@@ -2270,15 +2270,15 @@ fn draw_palette(
 }
 
 /// Five-row pixel letterforms for the startup wordmark. Every letter occupies
-/// the same five columns so the rows align without per-letter padding; the
+/// the same six columns so the rows align without per-letter padding; the
 /// extra width keeps the glyphs from looking narrow against terminal cells,
 /// which are roughly twice as tall as they are wide.
 const WORDMARK: [(&str, [&str; 5]); 5] = [
-    ("L", ["██   ", "██   ", "██   ", "██   ", "█████"]),
-    ("A", [" ███ ", "██ ██", "█████", "██ ██", "██ ██"]),
-    ("T", ["█████", "  ██ ", "  ██ ", "  ██ ", "  ██ "]),
-    ("C", [" ████", "██   ", "██   ", "██   ", " ████"]),
-    ("H", ["██ ██", "██ ██", "█████", "██ ██", "██ ██"]),
+    ("L", ["███   ", "███   ", "███   ", "███   ", "██████"]),
+    ("A", [" ████ ", "██  ██", "██████", "██  ██", "██  ██"]),
+    ("T", ["██████", "  ██  ", "  ██  ", "  ██  ", "  ██  "]),
+    ("C", [" █████", "██    ", "██    ", "██    ", " █████"]),
+    ("H", ["██  ██", "██  ██", "██████", "██  ██", "██  ██"]),
 ];
 
 /// One muted tone per letter; all distinct, none neon.
