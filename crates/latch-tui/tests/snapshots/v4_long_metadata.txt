@@ -1,18 +1,18 @@
                                                                                                                     │a-very-long-model-name-that-keeps-going-a… 
-                                                                                                                    │WORK · 0 turns                             
-                                                                                                                    │on main                                    
-                                                        Latch                                                       │                                           
-                                            a quiet terminal coding agent                                           │CONTEXT                                    
+                                              ██    ██  ████  ███ █  █                                              │WORK · 0 turns                             
+                                              ██   █  █  ██  ██   █  █                                              │on main                                    
+                                              ██   ████  ██  ██   ████                                              │                                           
+                                              ██   █  █  ██  ██   █  █                                              │CONTEXT                                    
+                                              ████ █  █  ██   ███ █  █                                              │                                           
+                                            a quiet terminal coding agent                                           │TASK                                       
                                                                                                                     │                                           
-                         Ask Latch to inspect, change, or verify code. /help lists commands.                        │TASK                                       
-                                                                                                                    │                                           
-                                                                                                                    │USAGE                                      
-                                                                                                                    │                                           
-                                                                                                                    │CHANGES                                    
+                         Ask Latch to inspect, change, or verify code. /help lists commands.                        │USAGE                                      
                                                                                                                     │                                           
                                                                                                                                                                 
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ check the long metadata handling                                                                                                                             │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
 │                                                                                                                                                              │
 │ WORK · a-very-long-model-name-that-keeps-going-and-going-flash · main                                                                                  ready │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

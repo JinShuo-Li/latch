@@ -1865,6 +1865,12 @@ impl ComposerChrome {
             + self.footer
     }
 
+    /// The editor keeps at least this many rows on terminals tall enough for
+    /// it, so the idle screen opens with a roomy input box instead of a
+    /// single hairline row. Heights that cannot afford it fall back to a
+    /// smaller body.
+    const MIN_BODY: u16 = 3;
+
     fn responsive(height: u16, content_rows: usize) -> Self {
         if height < 3 {
             return Self {
@@ -1876,7 +1882,9 @@ impl ComposerChrome {
         let mut chrome = Self {
             spacer: u16::from(height >= 14),
             top: 1,
-            body: (content_rows.max(1) as u16).min(max_body),
+            body: (content_rows.max(1) as u16)
+                .max(Self::MIN_BODY)
+                .min(max_body),
             gap: u16::from(height >= 9),
             meta: 1,
             rule: 1,
@@ -1986,25 +1994,55 @@ fn draw_palette(
     frame.render_widget(Paragraph::new(rows), area);
 }
 
+/// Five-row pixel letterforms for the startup wordmark. Every letter occupies
+/// the same four columns so the rows align without per-letter padding.
+const WORDMARK: [(&str, [&str; 5]); 5] = [
+    ("L", ["██  ", "██  ", "██  ", "██  ", "████"]),
+    ("A", [" ██ ", "█  █", "████", "█  █", "█  █"]),
+    ("T", ["████", " ██ ", " ██ ", " ██ ", " ██ "]),
+    ("C", [" ███", "██  ", "██  ", "██  ", " ███"]),
+    ("H", ["█  █", "█  █", "████", "█  █", "█  █"]),
+];
+
+/// One muted tone per letter; all distinct, none neon.
+const WORDMARK_COLORS: [Color; 5] = [
+    Color::Rgb(186, 142, 120),
+    Color::Rgb(158, 176, 134),
+    Color::Rgb(134, 160, 190),
+    Color::Rgb(184, 164, 126),
+    Color::Rgb(172, 146, 178),
+];
+
+fn wordmark_lines() -> Vec<Line<'static>> {
+    (0..5)
+        .map(|row| {
+            let mut spans = Vec::new();
+            for (index, (_, glyph)) in WORDMARK.iter().enumerate() {
+                if index > 0 {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(Span::styled(
+                    glyph[row].to_owned(),
+                    Style::default().fg(WORDMARK_COLORS[index]),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
 fn draw_welcome(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let mut lines: Vec<Line<'static>> = vec![
-        Line::from(""),
-        Line::styled(
-            "Latch",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Line::styled("a quiet terminal coding agent", muted_style()),
-        Line::from(""),
-        Line::styled(
-            "Ask Latch to inspect, change, or verify code. /help lists commands.",
-            notice_style(),
-        ),
-    ];
+    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    lines.extend(wordmark_lines());
+    lines.push(Line::styled("a quiet terminal coding agent", muted_style()));
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        "Ask Latch to inspect, change, or verify code. /help lists commands.",
+        notice_style(),
+    ));
     let top = area.height.saturating_sub(lines.len() as u16) / 3;
     let mut text = vec![Line::from(""); top as usize];
     text.append(&mut lines);
@@ -4025,6 +4063,43 @@ mod tests {
             "v4_inline_edit_preview.txt",
             &render_to_text(&mut app, 100, 24),
         );
+    }
+
+    #[test]
+    fn welcome_wordmark_uses_five_distinct_muted_letter_colors() {
+        let lines = wordmark_lines();
+        assert_eq!(lines.len(), 5);
+        let mut colors = Vec::new();
+        for line in &lines {
+            let letters: Vec<&Span<'static>> = line
+                .spans
+                .iter()
+                .filter(|span| span.content.contains('█'))
+                .collect();
+            assert_eq!(letters.len(), 5, "each row shows five letter regions");
+            for span in letters {
+                colors.push(span.style.fg.expect("letter color"));
+            }
+        }
+        let distinct: std::collections::BTreeSet<String> =
+            colors.iter().map(|color| format!("{color:?}")).collect();
+        assert_eq!(distinct.len(), 5, "all five letters use different colors");
+        for color in &colors {
+            let Color::Rgb(red, green, blue) = color else {
+                panic!("expected rgb wordmark color, got {color:?}");
+            };
+            let max = *red.max(green).max(blue) as i32;
+            let min = *red.min(green).min(blue) as i32;
+            assert!(max - min <= 90, "muted tone expected: {color:?}");
+        }
+    }
+
+    #[test]
+    fn idle_composer_body_is_roomier_but_stays_bounded() {
+        assert_eq!(ComposerChrome::responsive(30, 1).body, 3);
+        assert_eq!(ComposerChrome::responsive(24, 1).body, 3);
+        assert_eq!(ComposerChrome::responsive(30, 20).body, 8);
+        assert_eq!(ComposerChrome::responsive(12, 1).body, 1);
     }
 
     #[test]
