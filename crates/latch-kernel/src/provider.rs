@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// User-Agent sent with every provider request. Keep in sync with the workspace version.
-pub const USER_AGENT: &str = "latch/0.1";
+pub const USER_AGENT: &str = "latch/0.1.1";
 const OPENCODE_GO_BASE: &str = "https://opencode.ai/zen/go";
 const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
@@ -726,7 +726,10 @@ mod tests {
             resumed.request_headers().get(OPENCODE_SESSION_HEADER),
             first.get(OPENCODE_SESSION_HEADER)
         );
-        assert_eq!(first.get(reqwest::header::USER_AGENT).unwrap(), "latch/0.1");
+        assert_eq!(
+            first.get(reqwest::header::USER_AGENT).unwrap(),
+            "latch/0.1.1"
+        );
     }
     #[test]
     fn detects_opencode_go_endpoints_at_path_boundaries() {

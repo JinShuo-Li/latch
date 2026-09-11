@@ -2,10 +2,10 @@
 
 | Crate | Responsibility |
 |---|---|
-| `latch-protocol` | Events, task/memory/evidence records, provider and extension types |
-| `latch-kernel` | Store, continuity, prompts, policy, tools, providers, extensions, supervision, loop |
-| `latch-tui` | Dense transcript, status line, input, semantic rendering |
-| `latch-cli` | Configuration, resume, provider setup, slash-command coordination |
+| `latch-protocol` | Events, task/memory/evidence records, provider and extension types, shared display formatting |
+| `latch-kernel` | Store, continuity, prompts, policy, tools, providers, extensions, validation/evidence, failure supervision, loop, session resume |
+| `latch-tui` | Typed transcript, slash palette, input editor, prompt history, semantic rendering |
+| `latch-cli` | Configuration, resume orchestration, provider setup, slash-command coordination |
 
 ```mermaid
 flowchart LR
@@ -13,25 +13,90 @@ flowchart LR
     K --> C[Continuity Engine]
     C --> S[(SQLite events + memory)]
     K --> P[Prompt compiler]
+    K --> V[validate: kernel-run validation]
+    V --> E[Evidence ledger]
+    E --> CP[Completion derivation]
     K --> M[Provider adapter]
     M -->|deltas| U
     M -->|tool calls| K
-    K --> E[Policy + scheduler]
-    E --> W[Workspace / processes]
-    E --> S
-    K --> F[Evidence + failure supervision]
+    K --> G[Policy + scheduler]
+    G --> W[Workspace / processes]
+    G --> L[Durable change ledger]
+    K --> F[Failure supervision]
     X[stdio extensions] <--> K
 ```
 
+## The V0.1.1 shift: models express validation intent, the kernel owns truth
+
+The model names what must hold — `validate {"requirement": "existing unittest
+passes", "command": "python3 -B -m unittest test_calc -v"}` — and the kernel
+does everything else: it executes the command under shell policy, appends a
+`ValidationResult` event, creates or supersedes evidence for the requirement
+with the real source event recorded internally, registers the requirement, and
+derives completion. The model never supplies or sees an internal event id,
+call id, or ledger id. `record_evidence` remains for non-command claims but
+accepts only `pending` and `unavailable`; `passed`/`failed` statuses are
+kernel-owned, so a model cannot self-certify.
+
+Evidence is a current-state ledger: the newest entry per claim is the current
+evidence; earlier entries stay in durable history. A validation that failed and
+now passes supersedes the failure. Completion is derived, never declared:
+`InProgress` until the model claims implementation, then `Verified` when every
+required validation has current passing evidence, `Blocked` when a required
+validation is unavailable, and `ImplementedNotVerified` otherwise.
+
+## State, memory, and supervision
+
+Model `task_update` constraints are `TaskConstraint` memory; only actual user
+messages create `UserConstraint` provenance. Hypotheses are rejected or stay
+hypotheses — a rejected hypothesis is never promoted to a decision. Decisions,
+task constraints, and open questions have deterministic supersession/resolution
+so canonical current state stays clean while raw events and memory records
+retain history.
+
+Failure supervision tracks a streak per validation lineage (requirement, or
+shell command). Successful inspection tools never reset it; the lineage's own
+validation passing resolves it, and a materially different failure signature
+restarts the count. Streaks replay from durable events, so `--resume` does not
+forget a stalled loop. At the configured budget the kernel requests re-ground.
+
 Important lifecycle transitions append to SQLite. Streaming token deltas are
-transient. Operations are marked running before execution and complete afterward;
-resume surfaces an unfinished record as uncertain.
+transient. Operations are marked running before execution and complete
+afterward; resume surfaces an unfinished record as uncertain.
 
 Read-only batches execute concurrently. A mutation lock serializes edits,
-writes, checkpoints, and undo. Shell processes use bounded timeout, cancellation,
-captured status, and artifact spill for large output.
+writes, checkpoints, and undo. Shell and validation processes use bounded
+timeout, cancellation, captured status, and artifact spill for large output.
+
+## Change ledger and shell drift
+
+Latch- and shell-owned changes persist across restarts: pre-change bytes go to
+content-addressed artifacts referenced by `FileChanged` events, and
+`ChangeReverted` tombstones keep a resumed ledger from re-applying undone
+work. `/undo` peeks before popping, restores only when the file still matches
+the recorded post-change hash, and refuses otherwise. Workspace drift around
+shell commands is classified honestly: Git workspaces get reversible `Shell`-owned
+records where pre-content was capturable (captured dirty files, or the HEAD
+blob for previously clean files) and explicit non-reversible markers otherwise;
+non-Git workspaces get an honest "detection unavailable" marker. Pre-existing
+dirty work is captured at startup and never conflated with Latch's changes.
+
+## Providers
 
 OpenAI-compatible chat completions and Anthropic Messages translate only at the
-API boundary. Durable state remains provider-neutral. Repository instruction
-precedence is `CLAUDE.md`, `AGENTS.md`, then `.latch/instructions.md`; current user
-input follows them. Kernel invariants override project text.
+API boundary. Durable state remains provider-neutral. Assistant reasoning
+(`reasoning_content`) is persisted and replayed verbatim for tool-call turns on
+models that support it; it is never displayed in the transcript. Repository
+instruction precedence is `CLAUDE.md`, `AGENTS.md`, then
+`.latch/instructions.md`; current user input follows them. Kernel invariants
+override project text.
+
+## Resume
+
+`--resume` is a user-level resume: the visible transcript replays from durable
+events through the same formatter the live TUI uses (no reasoning, context
+statistics, model usage, or raw task state), the effective mode resolves as
+CLI `--mode` > the session's durable mode history > config default, prompt
+history is rebuilt from user events, and task state, evidence, failure
+streaks, and change ownership are restored without re-executing anything or
+appending duplicate durable events.
