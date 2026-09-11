@@ -121,6 +121,36 @@ pub struct ToolResult {
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Provider-reported cache-read tokens. `None` means the provider did not
+    /// report the category at all, which is distinct from a reported zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    /// Provider-reported cache-write tokens. `None` means unreported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+}
+
+/// Optional user-configured per-model pricing, expressed per million tokens.
+///
+/// Every component is optional on purpose: a missing price component stays
+/// unknown and must never be invented. The UI labels any computed amount as an
+/// estimate, not a bill.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ModelPricing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_per_million: Option<f64>,
+    #[serde(default = "default_currency")]
+    pub currency: String,
+}
+
+fn default_currency() -> String {
+    "USD".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -175,6 +205,12 @@ pub enum EventPayload {
         /// holding the pre-change bytes so ownership and undo survive resume.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         undo_artifact: Option<String>,
+        /// Line delta recorded by the kernel change ledger. Older events
+        /// default to zero because the counts were not stored.
+        #[serde(default)]
+        additions: usize,
+        #[serde(default)]
+        deletions: usize,
     },
     /// Records workspace drift observed around a shell execution. Emitted when
     /// a shell (or validation) command mutated paths outside the guarded edit
@@ -374,6 +410,10 @@ pub struct ContextStats {
     pub selected_episodes: usize,
     #[serde(default)]
     pub total_bytes: usize,
+    /// The configured active working-set budget, so surfaces can present a
+    /// bounded working set instead of guessing a limit. Zero on older events.
+    #[serde(default)]
+    pub budget_bytes: usize,
     pub status: String,
 }
 

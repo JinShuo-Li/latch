@@ -116,6 +116,8 @@ mod tests {
                 usage: latch_protocol::Usage {
                     input_tokens: 1,
                     output_tokens: 1,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
                 },
             }),
             event(EventPayload::TaskStateUpdated {

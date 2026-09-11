@@ -181,6 +181,7 @@ impl ContinuityEngine {
                 episodes: episodes.len(),
                 selected_episodes: selected.len(),
                 total_bytes: total,
+                budget_bytes: self.config.active_bytes,
                 status,
             },
         })
@@ -1084,6 +1085,8 @@ mod tests {
                 },
                 owner: latch_protocol::ChangeOwner::Latch,
                 undo_artifact: None,
+                additions: 1,
+                deletions: 0,
             },
         ));
         events.push(event(

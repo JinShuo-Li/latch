@@ -265,6 +265,17 @@ impl EventStore {
         Ok(event)
     }
 
+    /// Number of durable events for a session. Used to avoid materializing the
+    /// full event log when nothing new was appended.
+    pub fn event_count(&self, session_id: Uuid) -> Result<usize> {
+        let count: i64 = self.conn()?.query_row(
+            "SELECT COUNT(*) FROM events WHERE session_id=?1",
+            [session_id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
     pub fn events(&self, session_id: Uuid) -> Result<Vec<Event>> {
         let conn = self.conn()?;
         let mut stmt=conn.prepare("SELECT sequence,id,parent_id,timestamp,payload FROM events WHERE session_id=?1 ORDER BY sequence")?;

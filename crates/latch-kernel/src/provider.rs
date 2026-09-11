@@ -144,13 +144,26 @@ impl ModelProvider for OpenAiProvider {
                 if let Some(error) = v.get("error") {
                     bail!("OpenAI-compatible stream error: {error}");
                 }
-                if let Some(u) = v.get("usage") {
+                if let Some(u) = v.get("usage")
+                    && let (Some(input), Some(output)) = (
+                        u.get("prompt_tokens").and_then(Value::as_u64),
+                        u.get("completion_tokens").and_then(Value::as_u64),
+                    )
+                {
+                    // Cache categories are optional: an absent field stays
+                    // `None` (unknown), never a fabricated zero. OpenAI-style
+                    // providers report cached prompt tokens under
+                    // `prompt_tokens_details.cached_tokens`; some compatible
+                    // servers use `prompt_cache_hit_tokens`.
+                    let cache_read = u
+                        .pointer("/prompt_tokens_details/cached_tokens")
+                        .and_then(Value::as_u64)
+                        .or_else(|| u.get("prompt_cache_hit_tokens").and_then(Value::as_u64));
                     usage = Some(Usage {
-                        input_tokens: u.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0),
-                        output_tokens: u
-                            .get("completion_tokens")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0),
+                        input_tokens: input,
+                        output_tokens: output,
+                        cache_read_tokens: cache_read,
+                        cache_write_tokens: None,
                     });
                 }
                 let Some(choice) = v
@@ -262,6 +275,8 @@ impl ModelProvider for AnthropicProvider {
         let mut usage = Usage {
             input_tokens: 0,
             output_tokens: 0,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
         };
         loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
@@ -276,7 +291,15 @@ impl ModelProvider for AnthropicProvider {
                         usage.input_tokens = v
                             .pointer("/message/usage/input_tokens")
                             .and_then(Value::as_u64)
-                            .unwrap_or(0)
+                            .unwrap_or(0);
+                        // Anthropic reports cache read/write as explicit
+                        // categories; only set them when actually present.
+                        usage.cache_read_tokens = v
+                            .pointer("/message/usage/cache_read_input_tokens")
+                            .and_then(Value::as_u64);
+                        usage.cache_write_tokens = v
+                            .pointer("/message/usage/cache_creation_input_tokens")
+                            .and_then(Value::as_u64);
                     }
                     Some("content_block_start") => {
                         if v.pointer("/content_block/type").and_then(Value::as_str)

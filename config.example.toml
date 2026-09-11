@@ -25,6 +25,16 @@ retry_budget = 3
 # re-grounds the model with the already-known unchanged observations.
 stagnation_budget = 2
 
+# Optional, user-configured pricing for the usage sidebar. Latch never fetches
+# or invents prices; amounts are presented as estimates. Every component is
+# optional, and an absent component stays unknown rather than zero.
+# [models.deepseek-flash.pricing]
+# input_per_million = 0.28
+# output_per_million = 0.42
+# cache_read_per_million = 0.028
+# cache_write_per_million = 0.28
+# currency = "USD"
+
 # [[extensions]]
 # name = "example"
 # command = "node"

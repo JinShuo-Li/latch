@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use latch_protocol::Mode;
+use latch_protocol::{Mode, ModelPricing};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +20,17 @@ pub struct Config {
     pub failure: FailureConfig,
     #[serde(default)]
     pub extensions: Vec<ExtensionConfig>,
+    /// Per-model product metadata. Pricing is optional and user-configured;
+    /// Latch never fetches or invents provider prices.
+    #[serde(default)]
+    pub models: BTreeMap<String, ModelConfig>,
+}
+
+/// Product metadata for one model name, keyed by the provider model string.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,11 +171,20 @@ impl Default for Config {
             context: ContextConfig::default(),
             failure: FailureConfig::default(),
             extensions: vec![],
+            models: BTreeMap::new(),
         }
     }
 }
 
 impl Config {
+    /// Resolved optional pricing for an exact provider model name.
+    #[must_use]
+    pub fn pricing_for(&self, model: &str) -> Option<&ModelPricing> {
+        self.models
+            .get(model)
+            .and_then(|config| config.pricing.as_ref())
+    }
+
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let Some(path) = path
             .map(PathBuf::from)
@@ -191,5 +212,26 @@ mod tests {
         assert_eq!(config.default_mode, Mode::Work);
         assert_eq!(config.provider.kind, "openai-compatible");
         assert_eq!(config.context.active_bytes, 96_000);
+        assert!(config.models.is_empty(), "pricing is optional");
+    }
+
+    #[test]
+    fn model_pricing_parses_and_stays_honest_about_missing_components() {
+        let config: Config = toml::from_str(
+            r#"
+            [models.deepseek-flash.pricing]
+            input_per_million = 0.28
+            output_per_million = 0.42
+            currency = "USD"
+            "#,
+        )
+        .unwrap();
+        let pricing = config.pricing_for("deepseek-flash").expect("pricing");
+        assert_eq!(pricing.input_per_million, Some(0.28));
+        assert_eq!(pricing.output_per_million, Some(0.42));
+        assert_eq!(pricing.cache_read_per_million, None);
+        assert_eq!(pricing.cache_write_per_million, None);
+        assert_eq!(pricing.currency, "USD");
+        assert!(config.pricing_for("unknown-model").is_none());
     }
 }

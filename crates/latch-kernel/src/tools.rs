@@ -205,6 +205,8 @@ impl ToolExecutor {
                     after,
                     owner,
                     undo_artifact,
+                    additions,
+                    deletions,
                     ..
                 } if !matches!(owner, ChangeOwner::External) => {
                     let path = self.workspace.join(&after.path);
@@ -212,8 +214,8 @@ impl ToolExecutor {
                         path,
                         before: None,
                         after_hash: after.content_hash.clone(),
-                        additions: 0,
-                        deletions: 0,
+                        additions: *additions,
+                        deletions: *deletions,
                         owner: owner.clone(),
                         undo_artifact: undo_artifact.clone(),
                     };
@@ -546,6 +548,8 @@ impl ToolExecutor {
                 after: after_version.clone(),
                 owner,
                 undo_artifact,
+                additions,
+                deletions,
             },
         )?;
         self.store.finish_operation(operation)?;
@@ -835,6 +839,8 @@ impl ToolExecutor {
                     after,
                     owner: ChangeOwner::Shell,
                     undo_artifact,
+                    additions,
+                    deletions,
                 },
             );
         }

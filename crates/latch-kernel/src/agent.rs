@@ -15,6 +15,7 @@ use latch_protocol::{
     ModelMessage, ModelRequest, StreamEvent, ToolCall, ToolDefinition, ToolResult, Validity,
 };
 use serde_json::json;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -43,6 +44,7 @@ pub struct Agent {
     failures: FailureManager,
     progress: ProgressSupervisor,
     progress_watermark: usize,
+    forward_watermark: Cell<usize>,
     suppressed_calls: HashSet<String>,
     max_model_retries: u32,
     scope_warned: bool,
@@ -77,6 +79,7 @@ impl Agent {
             failures: FailureManager::new(runtime.retry_budget),
             progress,
             progress_watermark: 0,
+            forward_watermark: Cell::new(0),
             suppressed_calls: HashSet::new(),
             max_model_retries: 2,
             scope_warned: false,
@@ -197,8 +200,25 @@ impl Agent {
     pub async fn shutdown_extensions(&mut self) -> Result<()> {
         self.extensions.shutdown_all().await
     }
+    /// Runs a kernel-owned builtin tool without forwarding appended events.
+    /// Callers that render live state should prefer
+    /// [`Self::builtin_tool_streamed`].
     pub async fn builtin_tool(&self, name: &str, cancel: CancellationToken) -> ToolResult {
-        self.tools
+        let silent: AgentEventSink = Arc::new(|_| {});
+        self.builtin_tool_streamed(name, cancel, &silent).await
+    }
+
+    /// Runs a kernel-owned builtin tool and publishes any durable events it
+    /// appends (`/undo` and friends) so live consumers stay in sync with
+    /// replay.
+    pub async fn builtin_tool_streamed(
+        &self,
+        name: &str,
+        cancel: CancellationToken,
+        sink: &AgentEventSink,
+    ) -> ToolResult {
+        let result = self
+            .tools
             .execute(
                 &latch_protocol::ToolCall {
                     id: format!("builtin-{}", Uuid::new_v4()),
@@ -207,7 +227,9 @@ impl Agent {
                 },
                 cancel,
             )
-            .await
+            .await;
+        let _ = self.forward_appended_events(sink);
+        result
     }
     /// Kernel-side validation with the same semantics as the model-facing
     /// `validate` tool: kernel-owned execution, provenance, evidence, and
@@ -233,9 +255,11 @@ impl Agent {
         cancel: CancellationToken,
         sink: AgentEventSink,
     ) -> Result<String> {
-        // Everything appended from here on is fed to the supervisor in order,
-        // exactly as a later replay would process it.
-        self.progress_watermark = self.store.events(self.session_id)?.len();
+        // Everything appended from here on is fed to the supervisor and to the
+        // live sink in order, exactly as a later replay would process it.
+        let start = self.store.events(self.session_id)?.len();
+        self.progress_watermark = start;
+        self.forward_watermark.set(start);
         let user_event = self.emit(
             EventPayload::UserMessage {
                 text: user_text.into(),
@@ -373,6 +397,9 @@ impl Agent {
             }
             let calls = response.tool_calls.clone();
             let tool_results = self.execute_batch(calls, cancel.clone(), &sink).await;
+            // Publish tool-appended durable events before the display results,
+            // keeping live consumers in exact durable order.
+            self.forward_appended_events(&sink)?;
             for result in &tool_results {
                 sink(AgentOutput::ToolResult(result.clone()));
             }
@@ -1074,10 +1101,35 @@ impl Agent {
         }
         Ok(())
     }
-    fn emit(&self, payload: EventPayload, sink: &AgentEventSink) -> Result<Event> {
+    fn emit(&mut self, payload: EventPayload, sink: &AgentEventSink) -> Result<Event> {
+        // Tool execution appends durable events (mutations, drift detection,
+        // lifecycle) directly to the store. Deliver those to the live sink
+        // first so consumers observe the exact durable order that replay sees.
+        self.forward_appended_events(sink)?;
         let event = self.store.append(self.session_id, payload)?;
         sink(AgentOutput::Durable(Box::new(event.clone())));
+        self.forward_watermark.set(event.sequence as usize);
         Ok(event)
+    }
+    /// Forwards durable events appended since the watermark to the live sink.
+    /// This keeps live presentation and sidebar state in sync with events that
+    /// never pass through [`Self::emit`], such as `FileChanged` or
+    /// `ExternalFileChangeDetected`.
+    fn forward_appended_events(&self, sink: &AgentEventSink) -> Result<()> {
+        let watermark = self.forward_watermark.get();
+        let count = self.store.event_count(self.session_id)?;
+        if count <= watermark {
+            if count < watermark {
+                self.forward_watermark.set(count);
+            }
+            return Ok(());
+        }
+        let events = self.store.events(self.session_id)?;
+        for event in &events[watermark..] {
+            sink(AgentOutput::Durable(Box::new(event.clone())));
+        }
+        self.forward_watermark.set(events.len());
+        Ok(())
     }
 }
 
