@@ -194,6 +194,10 @@ pub enum EventPayload {
     RegroundRequested {
         signature: String,
     },
+    ScopeExpansionRequested {
+        mutations: usize,
+        reason: String,
+    },
     ContextMaterialized {
         stats: ContextStats,
     },

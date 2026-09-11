@@ -103,6 +103,10 @@ pub struct EvidenceLedger {
     entries: Vec<Evidence>,
 }
 impl EvidenceLedger {
+    #[must_use]
+    pub fn new(entries: Vec<Evidence>) -> Self {
+        Self { entries }
+    }
     pub fn add(
         &mut self,
         claim: impl Into<String>,

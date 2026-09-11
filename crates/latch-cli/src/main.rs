@@ -183,6 +183,17 @@ async fn build_agent(
     {
         agent.restore_state(state);
     }
+    if resume {
+        let evidence = store
+            .events(session_id)?
+            .into_iter()
+            .filter_map(|event| match event.payload {
+                EventPayload::EvidenceCreated { evidence } => Some(evidence),
+                _ => None,
+            })
+            .collect();
+        agent.restore_evidence(evidence);
+    }
     Ok((agent, model))
 }
 
@@ -264,6 +275,25 @@ async fn interactive(mut agent: Agent, mode: Mode, model: String) -> Result<()> 
                             }),
                             _ => None,
                         },
+                        latch_kernel::agent::AgentOutput::ToolResult(result) => {
+                            Some(Output::Tool {
+                                verb: if result.is_error {
+                                    "fail".into()
+                                } else {
+                                    "done".into()
+                                },
+                                target: format!(
+                                    "{}  {}",
+                                    result.name,
+                                    result.output.lines().next().unwrap_or("")
+                                ),
+                                status: if result.is_error {
+                                    ToolStatus::Failed
+                                } else {
+                                    ToolStatus::Passed
+                                },
+                            })
+                        }
                         _ => None,
                     };
                     if let Some(output) = output {

@@ -235,6 +235,22 @@ impl ExtensionHost {
             }
         }
     }
+    pub async fn observe(&mut self, event: &str, payload: Value) -> Result<()> {
+        if self
+            .capabilities
+            .observe
+            .iter()
+            .any(|registered| registered == event || registered == "*")
+        {
+            self.writer
+                .write(&notification(
+                    "hook.observe",
+                    json!({"event":event,"payload":payload}),
+                ))
+                .await?;
+        }
+        Ok(())
+    }
     pub async fn shutdown(mut self) -> Result<()> {
         let id = self.next_id;
         self.writer
@@ -331,6 +347,12 @@ impl ExtensionRegistry {
         } else {
             bail!("extension shutdown failures: {}", errors.join("; "))
         }
+    }
+    pub async fn observe(&mut self, event: &str, payload: Value) -> Result<()> {
+        for host in self.hosts.values_mut() {
+            host.observe(event, payload.clone()).await?;
+        }
+        Ok(())
     }
 }
 impl Default for ExtensionRegistry {

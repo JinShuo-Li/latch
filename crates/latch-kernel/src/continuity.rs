@@ -15,12 +15,23 @@ pub struct Episode {
     pub event_ids: Vec<Uuid>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConversationBridge {
+    pub current_topic: String,
+    pub current_user_intent: String,
+    pub unresolved_references: Vec<String>,
+    pub recent_decisions: Vec<String>,
+    pub ongoing_action: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct MaterializedContext {
     pub system: String,
     pub canonical: String,
     pub recalled: String,
     pub recent: Vec<Event>,
+    pub bridge: ConversationBridge,
+    pub episodes: Vec<Episode>,
     pub stats: ContextStats,
 }
 
@@ -70,16 +81,34 @@ impl ContinuityEngine {
             .rposition(|event| matches!(event.payload, EventPayload::ManualCompact { .. }))
             .map_or(0, |index| index + 1);
         let recent = select_recent(&events[active_start..], self.config.recent_bytes);
-        let canonical = render_canonical(state, &memories)?;
-        let recalled_text = recalled
+        let bridge = conversation_bridge(state, &events);
+        let canonical = format!(
+            "{}\nCONVERSATION BRIDGE (navigation only)\n{}",
+            render_canonical(state, &memories)?,
+            serde_json::to_string_pretty(&bridge)?
+        );
+        let old_end = events.len().saturating_sub(recent.len());
+        let episodes = build_episodes(&events[..old_end]);
+        let episode_index = episodes
+            .iter()
+            .map(|episode| {
+                format!(
+                    "- events {}-{}: {}",
+                    episode.start_sequence, episode.end_sequence, episode.description
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let recalled_events = recalled
             .iter()
             .map(render_event)
             .collect::<Vec<_>>()
             .join("\n");
+        let recalled_text =
+            format!("EPISODE INDEX\n{episode_index}\nORIGINAL RECALLED EVENTS\n{recalled_events}");
         let recent_bytes = recent.iter().map(|e| render_event(e).len()).sum();
         let canonical_bytes = canonical.len();
         let recalled_bytes = recalled_text.len();
-        let episodes = episode_count(events.len(), recent.len());
         let used = recent_bytes + canonical_bytes + recalled_bytes;
         let reserve = self
             .config
@@ -91,6 +120,8 @@ impl ContinuityEngine {
             canonical,
             recalled: recalled_text,
             recent,
+            bridge,
+            episodes: episodes.clone(),
             stats: ContextStats {
                 recent_bytes,
                 recalled_bytes,
@@ -98,7 +129,7 @@ impl ContinuityEngine {
                 code_evidence_bytes: 0,
                 reserve_bytes: reserve,
                 durable_events: events.len(),
-                episodes,
+                episodes: episodes.len(),
                 status: "healthy".into(),
             },
         })
@@ -119,8 +150,64 @@ fn select_recent(events: &[Event], budget: usize) -> Vec<Event> {
     selected.reverse();
     selected
 }
-fn episode_count(total: usize, recent: usize) -> usize {
-    total.saturating_sub(recent).div_ceil(20)
+fn build_episodes(events: &[Event]) -> Vec<Episode> {
+    events
+        .chunks(20)
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| {
+            let topic = chunk
+                .iter()
+                .find_map(|event| match &event.payload {
+                    EventPayload::UserMessage { text } => {
+                        Some(text.chars().take(100).collect::<String>())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| "session activity".into());
+            let mut entities = Vec::new();
+            for event in chunk {
+                match &event.payload {
+                    EventPayload::FileObserved { version } => entities.push(version.path.clone()),
+                    EventPayload::FileChanged { after, .. } => entities.push(after.path.clone()),
+                    _ => {}
+                }
+            }
+            entities.sort();
+            entities.dedup();
+            Episode {
+                start_sequence: chunk[0].sequence,
+                end_sequence: chunk[chunk.len() - 1].sequence,
+                topic: topic.clone(),
+                entities,
+                description: topic,
+                event_ids: chunk.iter().map(|event| event.id).collect(),
+            }
+        })
+        .collect()
+}
+
+fn conversation_bridge(state: &TaskState, events: &[Event]) -> ConversationBridge {
+    let current_user_intent = events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::UserMessage { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let lower = current_user_intent.to_ascii_lowercase();
+    let unresolved_references = ["this", "that", "second approach", "continue"]
+        .into_iter()
+        .filter(|needle| lower.contains(needle))
+        .map(str::to_owned)
+        .collect();
+    ConversationBridge {
+        current_topic: current_user_intent.chars().take(160).collect(),
+        current_user_intent,
+        unresolved_references,
+        recent_decisions: state.decisions.iter().rev().take(4).cloned().collect(),
+        ongoing_action: state.next_actions.first().cloned(),
+    }
 }
 fn render_canonical(state: &TaskState, memories: &[MemoryRecord]) -> Result<String> {
     let active = memories
@@ -320,5 +407,9 @@ mod tests {
         let all = s.events(id).unwrap();
         assert_eq!(all.len(), 2);
         assert!(matches!(all[1].payload, EventPayload::ManualCompact { .. }));
+        let context = e
+            .materialize(id, &TaskState::default(), None, "system".into())
+            .unwrap();
+        assert!(context.recent.is_empty());
     }
 }

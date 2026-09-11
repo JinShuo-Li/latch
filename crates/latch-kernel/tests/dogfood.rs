@@ -189,6 +189,18 @@ async fn scripted_long_session_dogfood() {
         )
         .await
         .unwrap();
+    let memories = store.memories(session).unwrap();
+    assert!(
+        memories
+            .iter()
+            .any(|memory| memory.content.contains("Decision B"))
+    );
+    assert!(
+        memories
+            .iter()
+            .any(|memory| memory.content.contains("Approach C")
+                && format!("{:?}", memory.validity) == "Rejected")
+    );
     agent.set_mode(Mode::Work);
     agent
         .run(
@@ -227,6 +239,7 @@ async fn scripted_long_session_dogfood() {
             .any(|e| matches!(e.payload, EventPayload::ManualCompact { .. }))
     );
     let recalled = agent.context(Some("Decision B marker")).unwrap();
+    assert!(!recalled.episodes.is_empty());
     assert!(recalled.recalled.contains("Decision B") || recalled.canonical.contains("Decision B"));
     agent
         .run(

@@ -22,6 +22,7 @@ pub type AgentEventSink = Arc<dyn Fn(AgentOutput) + Send + Sync>;
 pub enum AgentOutput {
     Durable(Box<Event>),
     Transient(StreamEvent),
+    ToolResult(ToolResult),
 }
 
 pub struct Agent {
@@ -81,6 +82,9 @@ impl Agent {
     pub fn restore_state(&mut self, state: latch_protocol::TaskState) {
         self.state = TaskStateManager::new(state);
     }
+    pub fn restore_evidence(&mut self, evidence: Vec<latch_protocol::Evidence>) {
+        self.evidence = EvidenceLedger::new(evidence);
+    }
     pub fn context(&self, query: Option<&str>) -> Result<crate::continuity::MaterializedContext> {
         let prompt = PromptCompiler::compile(self.mode, self.state.state(), &self.workspace)?;
         self.continuity
@@ -126,6 +130,12 @@ impl Agent {
             },
             &sink,
         )?;
+        self.extensions
+            .observe(
+                "user_message",
+                json!({"text":user_text,"sessionId":self.session_id}),
+            )
+            .await?;
         if self.state.state().goal.is_empty() {
             self.state.update(crate::state::StateUpdate {
                 goal: Some(user_text.into()),
@@ -140,7 +150,6 @@ impl Agent {
             let _ = e;
         }
         let mut final_text = String::new();
-        let mut tool_results: Vec<ToolResult> = vec![];
         let mut turns = 0u32;
         loop {
             turns += 1;
@@ -156,16 +165,7 @@ impl Agent {
                 &sink,
             )?;
             let _ = event;
-            let mut messages = context_messages(&ctx);
-            for result in &tool_results {
-                messages.push(ModelMessage {
-                    role: "user".into(),
-                    content: format!(
-                        "Tool result for {} ({}):\n{}",
-                        result.name, result.call_id, result.output
-                    ),
-                });
-            }
+            let messages = context_messages(&ctx);
             let request = ModelRequest {
                 system: format!(
                     "{}\n\n{}\n\nRECALLED ORIGINAL MATERIAL\n{}",
@@ -183,9 +183,24 @@ impl Agent {
             )?;
             let transient = sink.clone();
             let provider_sink: StreamSink = Arc::new(move |e| transient(AgentOutput::Transient(e)));
-            let response = self
+            let response = match self
                 .call_with_retry(request, cancel.clone(), provider_sink)
-                .await?;
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    self.emit(
+                        EventPayload::ModelRequestFinished {
+                            stop_reason: "error".into(),
+                        },
+                        &sink,
+                    )?;
+                    sink(AgentOutput::Transient(StreamEvent::Error(
+                        error.to_string(),
+                    )));
+                    return Err(error);
+                }
+            };
             final_text.push_str(&response.text);
             self.emit(
                 EventPayload::AssistantMessageCompleted {
@@ -209,13 +224,15 @@ impl Agent {
             for call in &response.tool_calls {
                 self.emit(EventPayload::ToolRequested { call: call.clone() }, &sink)?;
             }
-            tool_results = self
+            let tool_results = self
                 .execute_batch(response.tool_calls, cancel.clone(), &sink)
                 .await;
-            if self.tools.latch_change_count().await > 12 {
-                tool_results.push(ToolResult { call_id: "kernel-scope".into(), name: "scope_budget".into(), output: "The change now spans more than 12 Latch mutations. Explain why this expansion is required by the user task before continuing.".into(), is_error: false, artifact_id: None });
+            for result in &tool_results {
+                sink(AgentOutput::ToolResult(result.clone()));
             }
-            let mut reground = None;
+            if self.tools.latch_change_count().await > 12 {
+                self.emit(EventPayload::ScopeExpansionRequested { mutations: self.tools.latch_change_count().await, reason: "Explain why this expansion is required by the user task before continuing.".into() }, &sink)?;
+            }
             for r in &tool_results {
                 if r.is_error {
                     let d = self.failures.record(&r.name, &r.output);
@@ -233,14 +250,10 @@ impl Agent {
                             },
                             &sink,
                         )?;
-                        reground = Some(d.signature);
                     }
                 } else {
                     self.failures.improvement();
                 }
-            }
-            if let Some(signature) = reground {
-                tool_results.push(ToolResult{call_id:"kernel-reground".into(),name:"re_ground".into(),output:format!("Repeated failure {signature}. Re-read current reality, identify disproven assumptions, and form a materially different strategy before another mutation."),is_error:false,artifact_id:None});
             }
         }
         Ok(final_text)
@@ -260,6 +273,13 @@ impl Agent {
             {
                 Ok(r) => return Ok(r),
                 Err(e) if attempt < self.max_model_retries && !cancel.is_cancelled() => {
+                    self.store.append(
+                        self.session_id,
+                        EventPayload::FailureAttempt {
+                            signature: format!("provider:{}", self.provider.name()),
+                            count: attempt + 1,
+                        },
+                    )?;
                     last = Some(e);
                     tokio::time::sleep(std::time::Duration::from_millis(100 * 2u64.pow(attempt)))
                         .await;
@@ -533,7 +553,7 @@ fn tool_error(call: &ToolCall, output: String) -> ToolResult {
     }
 }
 fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMessage> {
-    ctx.recent
+    let raw = ctx.recent
         .iter()
         .filter_map(|e| match &e.payload {
             EventPayload::UserMessage { text } => Some(ModelMessage {
@@ -550,9 +570,23 @@ fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMe
                     content: format!("Tool {}: {}", result.name, result.output),
                 })
             }
+            EventPayload::RegroundRequested { signature } => Some(ModelMessage { role: "user".into(), content: format!("Kernel re-ground required after repeated failure {signature}. Re-read current reality, identify disproven assumptions, and form a materially different strategy before another mutation.") }),
+            EventPayload::ScopeExpansionRequested { mutations, reason } => Some(ModelMessage { role: "user".into(), content: format!("Kernel scope review after {mutations} mutations: {reason}") }),
             _ => None,
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let mut normalized: Vec<ModelMessage> = Vec::new();
+    for message in raw.into_iter().skip_while(|message| message.role != "user") {
+        if let Some(previous) = normalized.last_mut()
+            && previous.role == message.role
+        {
+            previous.content.push_str("\n\n");
+            previous.content.push_str(&message.content);
+        } else {
+            normalized.push(message);
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
@@ -631,5 +665,63 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn loop_executes_registered_extension_tool() {
+        let d = tempdir().unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(d.path()).unwrap();
+        let provider = Arc::new(FakeProvider::scripted(vec![
+            ModelResponse {
+                text: "calling extension".into(),
+                tool_calls: vec![ToolCall {
+                    id: "ext-1".into(),
+                    name: "fixture.echo".into(),
+                    arguments: json!({"value":"through-agent"}),
+                }],
+                stop_reason: "tool_calls".into(),
+                usage: None,
+            },
+            ModelResponse {
+                text: "extension complete".into(),
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: None,
+            },
+        ]));
+        let tools = ToolExecutor::new(
+            d.path().into(),
+            d.path().join("art"),
+            store.clone(),
+            sid,
+            PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        let mut agent = Agent::new(
+            sid,
+            d.path().into(),
+            Mode::Work,
+            store.clone(),
+            provider,
+            tools,
+            ContinuityEngine::new(store.clone(), ContextConfig::default()),
+            2,
+        );
+        let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
+        agent
+            .load_extension("fixture".into(), "python3", &[fixture])
+            .await
+            .unwrap();
+        agent
+            .run(
+                "use the extension",
+                CancellationToken::new(),
+                Arc::new(|_| {}),
+            )
+            .await
+            .unwrap();
+        assert!(store.events(sid).unwrap().iter().any(|event| matches!(&event.payload, EventPayload::ToolCompleted { result } if result.name == "fixture.echo" && result.output.contains("through-agent"))));
+        agent.shutdown_extensions().await.unwrap();
     }
 }

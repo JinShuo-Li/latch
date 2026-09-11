@@ -75,6 +75,9 @@ impl ModelProvider for OpenAiProvider {
                     continue;
                 }
                 let v: Value = serde_json::from_str(&data)?;
+                if let Some(error) = v.get("error") {
+                    bail!("OpenAI-compatible stream error: {error}");
+                }
                 if let Some(u) = v.get("usage") {
                     usage = Some(Usage {
                         input_tokens: u.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0),
@@ -193,6 +196,9 @@ impl ModelProvider for AnthropicProvider {
             for data in decoder.push(&chunk?) {
                 let v: Value = serde_json::from_str(&data)?;
                 match v.get("type").and_then(Value::as_str) {
+                    Some("error") => {
+                        bail!("Anthropic stream error: {}", v.get("error").unwrap_or(&v))
+                    }
                     Some("message_start") => {
                         usage.input_tokens = v
                             .pointer("/message/usage/input_tokens")
@@ -340,15 +346,27 @@ fn anthropic_request(r: &ModelRequest, model: &str) -> Value {
 
 #[derive(Default)]
 struct SseDecoder {
-    buffer: String,
+    buffer: Vec<u8>,
 }
 impl SseDecoder {
     fn push(&mut self, bytes: &[u8]) -> Vec<String> {
-        self.buffer.push_str(&String::from_utf8_lossy(bytes));
+        self.buffer.extend_from_slice(bytes);
         let mut out = vec![];
-        while let Some(i) = self.buffer.find("\n\n") {
-            let frame = self.buffer[..i].replace("\r", "");
-            self.buffer.drain(..i + 2);
+        loop {
+            let delimiter = match (
+                find_bytes(&self.buffer, b"\n\n"),
+                find_bytes(&self.buffer, b"\r\n\r\n"),
+            ) {
+                (Some(a), Some(b)) if a <= b => Some((a, 2)),
+                (Some(a), _) => Some((a, 2)),
+                (_, Some(b)) => Some((b, 4)),
+                _ => None,
+            };
+            let Some((i, delimiter_len)) = delimiter else {
+                break;
+            };
+            let frame = String::from_utf8_lossy(&self.buffer[..i]).replace('\r', "");
+            self.buffer.drain(..i + delimiter_len);
             let data = frame
                 .lines()
                 .filter_map(|l| l.strip_prefix("data:"))
@@ -361,6 +379,11 @@ impl SseDecoder {
         }
         out
     }
+}
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 #[cfg(test)]
@@ -393,5 +416,6 @@ mod tests {
         let mut d = SseDecoder::default();
         assert!(d.push(b"data: {\"a\":").is_empty());
         assert_eq!(d.push(b"1}\n\n"), ["{\"a\":1}"]);
+        assert_eq!(d.push(b"data: ok\r\n\r\n"), ["ok"]);
     }
 }

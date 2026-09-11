@@ -1,4 +1,4 @@
-use crate::config::PermissionConfig;
+use crate::config::{OutsidePolicy, PermissionConfig};
 use crate::store::EventStore;
 use anyhow::{Context, Result, anyhow, bail};
 use latch_protocol::{ChangeOwner, EventPayload, FileVersion, Mode, ToolCall, ToolResult};
@@ -53,7 +53,12 @@ impl PolicyEngine {
             && let Some(path) = args.get("path").and_then(Value::as_str)
             && resolve_workspace_path(&self.workspace, path).is_err()
         {
-            return PolicyDecision::Deny("path escapes workspace".into());
+            return match self.config.outside_workspace {
+                OutsidePolicy::Deny => PolicyDecision::Deny("path escapes workspace".into()),
+                OutsidePolicy::Ask => {
+                    PolicyDecision::Ask("outside-workspace write requires explicit approval".into())
+                }
+            };
         }
         if tool == "shell" {
             let c = args.get("command").and_then(Value::as_str).unwrap_or("");
@@ -312,7 +317,14 @@ impl ToolExecutor {
             .as_ref()
             .map(|b| version(&self.workspace, &path, b))
             .transpose()?;
-        tokio::fs::write(&path, &after).await?;
+        let operation = self.store.begin_operation(
+            self.session_id,
+            &format!("guarded write: {}", path.display()),
+        )?;
+        if let Err(error) = tokio::fs::write(&path, &after).await {
+            self.store.finish_operation(operation)?;
+            return Err(error.into());
+        }
         let after_version = version(&self.workspace, &path, &after)?;
         self.observations
             .lock()
@@ -331,6 +343,7 @@ impl ToolExecutor {
                 owner: ChangeOwner::Latch,
             },
         )?;
+        self.store.finish_operation(operation)?;
         Ok((
             format!(
                 "updated {} @ {}",
@@ -575,9 +588,11 @@ fn is_read_only_shell(c: &str) -> bool {
 }
 fn dangerous_shell(c: &str) -> bool {
     let l = c.to_ascii_lowercase();
-    l.contains("sudo ")
-        || l.contains("rm -rf")
-        || l.contains("git push --force")
+    let words = l.split_whitespace().collect::<Vec<_>>();
+    l.starts_with("sudo ")
+        || (words.first() == Some(&"rm") && words.iter().any(|word| word.contains('r')))
+        || (words.starts_with(&["git", "push"])
+            && words.iter().any(|word| word.starts_with("--force")))
         || l.contains("git reset --hard")
         || l.contains("git clean -f")
 }
@@ -705,6 +720,59 @@ mod tests {
             std::fs::read_to_string(d.path().join("a.txt")).unwrap(),
             "old"
         );
+    }
+    #[tokio::test]
+    async fn undo_refuses_external_change() {
+        let (d, e) = setup(Mode::Work);
+        let read = e
+            .execute(
+                &call("read_file", json!({"path":"a.txt"})),
+                CancellationToken::new(),
+            )
+            .await;
+        let hash = read
+            .output
+            .lines()
+            .next()
+            .unwrap()
+            .trim_start_matches("hash: ");
+        e.execute(
+            &call(
+                "patch",
+                json!({"path":"a.txt","base_hash":hash,"old":"old","new":"latch"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+        std::fs::write(d.path().join("a.txt"), "external").unwrap();
+        let undo = e
+            .execute(&call("undo", json!({})), CancellationToken::new())
+            .await;
+        assert!(undo.is_error);
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("a.txt")).unwrap(),
+            "external"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_modes_reject_shell_escape() {
+        for mode in [Mode::Ask, Mode::Plan] {
+            let (_d, executor) = setup(mode);
+            for command in [
+                "touch injected",
+                "git branch -D main",
+                "rg x .; touch injected",
+            ] {
+                let result = executor
+                    .execute(
+                        &call("shell", json!({"command":command})),
+                        CancellationToken::new(),
+                    )
+                    .await;
+                assert!(result.is_error, "{mode} allowed {command}");
+            }
+        }
     }
     #[test]
     fn work_policy_and_dangerous_commands() {
