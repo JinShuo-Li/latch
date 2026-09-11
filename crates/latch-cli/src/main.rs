@@ -8,6 +8,7 @@ use latch_kernel::{
 };
 use latch_protocol::{EventPayload, Mode, StreamEvent, TaskState};
 use latch_tui::{Input, Output, SLASH_COMMANDS};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -26,6 +27,12 @@ struct Args {
     /// effective mode, task state, evidence, failures, and change ownership.
     #[arg(long)]
     resume: bool,
+    /// Resume an exact session UUID or unambiguous UUID prefix.
+    #[arg(long, requires = "resume")]
+    session: Option<String>,
+    /// Resume the most recently active session in this workspace.
+    #[arg(long, requires = "resume", conflicts_with = "session")]
+    latest: bool,
     #[arg(long,value_parser=parse_mode)]
     mode: Option<Mode>,
     #[arg(short = 'p', long)]
@@ -70,12 +77,128 @@ async fn main() -> Result<()> {
     {
         return debug_prompt(&workspace, mode, fragment.as_deref());
     }
-    let (mut agent, model, session) =
-        build_agent(&workspace, &config, args.mode, args.resume).await?;
+    let mut selected = match select_startup_session(&workspace, &config, &args).await? {
+        ResumeChoice::Session(id) => Some(id),
+        ResumeChoice::Fresh => None,
+        ResumeChoice::Exit => return Ok(()),
+    };
+    let (mut agent, mut model, mut session) =
+        build_agent(&workspace, &config, args.mode, selected).await?;
     if let Some(prompt) = args.prompt {
         return one_shot(&mut agent, &prompt).await;
     }
-    interactive(agent, model, session).await
+    loop {
+        match interactive(agent, model, session).await? {
+            InteractiveOutcome::Exit => return Ok(()),
+            InteractiveOutcome::Resume => {
+                selected = match pick_session(&workspace, &config).await? {
+                    ResumeChoice::Session(id) => Some(id),
+                    ResumeChoice::Fresh => None,
+                    ResumeChoice::Exit => return Ok(()),
+                };
+                (agent, model, session) =
+                    build_agent(&workspace, &config, args.mode, selected).await?;
+            }
+        }
+    }
+}
+
+enum ResumeChoice {
+    Session(Uuid),
+    Fresh,
+    Exit,
+}
+
+async fn select_startup_session(
+    workspace: &Path,
+    config: &Config,
+    args: &Args,
+) -> Result<ResumeChoice> {
+    if !args.resume {
+        return Ok(ResumeChoice::Fresh);
+    }
+    let store = EventStore::open(&config.state_dir.join("latch.sqlite3"))?;
+    if let Some(selector) = &args.session {
+        let selected = store.resolve_session(selector)?;
+        if Path::new(&selected.workspace) != workspace {
+            eprintln!(
+                "resuming session {} from workspace {} (current workspace is {})",
+                &selected.id.to_string()[..8],
+                selected.workspace,
+                workspace.display()
+            );
+        }
+        return Ok(ResumeChoice::Session(selected.id));
+    }
+    if args.latest {
+        return store
+            .latest_session(Some(workspace))?
+            .map(ResumeChoice::Session)
+            .ok_or_else(|| {
+                anyhow!(
+                    "no previous session for {}; remove --latest to start fresh",
+                    workspace.display()
+                )
+            });
+    }
+    let matching = store.list_sessions(Some(workspace))?;
+    match matching.as_slice() {
+        [] => Err(anyhow!("no previous session for {}", workspace.display())),
+        [session] => Ok(ResumeChoice::Session(session.id)),
+        _ if args.prompt.is_some()
+            || !std::io::stdin().is_terminal()
+            || !std::io::stdout().is_terminal() =>
+        {
+            bail!(
+                "{} sessions match {}; choose one with --resume --session <uuid-or-prefix> or use --resume --latest",
+                matching.len(),
+                workspace.display()
+            )
+        }
+        _ => pick_session(workspace, config).await,
+    }
+}
+
+async fn pick_session(workspace: &Path, config: &Config) -> Result<ResumeChoice> {
+    let store = EventStore::open(&config.state_dir.join("latch.sqlite3"))?;
+    let sessions = store
+        .list_sessions(None)?
+        .into_iter()
+        .map(|session| latch_tui::SessionItem {
+            id: session.id,
+            workspace: session.workspace,
+            updated_at: session.updated_at,
+            mode: session
+                .mode
+                .map_or_else(|| config.default_mode.to_string(), |mode| mode.to_string()),
+            model: session.model.unwrap_or_else(|| "—".into()),
+            prompt: session
+                .prompt_preview
+                .unwrap_or_else(|| "No user prompt".into()),
+            event_count: session.event_count,
+        })
+        .collect();
+    let preview_store = store.clone();
+    let preview = Arc::new(move |id| {
+        preview_store
+            .session_preview(id, 6)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|line| latch_tui::SessionPreviewLine {
+                speaker: line.speaker.into(),
+                text: line.text,
+            })
+            .collect()
+    });
+    Ok(
+        match latch_tui::run_session_picker(sessions, workspace, preview).await? {
+            latch_tui::PickerSelection::Resume(id) => ResumeChoice::Session(id),
+            latch_tui::PickerSelection::StartFresh => ResumeChoice::Fresh,
+            latch_tui::PickerSelection::Exit | latch_tui::PickerSelection::Cancel => {
+                ResumeChoice::Exit
+            }
+        },
+    )
 }
 
 fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
@@ -111,7 +234,7 @@ fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
 /// One restored session for the TUI: visible transcript items and prompt
 /// history, both derived from durable events by the shared formatter.
 struct Restored {
-    items: Vec<latch_protocol::DisplayItem>,
+    events: Vec<latch_protocol::Event>,
     history: Vec<String>,
 }
 
@@ -119,15 +242,13 @@ async fn build_agent(
     workspace: &Path,
     config: &Config,
     cli_mode: Option<Mode>,
-    resume: bool,
+    resume_session: Option<Uuid>,
 ) -> Result<(Agent, String, Option<Restored>)> {
     let db = config.state_dir.join("latch.sqlite3");
     let store = EventStore::open(&db)?;
     let mut restored = None;
-    let session_id = if resume {
-        let session = store
-            .latest_session(Some(workspace))?
-            .ok_or_else(|| anyhow!("no previous session for {}", workspace.display()))?;
+    let resume = resume_session.is_some();
+    let session_id = if let Some(session) = resume_session {
         let events = store.events(session)?;
         store.append(session, EventPayload::SessionResumed)?;
         for (id, description) in store.interrupted_operations(session)? {
@@ -141,7 +262,7 @@ async fn build_agent(
             store.mark_operation_reported(id)?;
         }
         restored = Some(Restored {
-            items: session::replay_items(&events),
+            events: events.clone(),
             history: session::prompt_history(&events),
         });
         session
@@ -267,12 +388,22 @@ async fn one_shot(agent: &mut Agent, prompt: &str) -> Result<()> {
     Ok(())
 }
 
-async fn interactive(mut agent: Agent, model: String, restored: Option<Restored>) -> Result<()> {
+enum InteractiveOutcome {
+    Exit,
+    Resume,
+}
+
+async fn interactive(
+    mut agent: Agent,
+    model: String,
+    restored: Option<Restored>,
+) -> Result<InteractiveOutcome> {
     let (input_tx, mut input_rx) = mpsc::channel(16);
     let (output_tx, output_rx) = mpsc::channel(512);
     let start_mode = agent.mode();
+    let resumed = restored.is_some();
     let (replay, history) = restored
-        .map(|r| (r.items, r.history))
+        .map(|r| (r.events, r.history))
         .unwrap_or_else(|| (Vec::new(), Vec::new()));
     let tui = tokio::spawn(latch_tui::run(
         input_tx,
@@ -286,12 +417,17 @@ async fn interactive(mut agent: Agent, model: String, restored: Option<Restored>
         .send(Output::Header {
             model,
             branch: git_branch().unwrap_or_else(|_| "-".into()),
-            continuity: "bounded".into(),
+            resumed,
         })
         .await?;
+    let mut outcome = InteractiveOutcome::Exit;
     'session: while let Some(input) = input_rx.recv().await {
         match input {
             Input::Quit => break,
+            Input::Resume => {
+                outcome = InteractiveOutcome::Resume;
+                break;
+            }
             Input::Cancel => {}
             Input::Submit(text) => {
                 if text.trim_start().starts_with('/') {
@@ -306,29 +442,10 @@ async fn interactive(mut agent: Agent, model: String, restored: Option<Restored>
                             vec![Output::AssistantDelta(t)]
                         }
                         latch_kernel::agent::AgentOutput::Durable(e) => {
-                            // The streamed assistant item already shows the
-                            // final text; skip the durable duplicate.
-                            if matches!(e.payload, EventPayload::AssistantMessageCompleted { .. }) {
-                                vec![]
-                            } else {
-                                latch_protocol::display_items(&e)
-                                    .into_iter()
-                                    .map(Output::Item)
-                                    .collect()
-                            }
+                            vec![Output::Event(*e)]
                         }
                         latch_kernel::agent::AgentOutput::ToolResult(result) => {
-                            vec![Output::Item(latch_protocol::DisplayItem::ToolActivity {
-                                call_id: result.call_id,
-                                verb: result.name,
-                                target: String::new(),
-                                detail: first_line(&result.output),
-                                status: if result.is_error {
-                                    latch_protocol::ToolRunStatus::Failed
-                                } else {
-                                    latch_protocol::ToolRunStatus::Passed
-                                },
-                            })]
+                            vec![Output::ToolResult(result)]
                         }
                         _ => vec![],
                     };
@@ -350,6 +467,7 @@ async fn interactive(mut agent: Agent, model: String, restored: Option<Restored>
                         next = input_rx.recv() => match next {
                             Some(Input::Cancel) => active.cancel(),
                             Some(Input::Quit) | None => { active.cancel(); let _ = (&mut running).await; break 'session; }
+                            Some(Input::Resume) => { output_tx.send(Output::Notice("cancel the active turn before resuming another session".into())).await?; }
                             Some(Input::Submit(_)) => output_tx.send(Output::Notice("finish or cancel the active turn before submitting another message".into())).await?,
                         }
                     }
@@ -360,7 +478,7 @@ async fn interactive(mut agent: Agent, model: String, restored: Option<Restored>
     drop(output_tx);
     tui.await??;
     agent.shutdown_extensions().await?;
-    Ok(())
+    Ok(outcome)
 }
 
 async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>) -> Result<()> {
@@ -402,27 +520,13 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
 }
 async fn send_tool(agent: &Agent, name: &str, tx: &mpsc::Sender<Output>) -> Result<()> {
     let r = agent.builtin_tool(name, CancellationToken::new()).await;
-    tx.send(Output::Item(latch_protocol::DisplayItem::ToolActivity {
-        call_id: r.call_id,
-        verb: name.into(),
-        target: String::new(),
-        detail: first_line(&r.output),
-        status: if r.is_error {
-            latch_protocol::ToolRunStatus::Failed
-        } else {
-            latch_protocol::ToolRunStatus::Passed
-        },
-    }))
+    (if name == "git_diff" && !r.output.trim().is_empty() && !r.is_error {
+        tx.send(Output::Notice(r.output))
+    } else {
+        tx.send(Output::ToolResult(r))
+    })
     .await?;
     Ok(())
-}
-fn first_line(text: &str) -> String {
-    text.lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("")
-        .chars()
-        .take(80)
-        .collect()
 }
 fn git_branch() -> Result<String> {
     let out = std::process::Command::new("git")
