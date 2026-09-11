@@ -1,0 +1,25 @@
+[package]
+name = "latch-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "latch"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+latch-kernel = { path = "../latch-kernel" }
+latch-protocol = { path = "../latch-protocol" }
+latch-tui = { path = "../latch-tui" }
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

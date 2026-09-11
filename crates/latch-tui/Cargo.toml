@@ -1,0 +1,16 @@
+[package]
+name = "latch-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+latch-protocol = { path = "../latch-protocol" }
+ratatui.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
