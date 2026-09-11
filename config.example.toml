@@ -1,0 +1,26 @@
+default_mode = "WORK"
+# state_dir = "/home/you/.local/state/latch"
+
+[provider]
+kind = "openai-compatible" # or "anthropic"
+model = "gpt-5-mini"
+# base_url = "https://api.openai.com/v1"
+# api_key_env = "OPENAI_API_KEY"
+
+[permissions]
+workspace_write = true
+outside_workspace = "deny"
+shell_timeout_seconds = 120
+
+[context]
+active_bytes = 96000
+recent_bytes = 48000
+reserve_bytes = 16000
+
+[failure]
+retry_budget = 3
+
+# [[extensions]]
+# name = "example"
+# command = "node"
+# args = ["/absolute/path/to/extensions/example-ts/dist/index.js"]
