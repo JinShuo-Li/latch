@@ -9,8 +9,10 @@ event order, file versions, process results, validation outcomes, evidence
 provenance, policy decisions, mutations, cancellation, and durable state.
 Prompts explain mechanisms while code enforces hard invariants. ASK and PLAN
 cannot mutate (including validation commands that are not conservatively
-read-only). A guarded edit cannot replace a version it did not observe.
-Forbidden commands do not execute.
+read-only). A guarded edit targets a version Latch observed; drift that Latch
+itself produced is recognized so repairs never demand a redundant re-read, while
+genuine external modification is still refused. Forbidden commands do not
+execute.
 
 ## Validation intent versus kernel truth
 
@@ -102,10 +104,14 @@ provider usage as zero. Abnormal states become visually obvious; healthy state
 stays quiet.
 
 Code modification reads at a glance: edit rows carry green `+N` and red `−N`
-independently, and `/diff` opens a typed unified-diff inspector. Counts come
-from a real Myers line diff over the kernel change ledger, so moved blocks and
-duplicate lines are not misreported. Only parsed unified diffs receive red/green
-semantics, so compiler output or shell text can never be misclassified.
+independently, a compact preview of the real unified diff (green additions, red
+removals, subdued context) is shown inline, and `/diff` opens a typed
+unified-diff inspector. Counts come from a real Myers line diff over the kernel
+change ledger, so moved blocks and duplicate lines are not misreported. The
+preview text is generated from the actual before/after bytes at mutation time,
+never reconstructed from counters, and is bounded with an explicit omission
+note. Only parsed unified diffs receive red/green semantics, so compiler output
+or shell text can never be misclassified.
 
 ## Terminal experience
 
@@ -122,7 +128,8 @@ deterministic Markdown subset, one visual lifecycle row per tool call (running
 Hidden internals — reasoning content, context statistics, model usage, raw task
 state — are never displayed, live or on resume. Typing `/` opens a command
 palette filtered from the same list `/help` prints. The input is a real editor:
-cursor motion, multiline (Alt+Enter), word kill, a bounded expanding area, and
+cursor motion, multiline (Ctrl+J or Alt+Enter), word kill, a bounded expanding
+area, and
 shell-like prompt history recalled with Up/Down that survives resume from user
 events. Scrolling stays visual-row based with PageUp/PageDown, Home/End, mouse
 wheel, auto-follow at the bottom, and a subtle newer-content indicator.

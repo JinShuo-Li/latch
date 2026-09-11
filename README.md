@@ -68,10 +68,23 @@ compact, while failures retain a bounded diagnostic:
     Search "average" in src/
 
 • Edited src/lib.rs  +2 −2
+    @@ -12,7 +12,7 @@
+         let base = 10;
+    -    base + a + b
+    +    base + a - b
+         base + a + b + offset
 
 ✓ Verified
   └ cargo test · 3 tests passed · 0.42s
 ```
+
+Edit cells carry the real unified diff computed by the kernel from the actual
+before/after bytes: added source lines render green, removed lines red, and
+unchanged context is subdued. Previews are bounded with an explicit
+`… N diff lines omitted · /diff for the full diff` note, and newly created,
+deleted, repeated, multi-file, and Unicode content all render the same way. The
+`+N −N` summary remains, but the diff itself is never reconstructed from those
+counters.
 
 The composer is the main control surface: a closed rounded frame (cyan while it
 owns input, quiet gray during overlays or approvals) with comfortable padding, a

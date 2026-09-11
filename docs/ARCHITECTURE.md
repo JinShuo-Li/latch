@@ -121,7 +121,10 @@ Latch- and shell-owned changes persist across restarts: pre-change bytes go to
 content-addressed artifacts referenced by `FileChanged` events, and
 `ChangeReverted` tombstones keep a resumed ledger from re-applying undone
 work. `/undo` peeks before popping, restores only when the file still matches
-the recorded post-change hash, and refuses otherwise. Workspace drift around
+the recorded post-change hash, and refuses otherwise. Guarded edits check the
+`base_hash` against the current bytes, but drift onto a hash Latch itself wrote
+is recognized as self-authored, so read → edit → repair works without a forced
+re-read; only genuinely external modification trips the stale path. Workspace drift around
 shell commands is classified honestly: Git workspaces get reversible `Shell`-owned
 records where pre-content was capturable (captured dirty files, or the HEAD
 blob for previously clean files) and explicit non-reversible markers otherwise;
