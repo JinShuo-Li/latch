@@ -1174,6 +1174,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tracing",
+ "unicode-width",
  "uuid",
 ]
 

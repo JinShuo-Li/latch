@@ -1,6 +1,7 @@
 use crate::config::ContextConfig;
 use crate::state::{EvidenceLedger, FailureManager};
 use crate::store::EventStore;
+use crate::tokens::TokenEstimator;
 use anyhow::Result;
 use latch_protocol::{
     ContextStats, Event, EventPayload, MemoryKind, MemoryRecord, TaskState, Validity,
@@ -52,9 +53,26 @@ pub struct MaterializedContext {
     pub stats: ContextStats,
 }
 
+/// Token budget for one materialized request view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaterializeBudget {
+    /// Complete request budget (`context window - reserve`).
+    pub request_tokens: usize,
+    /// The model's full context window, for display.
+    pub window_tokens: usize,
+    /// Tokens reserved for the model response plus safety.
+    pub reserve_tokens: usize,
+    /// Upper bound for the verbatim recent transcript.
+    pub recent_tokens: usize,
+    /// Tokens already reserved by the caller for tool schemas and extension
+    /// context; continuity sizes its own sections inside the remainder.
+    pub reserved_tokens: usize,
+}
+
 pub struct ContinuityEngine {
     store: EventStore,
     config: ContextConfig,
+    estimator: TokenEstimator,
     generation: u32,
 }
 impl ContinuityEngine {
@@ -63,7 +81,53 @@ impl ContinuityEngine {
         Self {
             store,
             config,
+            estimator: TokenEstimator::generic(),
             generation: 0,
+        }
+    }
+    /// Builds an engine whose estimator matches the provider model.
+    #[must_use]
+    pub fn for_model(store: EventStore, config: ContextConfig, model: &str) -> Self {
+        Self {
+            store,
+            config,
+            estimator: TokenEstimator::for_model(model),
+            generation: 0,
+        }
+    }
+    #[must_use]
+    pub const fn estimator(&self) -> &TokenEstimator {
+        &self.estimator
+    }
+    pub fn set_estimator(&mut self, estimator: TokenEstimator) {
+        self.estimator = estimator;
+    }
+    pub fn set_config(&mut self, config: ContextConfig) {
+        self.config = config;
+    }
+    /// Derives the request budget from this engine's token configuration.
+    #[must_use]
+    pub fn default_budget(
+        &self,
+        window_tokens: usize,
+        reserved_tokens: usize,
+    ) -> MaterializeBudget {
+        let window = window_tokens.max(1);
+        let reserve = self
+            .config
+            .output_reserve_tokens
+            .saturating_add(self.config.reserve_tokens);
+        let request_tokens = self
+            .config
+            .max_request_tokens
+            .unwrap_or_else(|| window.saturating_sub(reserve))
+            .min(window);
+        MaterializeBudget {
+            request_tokens,
+            window_tokens: window,
+            reserve_tokens: reserve,
+            recent_tokens: self.config.recent_tokens,
+            reserved_tokens: reserved_tokens.min(request_tokens),
         }
     }
     pub fn manual_compact(&mut self, session_id: Uuid) -> Result<()> {
@@ -82,14 +146,18 @@ impl ContinuityEngine {
 
     /// Materializes one bounded request view.
     ///
-    /// Invariant: `system + canonical + recalled + recent + episode index`
-    /// stays within `active_bytes` while preserving `reserve_bytes`. Components
-    /// are allocated in explicit priority order — system prompt, canonical
-    /// core (goal/constraints/decisions/evidence/failures), protocol-atomic
-    /// recent verbatim transcript, query-recalled original events, then the
-    /// scored episode index. Lower-priority material shrinks first; nothing
-    /// durable is ever deleted and no automatic compaction exists.
-    #[allow(clippy::too_many_arguments)]
+    /// Invariant: `instructions + state + recent + recall` (the sections this
+    /// engine owns) stays within the request budget minus any tokens the caller
+    /// already reserved for tool schemas and extension context. Components are
+    /// allocated in explicit priority order — system prompt, canonical core
+    /// (goal/constraints/decisions/evidence/failures), protocol-atomic recent
+    /// verbatim transcript, query-recalled original events, then the scored
+    /// episode index. Lower-priority material shrinks first; nothing durable is
+    /// ever deleted and no automatic compaction exists.
+    ///
+    /// Every size is a token estimate; the caller adds tools/extension costs
+    /// and recomputes the final totals so recalled material is counted exactly
+    /// once.
     pub fn materialize(
         &self,
         session_id: Uuid,
@@ -98,6 +166,7 @@ impl ContinuityEngine {
         evidence: &EvidenceLedger,
         failures: &FailureManager,
         system: String,
+        budget: &MaterializeBudget,
     ) -> Result<MaterializedContext> {
         let memories = self.store.memories(session_id)?;
         let active_start = self.active_start(session_id)?;
@@ -112,40 +181,57 @@ impl ContinuityEngine {
             .transpose()?
             .unwrap_or_default();
 
-        // 1. Hard system/kernel instructions come first.
-        let hard = self
-            .config
-            .active_bytes
-            .saturating_sub(self.config.reserve_bytes);
-        let mut used = system.len();
+        let estimator = self.estimator;
+        let own_budget = budget.request_tokens.saturating_sub(budget.reserved_tokens);
 
-        // 2. Canonical state, capped. Individual memory lines drop lowest-
-        //    priority first; goal, constraints, decisions, evidence, and
+        // 1. Hard system/kernel instructions come first.
+        let instructions_tokens = estimator.estimate(&system);
+        let mut used = instructions_tokens;
+
+        // 2. Canonical state, capped by tokens. Individual memory lines drop
+        //    lowest-priority first; goal, constraints, decisions, evidence, and
         //    failures survive as long as anything does.
-        let canonical_cap = hard.saturating_sub(used) * 2 / 5;
+        let canonical_cap = own_budget.saturating_sub(used) * 2 / 5;
         let bridge = conversation_bridge(state, active_events);
-        let canonical =
-            render_canonical(state, &memories, evidence, failures, &bridge, canonical_cap);
-        used += canonical.len();
-        let canonical_bytes = canonical.len();
+        let canonical = render_canonical(
+            state,
+            &memories,
+            evidence,
+            failures,
+            &bridge,
+            canonical_cap,
+            &estimator,
+        );
+        let state_tokens = estimator.estimate(&canonical);
+        used = used.saturating_add(state_tokens);
 
         // 3. Recent verbatim transcript, protocol-atomic, within its own
         //    budget and the global remainder.
-        let recent_budget = self.config.recent_bytes.min(hard.saturating_sub(used));
-        let recent = select_recent(active_events, recent_budget);
-        let recent_bytes = recent.iter().map(|e| render_event(e).len()).sum();
-        used += recent_bytes;
+        let recent_budget = budget.recent_tokens.min(own_budget.saturating_sub(used));
+        let recent = select_recent(active_events, recent_budget, &estimator);
+        let recent_tokens = recent
+            .iter()
+            .map(|event| estimator.estimate(&render_event(event)))
+            .sum::<usize>();
+        used = used.saturating_add(recent_tokens);
 
-        // 4. Recalled original events, bounded by what remains.
-        let recalled_cap = hard.saturating_sub(used) * 3 / 4;
-        let (recalled_text, _recalled_selected) = render_recalled(&recalled_events, recalled_cap);
-        let recalled_bytes = recalled_text.len();
-        used += recalled_bytes;
-
-        // 5. Episode index, scored and bounded by what remains.
+        // 4. Recalled originals, then the episode index, sharing the remaining
+        //    recall budget. The combined block is estimated exactly once so
+        //    recalled content is never double counted.
+        let recall_budget = own_budget.saturating_sub(used);
+        let recalled_cap = recall_budget * 3 / 4;
+        let (recalled_text, _recalled_selected) =
+            render_recalled(&recalled_events, recalled_cap, &estimator);
+        let recalled_used = estimator.estimate(&recalled_text);
         let old_end = active_events.len().saturating_sub(recent.len());
         let episodes = build_episodes(&active_events[..old_end]);
-        let selected = select_episodes(&episodes, query, state, hard.saturating_sub(used));
+        let selected = select_episodes(
+            &episodes,
+            query,
+            state,
+            recall_budget.saturating_sub(recalled_used),
+            &estimator,
+        );
         let episode_index = selected
             .iter()
             .map(|episode| episode.summary.clone())
@@ -155,15 +241,27 @@ impl ContinuityEngine {
             "EPISODE INDEX\n{}\nORIGINAL RECALLED EVENTS\n{}",
             episode_index, recalled_text
         );
+        let recall_tokens = estimator.estimate(&recalled_full);
 
-        let total = used + recalled_full.len();
-        let status = if total <= hard {
-            "bounded".to_owned()
-        } else {
-            // Only an oversized system prompt can break the invariant; report
-            // it honestly instead of hiding it.
-            "over_budget".to_owned()
+        let mut stats = ContextStats {
+            instructions_tokens,
+            state_tokens,
+            recent_tokens,
+            recall_tokens,
+            tools_tokens: 0,
+            extension_tokens: 0,
+            total_tokens: 0,
+            budget_tokens: budget.request_tokens,
+            window_tokens: budget.window_tokens,
+            reserve_tokens: budget.reserve_tokens,
+            headroom_tokens: 0,
+            durable_events: all_events.len(),
+            episodes: episodes.len(),
+            selected_episodes: selected.len(),
+            estimated: true,
+            status: String::new(),
         };
+        stats.recompute();
         Ok(MaterializedContext {
             system,
             canonical,
@@ -171,19 +269,7 @@ impl ContinuityEngine {
             recent,
             bridge,
             episodes: selected.clone(),
-            stats: ContextStats {
-                recent_bytes,
-                recalled_bytes,
-                canonical_bytes,
-                code_evidence_bytes: 0,
-                reserve_bytes: self.config.reserve_bytes,
-                durable_events: all_events.len(),
-                episodes: episodes.len(),
-                selected_episodes: selected.len(),
-                total_bytes: total,
-                budget_bytes: self.config.active_bytes,
-                status,
-            },
+            stats,
         })
     }
     fn active_start(&self, session_id: Uuid) -> Result<usize> {
@@ -226,7 +312,8 @@ fn select_episodes(
     episodes: &[Episode],
     query: Option<&str>,
     state: &TaskState,
-    budget: usize,
+    budget_tokens: usize,
+    estimator: &TokenEstimator,
 ) -> Vec<Episode> {
     let newest_start = episodes.len().saturating_sub(5);
     let mut scored: Vec<(i64, usize, &Episode)> = episodes
@@ -247,10 +334,11 @@ fn select_episodes(
         if selected.len() >= MAX_EPISODE_ENTRIES {
             break;
         }
-        if score <= 0 || used + episode.summary.len() > budget {
+        let cost = estimator.estimate(&episode.summary);
+        if score <= 0 || used + cost > budget_tokens {
             continue;
         }
-        used += episode.summary.len();
+        used += cost;
         selected.push(episode.clone());
     }
     selected.sort_by_key(|episode| episode.start_sequence);
@@ -303,16 +391,16 @@ fn score_episode(episode: &Episode, query: Option<&str>, state: &TaskState) -> i
     score
 }
 
-fn select_recent(events: &[Event], budget: usize) -> Vec<Event> {
+fn select_recent(events: &[Event], budget_tokens: usize, estimator: &TokenEstimator) -> Vec<Event> {
     let units = conversation_units(events);
     let mut size = 0;
     let mut selected = Vec::new();
     for &(start, end) in units.iter().rev() {
         let n = events[start..end]
             .iter()
-            .map(|event| render_event(event).len())
+            .map(|event| estimator.estimate(&render_event(event)))
             .sum::<usize>();
-        if !selected.is_empty() && size + n > budget {
+        if !selected.is_empty() && size + n > budget_tokens {
             break;
         }
         size += n;
@@ -519,7 +607,8 @@ fn render_canonical(
     evidence: &EvidenceLedger,
     failures: &FailureManager,
     bridge: &ConversationBridge,
-    cap: usize,
+    cap_tokens: usize,
+    estimator: &TokenEstimator,
 ) -> String {
     // Compact JSON: canonical state for the model, without prettify padding.
     let state_json = serde_json::to_string(state).unwrap_or_default();
@@ -583,7 +672,12 @@ fn render_canonical(
     ];
     // Drop lowest-priority sections until the canonical view fits its share.
     while sections.len() > 1
-        && sections.iter().map(|s| s.len()).sum::<usize>() + 4 * (sections.len() - 1) > cap
+        && sections
+            .iter()
+            .map(|section| estimator.estimate(section))
+            .sum::<usize>()
+            + 4 * (sections.len() - 1)
+            > cap_tokens
     {
         // Priority: bridge first, then memory, then failures, then evidence;
         // task state JSON always stays.
@@ -611,14 +705,21 @@ fn render_canonical(
     sections.join("\n\n")
 }
 
-fn render_recalled(recalled: &[Event], cap: usize) -> (String, Vec<Event>) {
+fn render_recalled(
+    recalled: &[Event],
+    cap_tokens: usize,
+    estimator: &TokenEstimator,
+) -> (String, Vec<Event>) {
     let mut text = String::new();
+    let mut used = 0usize;
     let mut selected = Vec::new();
     for event in recalled {
         let rendered = render_event(event);
-        if !selected.is_empty() && text.len() + rendered.len() > cap {
+        let cost = estimator.estimate(&rendered);
+        if !selected.is_empty() && used + cost > cap_tokens {
             break;
         }
+        used += cost;
         text.push_str(&rendered);
         text.push('\n');
         selected.push(event.clone());
@@ -664,6 +765,16 @@ mod tests {
     use latch_protocol::{MemoryKind, MemoryRecord};
     use std::path::Path;
     use uuid::Uuid;
+
+    fn budget(request_tokens: usize, recent_tokens: usize) -> MaterializeBudget {
+        MaterializeBudget {
+            request_tokens,
+            window_tokens: request_tokens.saturating_add(12_192),
+            reserve_tokens: 12_192,
+            recent_tokens,
+            reserved_tokens: 0,
+        }
+    }
 
     fn memory(
         session: Uuid,
@@ -776,9 +887,10 @@ mod tests {
         let engine = ContinuityEngine::new(
             store.clone(),
             ContextConfig {
-                active_bytes: 24_000,
-                recent_bytes: 4_000,
-                reserve_bytes: 2_000,
+                max_request_tokens: Some(24_000),
+                recent_tokens: 4_000,
+                reserve_tokens: 2_000,
+                output_reserve_tokens: 0,
             },
         );
         let ctx = engine
@@ -789,6 +901,7 @@ mod tests {
                 &EvidenceLedger::default(),
                 &crate::state::FailureManager::new(3),
                 "system".into(),
+                &budget(24_000, 4_000),
             )
             .unwrap();
         assert!(ctx.canonical.contains("Constraint A"));
@@ -819,13 +932,24 @@ mod tests {
                 .any(|e| matches!(e.payload, EventPayload::ManualCompact { .. }))
         );
         assert!(ctx.recent.len() < all.len());
-        // Bounded invariant: everything materialized fits the active budget
-        // minus reserve even with 2000 durable events.
-        let materialized = ctx.stats.total_bytes;
+        // Bounded invariant: the estimated request fits the token budget even
+        // with 2000 durable events, and the component sum is exact.
+        let materialized = ctx.stats.total_tokens;
         assert!(
-            materialized <= 24_000 - 2_000,
+            materialized <= 24_000,
             "materialized {materialized} exceeded budget"
         );
+        let component_sum = ctx.stats.instructions_tokens
+            + ctx.stats.state_tokens
+            + ctx.stats.recent_tokens
+            + ctx.stats.recall_tokens
+            + ctx.stats.tools_tokens
+            + ctx.stats.extension_tokens;
+        assert_eq!(
+            materialized, component_sum,
+            "recalled material must be counted exactly once"
+        );
+        assert_eq!(ctx.stats.headroom_tokens, 24_000 - materialized);
         // Episode index is a bounded selection, not every episode.
         assert!(ctx.episodes.len() <= MAX_EPISODE_ENTRIES);
         assert!(ctx.stats.episodes > ctx.episodes.len() || ctx.stats.episodes < 20);
@@ -848,9 +972,10 @@ mod tests {
         let engine = ContinuityEngine::new(
             store.clone(),
             ContextConfig {
-                active_bytes: 16_000,
-                recent_bytes: 4_000,
-                reserve_bytes: 2_000,
+                max_request_tokens: Some(16_000),
+                recent_tokens: 4_000,
+                reserve_tokens: 2_000,
+                output_reserve_tokens: 0,
             },
         );
         let ctx = engine
@@ -861,9 +986,10 @@ mod tests {
                 &EvidenceLedger::default(),
                 &crate::state::FailureManager::new(3),
                 "system prompt".repeat(10),
+                &budget(16_000, 4_000),
             )
             .unwrap();
-        assert!(ctx.stats.total_bytes <= 14_000);
+        assert!(ctx.stats.total_tokens <= 16_000);
         assert_eq!(ctx.stats.status, "bounded");
         // 5000 durable fillers plus the one recall bookkeeping event.
         assert_eq!(store.events(sid).unwrap().len(), 5001);
@@ -883,9 +1009,10 @@ mod tests {
         let mut e = ContinuityEngine::new(
             s.clone(),
             ContextConfig {
-                active_bytes: 100,
-                recent_bytes: 50,
-                reserve_bytes: 10,
+                max_request_tokens: Some(100),
+                recent_tokens: 50,
+                reserve_tokens: 10,
+                output_reserve_tokens: 0,
             },
         );
         e.manual_compact(id).unwrap();
@@ -900,6 +1027,7 @@ mod tests {
                 &EvidenceLedger::default(),
                 &crate::state::FailureManager::new(3),
                 "system".into(),
+                &budget(100, 50),
             )
             .unwrap();
         assert!(context.recent.is_empty());
@@ -965,13 +1093,15 @@ mod tests {
                 },
             ),
         ];
-        let transaction = render_event(&events[1]).len() + render_event(&events[2]).len();
-        let tail = render_event(&events[3]).len();
+        let estimator = TokenEstimator::generic();
+        let transaction = estimator.estimate(&render_event(&events[1]))
+            + estimator.estimate(&render_event(&events[2]));
+        let tail = estimator.estimate(&render_event(&events[3]));
 
         // Budget fits the trailing assistant reply and the tool result but not
         // the assistant tool-call message: the transaction must be dropped
         // whole, never leaving a dangling tool result.
-        let split = select_recent(&events, tail + transaction - 1);
+        let split = select_recent(&events, tail + transaction - 1, &estimator);
         assert_eq!(split.len(), 1);
         assert!(matches!(
             split[0].payload,
@@ -984,7 +1114,7 @@ mod tests {
         );
 
         // Budget fits the whole transaction: both halves are selected.
-        let whole = select_recent(&events, tail + transaction);
+        let whole = select_recent(&events, tail + transaction, &estimator);
         assert!(
             whole
                 .iter()
@@ -1032,7 +1162,7 @@ mod tests {
         let units = conversation_units(&events);
         assert_eq!(units, vec![(0, 2)]);
         for budget in [0, 1, 10, 100, 10_000] {
-            let recent = select_recent(&events, budget);
+            let recent = select_recent(&events, budget, &TokenEstimator::generic());
             let has_assistant = recent.iter().any(|e| matches!(
                 &e.payload,
                 EventPayload::AssistantMessageCompleted { tool_calls, .. } if !tool_calls.is_empty()
@@ -1134,9 +1264,13 @@ mod tests {
             &crate::state::FailureManager::new(3),
             &ConversationBridge::default(),
             2_000,
+            &TokenEstimator::generic(),
         );
         assert!(rendered.contains("ship it"));
         assert!(rendered.contains("keep API stable"));
-        assert!(rendered.len() < 30_000, "canonical must be capped");
+        assert!(
+            TokenEstimator::generic().estimate(&rendered) < 30_000,
+            "canonical must be capped"
+        );
     }
 }

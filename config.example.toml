@@ -15,15 +15,26 @@ outside_workspace = "deny"
 shell_timeout_seconds = 120
 
 [context]
-active_bytes = 96000
-recent_bytes = 48000
-reserve_bytes = 16000
+# All context budgets are tokens. Bytes remain only for internal file,
+# artifact, log, and I/O limits.
+# recent_tokens = 24000          # verbatim transcript share of the request
+# output_reserve_tokens = 8192   # reserved for the model's response
+# reserve_tokens = 4000          # additional safety reserve
+# max_request_tokens = 200000    # explicit cap; defaults to window - reserve
 
 [failure]
 retry_budget = 3
 # Consecutive redundant inspection turns tolerated before the kernel
 # re-grounds the model with the already-known unchanged observations.
 stagnation_budget = 2
+# Ultimate abnormal-behaviour circuit breaker. Unset means unlimited: long,
+# productive tasks are never killed by turn count.
+# max_model_turns = 1000
+
+# Per-model metadata. The context window defaults to 256000 tokens when not
+# configured; set it explicitly to match the provider model.
+# [models.deepseek-flash]
+# context_window_tokens = 262144
 
 # Optional, user-configured pricing for the usage sidebar. Latch never fetches
 # or invents prices; amounts are presented as estimates. Every component is

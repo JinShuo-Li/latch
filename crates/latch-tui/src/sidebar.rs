@@ -584,23 +584,26 @@ impl SidebarModel {
             return vec![section_title("CONTEXT")];
         };
         let mut lines = vec![section_title("CONTEXT")];
-        let budget = if context.budget_bytes > 0 {
+        // The working set is the complete estimated request; the denominator is
+        // the model's context window. Provider-reported usage, shown below when
+        // available, is authoritative for the request that actually ran.
+        let working = if context.window_tokens > 0 {
             format!(
-                "{} / {}",
-                format_bytes(context.total_bytes),
-                format_bytes(context.budget_bytes)
+                "≈{} / {} tok",
+                format_tokens(context.total_tokens as u64),
+                format_tokens(context.window_tokens as u64)
             )
         } else {
-            format_bytes(context.total_bytes)
+            format!("≈{} tok", format_tokens(context.total_tokens as u64))
         };
         lines.push(Line::from(vec![
             Span::styled("Working set  ", dim()),
-            Span::raw(budget),
+            Span::raw(fit(&working, width.saturating_sub(13))),
         ]));
-        if show_bar && context.budget_bytes > 0 {
+        if show_bar && context.budget_tokens > 0 {
             lines.push(Line::styled(
-                bar(context.total_bytes, context.budget_bytes, width),
-                if context.total_bytes > context.budget_bytes {
+                bar(context.total_tokens, context.budget_tokens, width),
+                if context.total_tokens > context.budget_tokens {
                     yellow()
                 } else {
                     cyan()
@@ -609,18 +612,54 @@ impl SidebarModel {
         }
         if detail {
             for (label, value) in [
-                ("Recent", context.recent_bytes),
-                ("Canonical", context.canonical_bytes),
-                ("Recalled", context.recalled_bytes),
-                ("Reserve", context.reserve_bytes),
+                ("Recent", context.recent_tokens),
+                ("State", context.state_tokens),
+                ("Recall", context.recall_tokens),
+                (
+                    "Tools+ext",
+                    context
+                        .tools_tokens
+                        .saturating_add(context.extension_tokens),
+                ),
             ] {
-                if value == 0 && label != "Reserve" {
+                if value == 0 {
                     continue;
                 }
                 lines.push(Line::from(vec![
                     Span::styled(format!("{label:<12}"), dim()),
-                    Span::raw(format_bytes(value)),
+                    Span::raw(fit(
+                        &format!("{} tok", format_tokens(value as u64)),
+                        width.saturating_sub(12),
+                    )),
                 ]));
+            }
+            lines.push(Line::from(vec![
+                Span::styled("Reserve     ", dim()),
+                Span::raw(format!(
+                    "{} tok",
+                    format_tokens(context.reserve_tokens as u64)
+                )),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Headroom    ", dim()),
+                Span::raw(format!(
+                    "{} tok",
+                    format_tokens(context.headroom_tokens as u64)
+                )),
+            ]));
+        }
+        if let Some(last) = &self.last_usage {
+            if detail {
+                lines.push(Line::styled(
+                    fit(
+                        &format!(
+                            "Reported    last request {} tok",
+                            format_tokens(last.input_tokens)
+                        ),
+                        width,
+                    ),
+                    dim(),
+                ));
             }
         }
         if detail || show_bar {
@@ -895,19 +934,6 @@ fn completion_label(completion: &CompletionState) -> (&'static str, Style) {
     }
 }
 
-/// `45.7k / 96k`-style byte formatting. Bytes are never relabeled as tokens.
-#[must_use]
-pub fn format_bytes(bytes: usize) -> String {
-    let value = bytes as f64;
-    if bytes < 1_000 {
-        format!("{bytes} B")
-    } else if bytes < 10_000_000 {
-        format!("{}k", trim_decimal(value / 1_000.0))
-    } else {
-        format!("{}M", trim_decimal(value / 1_000_000.0))
-    }
-}
-
 fn option_tokens(tokens: Option<u64>) -> String {
     tokens.map_or_else(|| "—".to_owned(), format_tokens)
 }
@@ -1055,29 +1081,40 @@ mod tests {
 
     fn stats() -> ContextStats {
         ContextStats {
-            recent_bytes: 37_900,
-            recalled_bytes: 3_100,
-            canonical_bytes: 3_300,
-            code_evidence_bytes: 0,
-            reserve_bytes: 16_000,
+            instructions_tokens: 3_000,
+            state_tokens: 3_300,
+            recent_tokens: 37_900,
+            recall_tokens: 1_500,
+            tools_tokens: 2_400,
+            extension_tokens: 0,
+            total_tokens: 48_100,
+            budget_tokens: 243_808,
+            window_tokens: 256_000,
+            reserve_tokens: 12_192,
+            headroom_tokens: 195_708,
             durable_events: 503,
             episodes: 11,
             selected_episodes: 4,
-            total_bytes: 45_700,
-            budget_bytes: 96_000,
+            estimated: true,
             status: "bounded".into(),
         }
     }
 
     #[test]
-    fn context_is_a_bounded_working_set_and_bytes_are_not_tokens() {
+    fn context_is_a_token_working_set_against_the_model_window() {
         let mut model = SidebarModel::new(session());
         model.apply_event(&event(EventPayload::ContextMaterialized { stats: stats() }));
         let rendered = render(&model, 40, 60);
         assert!(rendered.contains("Working set"));
-        assert!(rendered.contains("45.7k / 96k"));
+        assert!(rendered.contains("≈48.1k / 256k tok"), "{rendered}");
+        assert!(rendered.contains("Recent"));
+        assert!(rendered.contains("Tools+ext"));
+        assert!(rendered.contains("Headroom"));
         assert!(rendered.contains("503 events · 11 episodes"));
-        assert!(!rendered.contains("tokens"), "bytes must not be relabeled");
+        assert!(
+            !rendered.contains("48.1k / 256k B"),
+            "context must never render as bytes"
+        );
     }
 
     #[test]
@@ -1399,14 +1436,19 @@ mod tests {
             0,
             EventPayload::ContextMaterialized {
                 stats: ContextStats {
-                    recent_bytes: 37_900,
-                    recalled_bytes: 3_100,
-                    canonical_bytes: 3_300,
-                    reserve_bytes: 16_000,
+                    instructions_tokens: 3_000,
+                    state_tokens: 3_300,
+                    recent_tokens: 37_900,
+                    recall_tokens: 1_500,
+                    tools_tokens: 2_400,
+                    total_tokens: 48_100,
+                    budget_tokens: 243_808,
+                    window_tokens: 256_000,
+                    reserve_tokens: 12_192,
+                    headroom_tokens: 195_708,
                     durable_events: 503,
                     episodes: 11,
-                    total_bytes: 45_700,
-                    budget_bytes: 96_000,
+                    estimated: true,
                     status: "bounded".into(),
                     ..ContextStats::default()
                 },

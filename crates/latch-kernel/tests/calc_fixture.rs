@@ -154,6 +154,12 @@ if __name__ == '__main__':
         PolicyEngine::new(Mode::Ask, workspace.clone(), PermissionConfig::default()),
     )
     .unwrap();
+    let context = ContextConfig {
+        max_request_tokens: Some(40_000),
+        recent_tokens: 20_000,
+        reserve_tokens: 0,
+        output_reserve_tokens: 0,
+    };
     let mut agent = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.clone(),
@@ -161,16 +167,10 @@ if __name__ == '__main__':
         store: store.clone(),
         provider: Arc::new(FakeProvider::scripted(scripted)),
         tools,
-        continuity: ContinuityEngine::new(
-            store.clone(),
-            ContextConfig {
-                active_bytes: 40_000,
-                recent_bytes: 20_000,
-                reserve_bytes: 4_000,
-            },
-        ),
+        continuity: ContinuityEngine::new(store.clone(), context.clone()),
         retry_budget: 3,
     });
+    agent.set_context_budget(context, latch_kernel::config::DEFAULT_CONTEXT_WINDOW_TOKENS);
     let sink = Arc::new(|_| {});
 
     agent

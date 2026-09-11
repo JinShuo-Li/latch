@@ -16,9 +16,12 @@ pub struct CompiledPrompt {
     pub fragments: Vec<PromptFragment>,
 }
 impl CompiledPrompt {
+    /// Conservative token estimate for the compiled prompt. Provider-reported
+    /// usage remains authoritative after a real request; this is only a
+    /// pre-request estimate.
     #[must_use]
     pub fn approximate_tokens(&self) -> usize {
-        self.text.len().div_ceil(4)
+        crate::tokens::TokenEstimator::generic().estimate(&self.text)
     }
     pub fn fragment(&self, id: &str) -> Option<&PromptFragment> {
         self.fragments.iter().find(|f| f.id == id)

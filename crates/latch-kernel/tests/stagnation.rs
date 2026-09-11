@@ -169,17 +169,20 @@ fn build_agent(
         PolicyEngine::new(mode, workspace.to_path_buf(), PermissionConfig::default()),
     )
     .unwrap();
+    let window = latch_kernel::config::DEFAULT_CONTEXT_WINDOW_TOKENS;
+    let continuity = ContinuityEngine::new(store.clone(), context.clone());
     let mut agent = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.to_path_buf(),
         mode,
-        store: store.clone(),
+        store,
         provider,
         tools,
-        continuity: ContinuityEngine::new(store, context),
+        continuity,
         retry_budget: 3,
     });
     agent.set_stagnation_budget(2);
+    agent.set_context_budget(context, window);
     agent
 }
 
@@ -689,9 +692,10 @@ async fn recent_window_without_user_prompt_still_replays_history() {
         Mode::Ask,
         provider.clone(),
         ContextConfig {
-            active_bytes: 20_000,
-            recent_bytes: 1_500,
-            reserve_bytes: 1_000,
+            max_request_tokens: Some(20_000),
+            recent_tokens: 1_500,
+            reserve_tokens: 1_000,
+            output_reserve_tokens: 0,
         },
     );
     agent
@@ -730,5 +734,45 @@ async fn recent_window_without_user_prompt_still_replays_history() {
             .iter()
             .any(|message| message.role == "tool" && message.tool_call_id.as_deref() == Some("r1")),
         "the previous tool result must be replayed"
+    );
+}
+
+/// Long-horizon guarantee: a task that keeps making genuine progress is never
+/// killed by model-turn count. The old kernel died at 32 turns.
+#[tokio::test]
+async fn productive_task_runs_past_one_hundred_model_turns() {
+    let (dir, workspace) = workspace_with(&[("data.txt", "needle\n")]);
+    let mut steps = Vec::new();
+    for index in 0..105 {
+        steps.push(step(response(
+            &format!("step {index}"),
+            vec![call(
+                &format!("s{index}"),
+                "search",
+                json!({"query": format!("needle-{index}")}),
+            )],
+        )));
+    }
+    steps.push(step(response("done", vec![])));
+    let provider = ScriptedProvider::new(steps);
+    let (mut agent, store, session) = fresh_agent(
+        &dir,
+        &workspace,
+        Mode::Ask,
+        provider.clone(),
+        ContextConfig::default(),
+    );
+    agent
+        .run("long task", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .expect("long productive tasks must not hit a turn ceiling");
+    assert!(
+        provider.requests().len() > 100,
+        "expected >100 model turns, got {}",
+        provider.requests().len()
+    );
+    assert!(
+        stagnation_events(&store.events(session).unwrap()).is_empty(),
+        "distinct observations are progress, not stagnation"
     );
 }

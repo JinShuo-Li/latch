@@ -1,4 +1,5 @@
-use crate::continuity::ContinuityEngine;
+use crate::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS};
+use crate::continuity::{ContinuityEngine, MaterializeBudget};
 use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
 use crate::progress::{DEFAULT_STAGNATION_BUDGET, ProgressSupervisor, StagnationDecision};
 use crate::prompt::PromptCompiler;
@@ -7,6 +8,7 @@ use crate::state::{
     EvidenceLedger, FailureManager, StateUpdate, TaskStateManager, failure_subject,
 };
 use crate::store::EventStore;
+use crate::tokens::TokenEstimator;
 use crate::tools::ToolExecutor;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
@@ -47,6 +49,9 @@ pub struct Agent {
     forward_watermark: Cell<usize>,
     suppressed_calls: HashSet<String>,
     max_model_retries: u32,
+    max_model_turns: Option<u32>,
+    context_window_tokens: usize,
+    estimator: TokenEstimator,
     scope_warned: bool,
     last_completion: Option<CompletionState>,
 }
@@ -63,6 +68,11 @@ pub struct AgentRuntime {
 impl Agent {
     #[must_use]
     pub fn new(runtime: AgentRuntime) -> Self {
+        let estimator = TokenEstimator::for_model(runtime.provider.model());
+        let mut continuity = runtime.continuity;
+        // The request estimator and the continuity budget must agree on the
+        // provider model.
+        continuity.set_estimator(estimator);
         let progress =
             ProgressSupervisor::new(DEFAULT_STAGNATION_BUDGET, runtime.workspace.clone());
         Self {
@@ -72,7 +82,7 @@ impl Agent {
             store: runtime.store,
             provider: runtime.provider,
             tools: runtime.tools,
-            continuity: runtime.continuity,
+            continuity,
             state: TaskStateManager::default(),
             evidence: EvidenceLedger::default(),
             extensions: ExtensionRegistry::new(),
@@ -82,6 +92,9 @@ impl Agent {
             forward_watermark: Cell::new(0),
             suppressed_calls: HashSet::new(),
             max_model_retries: 2,
+            max_model_turns: None,
+            context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+            estimator,
             scope_warned: false,
             last_completion: None,
         }
@@ -90,6 +103,29 @@ impl Agent {
     /// tolerated before the kernel re-grounds the model.
     pub fn set_stagnation_budget(&mut self, budget: u32) {
         self.progress.set_budget(budget);
+    }
+    /// Sets the ultimate model-turn circuit breaker. `None` keeps long,
+    /// productive tasks unlimited; the stagnation and failure supervisors
+    /// remain the primary loop controls.
+    pub fn set_max_model_turns(&mut self, max_model_turns: Option<u32>) {
+        self.max_model_turns = max_model_turns;
+    }
+    /// Installs the token-native context configuration and the resolved model
+    /// context window.
+    pub fn set_context_budget(&mut self, context: ContextConfig, window_tokens: usize) {
+        self.continuity.set_config(context);
+        self.context_window_tokens = window_tokens.max(1);
+    }
+    #[must_use]
+    pub const fn estimator(&self) -> &TokenEstimator {
+        &self.estimator
+    }
+    /// Token budget for the complete request, before tool/extension costs are
+    /// known.
+    #[must_use]
+    fn materialize_budget(&self, reserved_tokens: usize) -> MaterializeBudget {
+        self.continuity
+            .default_budget(self.context_window_tokens, reserved_tokens)
     }
     /// Changes the effective mode and records it durably so `--resume`
     /// restores the mode the session actually transitioned to.
@@ -175,6 +211,9 @@ impl Agent {
     }
     pub fn context(&self, query: Option<&str>) -> Result<crate::continuity::MaterializedContext> {
         let prompt = PromptCompiler::compile(self.mode, self.state.state(), &self.workspace)?;
+        // `/context` has no extension context to include, but tool schemas are
+        // part of every real request, so reserve for them here too.
+        let reserved = self.estimator.estimate_tools(&self.tool_definitions());
         self.continuity.materialize(
             self.session_id,
             self.state.state(),
@@ -182,6 +221,7 @@ impl Agent {
             &self.evidence,
             &self.failures,
             prompt.text,
+            &self.materialize_budget(reserved),
         )
     }
     pub fn compact(&mut self) -> Result<()> {
@@ -309,14 +349,43 @@ impl Agent {
         let mut turns = 0u32;
         loop {
             turns += 1;
-            if turns > 32 {
-                return Err(anyhow!("agent exceeded 32 tool turns"));
+            // The ultimate circuit breaker is opt-in and off by default: a
+            // long-horizon task making real progress is never killed by turn
+            // count. Stagnation and failure supervision are the primary loop
+            // controls.
+            if let Some(limit) = self.max_model_turns
+                && turns > limit
+            {
+                return Err(anyhow!(
+                    "agent exceeded the configured model-turn circuit breaker ({limit})"
+                ));
             }
             let query = if turns == 1 { Some(user_text) } else { None };
-            let ctx = self.context(query)?;
+            // Budget the complete request: tool schemas and extension context
+            // are part of every call, so they are reserved before the
+            // continuity engine allocates its own sections.
+            let extension_context = self.extensions.context().await?;
+            let extension_json = serde_json::to_string_pretty(&extension_context)?;
+            let tools = self.tool_definitions();
+            let tools_tokens = self.estimator.estimate_tools(&tools);
+            let extension_tokens = self.estimator.estimate(&extension_json);
+            let budget = self.materialize_budget(tools_tokens.saturating_add(extension_tokens));
+            let ctx = self.continuity.materialize(
+                self.session_id,
+                self.state.state(),
+                query,
+                &self.evidence,
+                &self.failures,
+                PromptCompiler::compile(self.mode, self.state.state(), &self.workspace)?.text,
+                &budget,
+            )?;
+            let mut stats = ctx.stats.clone();
+            stats.tools_tokens = tools_tokens;
+            stats.extension_tokens = extension_tokens;
+            stats.recompute();
             self.emit(
                 EventPayload::ContextMaterialized {
-                    stats: ctx.stats.clone(),
+                    stats: stats.clone(),
                 },
                 &sink,
             )?;
@@ -326,17 +395,13 @@ impl Agent {
             if let Some(instruction) = self.progress.reground_instruction() {
                 messages.push(ModelMessage::text("user", instruction));
             }
-            let extension_context = self.extensions.context().await?;
             let request = ModelRequest {
                 system: format!(
                     "{}\n\n{}\n\nRECALLED ORIGINAL MATERIAL\n{}\n\nEXTENSION CONTEXT SOURCES\n{}",
-                    ctx.system,
-                    ctx.canonical,
-                    ctx.recalled,
-                    serde_json::to_string_pretty(&extension_context)?
+                    ctx.system, ctx.canonical, ctx.recalled, extension_json
                 ),
                 messages,
-                tools: self.tool_definitions(),
+                tools,
             };
             let request: ModelRequest = serde_json::from_value(
                 self.extensions
@@ -1892,5 +1957,134 @@ mod tests {
         let messages = context_messages(&with_user);
         assert_eq!(messages[0].role, "user");
         assert_eq!(messages[0].content, "do it");
+    }
+
+    #[tokio::test]
+    async fn context_stats_cover_the_complete_request_in_tokens() {
+        let d = tempdir().unwrap();
+        std::fs::write(d.path().join("a"), "hello world").unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(d.path()).unwrap();
+        let responses = vec![
+            ModelResponse {
+                text: "checking".into(),
+                tool_calls: vec![ToolCall {
+                    id: "1".into(),
+                    name: "read_file".into(),
+                    arguments: json!({"path":"a"}),
+                }],
+                stop_reason: "tool_calls".into(),
+                usage: None,
+                reasoning_content: None,
+            },
+            ModelResponse {
+                text: "done".into(),
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: None,
+                reasoning_content: None,
+            },
+        ];
+        let tools = ToolExecutor::new(
+            d.path().into(),
+            d.path().join("art"),
+            store.clone(),
+            sid,
+            PolicyEngine::new(Mode::Ask, d.path().into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        let mut agent = Agent::new(AgentRuntime {
+            session_id: sid,
+            workspace: d.path().into(),
+            mode: Mode::Ask,
+            store: store.clone(),
+            provider: Arc::new(FakeProvider::scripted(responses)),
+            tools,
+            continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+            retry_budget: 2,
+        });
+        agent.set_context_budget(ContextConfig::default(), 128_000);
+        agent
+            .run("inspect", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        let stats = store
+            .events(sid)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|event| match &event.payload {
+                EventPayload::ContextMaterialized { stats } => Some(stats.clone()),
+                _ => None,
+            })
+            .expect("context stats");
+        assert!(stats.estimated);
+        assert_eq!(stats.window_tokens, 128_000);
+        assert!(
+            stats.tools_tokens > 0,
+            "tool schemas are part of the real request"
+        );
+        assert!(
+            stats.instructions_tokens > 0,
+            "compiled system prompt is accounted"
+        );
+        let sum = stats.instructions_tokens
+            + stats.state_tokens
+            + stats.recent_tokens
+            + stats.recall_tokens
+            + stats.tools_tokens
+            + stats.extension_tokens;
+        assert_eq!(stats.total_tokens, sum, "no double counting");
+        assert_eq!(
+            stats.headroom_tokens,
+            stats.budget_tokens.saturating_sub(sum)
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_turn_breaker_stops_abnormal_loops() {
+        let d = tempdir().unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(d.path()).unwrap();
+        // Three identical empty responses would never be scripted in practice;
+        // this only proves the opt-in breaker fires when configured.
+        let responses = (0..4)
+            .map(|index| ModelResponse {
+                text: format!("turn {index}"),
+                tool_calls: vec![ToolCall {
+                    id: format!("call-{index}"),
+                    name: "search".into(),
+                    arguments: json!({"query": format!("q{index}")}),
+                }],
+                stop_reason: "tool_calls".into(),
+                usage: None,
+                reasoning_content: None,
+            })
+            .collect();
+        let tools = ToolExecutor::new(
+            d.path().into(),
+            d.path().join("art"),
+            store.clone(),
+            sid,
+            PolicyEngine::new(Mode::Ask, d.path().into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        let continuity = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        let mut agent = Agent::new(AgentRuntime {
+            session_id: sid,
+            workspace: d.path().into(),
+            mode: Mode::Ask,
+            store,
+            provider: Arc::new(FakeProvider::scripted(responses)),
+            tools,
+            continuity,
+            retry_budget: 2,
+        });
+        agent.set_max_model_turns(Some(2));
+        let error = agent
+            .run("loop", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .expect_err("breaker must fire");
+        assert!(error.to_string().contains("circuit breaker"));
     }
 }

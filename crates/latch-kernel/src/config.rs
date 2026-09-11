@@ -31,6 +31,10 @@ pub struct Config {
 pub struct ModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<ModelPricing>,
+    /// Provider context window in tokens. `None` uses the conservative
+    /// [`DEFAULT_CONTEXT_WINDOW_TOKENS`] fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,14 +65,23 @@ pub enum OutsidePolicy {
     Ask,
 }
 
+/// Token-native context budget. Bytes remain only for internal file, artifact,
+/// log, and I/O limits.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextConfig {
-    #[serde(default = "default_active_budget")]
-    pub active_bytes: usize,
-    #[serde(default = "default_recent_budget")]
-    pub recent_bytes: usize,
-    #[serde(default = "default_reserve")]
-    pub reserve_bytes: usize,
+    /// Explicit cap on the estimated complete request, overriding the derived
+    /// context window minus reserve. `None` uses the model window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_request_tokens: Option<usize>,
+    /// Upper bound for the verbatim recent transcript within the request.
+    #[serde(default = "default_recent_tokens")]
+    pub recent_tokens: usize,
+    /// Tokens reserved for the model's own response.
+    #[serde(default = "default_output_reserve_tokens")]
+    pub output_reserve_tokens: usize,
+    /// Additional safety reserve held back from the request budget.
+    #[serde(default = "default_safety_reserve_tokens")]
+    pub reserve_tokens: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +92,11 @@ pub struct FailureConfig {
     /// tolerated before the kernel re-grounds the model.
     #[serde(default = "default_stagnation")]
     pub stagnation_budget: u32,
+    /// Ultimate abnormal-behaviour circuit breaker. `None` (the default) means
+    /// long, productive tasks are never killed by turn count; the stagnation
+    /// and failure supervisors remain the primary loop controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_model_turns: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,14 +115,17 @@ fn default_provider() -> String {
 fn default_model() -> String {
     "gpt-5-mini".into()
 }
-fn default_active_budget() -> usize {
-    96_000
+/// Fallback context window when a model has no configured metadata. Users can
+/// override it per model with `[models.<name>] context_window_tokens = ...`.
+pub const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 256_000;
+fn default_recent_tokens() -> usize {
+    24_000
 }
-fn default_recent_budget() -> usize {
-    48_000
+fn default_output_reserve_tokens() -> usize {
+    8_192
 }
-fn default_reserve() -> usize {
-    16_000
+fn default_safety_reserve_tokens() -> usize {
+    4_000
 }
 fn default_retry() -> u32 {
     3
@@ -147,9 +168,10 @@ impl Default for PermissionConfig {
 impl Default for ContextConfig {
     fn default() -> Self {
         Self {
-            active_bytes: default_active_budget(),
-            recent_bytes: default_recent_budget(),
-            reserve_bytes: default_reserve(),
+            max_request_tokens: None,
+            recent_tokens: default_recent_tokens(),
+            output_reserve_tokens: default_output_reserve_tokens(),
+            reserve_tokens: default_safety_reserve_tokens(),
         }
     }
 }
@@ -158,6 +180,7 @@ impl Default for FailureConfig {
         Self {
             retry_budget: default_retry(),
             stagnation_budget: default_stagnation(),
+            max_model_turns: None,
         }
     }
 }
@@ -183,6 +206,34 @@ impl Config {
         self.models
             .get(model)
             .and_then(|config| config.pricing.as_ref())
+    }
+
+    /// Context window for an exact provider model name, falling back to the
+    /// conservative default.
+    #[must_use]
+    pub fn context_window_for(&self, model: &str) -> usize {
+        self.models
+            .get(model)
+            .and_then(|config| config.context_window_tokens)
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS)
+    }
+
+    /// Tokens set aside for the model response plus safety.
+    #[must_use]
+    pub fn reserve_tokens(&self) -> usize {
+        self.context
+            .output_reserve_tokens
+            .saturating_add(self.context.reserve_tokens)
+    }
+
+    /// Token budget for the complete request sent to the model.
+    #[must_use]
+    pub fn request_budget_for(&self, model: &str) -> usize {
+        let window = self.context_window_for(model);
+        self.context
+            .max_request_tokens
+            .unwrap_or_else(|| window.saturating_sub(self.reserve_tokens()))
+            .min(window)
     }
 
     pub fn load(path: Option<&Path>) -> Result<Self> {
@@ -211,7 +262,15 @@ mod tests {
         let config: Config = toml::from_str(include_str!("../../../config.example.toml")).unwrap();
         assert_eq!(config.default_mode, Mode::Work);
         assert_eq!(config.provider.kind, "openai-compatible");
-        assert_eq!(config.context.active_bytes, 96_000);
+        assert_eq!(config.context.recent_tokens, 24_000);
+        assert_eq!(
+            config.context_window_for("gpt-5-mini"),
+            DEFAULT_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(
+            config.request_budget_for("gpt-5-mini"),
+            DEFAULT_CONTEXT_WINDOW_TOKENS - config.reserve_tokens()
+        );
         assert!(config.models.is_empty(), "pricing is optional");
     }
 

@@ -10,13 +10,15 @@ pub mod provider;
 pub mod session;
 pub mod state;
 pub mod store;
+pub mod tokens;
 pub mod tools;
 
 pub use agent::{Agent, AgentEventSink, AgentRuntime};
 pub use config::Config;
-pub use continuity::{ContinuityEngine, MaterializedContext};
+pub use continuity::{ContinuityEngine, MaterializeBudget, MaterializedContext};
 pub use progress::{ProgressSupervisor, StagnationDecision};
 pub use provider::{AnthropicProvider, FakeProvider, ModelProvider, OpenAiProvider};
 pub use state::{EvidenceLedger, FailureManager, TaskStateManager};
 pub use store::{EventStore, SessionPreviewLine, SessionSummary};
+pub use tokens::{TokenEstimator, TokenProfile};
 pub use tools::{PolicyEngine, ToolExecutor};

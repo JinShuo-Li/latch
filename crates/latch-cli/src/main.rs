@@ -218,6 +218,7 @@ async fn pick_session(workspace: &Path, config: &Config) -> Result<ResumeChoice>
 
 fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
     let p = PromptCompiler::compile(mode, &TaskState::default(), workspace)?;
+    let estimator = latch_kernel::TokenEstimator::generic();
     if let Some(id) = id {
         let f = p
             .fragment(id)
@@ -228,17 +229,17 @@ fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
         );
     } else {
         println!(
-            "fragments: {}  approximate tokens: {}\n",
+            "fragments: {}  estimated tokens: ≈{}\n",
             p.fragments.len(),
-            p.approximate_tokens()
+            estimator.estimate(&p.text)
         );
         for f in &p.fragments {
             println!(
-                "{:>4}  {:<38} v{}  ~{} tokens",
+                "{:>4}  {:<38} v{}  ≈{} tokens",
                 f.priority,
                 f.id,
                 f.version,
-                f.content.len().div_ceil(4)
+                estimator.estimate(&f.content)
             );
         }
         println!("\n{}", p.text);
@@ -313,7 +314,7 @@ async fn build_agent(
         let count = tools.restore_ownership().await?;
         tracing::info!("restored {count} owned change records");
     }
-    let continuity = ContinuityEngine::new(store.clone(), config.context.clone());
+    let continuity = ContinuityEngine::for_model(store.clone(), config.context.clone(), &model);
     let mut agent = Agent::new(AgentRuntime {
         session_id,
         workspace: workspace.to_path_buf(),
@@ -325,6 +326,8 @@ async fn build_agent(
         retry_budget: config.failure.retry_budget,
     });
     agent.set_stagnation_budget(config.failure.stagnation_budget);
+    agent.set_max_model_turns(config.failure.max_model_turns);
+    agent.set_context_budget(config.context.clone(), config.context_window_for(&model));
     for extension in config
         .extensions
         .iter()
@@ -520,9 +523,12 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
         }
         "/context" => {
             let c = agent.context(None)?;
+            let s = &c.stats;
             tx.send(Output::Notice(format!(
-                "ctx {} B (status {}) | recent {} B | recalled {} B | canonical {} B | reserve {} B | {} events | {}/{} episodes",
-                c.stats.total_bytes, c.stats.status, c.stats.recent_bytes, c.stats.recalled_bytes, c.stats.canonical_bytes, c.stats.reserve_bytes, c.stats.durable_events, c.stats.selected_episodes, c.stats.episodes
+                "context ≈{} / {} tok ({}; estimated) | system {} | state {} | recent {} | recall {} | tools {} | ext {} | reserve {} | headroom {} | {} events | {}/{} episodes",
+                s.total_tokens, s.window_tokens, s.status, s.instructions_tokens, s.state_tokens,
+                s.recent_tokens, s.recall_tokens, s.tools_tokens, s.extension_tokens,
+                s.reserve_tokens, s.headroom_tokens, s.durable_events, s.selected_episodes, s.episodes
             ))).await?;
         }
         "/compact" => { agent.compact()?; tx.send(Output::Notice("active context reset; durable history and state retained".into())).await?; }

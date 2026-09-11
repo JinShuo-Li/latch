@@ -397,24 +397,63 @@ pub enum EvidenceStatus {
     Unavailable,
 }
 
+/// Token-native accounting of the complete request Latch is about to send.
+///
+/// Every number is a pre-request *estimate* produced by the kernel's
+/// conservative token estimator. Once a request completes, the provider's
+/// reported usage (see [`Usage`]) is authoritative. Old durable events predate
+/// these fields and deserialize as zeros.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct ContextStats {
-    pub recent_bytes: usize,
-    pub recalled_bytes: usize,
-    pub canonical_bytes: usize,
-    pub code_evidence_bytes: usize,
-    pub reserve_bytes: usize,
+    /// Compiled system/kernel instructions.
+    pub instructions_tokens: usize,
+    /// Canonical task state, evidence, failure lineages, and durable memory.
+    pub state_tokens: usize,
+    /// Verbatim recent transcript, protocol-atomic.
+    pub recent_tokens: usize,
+    /// Recalled original events plus the scored episode index.
+    pub recall_tokens: usize,
+    /// Tool schemas actually sent with this request.
+    pub tools_tokens: usize,
+    /// Extension-provided context sources.
+    pub extension_tokens: usize,
+    /// Estimated total for the complete request (sum of the above).
+    pub total_tokens: usize,
+    /// Request budget: context window minus the output/safety reserve.
+    pub budget_tokens: usize,
+    /// The model's full context window, when known.
+    pub window_tokens: usize,
+    /// Tokens reserved for the model response and safety.
+    pub reserve_tokens: usize,
+    /// Remaining request budget after this materialization (`budget - total`).
+    pub headroom_tokens: usize,
     pub durable_events: usize,
     pub episodes: usize,
-    #[serde(default)]
     pub selected_episodes: usize,
-    #[serde(default)]
-    pub total_bytes: usize,
-    /// The configured active working-set budget, so surfaces can present a
-    /// bounded working set instead of guessing a limit. Zero on older events.
-    #[serde(default)]
-    pub budget_bytes: usize,
+    /// True while these numbers are estimates awaiting provider-reported usage.
+    pub estimated: bool,
     pub status: String,
+}
+
+impl ContextStats {
+    /// Recomputes the derived totals after tools/extension costs are added.
+    pub fn recompute(&mut self) {
+        self.total_tokens = self
+            .instructions_tokens
+            .saturating_add(self.state_tokens)
+            .saturating_add(self.recent_tokens)
+            .saturating_add(self.recall_tokens)
+            .saturating_add(self.tools_tokens)
+            .saturating_add(self.extension_tokens);
+        self.headroom_tokens = self.budget_tokens.saturating_sub(self.total_tokens);
+        self.status = if self.budget_tokens == 0 || self.total_tokens <= self.budget_tokens {
+            "bounded".to_owned()
+        } else {
+            "over_budget".to_owned()
+        };
+        self.estimated = true;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -2990,10 +2990,19 @@ mod tests {
             parent_id: None,
             payload: latch_protocol::EventPayload::ContextMaterialized {
                 stats: latch_protocol::ContextStats {
-                    total_bytes: 45_700,
-                    budget_bytes: 96_000,
+                    instructions_tokens: 3_000,
+                    state_tokens: 3_300,
+                    recent_tokens: 37_900,
+                    recall_tokens: 1_500,
+                    tools_tokens: 2_400,
+                    total_tokens: 48_100,
+                    budget_tokens: 243_808,
+                    window_tokens: 256_000,
+                    reserve_tokens: 12_192,
+                    headroom_tokens: 195_708,
                     durable_events: 503,
                     episodes: 11,
+                    estimated: true,
                     status: "bounded".into(),
                     ..latch_protocol::ContextStats::default()
                 },
@@ -3032,8 +3041,9 @@ mod tests {
             parent_id: None,
             payload: latch_protocol::EventPayload::ContextMaterialized {
                 stats: latch_protocol::ContextStats {
-                    total_bytes: 45_700,
-                    budget_bytes: 96_000,
+                    total_tokens: 48_100,
+                    budget_tokens: 243_808,
+                    window_tokens: 256_000,
                     status: "bounded".into(),
                     ..latch_protocol::ContextStats::default()
                 },
