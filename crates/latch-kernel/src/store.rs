@@ -493,6 +493,11 @@ mod tests {
         let shown = format!("{preview:?}");
         assert!(shown.contains("visible answer"));
         assert!(!shown.contains("hidden chain"));
+        let unchanged = store.list_sessions(Some(workspace)).unwrap();
+        assert_eq!(
+            listed, unchanged,
+            "listing and previewing must not update sessions"
+        );
     }
 
     #[test]
@@ -510,6 +515,19 @@ mod tests {
         );
         // Empty prefixes are rejected instead of selecting an arbitrary row.
         assert!(store.resolve_session("").is_err());
+        let now = Utc::now().to_rfc3339();
+        for id in [
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            "aaaaaaaa-0000-0000-0000-000000000002",
+        ] {
+            store.conn().unwrap().execute(
+                "INSERT INTO sessions(id,workspace,created_at,updated_at) VALUES(?1,'/x',?2,?2)",
+                params![id, now],
+            ).unwrap();
+        }
+        let error = store.resolve_session("aaaaaaaa").unwrap_err().to_string();
+        assert!(error.contains("ambiguous"));
+        assert!(error.contains("aaaaaaaa"));
     }
 
     #[test]

@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
         .init();
     let args = Args::parse();
     let config = Config::load(args.config.as_deref())?;
-    let workspace = std::env::current_dir()?;
+    let mut workspace = std::env::current_dir()?;
     if let Some(Commands::Debug {
         command: DebugCommand::Prompt { fragment, mode },
     }) = args.command
@@ -78,7 +78,10 @@ async fn main() -> Result<()> {
         return debug_prompt(&workspace, mode, fragment.as_deref());
     }
     let mut selected = match select_startup_session(&workspace, &config, &args).await? {
-        ResumeChoice::Session(id) => Some(id),
+        ResumeChoice::Session(id, session_workspace) => {
+            workspace = session_workspace;
+            Some(id)
+        }
         ResumeChoice::Fresh => None,
         ResumeChoice::Exit => return Ok(()),
     };
@@ -92,7 +95,10 @@ async fn main() -> Result<()> {
             InteractiveOutcome::Exit => return Ok(()),
             InteractiveOutcome::Resume => {
                 selected = match pick_session(&workspace, &config).await? {
-                    ResumeChoice::Session(id) => Some(id),
+                    ResumeChoice::Session(id, session_workspace) => {
+                        workspace = session_workspace;
+                        Some(id)
+                    }
                     ResumeChoice::Fresh => None,
                     ResumeChoice::Exit => return Ok(()),
                 };
@@ -104,7 +110,7 @@ async fn main() -> Result<()> {
 }
 
 enum ResumeChoice {
-    Session(Uuid),
+    Session(Uuid, PathBuf),
     Fresh,
     Exit,
 }
@@ -128,12 +134,15 @@ async fn select_startup_session(
                 workspace.display()
             );
         }
-        return Ok(ResumeChoice::Session(selected.id));
+        return Ok(ResumeChoice::Session(
+            selected.id,
+            selected.workspace.into(),
+        ));
     }
     if args.latest {
         return store
             .latest_session(Some(workspace))?
-            .map(ResumeChoice::Session)
+            .map(|id| ResumeChoice::Session(id, workspace.to_path_buf()))
             .ok_or_else(|| {
                 anyhow!(
                     "no previous session for {}; remove --latest to start fresh",
@@ -144,7 +153,10 @@ async fn select_startup_session(
     let matching = store.list_sessions(Some(workspace))?;
     match matching.as_slice() {
         [] => Err(anyhow!("no previous session for {}", workspace.display())),
-        [session] => Ok(ResumeChoice::Session(session.id)),
+        [session] => Ok(ResumeChoice::Session(
+            session.id,
+            session.workspace.clone().into(),
+        )),
         _ if args.prompt.is_some()
             || !std::io::stdin().is_terminal()
             || !std::io::stdout().is_terminal() =>
@@ -192,7 +204,10 @@ async fn pick_session(workspace: &Path, config: &Config) -> Result<ResumeChoice>
     });
     Ok(
         match latch_tui::run_session_picker(sessions, workspace, preview).await? {
-            latch_tui::PickerSelection::Resume(id) => ResumeChoice::Session(id),
+            latch_tui::PickerSelection::Resume(id) => {
+                let selected = store.resolve_session(&id.to_string())?;
+                ResumeChoice::Session(id, selected.workspace.into())
+            }
             latch_tui::PickerSelection::StartFresh => ResumeChoice::Fresh,
             latch_tui::PickerSelection::Exit | latch_tui::PickerSelection::Cancel => {
                 ResumeChoice::Exit
@@ -442,7 +457,7 @@ async fn interactive(
                             vec![Output::AssistantDelta(t)]
                         }
                         latch_kernel::agent::AgentOutput::Durable(e) => {
-                            vec![Output::Event(*e)]
+                            vec![Output::Event(e)]
                         }
                         latch_kernel::agent::AgentOutput::ToolResult(result) => {
                             vec![Output::ToolResult(result)]
@@ -510,7 +525,8 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                  scroll: PgUp/PgDn, Home/End, mouse wheel — Ctrl+C cancels a running turn\n\
                  input: Enter submit · Alt+Enter newline · Ctrl+A/E line start/end · Ctrl+W delete word\n\
                  history: Up/Down recalls previous prompts\n\
-                 palette: typing / filters commands · Tab/Enter complete · Esc close\n\
+                 palette: typing / filters commands · ↑/↓ select · Tab complete · Enter run · Esc close\n\
+                 detail: Ctrl+T or /raw · resume: /resume\n\
                  commands:\n{commands}"
             ))).await?;
         }
@@ -589,8 +605,11 @@ mod tests {
             "/checkpoint",
             "/undo",
             "/compact",
+            "/resume",
+            "/raw",
             "/help",
             "/quit",
+            "/exit",
         ] {
             assert!(help_text.contains(required), "/help missing {required}");
         }
@@ -602,5 +621,17 @@ mod tests {
         // full precedence matrix is covered in latch_kernel::session tests.
         let mode = session::resumed_mode(&[], Some(Mode::Ask), Mode::Work);
         assert_eq!(mode, Mode::Ask);
+    }
+
+    #[test]
+    fn explicit_resume_flags_are_deterministic() {
+        let args = Args::try_parse_from(["latch", "--resume", "--session", "deadbeef"]).unwrap();
+        assert_eq!(args.session.as_deref(), Some("deadbeef"));
+        assert!(!args.latest);
+        assert!(Args::try_parse_from(["latch", "--session", "deadbeef"]).is_err());
+        assert!(
+            Args::try_parse_from(["latch", "--resume", "--latest", "--session", "deadbeef"])
+                .is_err()
+        );
     }
 }
