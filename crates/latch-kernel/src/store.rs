@@ -163,7 +163,14 @@ impl EventStore {
         let all = self.events(session_id)?;
         Ok(all
             .into_iter()
-            .filter(|e| ids.contains(&e.id.to_string()))
+            .filter(|event| {
+                ids.contains(&event.id.to_string())
+                    && !matches!(
+                        &event.payload,
+                        EventPayload::ContextMemoryRecalled { .. }
+                            | EventPayload::ContextMaterialized { .. }
+                    )
+            })
             .collect())
     }
 

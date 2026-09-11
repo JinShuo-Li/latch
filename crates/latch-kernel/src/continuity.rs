@@ -69,13 +69,29 @@ impl ContinuityEngine {
         query: Option<&str>,
         system: String,
     ) -> Result<MaterializedContext> {
-        let events = self.store.events(session_id)?;
         let memories = self.store.memories(session_id)?;
         let recalled = if let Some(q) = query {
             self.recall(session_id, q)?
         } else {
             vec![]
         };
+        if let Some(query) = query {
+            let lower = query.to_ascii_lowercase();
+            let memory_ids = memories
+                .iter()
+                .filter(|memory| memory.content.to_ascii_lowercase().contains(&lower))
+                .map(|memory| memory.id)
+                .collect();
+            self.store.append(
+                session_id,
+                EventPayload::ContextMemoryRecalled {
+                    query: query.into(),
+                    memory_ids,
+                    event_ids: recalled.iter().map(|event| event.id).collect(),
+                },
+            )?;
+        }
+        let events = self.store.events(session_id)?;
         let active_start = events
             .iter()
             .rposition(|event| matches!(event.payload, EventPayload::ManualCompact { .. }))
