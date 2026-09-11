@@ -285,6 +285,24 @@ pub enum EventPayload {
     ContextMaterialized {
         stats: ContextStats,
     },
+    /// A long-running development process was started and is owned by the
+    /// kernel. `ProcessExited` closes the lifecycle; a start without an exit
+    /// means the session restarted while the process was still running.
+    ProcessStarted {
+        id: String,
+        command: String,
+        #[serde(default)]
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pid: Option<u32>,
+    },
+    ProcessExited {
+        id: String,
+        /// `exit <code>`, `killed`, or `lost`.
+        status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact_id: Option<String>,
+    },
     ContextMemoryRecalled {
         query: String,
         memory_ids: Vec<Uuid>,
@@ -663,6 +681,18 @@ pub fn display_items(event: &Event) -> Vec<DisplayItem> {
         }
         EventPayload::RegroundRequested { signature } => vec![DisplayItem::KernelNotice {
             text: format!("re-ground requested after repeated failure of {signature}"),
+        }],
+        EventPayload::ProcessStarted {
+            id, command, label, ..
+        } => vec![DisplayItem::KernelNotice {
+            text: if label.is_empty() {
+                format!("process {id} started: {command}")
+            } else {
+                format!("process {id} started ({label}): {command}")
+            },
+        }],
+        EventPayload::ProcessExited { id, status, .. } => vec![DisplayItem::KernelNotice {
+            text: format!("process {id} {status}"),
         }],
         EventPayload::ProgressStagnation {
             unchanged,

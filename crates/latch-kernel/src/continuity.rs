@@ -158,6 +158,7 @@ impl ContinuityEngine {
     /// Every size is a token estimate; the caller adds tools/extension costs
     /// and recomputes the final totals so recalled material is counted exactly
     /// once.
+    #[allow(clippy::too_many_arguments)]
     pub fn materialize(
         &self,
         session_id: Uuid,

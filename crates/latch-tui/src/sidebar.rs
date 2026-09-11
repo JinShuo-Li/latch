@@ -648,19 +648,17 @@ impl SidebarModel {
                 )),
             ]));
         }
-        if let Some(last) = &self.last_usage {
-            if detail {
-                lines.push(Line::styled(
-                    fit(
-                        &format!(
-                            "Reported    last request {} tok",
-                            format_tokens(last.input_tokens)
-                        ),
-                        width,
+        if detail && let Some(last) = &self.last_usage {
+            lines.push(Line::styled(
+                fit(
+                    &format!(
+                        "Reported    last request {} tok",
+                        format_tokens(last.input_tokens)
                     ),
-                    dim(),
-                ));
-            }
+                    width,
+                ),
+                dim(),
+            ));
         }
         if detail || show_bar {
             lines.push(Line::styled(

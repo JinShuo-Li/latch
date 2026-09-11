@@ -6,10 +6,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -43,9 +44,11 @@ impl PolicyEngine {
     #[must_use]
     pub fn decide(&self, tool: &str, args: &Value) -> PolicyDecision {
         let command = || args.get("command").and_then(Value::as_str).unwrap_or("");
-        let mutation = matches!(tool, "patch" | "write" | "undo" | "checkpoint")
-            || matches!(tool, "shell" | "validate")
-                && !is_read_only_shell(command(), &self.workspace);
+        let mutation = matches!(
+            tool,
+            "patch" | "write" | "undo" | "checkpoint" | "exec_start"
+        ) || matches!(tool, "shell" | "validate")
+            && !is_read_only_shell(command(), &self.workspace);
         let mode = self.mode.read().map_or(Mode::Ask, |m| *m);
         if mutation && !mode.can_mutate() {
             return PolicyDecision::Deny(format!("{mode} mode cannot mutate the workspace"));
@@ -61,7 +64,7 @@ impl PolicyEngine {
                 }
             };
         }
-        if matches!(tool, "shell" | "validate") && dangerous_shell(command()) {
+        if matches!(tool, "shell" | "validate" | "exec_start") && dangerous_shell(command()) {
             return PolicyDecision::Deny(
                 "destructive or privileged shell command denied by policy".into(),
             );
@@ -102,6 +105,50 @@ const DRIFT_MAX_TRACKED: usize = 64;
 const DRIFT_MAX_FILE_BYTES: u64 = 1024 * 1024;
 const DRIFT_MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 
+/// `read_file` defaults to a bounded window with continuation. Files are never
+/// silently injected whole into context; explicit limits may be larger than the
+/// default but stay bounded per call.
+const READ_DEFAULT_LINES: usize = 2_000;
+const READ_MAX_LINES: usize = 20_000;
+/// `search` returns a bounded page with an offset continuation.
+const SEARCH_DEFAULT_RESULTS: usize = 50;
+const SEARCH_MAX_RESULTS: usize = 500;
+/// `read_artifact` defaults to the same window as a file read.
+const ARTIFACT_DEFAULT_LINES: usize = 2_000;
+const ARTIFACT_MAX_LINES: usize = 20_000;
+/// Managed process output retained in memory before spilling to an artifact.
+const PROCESS_MAX_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessStatus {
+    Running,
+    Exited(i32),
+    Killed,
+}
+
+impl ProcessStatus {
+    #[must_use]
+    pub fn label(self) -> String {
+        match self {
+            Self::Running => "running".into(),
+            Self::Exited(code) => format!("exited with code {code}"),
+            Self::Killed => "terminated".into(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ManagedProcess {
+    label: String,
+    status: ProcessStatus,
+    child: Option<Child>,
+    output: Arc<Mutex<String>>,
+    readers: Vec<tokio::task::JoinHandle<()>>,
+    /// Byte offset already returned to the model by `exec_poll`.
+    cursor: usize,
+    artifact_id: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct ToolExecutor {
     workspace: PathBuf,
@@ -114,6 +161,7 @@ pub struct ToolExecutor {
     mutation_lock: Arc<Mutex<()>>,
     read_slots: Arc<Semaphore>,
     restored: Arc<std::sync::atomic::AtomicBool>,
+    processes: Arc<Mutex<HashMap<String, ManagedProcess>>>,
 }
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScopeStats {
@@ -170,6 +218,7 @@ impl ToolExecutor {
             mutation_lock: Arc::new(Mutex::new(())),
             read_slots: Arc::new(Semaphore::new(8)),
             restored: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            processes: Arc::new(Mutex::new(HashMap::new())),
         })
     }
     pub fn set_mode(&self, mode: Mode) {
@@ -266,13 +315,33 @@ impl ToolExecutor {
         vec![
             def(
                 "read_file",
-                "Read a UTF-8 workspace file and return its content plus a version hash.",
-                json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"}}}),
+                "Read a bounded window of a UTF-8 workspace file and return its version hash. Defaults to the first 2000 lines; pass offset (1-based line) and/or limit, or tail, to read another window. The result reports the line range and the offset for continuation, so large files are never injected whole.",
+                json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based first line to return"},"limit":{"type":"integer","description":"maximum lines to return"},"tail":{"type":"integer","description":"return the last N lines instead of a head window"}}}),
             ),
             def(
                 "search",
-                "Search repository text with ripgrep.",
-                json!({"type":"object","required":["query"],"properties":{"query":{"type":"string"},"path":{"type":"string"}}}),
+                "Search repository text with ripgrep. Returns a bounded page of matches (default 50) with total count and an offset continuation.",
+                json!({"type":"object","required":["query"],"properties":{"query":{"type":"string"},"path":{"type":"string"},"max_results":{"type":"integer","description":"matches per page, default 50"},"offset":{"type":"integer","description":"0-based match offset for continuation"}}}),
+            ),
+            def(
+                "read_artifact",
+                "Read a stored artifact (full output spilled by a truncated shell, search, diff, or validation result) by id. Supports the same offset/limit/tail windowing as read_file; the result reports the line range and continuation offset.",
+                json!({"type":"object","required":["id"],"properties":{"id":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"},"tail":{"type":"integer"}}}),
+            ),
+            def(
+                "exec_start",
+                "Start a persistent development process (server, watcher, long build) in the workspace with bash -lc. Returns a process id for exec_poll and exec_terminate. WORK mode only; policy and dangerous-command checks apply.",
+                json!({"type":"object","required":["command"],"properties":{"command":{"type":"string"},"label":{"type":"string","description":"short human label"}}}),
+            ),
+            def(
+                "exec_poll",
+                "Return new output from a managed process since the last poll, plus its running/exited status. Exited processes keep their buffered output available through this tool.",
+                json!({"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}),
+            ),
+            def(
+                "exec_terminate",
+                "Terminate a managed process and return its final status.",
+                json!({"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}),
             ),
             def(
                 "patch",
@@ -352,6 +421,10 @@ impl ToolExecutor {
         let outcome = match call.name.as_str() {
             "read_file" => self.read_file(call).await,
             "search" => self.search(call).await,
+            "read_artifact" => self.read_artifact(call).await,
+            "exec_start" => self.process_start(call).await,
+            "exec_poll" => self.process_poll(call).await,
+            "exec_terminate" => self.process_terminate(call).await,
             "patch" => self.patch(call).await,
             "write" => self.write(call).await,
             "shell" => self.shell(call, cancel).await,
@@ -419,7 +492,24 @@ impl ToolExecutor {
             },
         )?;
         let text = String::from_utf8(bytes).context("file is not UTF-8")?;
-        Ok((format!("hash: {}\n{}", version.content_hash, text), None))
+        let window = LineWindow::from_args(
+            call,
+            text.lines().count(),
+            READ_DEFAULT_LINES,
+            READ_MAX_LINES,
+        )?;
+        let selected = window.slice(&text);
+        let mut out = format!("hash: {}\n", version.content_hash);
+        out.push_str(&format!(
+            "[{}: {}]\n",
+            version.path,
+            window.describe(text.lines().count())
+        ));
+        out.push_str(&selected);
+        if let Some(offset) = window.continue_offset(text.lines().count()) {
+            out.push_str(&format!("\n[continue with offset={offset}]"));
+        }
+        Ok((out, None))
     }
     async fn search(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
         let _permit = self.read_slots.acquire().await?;
@@ -430,8 +520,33 @@ impl ToolExecutor {
             .and_then(Value::as_str)
             .unwrap_or(".");
         let path = resolve_workspace_path(&self.workspace, target)?;
+        let max_results = call
+            .arguments
+            .get("max_results")
+            .and_then(Value::as_u64)
+            .map_or(SEARCH_DEFAULT_RESULTS, |value| {
+                (value as usize).clamp(1, SEARCH_MAX_RESULTS)
+            });
+        let offset = call
+            .arguments
+            .get("offset")
+            .and_then(Value::as_u64)
+            .map_or(0, |value| value as usize);
         let out = Command::new("rg")
-            .args(["-n", "--color=never", "--", q])
+            .args([
+                "-n",
+                "--color=never",
+                "--no-heading",
+                "--max-columns",
+                "400",
+                "--max-columns-preview",
+                "--max-filesize",
+                "8M",
+                "-m",
+                "1000",
+                "--",
+                q,
+            ])
             .arg(path)
             .current_dir(&self.workspace)
             .output()
@@ -443,8 +558,229 @@ impl ToolExecutor {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
-        let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        self.bound_output(text, "search")
+        let text = String::from_utf8_lossy(&out.stdout);
+        let matches = text.lines().collect::<Vec<_>>();
+        let total = matches.len();
+        if offset >= total {
+            return Ok((
+                format!("{total} match(es); offset {offset} is past the end"),
+                None,
+            ));
+        }
+        let end = (offset + max_results).min(total);
+        let mut result = format!(
+            "{total} match(es); showing {}-{} of {total}\n{}",
+            offset + 1,
+            end,
+            matches[offset..end].join("\n")
+        );
+        if end < total {
+            result.push_str(&format!("\n[continue with offset={end}]"));
+        }
+        Ok((result, None))
+    }
+    async fn read_artifact(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+        let _permit = self.read_slots.acquire().await?;
+        let id = str_arg(call, "id")?;
+        let path = self.artifact_path(id)?;
+        let bytes = tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("read artifact {id}"))?;
+        let text = String::from_utf8_lossy(&bytes);
+        let window = LineWindow::from_args(
+            call,
+            text.lines().count(),
+            ARTIFACT_DEFAULT_LINES,
+            ARTIFACT_MAX_LINES,
+        )?;
+        let mut out = format!(
+            "[artifact {id}: {}]\n",
+            window.describe(text.lines().count())
+        );
+        out.push_str(&window.slice(&text));
+        if let Some(offset) = window.continue_offset(text.lines().count()) {
+            out.push_str(&format!("\n[continue with offset={offset}]"));
+        }
+        Ok((out, None))
+    }
+    /// Starts a persistent development process owned by the kernel. Output is
+    /// buffered for `exec_poll`; lifecycle is durable so a resumed session can
+    /// report honestly that the child did not survive the restart.
+    async fn process_start(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+        let command = str_arg(call, "command")?.to_owned();
+        let label = call
+            .arguments
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let id = format!("proc-{}", Uuid::new_v4());
+        let mut child = Command::new("bash")
+            .args(["-lc", &command])
+            .current_dir(&self.workspace)
+            .kill_on_drop(true)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("start process: {command}"))?;
+        let pid = child.id();
+        let output = Arc::new(Mutex::new(String::new()));
+        let mut readers = Vec::new();
+        if let Some(stdout) = child.stdout.take() {
+            readers.push(spawn_reader(stdout, output.clone()));
+        }
+        if let Some(stderr) = child.stderr.take() {
+            readers.push(spawn_reader(stderr, output.clone()));
+        }
+        self.store.append(
+            self.session_id,
+            EventPayload::ProcessStarted {
+                id: id.clone(),
+                command: command.clone(),
+                label: label.clone(),
+                pid,
+            },
+        )?;
+        self.processes.lock().await.insert(
+            id.clone(),
+            ManagedProcess {
+                label: label.clone(),
+                status: ProcessStatus::Running,
+                child: Some(child),
+                output,
+                readers,
+                cursor: 0,
+                artifact_id: None,
+            },
+        );
+        let label_suffix = if label.is_empty() {
+            String::new()
+        } else {
+            format!(" ({label})")
+        };
+        Ok((
+            format!("process {id} started{label_suffix}\n[exec_poll id={id}]"),
+            None,
+        ))
+    }
+    async fn process_poll(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+        let id = str_arg(call, "id")?;
+        let mut processes = self.processes.lock().await;
+        let Some(process) = processes.get_mut(id) else {
+            if self.process_was_started(id)? {
+                bail!(
+                    "process {id} is no longer available: child processes do not survive a Latch restart"
+                );
+            }
+            bail!("unknown process {id}; start one with exec_start");
+        };
+        if process.status == ProcessStatus::Running
+            && let Some(child) = process.child.as_mut()
+            && let Some(status) = child.try_wait()?
+        {
+            process.status = ProcessStatus::Exited(status.code().unwrap_or(-1));
+            process.child = None;
+            for handle in process.readers.drain(..) {
+                let _ = handle.await;
+            }
+            self.finish_process(id, process).await?;
+        }
+        let full = process.output.lock().await.clone();
+        let new = full.get(process.cursor..).unwrap_or("").to_owned();
+        process.cursor = full.len();
+        let label = if process.label.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", process.label)
+        };
+        let mut text = format!("[{id}{label}: {}]\n", process.status.label());
+        if new.is_empty() {
+            text.push_str("(no new output)");
+        } else {
+            text.push_str(&new);
+        }
+        if let Some(artifact) = &process.artifact_id {
+            text.push_str(&format!("\n[full output artifact: {artifact}]"));
+        }
+        Ok((text, process.artifact_id.clone()))
+    }
+    async fn process_terminate(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+        let id = str_arg(call, "id")?;
+        let mut processes = self.processes.lock().await;
+        let Some(process) = processes.get_mut(id) else {
+            if self.process_was_started(id)? {
+                bail!("process {id} is not running; it did not survive a Latch restart");
+            }
+            bail!("unknown process {id}");
+        };
+        if process.status == ProcessStatus::Running {
+            if let Some(child) = process.child.as_mut() {
+                child.kill().await.ok();
+                let _ = child.wait().await;
+            }
+            process.status = ProcessStatus::Killed;
+            process.child = None;
+            for handle in process.readers.drain(..) {
+                let _ = handle.await;
+            }
+            self.finish_process(id, process).await?;
+        }
+        Ok((
+            format!("[process {id}: {}]", process.status.label()),
+            process.artifact_id.clone(),
+        ))
+    }
+    async fn finish_process(&self, id: &str, process: &mut ManagedProcess) -> Result<()> {
+        let full = process.output.lock().await.clone();
+        let artifact_id = if full.len() > PROCESS_MAX_BUFFER_BYTES {
+            let name = format!("process-{id}.log");
+            std::fs::write(self.artifacts.join(&name), full.as_bytes())?;
+            process.artifact_id = Some(name.clone());
+            Some(name)
+        } else {
+            process.artifact_id.clone()
+        };
+        let status = match process.status {
+            ProcessStatus::Running => "lost".into(),
+            ProcessStatus::Exited(code) => format!("exit {code}"),
+            ProcessStatus::Killed => "killed".into(),
+        };
+        self.store.append(
+            self.session_id,
+            EventPayload::ProcessExited {
+                id: id.to_owned(),
+                status,
+                artifact_id,
+            },
+        )?;
+        Ok(())
+    }
+    fn process_was_started(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .store
+            .events(self.session_id)?
+            .iter()
+            .any(|event| matches!(&event.payload, EventPayload::ProcessStarted { id: started, .. } if started == id)))
+    }
+    fn artifact_path(&self, id: &str) -> Result<PathBuf> {
+        if id.is_empty()
+            || id.contains("..")
+            || id.contains('/')
+            || id.contains('\\')
+            || Path::new(id).is_absolute()
+        {
+            bail!("invalid artifact id");
+        }
+        let path = self.artifacts.join(id);
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("unknown artifact {id}"))?;
+        let root = self.artifacts.canonicalize()?;
+        if !canonical.starts_with(&root) {
+            bail!("artifact path escapes the artifact store");
+        }
+        Ok(canonical)
     }
     async fn patch(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
         let _guard = self.mutation_lock.lock().await;
@@ -997,6 +1333,85 @@ fn result(
         artifact_id,
     }
 }
+/// A bounded line window with head, offset/limit, and tail modes. Used by
+/// `read_file` and `read_artifact` so no tool ever injects a whole file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LineWindow {
+    start: usize,
+    end: usize,
+}
+
+impl LineWindow {
+    fn from_args(
+        call: &ToolCall,
+        total: usize,
+        default_lines: usize,
+        max_lines: usize,
+    ) -> Result<Self> {
+        if let Some(tail) = call.arguments.get("tail").and_then(Value::as_u64) {
+            let tail = (tail as usize).clamp(1, max_lines);
+            return Ok(Self {
+                start: total.saturating_sub(tail),
+                end: total,
+            });
+        }
+        let offset = call
+            .arguments
+            .get("offset")
+            .and_then(Value::as_u64)
+            .map_or(0, |value| value.saturating_sub(1) as usize);
+        let limit = call
+            .arguments
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map_or(default_lines, |value| value as usize)
+            .clamp(1, max_lines);
+        let start = offset.min(total);
+        let end = start.saturating_add(limit).min(total);
+        Ok(Self { start, end })
+    }
+
+    fn slice(self, text: &str) -> String {
+        text.lines()
+            .skip(self.start)
+            .take(self.end.saturating_sub(self.start))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn describe(self, total: usize) -> String {
+        if total == 0 {
+            return "empty".into();
+        }
+        if self.start >= total {
+            return format!("no lines (offset past end of {total})");
+        }
+        format!("lines {}-{} of {total}", self.start + 1, self.end)
+    }
+
+    fn continue_offset(self, total: usize) -> Option<usize> {
+        (self.end < total).then_some(self.end + 1)
+    }
+}
+
+fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(
+    mut reader: R,
+    output: Arc<Mutex<String>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut buffer = [0u8; 4096];
+        loop {
+            match reader.read(&mut buffer).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => output
+                    .lock()
+                    .await
+                    .push_str(&String::from_utf8_lossy(&buffer[..n])),
+            }
+        }
+    })
+}
+
 fn str_arg<'a>(call: &'a ToolCall, name: &str) -> Result<&'a str> {
     call.arguments
         .get(name)
@@ -1990,5 +2405,220 @@ mod tests {
             "user work",
             "undo restores the user's pre-existing content, not HEAD"
         );
+    }
+
+    // ---- ranged reads, artifact reads, and managed processes ----
+
+    #[tokio::test]
+    async fn read_file_supports_ranges_and_continuation() {
+        let (d, e) = setup(Mode::Ask);
+        let content = (1..=10)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(d.path().join("ranged.txt"), content).unwrap();
+        let page = e
+            .execute(
+                &call(
+                    "read_file",
+                    json!({"path":"ranged.txt","offset":3,"limit":4}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!page.is_error, "{}", page.output);
+        assert!(page.output.contains("lines 3-6 of 10"), "{}", page.output);
+        assert!(page.output.contains("line 3"));
+        assert!(page.output.contains("line 6"));
+        assert!(!page.output.contains("line 7"));
+        assert!(page.output.contains("[continue with offset=7]"));
+        let tail = e
+            .execute(
+                &call("read_file", json!({"path":"ranged.txt","tail":2})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(tail.output.contains("lines 9-10 of 10"), "{}", tail.output);
+        assert!(!tail.output.contains("continue with offset"));
+    }
+
+    #[tokio::test]
+    async fn read_file_never_injects_a_whole_large_file() {
+        let (d, e) = setup(Mode::Ask);
+        let content = (1..=2_500)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(d.path().join("big.txt"), content).unwrap();
+        let result = e
+            .execute(
+                &call("read_file", json!({"path":"big.txt"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!result.is_error, "{}", result.output);
+        assert!(
+            result.output.contains("lines 1-2000 of 2500"),
+            "{}",
+            result.output
+        );
+        assert!(result.output.contains("[continue with offset=2001]"));
+        assert!(!result.output.contains("line 2001"));
+    }
+
+    #[tokio::test]
+    async fn search_pages_results_with_continuation() {
+        let (d, e) = setup(Mode::Ask);
+        let content = (0..5)
+            .map(|line| format!("match {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(d.path().join("matches.txt"), content).unwrap();
+        let first = e
+            .execute(
+                &call(
+                    "search",
+                    json!({"query":"match","max_results":2,"offset":0}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!first.is_error, "{}", first.output);
+        assert!(first.output.contains("5 match(es)"), "{}", first.output);
+        assert!(first.output.contains("showing 1-2 of 5"));
+        assert!(first.output.contains("[continue with offset=2]"));
+        let second = e
+            .execute(
+                &call(
+                    "search",
+                    json!({"query":"match","max_results":2,"offset":2}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(second.output.contains("showing 3-4 of 5"));
+        assert!(second.output.contains("match 2"));
+    }
+
+    #[tokio::test]
+    async fn read_artifact_supports_ranges_and_rejects_escape() {
+        let (d, e) = setup(Mode::Ask);
+        let artifact = d.path().join("artifacts").join("shell-test.log");
+        let content = (1..=20)
+            .map(|line| format!("log {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&artifact, content).unwrap();
+        let result = e
+            .execute(
+                &call(
+                    "read_artifact",
+                    json!({"id":"shell-test.log","offset":18,"limit":2}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!result.is_error, "{}", result.output);
+        assert!(
+            result.output.contains("lines 18-19 of 20"),
+            "{}",
+            result.output
+        );
+        assert!(result.output.contains("log 18"));
+        let escaped = e
+            .execute(
+                &call("read_artifact", json!({"id":"../../etc/passwd"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(escaped.is_error);
+        assert!(escaped.output.contains("invalid artifact id"));
+    }
+
+    #[tokio::test]
+    async fn managed_process_start_poll_and_terminate() {
+        let (_d, e) = setup(Mode::Work);
+        let started = e
+            .execute(
+                &call(
+                    "exec_start",
+                    json!({"command":"printf 'one\\n'; sleep 0.3; printf 'two\\n'","label":"fixture"}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!started.is_error, "{}", started.output);
+        let id = started
+            .output
+            .split_whitespace()
+            .nth(1)
+            .expect("process id")
+            .to_owned();
+        let mut seen = String::new();
+        for _ in 0..50 {
+            let poll = e
+                .execute(
+                    &call("exec_poll", json!({"id": id})),
+                    CancellationToken::new(),
+                )
+                .await;
+            assert!(!poll.is_error, "{}", poll.output);
+            seen.push_str(&poll.output);
+            if seen.contains("two") && seen.contains("exited with code 0") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(seen.contains("one"), "{seen}");
+        assert!(seen.contains("two"), "{seen}");
+        assert!(seen.contains("exited with code 0"), "{seen}");
+        assert!(
+            e.store
+                .events(e.session_id)
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::ProcessExited { .. })),
+            "process exit is durable"
+        );
+
+        let long = e
+            .execute(
+                &call("exec_start", json!({"command":"sleep 30"})),
+                CancellationToken::new(),
+            )
+            .await;
+        let long_id = long.output.split_whitespace().nth(1).unwrap().to_owned();
+        let terminated = e
+            .execute(
+                &call("exec_terminate", json!({"id": long_id})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!terminated.is_error, "{}", terminated.output);
+        assert!(
+            terminated.output.contains("terminated"),
+            "{}",
+            terminated.output
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_start_is_work_only_and_dangerous_commands_are_denied() {
+        let (_d, ask) = setup(Mode::Ask);
+        let denied = ask
+            .execute(
+                &call("exec_start", json!({"command":"printf hi"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(denied.is_error);
+        let (_d2, work) = setup(Mode::Work);
+        let dangerous = work
+            .execute(
+                &call("exec_start", json!({"command":"sudo rm -rf /"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(dangerous.is_error);
     }
 }

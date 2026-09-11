@@ -672,7 +672,7 @@ impl Agent {
         let mut executed = if permitted.iter().all(|c| {
             matches!(
                 c.name.as_str(),
-                "read_file" | "search" | "git_status" | "git_diff"
+                "read_file" | "search" | "read_artifact" | "git_status" | "git_diff"
             )
         }) {
             let tasks = permitted

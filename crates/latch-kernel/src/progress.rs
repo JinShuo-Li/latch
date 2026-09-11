@@ -333,20 +333,42 @@ fn observation_key(
             let raw = string_arg(call, "path")?;
             let path = normalize_path(workspace, raw);
             let freshness = freshness_of_file(call, workspace);
-            Some((
-                format!("read_file:{path}"),
-                format!("read_file {path}"),
-                freshness,
-            ))
+            let range = range_key(call);
+            let label = if range.is_empty() {
+                format!("read_file {path}")
+            } else {
+                format!("read_file {path} [{range}]")
+            };
+            Some((format!("read_file:{path}:{range}"), label, freshness))
         }
         "search" => {
             let query = collapse_whitespace(string_arg(call, "query")?);
             let target = string_arg(call, "path")
                 .map(|path| normalize_path(workspace, path))
                 .unwrap_or_else(|| ".".into());
+            let range = range_key(call);
+            let suffix = if range.is_empty() {
+                String::new()
+            } else {
+                format!(" [{range}]")
+            };
             Some((
-                format!("search:{target}:{query}"),
-                format!("search \"{query}\" in {target}"),
+                format!("search:{target}:{query}:{range}"),
+                format!("search \"{query}\" in {target}{suffix}"),
+                None,
+            ))
+        }
+        "read_artifact" => {
+            let id = string_arg(call, "id")?;
+            let range = range_key(call);
+            let suffix = if range.is_empty() {
+                String::new()
+            } else {
+                format!(" [{range}]")
+            };
+            Some((
+                format!("read_artifact:{id}:{range}"),
+                format!("read_artifact {id}{suffix}"),
                 None,
             ))
         }
@@ -416,6 +438,21 @@ fn normalize_path(workspace: &Path, raw: &str) -> String {
 
 fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Range arguments are part of an observation's identity: reading a different
+/// window of the same file is new information, not a redundant re-read.
+fn range_key(call: &ToolCall) -> String {
+    ["offset", "limit", "tail", "max_results"]
+        .iter()
+        .filter_map(|name| {
+            call.arguments
+                .get(name)
+                .and_then(serde_json::Value::as_u64)
+                .map(|value| format!("{name}={value}"))
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn digest(text: &str) -> String {
