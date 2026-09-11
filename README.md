@@ -17,6 +17,8 @@ Stable Rust and a C toolchain are required.
 cargo build --release
 export OPENAI_API_KEY=...
 ./target/release/latch
+# Or install the executable:
+cargo install --path crates/latch-cli
 ```
 
 For Anthropic, copy `config.example.toml` to
@@ -48,6 +50,15 @@ LSP-style framed stdio. See [docs/PROTOCOL.md](docs/PROTOCOL.md), the minimal
 TypeScript SDK under `sdk/typescript`, and `extensions/example-ts`. V0.1 treats
 extension permission declarations as a cooperative audit contract; it does not
 provide syscall isolation.
+
+Build and probe the reference extension with:
+
+```sh
+(cd sdk/typescript && npm ci && npm run build)
+(cd extensions/example-ts && npm ci && npm run build)
+cargo run -p latch-kernel --example extension_probe -- \
+  extensions/example-ts/dist/index.js
+```
 
 Latch V0.1 supports Linux terminals only. It has no daemon, browser automation,
 remote execution, MCP, IDE integration, automatic commits, or automatic pushes.
