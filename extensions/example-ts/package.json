@@ -1,0 +1,1 @@
+{"name":"latch-example-extension","private":true,"type":"module","scripts":{"build":"tsc -p tsconfig.json"},"dependencies":{"@latch-agent/extension-sdk":"file:../../sdk/typescript"},"devDependencies":{"@types/node":"^24.3.0","typescript":"^5.9.2"}}
