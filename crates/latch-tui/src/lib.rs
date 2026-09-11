@@ -20,7 +20,9 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures::StreamExt;
-use latch_protocol::{DisplayItem, Mode, ToolRunStatus};
+#[cfg(test)]
+use latch_protocol::DisplayItem;
+use latch_protocol::{Event as DurableEvent, Mode, ToolResult, ToolRunStatus};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -31,6 +33,13 @@ use ratatui::{
 };
 use std::io::{self, Stdout};
 use tokio::sync::mpsc;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+mod presentation;
+mod session_picker;
+pub use presentation::{Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel};
+pub use session_picker::{PickerSelection, SessionItem, SessionPreviewLine, run_session_picker};
 
 /// Visual rows moved per mouse wheel event.
 const WHEEL_ROWS: usize = 3;
@@ -43,6 +52,7 @@ const MAX_PALETTE_ROWS: usize = 6;
 pub enum Input {
     Submit(String),
     Cancel,
+    Resume,
     Quit,
 }
 #[derive(Debug, Clone)]
@@ -51,13 +61,14 @@ pub enum Output {
     AssistantDone,
     /// One user-visible transcript element from the shared durable-event
     /// formatter. Used for live kernel events and resume replay alike.
-    Item(DisplayItem),
+    Event(DurableEvent),
+    ToolResult(ToolResult),
     Notice(String),
     Mode(Mode),
     Header {
         model: String,
         branch: String,
-        continuity: String,
+        resumed: bool,
     },
     /// Submitted prompts from the durable session, seeding prompt history on
     /// resume without a second history database.
@@ -78,16 +89,20 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "show or switch ASK/PLAN/WORK",
     },
     SlashCommand {
+        name: "/resume",
+        description: "Resume another saved session",
+    },
+    SlashCommand {
         name: "/model",
-        description: "show the configured provider model",
+        description: "Show the configured provider model",
     },
     SlashCommand {
         name: "/context",
-        description: "context budget diagnostics",
+        description: "Inspect context state",
     },
     SlashCommand {
         name: "/diff",
-        description: "show the workspace diff",
+        description: "Show workspace changes",
     },
     SlashCommand {
         name: "/checkpoint",
@@ -95,19 +110,27 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/undo",
-        description: "undo the newest Latch-owned change",
+        description: "Undo latest safe Latch-owned change",
     },
     SlashCommand {
         name: "/compact",
-        description: "reset active context; history kept",
+        description: "Reset active working context",
+    },
+    SlashCommand {
+        name: "/raw",
+        description: "Toggle detailed transcript",
     },
     SlashCommand {
         name: "/help",
-        description: "show controls and commands",
+        description: "Show controls",
     },
     SlashCommand {
         name: "/quit",
-        description: "exit Latch",
+        description: "Exit Latch",
+    },
+    SlashCommand {
+        name: "/exit",
+        description: "Exit Latch",
     },
 ];
 
@@ -118,14 +141,19 @@ pub fn filter_commands(filter: &str) -> Vec<&'static SlashCommand> {
     let query = filter.trim_start_matches('/').to_ascii_lowercase();
     SLASH_COMMANDS
         .iter()
-        .filter(|command| {
-            command
-                .name
-                .trim_start_matches('/')
-                .to_ascii_lowercase()
-                .starts_with(&query)
-        })
+        .filter(|command| fuzzy_match(command.name.trim_start_matches('/'), &query))
         .collect()
+}
+
+fn fuzzy_match(candidate: &str, query: &str) -> bool {
+    let mut query = query.chars();
+    let mut wanted = query.next();
+    for ch in candidate.chars().flat_map(char::to_lowercase) {
+        if wanted == Some(ch) {
+            wanted = query.next();
+        }
+    }
+    wanted.is_none()
 }
 
 struct Guard {
@@ -135,10 +163,19 @@ impl Guard {
     fn enter() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-        Ok(Self {
-            terminal: Terminal::new(CrosstermBackend::new(stdout))?,
-        })
+        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
+            disable_raw_mode().ok();
+            return Err(error.into());
+        }
+        match Terminal::new(CrosstermBackend::new(stdout)) {
+            Ok(terminal) => Ok(Self { terminal }),
+            Err(error) => {
+                disable_raw_mode().ok();
+                let mut stdout = io::stdout();
+                execute!(stdout, DisableMouseCapture, LeaveAlternateScreen).ok();
+                Err(error.into())
+            }
+        }
     }
 }
 impl Drop for Guard {
@@ -154,28 +191,17 @@ impl Drop for Guard {
     }
 }
 
-/// One transcript row of known type.
+/// Compatibility-facing transcript item retained for downstream callers while
+/// V3 rendering uses [`Cell`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptItem {
-    User {
-        text: String,
-    },
-    Assistant {
-        text: String,
-        /// True while the turn is still streaming; rendered verbatim until the
-        /// final text can be Markdown-rendered once.
-        streaming: bool,
-    },
+    User { text: String },
+    Assistant { text: String, streaming: bool },
     Tool(ToolRow),
-    Notice {
-        text: String,
-    },
-    Error {
-        text: String,
-    },
+    Notice { text: String },
+    Error { text: String },
 }
-/// A single tool invocation lifecycle. `call_id` lets running rows update in
-/// place to their final status instead of appending a second line.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRow {
     pub call_id: String,
@@ -186,6 +212,7 @@ pub struct ToolRow {
 }
 
 impl TranscriptItem {
+    #[cfg(test)]
     fn tool_call_id(&self) -> Option<&str> {
         match self {
             Self::Tool(row) => Some(&row.call_id),
@@ -257,14 +284,14 @@ impl InputEditor {
     pub fn backspace(&mut self) {
         if self.col > 0 {
             let line = &mut self.lines[self.row];
-            let byte = line
-                .char_indices()
-                .nth(self.col - 1)
-                .map(|(byte, _)| byte)
-                .unwrap_or(0);
-            let removed = line[byte..].chars().next().map(char::len_utf8).unwrap_or(0);
-            line.drain(byte..byte + removed);
-            self.col -= 1;
+            let cursor_byte = char_to_byte(line, self.col);
+            let previous = line[..cursor_byte]
+                .grapheme_indices(true)
+                .next_back()
+                .map_or(0, |(byte, _)| byte);
+            let removed_chars = line[previous..cursor_byte].chars().count();
+            line.drain(previous..cursor_byte);
+            self.col = self.col.saturating_sub(removed_chars);
         } else if self.row > 0 {
             let line = self.lines.remove(self.row);
             self.row -= 1;
@@ -275,12 +302,12 @@ impl InputEditor {
     pub fn delete(&mut self) {
         let line = &mut self.lines[self.row];
         if self.col < line.chars().count() {
-            let byte = line
-                .char_indices()
-                .nth(self.col)
-                .map(|(byte, _)| byte)
-                .unwrap_or(line.len());
-            let removed = line[byte..].chars().next().map(char::len_utf8).unwrap_or(0);
+            let byte = char_to_byte(line, self.col);
+            let removed = line[byte..]
+                .graphemes(true)
+                .next()
+                .map(str::len)
+                .unwrap_or(0);
             line.drain(byte..byte + removed);
         } else if self.row + 1 < self.lines.len() {
             let next = self.lines.remove(self.row + 1);
@@ -289,7 +316,12 @@ impl InputEditor {
     }
     pub fn left(&mut self) {
         if self.col > 0 {
-            self.col -= 1;
+            let byte = char_to_byte(&self.lines[self.row], self.col);
+            let step = self.lines[self.row][..byte]
+                .graphemes(true)
+                .next_back()
+                .map_or(1, |g| g.chars().count());
+            self.col = self.col.saturating_sub(step);
         } else if self.row > 0 {
             self.row -= 1;
             self.col = self.current_len();
@@ -297,7 +329,12 @@ impl InputEditor {
     }
     pub fn right(&mut self) {
         if self.col < self.current_len() {
-            self.col += 1;
+            let byte = char_to_byte(&self.lines[self.row], self.col);
+            let step = self.lines[self.row][byte..]
+                .graphemes(true)
+                .next()
+                .map_or(1, |g| g.chars().count());
+            self.col = (self.col + step).min(self.current_len());
         } else if self.row + 1 < self.lines.len() {
             self.row += 1;
             self.col = 0;
@@ -437,17 +474,21 @@ impl InputEditor {
 
 struct Palette {
     selected: usize,
+    dismissed: bool,
 }
 
 impl Palette {
     fn new() -> Self {
-        Self { selected: 0 }
+        Self {
+            selected: 0,
+            dismissed: false,
+        }
     }
     /// The palette is active while the input's first line is a bare command
     /// prefix: starts with `/` and contains no whitespace yet.
-    fn active(input: &InputEditor) -> bool {
+    fn active(&self, input: &InputEditor) -> bool {
         let first = &input.lines[0];
-        first.starts_with('/') && !first.contains(char::is_whitespace)
+        !self.dismissed && first.starts_with('/') && !first.contains(char::is_whitespace)
     }
     fn clamp(&mut self, len: usize) {
         if len == 0 {
@@ -474,11 +515,14 @@ impl Palette {
 struct App {
     input: InputEditor,
     palette: Palette,
+    presentation: PresentationModel,
     items: Vec<TranscriptItem>,
+    streaming: Option<String>,
     mode: Mode,
     model: String,
     branch: String,
-    continuity: String,
+    resumed: bool,
+    detail: bool,
     busy: bool,
     /// Offset from the top of the transcript in visual (wrapped) rows.
     scroll: usize,
@@ -494,11 +538,14 @@ impl Default for App {
         Self {
             input: InputEditor::new(),
             palette: Palette::new(),
+            presentation: PresentationModel::default(),
             items: Vec::new(),
+            streaming: None,
             mode: Mode::default(),
             model: String::new(),
             branch: String::new(),
-            continuity: String::new(),
+            resumed: false,
+            detail: false,
             busy: false,
             scroll: 0,
             follow: true,
@@ -511,15 +558,11 @@ impl App {
     fn output(&mut self, out: Output) {
         match out {
             Output::AssistantDelta(t) => {
-                let streaming = matches!(
-                    self.items.last(),
-                    Some(TranscriptItem::Assistant {
-                        streaming: true,
-                        ..
-                    })
-                ) && self.busy;
-                if streaming
-                    && let Some(TranscriptItem::Assistant { text, .. }) = self.items.last_mut()
+                self.streaming.get_or_insert_with(String::new).push_str(&t);
+                if let Some(TranscriptItem::Assistant {
+                    text,
+                    streaming: true,
+                }) = self.items.last_mut()
                 {
                     text.push_str(&t);
                 } else {
@@ -527,33 +570,34 @@ impl App {
                         text: t,
                         streaming: true,
                     });
-                    self.busy = true;
                 }
+                self.busy = true;
             }
             Output::AssistantDone => {
+                self.streaming = None;
                 if let Some(TranscriptItem::Assistant { streaming, .. }) = self.items.last_mut() {
                     *streaming = false;
                 }
                 self.busy = false;
             }
-            Output::Item(item) => self.apply_item(item),
-            Output::Notice(text) => self.items.push(TranscriptItem::Notice { text }),
+            Output::Event(event) => self.presentation.apply_event(&event),
+            Output::ToolResult(result) => self.presentation.apply_tool_result(&result),
+            Output::Notice(text) => self.presentation.push_notice(text),
             Output::Mode(mode) => self.mode = mode,
             Output::Header {
                 model,
                 branch,
-                continuity,
+                resumed,
             } => {
                 self.model = model;
                 self.branch = branch;
-                self.continuity = continuity;
+                self.resumed = resumed;
             }
             Output::History(history) => self.input.seed_history(history),
         }
     }
 
-    /// Applies one shared-formatter display item. Tool rows upsert by `call_id`
-    /// so a single invocation is one visual lifecycle.
+    #[cfg(test)]
     fn apply_item(&mut self, item: DisplayItem) {
         match item {
             DisplayItem::UserMessage { text } => self.items.push(TranscriptItem::User { text }),
@@ -561,6 +605,8 @@ impl App {
                 text,
                 streaming: false,
             }),
+            DisplayItem::KernelNotice { text } => self.items.push(TranscriptItem::Notice { text }),
+            DisplayItem::Error { text } => self.items.push(TranscriptItem::Error { text }),
             DisplayItem::ToolActivity {
                 call_id,
                 verb,
@@ -568,11 +614,10 @@ impl App {
                 detail,
                 status,
             } => {
-                if let Some(existing) = self
+                if let Some(TranscriptItem::Tool(row)) = self
                     .items
                     .iter_mut()
-                    .find(|entry| entry.tool_call_id() == Some(call_id.as_str()))
-                    && let TranscriptItem::Tool(row) = existing
+                    .find(|item| item.tool_call_id() == Some(call_id.as_str()))
                 {
                     if !verb.is_empty() {
                         row.verb = verb;
@@ -580,20 +625,18 @@ impl App {
                     if !target.is_empty() {
                         row.target = target;
                     }
-                    row.status = status;
                     row.detail = detail;
-                    return;
+                    row.status = status;
+                } else {
+                    self.items.push(TranscriptItem::Tool(ToolRow {
+                        call_id,
+                        verb,
+                        target,
+                        detail,
+                        status,
+                    }));
                 }
-                self.items.push(TranscriptItem::Tool(ToolRow {
-                    call_id,
-                    verb,
-                    target,
-                    detail,
-                    status,
-                }));
             }
-            DisplayItem::KernelNotice { text } => self.items.push(TranscriptItem::Notice { text }),
-            DisplayItem::Error { text } => self.items.push(TranscriptItem::Error { text }),
         }
     }
 
@@ -684,6 +727,20 @@ impl App {
                     self.input.kill_to_line_end();
                     None
                 }
+                KeyCode::Char('t') => {
+                    self.detail = !self.detail;
+                    None
+                }
+                KeyCode::Char('p') if self.palette.active(&self.input) => {
+                    let len = filter_commands(&self.input.lines[0]).len();
+                    self.palette.previous(len);
+                    None
+                }
+                KeyCode::Char('n') if self.palette.active(&self.input) => {
+                    let len = filter_commands(&self.input.lines[0]).len();
+                    self.palette.next(len);
+                    None
+                }
                 _ => None,
             };
         }
@@ -691,7 +748,7 @@ impl App {
             self.input.newline();
             return None;
         }
-        let palette_active = Palette::active(&self.input);
+        let palette_active = self.palette.active(&self.input);
         let candidates = if palette_active {
             filter_commands(&self.input.lines[0])
         } else {
@@ -699,8 +756,12 @@ impl App {
         };
         match key.code {
             KeyCode::Enter if palette_active => {
-                self.complete_palette(&candidates);
-                None
+                if let Some(name) = self.palette.completion(&candidates) {
+                    self.input.set_text(name);
+                    self.submit_action()
+                } else {
+                    None
+                }
             }
             KeyCode::Tab if palette_active => {
                 self.complete_palette(&candidates);
@@ -708,6 +769,7 @@ impl App {
             }
             KeyCode::Esc if palette_active => {
                 self.palette.selected = 0;
+                self.palette.dismissed = true;
                 None
             }
             KeyCode::Up if palette_active => {
@@ -718,27 +780,10 @@ impl App {
                 self.palette.next(candidates.len());
                 None
             }
-            KeyCode::Enter => {
-                let text = self.input.take_for_submit();
-                if text.trim().is_empty() {
-                    return None;
-                }
-                // Normal prompts are displayed by the ONE authoritative path:
-                // the durable UserMessage event, rendered through the shared
-                // formatter that resume replay uses. They must not be echoed
-                // here a second time. Slash commands are different: they are
-                // local control commands that never become durable UserMessage
-                // events, so echo them exactly once at submit.
-                if text.trim_start().starts_with('/') {
-                    self.items.push(TranscriptItem::User { text: text.clone() });
-                }
-                if text == "/quit" || text == "/exit" {
-                    return Some(Action::Quit);
-                }
-                Some(Action::Submit(text))
-            }
+            KeyCode::Enter => self.submit_action(),
             KeyCode::Backspace => {
                 self.input.backspace();
+                self.palette.dismissed = false;
                 self.palette
                     .clamp(filter_commands(&self.input.lines[0]).len());
                 None
@@ -781,6 +826,7 @@ impl App {
             }
             KeyCode::Char(ch) => {
                 self.input.insert(ch);
+                self.palette.dismissed = false;
                 self.palette
                     .clamp(filter_commands(&self.input.lines[0]).len());
                 None
@@ -793,10 +839,33 @@ impl App {
 enum Action {
     Submit(String),
     Cancel,
+    Resume,
     Quit,
 }
 
 impl App {
+    fn submit_action(&mut self) -> Option<Action> {
+        let text = self.input.take_for_submit();
+        let command = text.trim();
+        if command.is_empty() {
+            return None;
+        }
+        if matches!(command, "/quit" | "/exit") {
+            return Some(Action::Quit);
+        }
+        if command == "/resume" && !self.busy {
+            return Some(Action::Resume);
+        }
+        if command == "/raw" {
+            self.detail = !self.detail;
+            return None;
+        }
+        if !command.starts_with('/') {
+            self.busy = true;
+        }
+        Some(Action::Submit(text))
+    }
+
     /// Completes the palette selection in the input. A trailing space is added
     /// so the completed command is ready for arguments and the next Enter
     /// submits it instead of re-opening the palette.
@@ -805,6 +874,7 @@ impl App {
             self.input.set_text(name);
             self.input.insert(' ');
             self.palette.selected = 0;
+            self.palette.dismissed = false;
         }
     }
 }
@@ -812,23 +882,57 @@ impl App {
 /// Builds the transcript as Ratatui lines with the item's own styling,
 /// splitting embedded newlines so the wrapper and the scroll calculation agree
 /// on the visual row layout.
-fn transcript_lines(items: &[TranscriptItem]) -> Vec<Line<'_>> {
+fn transcript_lines(cells: &[Cell], streaming: Option<&str>, detail: bool) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    for item in items {
-        for line in item_lines(item) {
+    for cell in cells {
+        for line in cell_lines(cell, detail) {
             out.push(line);
         }
+        out.push(Line::from(""));
+    }
+    if let Some(text) = streaming {
+        out.extend(
+            text.lines()
+                .map(|line| Line::styled(line.to_owned(), assistant_style())),
+        );
+    }
+    while out.last().is_some_and(|line| {
+        line.spans.is_empty() || line.spans.iter().all(|span| span.content.is_empty())
+    }) {
+        out.pop();
     }
     out
 }
 
-fn item_lines(item: &TranscriptItem) -> Vec<Line<'_>> {
-    match item {
-        TranscriptItem::User { text } => text
+/// Copy-friendly rendering used by tests and transcript export paths.
+#[must_use]
+pub fn render_cells_plain(cells: &[Cell], detail: bool) -> String {
+    transcript_lines(cells, None, detail)
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn cell_lines(cell: &Cell, detail: bool) -> Vec<Line<'static>> {
+    if detail {
+        return cell
+            .raw_text()
+            .lines()
+            .map(|line| Line::styled(line.to_owned(), notice_style()))
+            .collect();
+    }
+    match cell {
+        Cell::User { text } => text
             .split('\n')
             .enumerate()
             .map(|(index, segment)| {
-                let prefix = if index == 0 { "❯ " } else { "  " };
+                let prefix = if index == 0 { "› " } else { "  " };
                 Line::styled(
                     format!("{prefix}{segment}"),
                     Style::default()
@@ -837,27 +941,199 @@ fn item_lines(item: &TranscriptItem) -> Vec<Line<'_>> {
                 )
             })
             .collect(),
-        TranscriptItem::Assistant { text, streaming } => {
-            if *streaming {
-                text.split('\n')
-                    .map(|segment| Line::styled(segment, assistant_style()))
-                    .collect()
+        Cell::Assistant { text } => render_markdown(text),
+        Cell::Exploration { operations } => exploration_lines(operations),
+        Cell::Command {
+            command,
+            status,
+            summary,
+            output,
+            ..
+        } => activity_lines(
+            *status,
+            if *status == CellStatus::Running {
+                "Running"
             } else {
-                render_markdown(text)
-            }
+                "Ran"
+            },
+            command,
+            summary,
+            output,
+        ),
+        Cell::Validation {
+            command,
+            status,
+            summary,
+            output,
+            ..
+        } => {
+            let title = match status {
+                CellStatus::Running => "Validating",
+                CellStatus::Passed => "Verified",
+                CellStatus::Failed => "Validation failed",
+            };
+            activity_lines(*status, title, command, summary, output)
         }
-        TranscriptItem::Tool(row) => vec![tool_line(row)],
-        TranscriptItem::Notice { text } => text
+        Cell::Patch { files } => patch_lines(files),
+        Cell::Notice { text } => text
             .split('\n')
             .map(|segment| Line::styled(format!("· {segment}"), notice_style()))
             .collect(),
-        TranscriptItem::Error { text } => text
+        Cell::Error { text } => text
             .split('\n')
-            .map(|segment| {
-                Line::styled(format!("error: {segment}"), Style::default().fg(Color::Red))
-            })
+            .map(|segment| Line::styled(format!("✗ {segment}"), Style::default().fg(Color::Red)))
             .collect(),
     }
+}
+
+fn status_marker(status: CellStatus) -> (&'static str, Style) {
+    match status {
+        CellStatus::Running => ("•", Style::default().fg(Color::Cyan)),
+        CellStatus::Passed => ("✓", Style::default().fg(Color::Green)),
+        CellStatus::Failed => ("✗", Style::default().fg(Color::Red)),
+    }
+}
+
+fn activity_lines(
+    status: CellStatus,
+    title: &str,
+    subject: &str,
+    summary: &str,
+    output: &str,
+) -> Vec<Line<'static>> {
+    let (marker, marker_style) = status_marker(status);
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{marker} "), marker_style),
+        Span::styled(
+            format!("{title} {subject}"),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ])];
+    if !summary.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  └ ", notice_style()),
+            Span::styled(summary.to_owned(), notice_style()),
+        ]));
+    }
+    if status == CellStatus::Failed && !output.is_empty() {
+        lines.push(Line::from(""));
+        lines.extend(
+            output
+                .lines()
+                .map(|line| Line::styled(format!("    {line}"), Style::default().fg(Color::Red))),
+        );
+    }
+    lines
+}
+
+fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line<'static>> {
+    let running = operations.iter().any(|op| op.status == CellStatus::Running);
+    let failed = operations.iter().any(|op| op.status == CellStatus::Failed);
+    let status = if failed {
+        CellStatus::Failed
+    } else if running {
+        CellStatus::Running
+    } else {
+        CellStatus::Passed
+    };
+    let (marker, style) = status_marker(status);
+    let title = if running { "Exploring" } else { "Explored" };
+    let mut labels = Vec::new();
+    let mut reads = Vec::new();
+    for operation in operations {
+        if operation.status != CellStatus::Failed
+            && let Some(path) = operation.label.strip_prefix("Read ")
+        {
+            reads.push(path);
+        } else {
+            labels.push(operation.label.clone());
+        }
+    }
+    if !reads.is_empty() {
+        labels.insert(0, format!("Read {}", reads.join(", ")));
+    }
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{marker} "), style),
+        Span::styled(title, Style::default().bold()),
+    ])];
+    for (index, label) in labels.iter().enumerate() {
+        let prefix = if index == 0 { "  └ " } else { "    " };
+        lines.push(Line::from(vec![
+            Span::styled(prefix, notice_style()),
+            Span::raw(label.clone()),
+        ]));
+    }
+    for operation in operations
+        .iter()
+        .filter(|op| op.status == CellStatus::Failed)
+    {
+        lines.push(Line::styled(
+            format!("    {} — {}", operation.label, operation.diagnostic),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    lines
+}
+
+fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
+    let failed = files.iter().any(|file| file.status == CellStatus::Failed);
+    let running = files.iter().any(|file| file.status == CellStatus::Running);
+    let status = if failed {
+        CellStatus::Failed
+    } else if running {
+        CellStatus::Running
+    } else {
+        CellStatus::Passed
+    };
+    let (marker, style) = status_marker(status);
+    let title = if running {
+        "Editing"
+    } else if failed {
+        "Edit failed"
+    } else {
+        "Edited"
+    };
+    let mut lines = Vec::new();
+    if files.len() == 1 {
+        let file = &files[0];
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} "), style),
+            Span::styled(format!("{title} {}", file.path), Style::default().bold()),
+            Span::styled(
+                format!("  +{} −{}", file.additions, file.deletions),
+                notice_style(),
+            ),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} "), style),
+            Span::styled(
+                format!("{title} {} files", files.len()),
+                Style::default().bold(),
+            ),
+        ]));
+        for (index, file) in files.iter().enumerate() {
+            let prefix = if index == 0 { "  └ " } else { "    " };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, notice_style()),
+                Span::raw(format!("{} {}", file.kind, file.path)),
+                Span::styled(
+                    format!("  +{} −{}", file.additions, file.deletions),
+                    notice_style(),
+                ),
+            ]));
+        }
+    }
+    for file in files
+        .iter()
+        .filter(|file| file.status == CellStatus::Failed)
+    {
+        lines.push(Line::styled(
+            format!("    {}", file.diagnostic),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    lines
 }
 
 fn assistant_style() -> Style {
@@ -868,33 +1144,7 @@ fn notice_style() -> Style {
     Style::default().fg(Color::DarkGray)
 }
 
-fn tool_line(row: &ToolRow) -> Line<'_> {
-    let (status_text, status_style) = match row.status {
-        ToolRunStatus::Running => ("…", Style::default().fg(Color::Cyan)),
-        ToolRunStatus::Passed => ("done", Style::default().fg(Color::Green)),
-        ToolRunStatus::Failed => ("FAIL", Style::default().fg(Color::Red).bold()),
-    };
-    let mut spans = vec![
-        Span::styled(
-            format!(" {:<9}", row.verb),
-            match row.status {
-                ToolRunStatus::Failed => Style::default().fg(Color::Red),
-                _ => Style::default().fg(Color::Cyan),
-            },
-        ),
-        Span::styled(truncate(&row.target, 52), Style::default().fg(Color::White)),
-        Span::raw("  "),
-    ];
-    if !row.detail.is_empty() {
-        spans.push(Span::styled(
-            format!("{} ", truncate(&row.detail, 60)),
-            notice_style(),
-        ));
-    }
-    spans.push(Span::styled(status_text, status_style));
-    Line::from(spans)
-}
-
+#[cfg(test)]
 fn truncate(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_owned();
@@ -908,48 +1158,77 @@ fn truncate(text: &str, limit: usize) -> String {
 
 /// Number of visual rows the transcript occupies at `width`, using the same
 /// wrapping Ratatui renders with.
+fn semantic_visual_height(
+    cells: &[Cell],
+    streaming: Option<&str>,
+    detail: bool,
+    width: u16,
+) -> usize {
+    if width == 0 {
+        return 0;
+    }
+    Paragraph::new(transcript_lines(cells, streaming, detail))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+}
+
+#[cfg(test)]
 fn visual_height(items: &[TranscriptItem], width: u16) -> usize {
     if width == 0 {
         return 0;
     }
-    Paragraph::new(transcript_lines(items))
+    let mut lines = Vec::new();
+    for item in items {
+        match item {
+            TranscriptItem::User { text } => {
+                lines.extend(text.lines().map(|line| Line::from(format!("› {line}"))))
+            }
+            TranscriptItem::Assistant { text, .. } => {
+                lines.extend(text.lines().map(|line| Line::from(line.to_owned())))
+            }
+            TranscriptItem::Tool(row) => lines.push(Line::from(format!(
+                "{} {} {}",
+                row.verb, row.target, row.detail
+            ))),
+            TranscriptItem::Notice { text } | TranscriptItem::Error { text } => {
+                lines.extend(text.lines().map(|line| Line::from(line.to_owned())))
+            }
+        }
+    }
+    Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .line_count(width)
+}
+
+fn char_to_byte(text: &str, offset: usize) -> usize {
+    text.char_indices()
+        .nth(offset)
+        .map_or(text.len(), |(byte, _)| byte)
 }
 
 /// Greedy word-wrap of one logical input line into visual rows, each paired
 /// with the char offset it starts at. The cursor position uses this exact
 /// layout, so wrapping and cursor placement always agree.
 fn wrap_input_line(line: &str, width: usize) -> Vec<(usize, String)> {
-    let chars: Vec<char> = line.chars().collect();
     if width == 0 {
         return vec![(0, line.to_owned())];
     }
     let mut rows = Vec::new();
-    let mut start = 0usize;
-    while start < chars.len() {
-        if chars.len() - start <= width {
-            rows.push((start, chars[start..].iter().collect()));
-            break;
+    let mut start_chars = 0usize;
+    let mut row = String::new();
+    let mut row_width = 0usize;
+    for grapheme in line.graphemes(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme).max(1);
+        if !row.is_empty() && row_width + grapheme_width > width {
+            rows.push((start_chars, std::mem::take(&mut row)));
+            start_chars += rows.last().map_or(0, |(_, text)| text.chars().count());
+            row_width = 0;
         }
-        // Prefer breaking at whitespace inside the window.
-        let mut cut = start + width;
-        let mut last_space = None;
-        for (offset, &ch) in chars.iter().enumerate().skip(start).take(width) {
-            if ch.is_whitespace() {
-                last_space = Some(offset + 1);
-            }
-        }
-        if let Some(space) = last_space
-            && space > start
-        {
-            cut = space;
-        }
-        rows.push((start, chars[start..cut].iter().collect()));
-        start = cut;
+        row.push_str(grapheme);
+        row_width += grapheme_width;
     }
-    if rows.is_empty() {
-        rows.push((0, String::new()));
+    if !row.is_empty() || rows.is_empty() {
+        rows.push((start_chars, row));
     }
     rows
 }
@@ -963,16 +1242,17 @@ fn cursor_position(editor: &InputEditor, width: usize) -> (usize, usize) {
             for (row_index, (start, content)) in rows.iter().enumerate() {
                 let row_len = content.chars().count();
                 if editor.col >= *start && editor.col <= start + row_len {
-                    return (visual_row + row_index, editor.col - start);
+                    let byte = char_to_byte(content, editor.col - start);
+                    return (
+                        visual_row + row_index,
+                        UnicodeWidthStr::width(&content[..byte]),
+                    );
                 }
             }
-            let (start, content) = rows.last().expect("wrap never yields empty");
+            let (_start, content) = rows.last().expect("wrap never yields empty");
             return (
                 visual_row + rows.len() - 1,
-                editor
-                    .col
-                    .saturating_sub(*start)
-                    .min(content.chars().count()),
+                UnicodeWidthStr::width(content.as_str()),
             );
         }
         visual_row += rows.len();
@@ -1045,6 +1325,28 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             out.push(Line::from(String::new()));
             continue;
         }
+        if body.contains('|') {
+            let cells = body
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            if cells.iter().all(|cell| {
+                !cell.is_empty() && cell.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
+            }) {
+                continue;
+            }
+            let mut spans = vec![Span::styled("│ ", notice_style())];
+            for (index, cell) in cells.iter().enumerate() {
+                if index > 0 {
+                    spans.push(Span::styled(" │ ", notice_style()));
+                }
+                spans.extend(inline_spans(cell, assistant_style()));
+            }
+            spans.push(Span::styled(" │", notice_style()));
+            out.push(Line::from(spans));
+            continue;
+        }
         out.push(Line::from(inline_spans(body, assistant_style())));
     }
     out
@@ -1058,7 +1360,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
     let mut index = 0;
     let flush = |plain: &mut String, spans: &mut Vec<Span<'static>>| {
         if !plain.is_empty() {
-            spans.push(Span::styled(plain.clone(), base));
+            push_plain_spans(plain, base, spans);
             plain.clear();
         }
     };
@@ -1082,11 +1384,64 @@ fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
             index = close + 2;
             continue;
         }
+        if chars[index] == '['
+            && let Some(label_end_offset) = chars[index + 1..].iter().position(|ch| *ch == ']')
+        {
+            let label_end = index + 1 + label_end_offset;
+            if chars.get(label_end + 1) == Some(&'(')
+                && let Some(url_end_offset) =
+                    chars[label_end + 2..].iter().position(|ch| *ch == ')')
+            {
+                flush(&mut plain, &mut spans);
+                let label: String = chars[index + 1..label_end].iter().collect();
+                let url_end = label_end + 2 + url_end_offset;
+                let url: String = chars[label_end + 2..url_end].iter().collect();
+                spans.push(Span::styled(label, base.add_modifier(Modifier::UNDERLINED)));
+                spans.push(Span::styled(
+                    format!(" ({url})"),
+                    Style::default().fg(Color::Cyan),
+                ));
+                index = url_end + 1;
+                continue;
+            }
+        }
+        if matches!(chars[index], '*' | '_')
+            && chars.get(index + 1) != Some(&chars[index])
+            && let Some(close) = chars[index + 1..].iter().position(|ch| *ch == chars[index])
+        {
+            flush(&mut plain, &mut spans);
+            let italic: String = chars[index + 1..index + 1 + close].iter().collect();
+            spans.push(Span::styled(italic, base.add_modifier(Modifier::ITALIC)));
+            index += close + 2;
+            continue;
+        }
         plain.push(chars[index]);
         index += 1;
     }
     flush(&mut plain, &mut spans);
     spans
+}
+
+fn push_plain_spans(text: &str, base: Style, spans: &mut Vec<Span<'static>>) {
+    let mut rest = text;
+    while let Some(start) = rest.find("http://").or_else(|| rest.find("https://")) {
+        if start > 0 {
+            spans.push(Span::styled(rest[..start].to_owned(), base));
+        }
+        let end = rest[start..]
+            .find(char::is_whitespace)
+            .map_or(rest.len(), |offset| start + offset);
+        spans.push(Span::styled(
+            rest[start..end].to_owned(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::UNDERLINED),
+        ));
+        rest = &rest[end..];
+    }
+    if !rest.is_empty() {
+        spans.push(Span::styled(rest.to_owned(), base));
+    }
 }
 
 fn find_double_star(chars: &[char], from: usize) -> Option<usize> {
@@ -1097,7 +1452,7 @@ fn find_double_star(chars: &[char], from: usize) -> Option<usize> {
 fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let area = frame.area();
     let width = area.width.max(1) as usize;
-    let palette_active = Palette::active(&app.input);
+    let palette_active = app.palette.active(&app.input);
     let candidates = if palette_active {
         filter_commands(&app.input.lines[0])
     } else {
@@ -1135,11 +1490,14 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(format!(
-            "  {}  {}  {}  ctx:{}",
-            app.mode, app.model, app.branch, app.continuity
-        )),
+        Span::raw(format!("  {}  {}  {}", app.mode, app.model, app.branch)),
     ];
+    if app.resumed {
+        header.push(Span::styled("  resumed", notice_style()));
+    }
+    if app.detail {
+        header.push(Span::styled("  detail", Style::default().fg(Color::Cyan)));
+    }
     if !app.follow {
         let indicator = if app.scroll > 0 {
             "  ↑ scroll  ↓ newer"
@@ -1154,12 +1512,21 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     frame.render_widget(Paragraph::new(Line::from(header)), chunks[0]);
 
     let viewport = chunks[1];
-    let content_rows = visual_height(&app.items, viewport.width);
+    let content_rows = semantic_visual_height(
+        app.presentation.cells(),
+        app.streaming.as_deref(),
+        app.detail,
+        viewport.width,
+    );
     app.sync_viewport(content_rows, viewport.height as usize);
     let offset = app.scroll.min(u16::MAX as usize) as u16;
-    let paragraph = Paragraph::new(transcript_lines(&app.items))
-        .wrap(Wrap { trim: false })
-        .scroll((offset, 0));
+    let paragraph = Paragraph::new(transcript_lines(
+        app.presentation.cells(),
+        app.streaming.as_deref(),
+        app.detail,
+    ))
+    .wrap(Wrap { trim: false })
+    .scroll((offset, 0));
     frame.render_widget(paragraph, viewport);
 
     if palette_active && !candidates.is_empty() {
@@ -1246,7 +1613,7 @@ pub async fn run(
     mut output_rx: mpsc::Receiver<Output>,
     mode: Mode,
     model: String,
-    replay: Vec<DisplayItem>,
+    replay: Vec<DurableEvent>,
     history: Vec<String>,
 ) -> Result<()> {
     let mut guard = Guard::enter()?;
@@ -1254,11 +1621,11 @@ pub async fn run(
         mode,
         model,
         branch: "-".into(),
-        continuity: "ok".into(),
+        resumed: !replay.is_empty(),
         ..Default::default()
     };
-    for item in replay {
-        app.apply_item(item);
+    for event in replay {
+        app.presentation.apply_event(&event);
     }
     app.input.seed_history(history);
     let mut events = EventStream::new();
@@ -1270,6 +1637,7 @@ pub async fn run(
             Some(Event::Key(key)) if key.kind==KeyEventKind::Press => match app.on_key(key) {
                 Some(Action::Submit(text)) => input_tx.send(Input::Submit(text)).await?,
                 Some(Action::Cancel) => input_tx.send(Input::Cancel).await?,
+                Some(Action::Resume) => { input_tx.send(Input::Resume).await?; break; }
                 Some(Action::Quit) => { input_tx.send(Input::Quit).await?; break; }
                 None => {}
             },
@@ -1741,15 +2109,8 @@ mod tests {
         for ch in "/mo".chars() {
             app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
         }
-        assert!(Palette::active(&app.input));
-        // First candidate is /mode; Enter completes instead of submitting.
-        app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(app.input.text(), "/mode ");
-        assert!(
-            !Palette::active(&app.input),
-            "completion closes the palette"
-        );
-        // The completed command is submitted by the next Enter, not re-opened.
+        assert!(app.palette.active(&app.input));
+        // Enter dispatches the selected command directly.
         let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(action, Some(Action::Submit(ref text)) if text.trim() == "/mode"));
         // Typing again reopens; selection can move.
@@ -1757,10 +2118,10 @@ mod tests {
         app.input.insert('/');
         app.input.insert('m');
         app.input.insert('o');
-        assert!(Palette::active(&app.input));
+        assert!(app.palette.active(&app.input));
         app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
-        app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(app.input.text(), "/model ");
+        let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(action, Some(Action::Submit(ref text)) if text.trim() == "/model"));
     }
 
     #[test]
@@ -1785,7 +2146,7 @@ mod tests {
         for ch in "/mode work".chars() {
             app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
         }
-        assert!(!Palette::active(&app.input));
+        assert!(!app.palette.active(&app.input));
         let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(
             matches!(action, Some(Action::Submit(ref text)) if text == "/mode work"),
@@ -1857,29 +2218,22 @@ mod tests {
     #[test]
     fn slash_command_echoes_exactly_once() {
         let mut app = App::default();
-        // The palette completes "/diff" to "/diff " on Enter; the next Enter
-        // submits the completed command.
+        // Enter dispatches a unique palette match.
         for ch in "/diff".chars() {
             app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
         }
-        app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
         let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(action, Some(Action::Submit(ref text)) if text.trim() == "/diff"));
         assert_eq!(
             app.items.len(),
-            1,
-            "slash command is a local control command echoed once"
+            0,
+            "slash commands are controls, not transcript messages"
         );
-        assert!(matches!(
-            app.items[0],
-            TranscriptItem::User { ref text } if text.trim() == "/diff"
-        ));
-        // Slash commands produce no durable UserMessage, so replay never adds
-        // a second copy: the local echo is the only copy.
+        // Slash commands produce no durable UserMessage.
         app.apply_item(DisplayItem::KernelNotice {
             text: "mode: WORK".into(),
         });
-        assert_eq!(app.items.len(), 2);
+        assert_eq!(app.items.len(), 1);
     }
 
     // ---- shared formatter integration ----

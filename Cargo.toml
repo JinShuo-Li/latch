@@ -37,6 +37,8 @@ toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.18", features = ["v4", "serde"] }
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
