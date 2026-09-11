@@ -7,10 +7,10 @@
               /help lists commands.             
                                                 
                                                 
-                                                
-│ a narrow but usable composer                  
-│                                               
-WORK · deepseek-flash · main            ready   
-╰───────────────────────────────────────────────
+╭──────────────────────────────────────────────╮
+│ a narrow but usable composer                 │
+│                                              │
+│ WORK · deepseek-flash · main           ready │
+╰──────────────────────────────────────────────╯
 ctrl+p commands                                 
 /tmp/latch-ui                       latch v0.1.1

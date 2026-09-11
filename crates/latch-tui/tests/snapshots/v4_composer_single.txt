@@ -2,7 +2,6 @@
                                                                                                     
                                                                                                     
                                                                                                     
-                                                                                                    
                                                 Latch                                               
                                     a quiet terminal coding agent                                   
                                                                                                     
@@ -16,9 +15,10 @@
                                                                                                     
                                                                                                     
                                                                                                     
-│ fix the failing test                                                                              
-│                                                                                                   
-WORK · deepseek-flash · main                                                                ready   
-╰───────────────────────────────────────────────────────────────────────────────────────────────────
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ fix the failing test                                                                             │
+│                                                                                                  │
+│ WORK · deepseek-flash · main                                                               ready │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 enter send  alt+enter newline  ctrl+p commands                                                      
 /tmp/latch-ui                                                                           latch v0.1.1

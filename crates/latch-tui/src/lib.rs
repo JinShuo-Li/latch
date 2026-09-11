@@ -1745,11 +1745,12 @@ fn draw_diff_overlay(frame: &mut ratatui::Frame<'_>, app: &mut App, area: ratatu
 /// Responsive chrome rows around the composer.
 ///
 /// Rows are dropped in priority order as the terminal shrinks: footer, top
-/// spacer, hints, gap, then the metadata row. The editor body itself is only
-/// ever reduced to a single row, never removed.
+/// spacer, hints, gap, then the metadata row. The rounded frame and the editor
+/// body are only ever reduced to a single row, never removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct ComposerChrome {
     spacer: u16,
+    top: u16,
     body: u16,
     gap: u16,
     meta: u16,
@@ -1760,7 +1761,14 @@ struct ComposerChrome {
 
 impl ComposerChrome {
     fn total(self) -> u16 {
-        self.spacer + self.body + self.gap + self.meta + self.rule + self.hints + self.footer
+        self.spacer
+            + self.top
+            + self.body
+            + self.gap
+            + self.meta
+            + self.rule
+            + self.hints
+            + self.footer
     }
 
     fn responsive(height: u16, content_rows: usize) -> Self {
@@ -1773,6 +1781,7 @@ impl ComposerChrome {
         let max_body = (u32::from(height) * 2 / 5).saturating_sub(4).clamp(1, 16) as u16;
         let mut chrome = Self {
             spacer: u16::from(height >= 14),
+            top: 1,
             body: (content_rows.max(1) as u16).min(max_body),
             gap: u16::from(height >= 9),
             meta: 1,
@@ -1806,6 +1815,12 @@ fn focused_accent() -> Style {
     Style::default().fg(Color::Cyan)
 }
 
+/// Readable secondary text for composer chrome (metadata, footer). `DarkGray`
+/// is nearly invisible on dark themes, so chrome text steps up to `Gray`.
+fn muted_style() -> Style {
+    Style::default().fg(Color::Gray)
+}
+
 /// Composer status word and color, derived from real run state.
 fn composer_status(app: &App) -> (String, Style) {
     if app.permission.is_some() {
@@ -1815,7 +1830,7 @@ fn composer_status(app: &App) -> (String, Style) {
     } else if app.interrupted {
         ("interrupted".into(), yellow())
     } else {
-        ("ready".into(), notice_style())
+        ("ready".into(), muted_style())
     }
 }
 
@@ -1889,7 +1904,7 @@ fn draw_welcome(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         ),
-        Line::styled("a quiet terminal coding agent", notice_style()),
+        Line::styled("a quiet terminal coding agent", muted_style()),
         Line::from(""),
         Line::styled(
             "Ask Latch to inspect, change, or verify code. /help lists commands.",
@@ -1919,16 +1934,21 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui::layout:
     };
     let right = format!("latch v{}", env!("CARGO_PKG_VERSION"));
     let right_width = display_width(&right);
-    let left_width = display_width(&workspace).min(width);
-    let text = if left_width + right_width < width {
-        format!(
-            "{workspace}{}{right}",
-            " ".repeat(width - left_width - right_width)
-        )
+    let left = sidebar::fit(
+        &workspace,
+        width.saturating_sub(right_width).saturating_sub(1),
+    );
+    let left_width = display_width(&left);
+    let line = if left_width + right_width < width {
+        Line::from(vec![
+            Span::styled(left, muted_style()),
+            Span::raw(" ".repeat(width - left_width - right_width)),
+            Span::styled(right, notice_style()),
+        ])
     } else {
-        sidebar::fit(&workspace, width)
+        Line::styled(sidebar::fit(&workspace, width), notice_style())
     };
-    frame.render_widget(Paragraph::new(Line::styled(text, notice_style())), area);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_composer_hints(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui::layout::Rect) {
@@ -1972,13 +1992,13 @@ fn draw_composer_hints(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui:
 fn composer_meta_line(app: &App, width: usize, sidebar_shown: bool) -> Line<'static> {
     let mode_style = match app.mode {
         Mode::Work => focused_accent().add_modifier(Modifier::BOLD),
-        _ => notice_style().add_modifier(Modifier::BOLD),
+        _ => muted_style().add_modifier(Modifier::BOLD),
     };
     let mode_text = app.mode.to_string();
     let mode_width = display_width(&mode_text);
     let mut fields: Vec<(String, Style)> = Vec::new();
     if !app.model.is_empty() {
-        fields.push((app.model.clone(), Style::default()));
+        fields.push((app.model.clone(), muted_style()));
     }
     if !app.branch.is_empty() && app.branch != "-" {
         fields.push((app.branch.clone(), notice_style()));
@@ -2097,12 +2117,15 @@ fn draw_composer(
         return;
     }
     let focused = app.permission.is_none() && app.diff_overlay.is_none();
-    let bar_style = if focused {
+    let border_style = if focused {
         focused_accent()
     } else {
         notice_style()
     };
-    let inner_width = area.width.saturating_sub(3).max(1) as usize;
+    // A closed rounded frame: one border column and one padding column on each
+    // side of the editor content.
+    let framed = chrome.top > 0;
+    let inner_width = area.width.saturating_sub(4).max(1) as usize;
     let body_height = chrome.body.max(1) as usize;
     app.last_input_width = inner_width;
     app.last_input_height = body_height;
@@ -2113,55 +2136,78 @@ fn draw_composer(
     let viewport = app.input.viewport();
     let (cursor_row, cursor_col) = app.input.cursor_visual(&layout);
 
+    let plain = |content: Vec<Span<'static>>, inner: usize| -> Line<'static> {
+        let used: usize = content
+            .iter()
+            .map(|span| display_width(&span.content))
+            .sum();
+        let mut spans = vec![Span::styled("│ ".to_owned(), border_style)];
+        spans.extend(content);
+        if used < inner {
+            spans.push(Span::raw(" ".repeat(inner - used)));
+        }
+        if framed {
+            spans.push(Span::styled(" │".to_owned(), border_style));
+        }
+        Line::from(spans)
+    };
+
     let mut lines: Vec<Line<'static>> = Vec::new();
     for _ in 0..chrome.spacer {
         lines.push(Line::from(""));
     }
+    if framed {
+        lines.push(Line::styled(
+            format!("╭{}╮", "─".repeat(area.width.saturating_sub(2) as usize)),
+            border_style,
+        ));
+    }
     let body_start = lines.len();
     for offset in 0..body_height {
         let index = viewport + offset;
-        let Some(row) = layout.get(index) else {
-            lines.push(Line::from(vec![Span::styled("│", bar_style)]));
-            continue;
-        };
-        let text = sidebar::fit(&app.input.row_text(row), inner_width);
-        if app.input.is_empty() && index == 0 {
-            lines.push(Line::from(vec![
-                Span::styled("│ ", bar_style),
-                Span::styled("Ask Latch…", notice_style()),
-            ]));
-            continue;
-        }
-        let mut spans = vec![Span::styled("│ ", bar_style)];
-        spans.push(Span::raw(text.clone()));
-        let above = index == viewport && viewport > 0;
-        let below = index + 1 == layout.len() && viewport + body_height < layout.len();
-        let indicator = match (above, below) {
-            (true, true) => Some("↕"),
-            (true, false) => Some("↑"),
-            (false, true) => Some("↓"),
-            _ => None,
-        };
-        if let Some(symbol) = indicator {
-            let text_width = display_width(&text);
-            if text_width + 3 <= inner_width {
-                spans.push(Span::raw(" ".repeat(inner_width - text_width - 2)));
-                spans.push(Span::styled(symbol.to_owned(), notice_style()));
+        let content = match layout.get(index) {
+            None => Vec::new(),
+            Some(_) if app.input.is_empty() && index == 0 => {
+                vec![Span::styled("Ask Latch…".to_owned(), notice_style())]
             }
-        }
-        lines.push(Line::from(spans));
+            Some(row) => {
+                let text = sidebar::fit(&app.input.row_text(row), inner_width);
+                let above = index == viewport && viewport > 0;
+                let below = index + 1 == layout.len() && viewport + body_height < layout.len();
+                let indicator = match (above, below) {
+                    (true, true) => Some("↕"),
+                    (true, false) => Some("↑"),
+                    (false, true) => Some("↓"),
+                    _ => None,
+                };
+                let text_width = display_width(&text);
+                let mut content = vec![Span::raw(text)];
+                if let Some(symbol) = indicator
+                    && text_width + 2 <= inner_width
+                {
+                    content.push(Span::raw(" ".repeat(inner_width - text_width - 1)));
+                    content.push(Span::styled(symbol.to_owned(), notice_style()));
+                }
+                content
+            }
+        };
+        lines.push(plain(content, inner_width));
     }
     for _ in 0..chrome.gap {
-        lines.push(Line::from(vec![Span::styled("│", bar_style)]));
+        lines.push(plain(Vec::new(), inner_width));
     }
     if chrome.meta > 0 {
-        lines.push(composer_meta_line(app, inner_width, sidebar_shown));
+        let meta = composer_meta_line(app, inner_width, sidebar_shown);
+        lines.push(plain(meta.spans, inner_width));
     }
     if chrome.rule > 0 {
-        lines.push(Line::styled(
-            format!("╰{}", "─".repeat(area.width.saturating_sub(1) as usize)),
-            notice_style(),
-        ));
+        let (left, right) = if framed { ("╰", "╯") } else { ("╰", "") };
+        let mut rule = format!(
+            "{left}{}",
+            "─".repeat(area.width.saturating_sub(2) as usize)
+        );
+        rule.push_str(right);
+        lines.push(Line::styled(rule, border_style));
     }
     frame.render_widget(Paragraph::new(lines), area);
 
@@ -2169,7 +2215,9 @@ fn draw_composer(
     // a viewport scrolled away hides it rather than pinning it to an edge.
     if focused && cursor_row >= viewport && cursor_row < viewport + body_height {
         let row = body_start + (cursor_row - viewport);
-        let col = (3 + cursor_col).min(area.width.saturating_sub(1) as usize) as u16;
+        // Frame column + padding column, then the cursor cell. It is clamped to
+        // the right padding so it never covers the border.
+        let col = (2 + cursor_col).min(area.width.saturating_sub(2) as usize) as u16;
         let position = (area.x + col, area.y + row as u16);
         frame.set_cursor_position(position);
         app.last_cursor = Some(position);
@@ -2192,7 +2240,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let sidebar_shown = sidebar_visible(area.width, app.sidebar_override) && !overlay_open;
     let sidebar_cols = sidebar_width(area.width, sidebar_shown);
 
-    let composer_inner = area.width.saturating_sub(3).max(1) as usize;
+    let composer_inner = area.width.saturating_sub(4).max(1) as usize;
     let content_rows = app.input.total_visual_rows(composer_inner);
     let palette_rows = if palette_active {
         candidates.len().min(MAX_PALETTE_ROWS) as u16
@@ -2206,7 +2254,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             Constraint::Min(0),
             Constraint::Length(palette_rows),
             Constraint::Length(
-                chrome.spacer + chrome.body + chrome.gap + chrome.meta + chrome.rule,
+                chrome.spacer + chrome.top + chrome.body + chrome.gap + chrome.meta + chrome.rule,
             ),
             Constraint::Length(chrome.hints),
             Constraint::Length(chrome.footer),
@@ -3068,13 +3116,39 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
 
         // The cursor is on the second pasted line inside the composer body:
-        // bar column + two padding spaces + cursor display column.
+        // top border + border/padding columns + cursor display column.
         let body = app.composer_body;
         assert_eq!(app.input.cursor(), (1, 3));
-        assert_eq!(app.last_cursor, Some((body.x + 3 + 3, body.y)));
+        assert_eq!(app.last_cursor, Some((body.x + 2 + 3, body.y + 1)));
         terminal
             .backend_mut()
-            .assert_cursor_position((body.x + 3 + 3, body.y));
+            .assert_cursor_position((body.x + 2 + 3, body.y + 1));
+    }
+
+    #[test]
+    fn composer_is_a_closed_rounded_frame_with_the_cursor_at_the_text_edge() {
+        let backend = ratatui::backend::TestBackend::new(48, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::default();
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let text = buffer_text(terminal.backend().buffer());
+        let rows: Vec<&str> = text.lines().collect();
+        let area = app.composer_body;
+        let top = rows[area.y as usize];
+        let bottom = rows[(area.y + area.height - 1) as usize];
+        assert!(top.starts_with('╭') && top.ends_with('╮'), "{top:?}");
+        assert!(
+            bottom.starts_with('╰') && bottom.ends_with('╯'),
+            "{bottom:?}"
+        );
+        for row in &rows[area.y as usize + 1..(area.y + area.height - 1) as usize] {
+            assert!(row.starts_with('│') && row.ends_with('│'), "{row:?}");
+        }
+        // The empty composer leaves the cursor on the first text cell, directly
+        // before the placeholder — never one column inside it.
+        assert_eq!(app.last_cursor, Some((area.x + 2, area.y + 1)));
     }
 
     #[test]

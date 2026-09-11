@@ -14,17 +14,17 @@
                                                                                                     
                                                                                                     
                                                                                                     
-                                                                                                    
-│ pasted line 0                                                                                     
-│ pasted line 1                                                                                     
-│ pasted line 2                                                                                     
-│ pasted line 3                                                                                     
-│ pasted line 4                                                                                     
-│ pasted line 5                                                                                     
-│ pasted line 6                                                                                     
-│ pasted line 7                                                                                     
-│                                                                                                   
-WORK · deepseek-flash · main                                                                ready   
-╰───────────────────────────────────────────────────────────────────────────────────────────────────
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ pasted line 0                                                                                    │
+│ pasted line 1                                                                                    │
+│ pasted line 2                                                                                    │
+│ pasted line 3                                                                                    │
+│ pasted line 4                                                                                    │
+│ pasted line 5                                                                                    │
+│ pasted line 6                                                                                    │
+│ pasted line 7                                                                                    │
+│                                                                                                  │
+│ WORK · deepseek-flash · main                                                               ready │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 enter send  alt+enter newline  ctrl+p commands                                                      
 /tmp/latch-ui                                                                           latch v0.1.1

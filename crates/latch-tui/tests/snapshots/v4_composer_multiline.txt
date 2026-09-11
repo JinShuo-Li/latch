@@ -11,14 +11,14 @@
                                                                                                     
                                                                                                     
                                                                                                     
-                                                                                                    
-│ line three                                                                                     ↑  
-│ line four                                                                                         
-│ line five                                                                                         
-│ line six                                                                                          
-│ line seven                                                                                        
-│                                                                                                   
-WORK · deepseek-flash · main                                                                ready   
-╰───────────────────────────────────────────────────────────────────────────────────────────────────
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ line three                                                                                     ↑ │
+│ line four                                                                                        │
+│ line five                                                                                        │
+│ line six                                                                                         │
+│ line seven                                                                                       │
+│                                                                                                  │
+│ WORK · deepseek-flash · main                                                               ready │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 enter send  alt+enter newline  ctrl+p commands                                                      
 /tmp/latch-ui                                                                           latch v0.1.1
