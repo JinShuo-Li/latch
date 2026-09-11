@@ -1138,7 +1138,11 @@ impl Agent {
             .get("timeout_seconds")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(600);
-        let output = match self.tools.run_process(&command, timeout, cancel).await {
+        let output = match self
+            .tools
+            .run_validated_command(call, timeout, cancel)
+            .await
+        {
             Ok(output) => output,
             Err(error) => {
                 let failed = tool_error(call, format!("{error:#}"));

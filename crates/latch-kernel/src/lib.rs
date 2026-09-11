@@ -9,6 +9,7 @@ pub mod permissions;
 pub mod progress;
 pub mod prompt;
 pub mod provider;
+pub mod sandbox;
 pub mod session;
 pub mod state;
 pub mod store;

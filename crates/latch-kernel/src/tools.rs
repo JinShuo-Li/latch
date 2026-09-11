@@ -1,4 +1,5 @@
 use crate::config::{OutsidePolicy, PermissionConfig};
+use crate::sandbox::{Capability, CapabilitySet, SandboxProfile, SandboxRunner};
 use crate::store::EventStore;
 use anyhow::{Context, Result, anyhow, bail};
 use latch_protocol::{ChangeOwner, EventPayload, FileVersion, Mode, ToolCall, ToolResult};
@@ -40,6 +41,33 @@ impl PolicyEngine {
         if let Ok(mut current) = self.mode.write() {
             *current = mode;
         }
+    }
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        self.mode.read().map_or(Mode::Ask, |mode| *mode)
+    }
+    /// Capability profile for one call. Until the safety layer classifies
+    /// capabilities itself, this mirrors the existing mutation/read-only
+    /// distinction so every execution still has an explicit sandbox.
+    #[must_use]
+    pub fn profile_for_call(&self, tool: &str, args: &Value) -> SandboxProfile {
+        let command = args.get("command").and_then(Value::as_str).unwrap_or("");
+        let mutation = matches!(
+            tool,
+            "patch" | "write" | "undo" | "checkpoint" | "exec_start"
+        ) || matches!(tool, "shell" | "validate")
+            && !is_read_only_shell(command, &self.workspace);
+        let mut capabilities = CapabilitySet::new();
+        capabilities.insert(Capability::WorkspaceRead);
+        capabilities.insert(Capability::BuildArtifactWrite);
+        if mutation && self.mode().can_mutate() {
+            capabilities.insert(Capability::WorkspaceSourceWrite);
+        }
+        SandboxProfile::new(
+            self.workspace.clone(),
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+            capabilities,
+        )
     }
     #[must_use]
     pub fn decide(&self, tool: &str, args: &Value) -> PolicyDecision {
@@ -147,6 +175,15 @@ struct ManagedProcess {
     artifact_id: Option<String>,
 }
 
+/// Outcome of the mandatory startup sandbox probe. `Unavailable` carries the
+/// actionable refusal message; command execution fails with it rather than
+/// silently running unsandboxed.
+#[derive(Clone)]
+enum SandboxState {
+    Ready(SandboxRunner),
+    Unavailable(String),
+}
+
 #[derive(Clone)]
 pub struct ToolExecutor {
     workspace: PathBuf,
@@ -165,6 +202,7 @@ pub struct ToolExecutor {
     processes: Arc<Mutex<HashMap<String, ManagedProcess>>>,
     /// Call ids the interactive layer approved for an `Ask` policy decision.
     approved: Arc<std::sync::Mutex<HashSet<String>>>,
+    sandbox: Arc<std::sync::RwLock<SandboxState>>,
 }
 /// Outcome of one bounded shell execution.
 #[derive(Debug)]
@@ -199,6 +237,10 @@ impl ToolExecutor {
     ) -> Result<Self> {
         std::fs::create_dir_all(&artifacts)?;
         let initial = git_dirty_hashes(&workspace).unwrap_or_default();
+        let sandbox = match SandboxRunner::detect(&workspace) {
+            Ok(runner) => SandboxState::Ready(runner),
+            Err(error) => SandboxState::Unavailable(format!("{error:#}")),
+        };
         Ok(Self {
             workspace,
             artifacts,
@@ -216,7 +258,41 @@ impl ToolExecutor {
             restored: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             processes: Arc::new(Mutex::new(HashMap::new())),
             approved: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            sandbox: Arc::new(std::sync::RwLock::new(sandbox)),
         })
+    }
+    /// The sandbox is required, not best-effort: a failed probe refuses every
+    /// command execution with the probe's actionable message.
+    fn sandbox_runner(&self) -> Result<SandboxRunner> {
+        let state = self
+            .sandbox
+            .read()
+            .map_err(|_| anyhow!("sandbox state poisoned"))?;
+        match &*state {
+            SandboxState::Ready(runner) => Ok(runner.clone()),
+            SandboxState::Unavailable(message) => bail!("{message}"),
+        }
+    }
+    /// Human-readable sandbox status for startup banners and diagnostics.
+    pub fn sandbox_status(&self) -> Result<String> {
+        self.sandbox_runner()
+            .map(|runner| format!("{} ready", runner.bwrap().display()))
+    }
+    #[cfg(test)]
+    pub(crate) fn force_sandbox_unavailable(&self, message: &str) {
+        if let Ok(mut state) = self.sandbox.write() {
+            *state = SandboxState::Unavailable(message.to_owned());
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn sandbox_available(&self) -> bool {
+        self.sandbox_runner().is_ok()
+    }
+    /// Capability profile for one call under the current mode and safety
+    /// policy, merged with any single-use grant the resolver approved.
+    #[must_use]
+    pub fn sandbox_profile(&self, tool: &str, args: &Value) -> SandboxProfile {
+        self.policy.profile_for_call(tool, args)
     }
     /// Marks a call id as approved by the human approval path so the policy
     /// `Ask` decision executes once instead of behaving like a denial.
@@ -644,11 +720,11 @@ impl ToolExecutor {
             .unwrap_or("")
             .to_owned();
         let id = format!("proc-{}", Uuid::new_v4());
-        let mut child = Command::new("bash")
-            .args(["-lc", &command])
-            .current_dir(&self.workspace)
+        let profile = self.sandbox_profile(&call.name, &call.arguments);
+        let runner = self.sandbox_runner()?;
+        let mut child = runner
+            .command(&profile, &command)
             .kill_on_drop(true)
-            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -973,6 +1049,7 @@ impl ToolExecutor {
     /// only for commands conservatively classified as read-only.
     pub async fn run_process(
         &self,
+        profile: &SandboxProfile,
         command: &str,
         timeout_seconds: u64,
         cancel: CancellationToken,
@@ -985,7 +1062,7 @@ impl ToolExecutor {
         };
         let started = Instant::now();
         let (status, text, artifact) = self
-            .run_process_inner(command, timeout_seconds, cancel)
+            .run_process_inner(profile, command, timeout_seconds, cancel)
             .await?;
         if drift {
             self.classify_drift(command, before.as_deref()).await;
@@ -1000,6 +1077,7 @@ impl ToolExecutor {
     }
     async fn run_process_inner(
         &self,
+        profile: &SandboxProfile,
         command: &str,
         timeout_seconds: u64,
         cancel: CancellationToken,
@@ -1007,9 +1085,9 @@ impl ToolExecutor {
         let op = self
             .store
             .begin_operation(self.session_id, &format!("shell: {command}"))?;
-        let mut child = Command::new("bash")
-            .args(["-lc", command])
-            .current_dir(&self.workspace)
+        let runner = self.sandbox_runner()?;
+        let mut child = runner
+            .command(profile, command)
             .kill_on_drop(true)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -1057,6 +1135,23 @@ impl ToolExecutor {
         let (bounded, artifact) = self.bound_output(text, "shell")?;
         Ok((status, bounded, artifact))
     }
+    /// Runs a `validate` command inside the same sandbox as `shell`.
+    pub async fn run_validated_command(
+        &self,
+        call: &ToolCall,
+        timeout_seconds: u64,
+        cancel: CancellationToken,
+    ) -> Result<ProcessOutput> {
+        let command = call
+            .arguments
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("command is required"))?
+            .to_owned();
+        let profile = self.sandbox_profile("validate", &call.arguments);
+        self.run_process(&profile, &command, timeout_seconds, cancel)
+            .await
+    }
     async fn shell(
         &self,
         call: &ToolCall,
@@ -1068,7 +1163,8 @@ impl ToolExecutor {
             .get("timeout_seconds")
             .and_then(Value::as_u64)
             .unwrap_or(self.policy.config.shell_timeout_seconds);
-        let output = self.run_process(command, timeout, cancel).await?;
+        let profile = self.sandbox_profile(&call.name, &call.arguments);
+        let output = self.run_process(&profile, command, timeout, cancel).await?;
         if !output.success {
             bail!("{}\n{}", output.status_line, output.text)
         }
@@ -1261,29 +1357,25 @@ impl ToolExecutor {
         }
     }
     async fn git_status(&self, _: &ToolCall) -> Result<(String, Option<String>)> {
-        let out = Command::new("git")
-            .args(["status", "--short", "--branch"])
-            .current_dir(&self.workspace)
+        let profile = self.sandbox_profile("git_status", &json!({}));
+        let runner = self.sandbox_runner()?;
+        let output = runner
+            .command(&profile, "git status --short --branch; git diff --stat")
             .output()
             .await?;
-        let diff = Command::new("git")
-            .args(["diff", "--stat"])
-            .current_dir(&self.workspace)
-            .output()
-            .await?;
-        Ok((
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&diff.stdout)
-            ),
-            None,
-        ))
+        if !output.status.success() {
+            bail!(
+                "git status failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok((String::from_utf8_lossy(&output.stdout).into_owned(), None))
     }
     async fn git_diff(&self, _: &ToolCall) -> Result<(String, Option<String>)> {
-        let output = Command::new("git")
-            .args(["diff", "--no-ext-diff", "--"])
-            .current_dir(&self.workspace)
+        let profile = self.sandbox_profile("git_diff", &json!({}));
+        let runner = self.sandbox_runner()?;
+        let output = runner
+            .command(&profile, "git diff --no-ext-diff --")
             .output()
             .await?;
         if !output.status.success() {
