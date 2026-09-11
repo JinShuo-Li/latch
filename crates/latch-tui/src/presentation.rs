@@ -396,6 +396,61 @@ fn exploration_label(call: &ToolCall) -> Option<String> {
         }
         "git_status" => Some("Inspect git status".into()),
         "git_diff" => Some("Inspect workspace diff".into()),
+        "shell" => shell_exploration_label(string_arg(&call.arguments, "command")?),
+        _ => None,
+    }
+}
+
+fn shell_exploration_label(command: &str) -> Option<String> {
+    let words = command.split_whitespace().collect::<Vec<_>>();
+    let executable = words.first()?.rsplit('/').next()?;
+    match executable {
+        "ls" => {
+            let targets = words
+                .iter()
+                .skip(1)
+                .filter(|word| !word.starts_with('-'))
+                .copied()
+                .collect::<Vec<_>>();
+            Some(if targets.is_empty() {
+                "List workspace".into()
+            } else {
+                format!("List {}", targets.join(", "))
+            })
+        }
+        "find" => Some(format!(
+            "List {}",
+            words.get(1).copied().unwrap_or("workspace")
+        )),
+        "rg" | "grep" => {
+            let query = words
+                .iter()
+                .skip(1)
+                .find(|word| !word.starts_with('-'))
+                .copied()
+                .unwrap_or("");
+            Some(if query.is_empty() {
+                "Search workspace".into()
+            } else {
+                format!("Search {query}")
+            })
+        }
+        "cat" | "head" | "tail" | "sed" => {
+            let target = words
+                .iter()
+                .skip(1)
+                .rev()
+                .find(|word| !word.starts_with('-'))
+                .copied()
+                .unwrap_or("input");
+            Some(format!("Read {target}"))
+        }
+        "git" => match words.get(1).copied() {
+            Some("status") => Some("Inspect git status".into()),
+            Some("diff") => Some("Inspect workspace diff".into()),
+            Some("log") => Some("Inspect git history".into()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -629,6 +684,20 @@ mod tests {
         assert!(visible.contains("Read Cargo.toml"));
         assert!(visible.contains("Search \\\"normalize\\\" in src/"));
         assert!(!operations.iter().any(|op| op.label.contains("deadbeef")));
+    }
+
+    #[test]
+    fn safe_shell_inspection_uses_exploration_semantics() {
+        let model = PresentationModel::from_events(&[
+            request("a", "shell", json!({"command":"ls -la src"})),
+            request("b", "shell", json!({"command":"rg -n normalize src"})),
+            result("a", "shell", "exit 0\nlib.rs", false),
+            result("b", "shell", "exit 0\nsrc/lib.rs:1", false),
+        ]);
+        let rendered = super::super::render_cells_plain(model.cells(), false);
+        assert!(rendered.contains("List src"));
+        assert!(rendered.contains("Search normalize"));
+        assert!(!rendered.contains("Running ls"));
     }
 
     #[test]

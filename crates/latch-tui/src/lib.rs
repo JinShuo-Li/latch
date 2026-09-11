@@ -580,7 +580,15 @@ impl App {
                 }
                 self.busy = false;
             }
-            Output::Event(event) => self.presentation.apply_event(&event),
+            Output::Event(event) => {
+                if matches!(
+                    &event.payload,
+                    latch_protocol::EventPayload::AssistantMessageCompleted { .. }
+                ) {
+                    self.streaming = None;
+                }
+                self.presentation.apply_event(&event);
+            }
             Output::ToolResult(result) => self.presentation.apply_tool_result(&result),
             Output::Notice(text) => self.presentation.push_notice(text),
             Output::Mode(mode) => self.mode = mode,
