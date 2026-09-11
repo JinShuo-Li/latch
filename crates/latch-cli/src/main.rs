@@ -13,6 +13,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(
@@ -139,7 +140,7 @@ async fn build_agent(
             store.mark_operation_reported(id)?;
         }
     }
-    let provider = provider(config)?;
+    let provider = provider(config, session_id)?;
     let model = provider.model().to_string();
     let policy = PolicyEngine::new(mode, workspace.to_path_buf(), config.permissions.clone());
     let tools = ToolExecutor::new(
@@ -198,20 +199,23 @@ async fn build_agent(
     Ok((agent, model))
 }
 
-fn provider(config: &Config) -> Result<Arc<dyn ModelProvider>> {
+fn provider(config: &Config, session_id: Uuid) -> Result<Arc<dyn ModelProvider>> {
     let p = &config.provider;
     match p.kind.as_str() {
         "openai" | "openai-compatible" => {
             let env = p.api_key_env.as_deref().unwrap_or("OPENAI_API_KEY");
             let key = std::env::var(env)
                 .with_context(|| format!("set {env} or configure provider.api_key_env"))?;
-            Ok(Arc::new(OpenAiProvider::new(
-                p.base_url
-                    .clone()
-                    .unwrap_or_else(|| "https://api.openai.com/v1".into()),
-                key,
-                p.model.clone(),
-            )))
+            Ok(Arc::new(
+                OpenAiProvider::new(
+                    p.base_url
+                        .clone()
+                        .unwrap_or_else(|| "https://api.openai.com/v1".into()),
+                    key,
+                    p.model.clone(),
+                )
+                .with_session(session_id),
+            ))
         }
         "anthropic" => {
             let env = p.api_key_env.as_deref().unwrap_or("ANTHROPIC_API_KEY");

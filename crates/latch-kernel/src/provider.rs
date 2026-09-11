@@ -3,10 +3,17 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use latch_protocol::{ModelRequest, ModelResponse, StreamEvent, ToolCall, Usage};
 use reqwest::Client;
+use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+/// User-Agent sent with every provider request. Keep in sync with the workspace version.
+pub const USER_AGENT: &str = "latch/0.1";
+const OPENCODE_GO_BASE: &str = "https://opencode.ai/zen/go";
+const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
 pub type StreamSink = Arc<dyn Fn(StreamEvent) + Send + Sync>;
 #[async_trait]
@@ -26,6 +33,7 @@ pub struct OpenAiProvider {
     base_url: String,
     api_key: String,
     model: String,
+    session_id: Option<Uuid>,
 }
 impl OpenAiProvider {
     #[must_use]
@@ -35,7 +43,28 @@ impl OpenAiProvider {
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
             model,
+            session_id: None,
         }
+    }
+    /// Tags requests with the durable Latch session id. OpenCode Go endpoints
+    /// receive it as `x-opencode-session`; other OpenAI-compatible servers are
+    /// unaffected. Because a resumed session reloads the same stored UUID, the
+    /// header stays stable for the lifetime of the session.
+    #[must_use]
+    pub fn with_session(mut self, session_id: Uuid) -> Self {
+        self.session_id = Some(session_id);
+        self
+    }
+    /// Headers attached to every model request.
+    fn request_headers(&self) -> HeaderMap {
+        let mut headers = user_agent_headers();
+        if is_opencode_go_endpoint(&self.base_url)
+            && let Some(session) = &self.session_id
+            && let Ok(value) = HeaderValue::from_str(&session.to_string())
+        {
+            headers.insert(OPENCODE_SESSION_HEADER, value);
+        }
+        headers
     }
 }
 #[async_trait]
@@ -57,6 +86,7 @@ impl ModelProvider for OpenAiProvider {
             .client
             .post(format!("{}/chat/completions", self.base_url))
             .bearer_auth(&self.api_key)
+            .headers(self.request_headers())
             .json(&body)
             .send()
             .await?
@@ -177,6 +207,7 @@ impl ModelProvider for AnthropicProvider {
             .post(format!("{}/v1/messages", self.base_url))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
+            .headers(user_agent_headers())
             .json(&anthropic_request(&request, &self.model))
             .send()
             .await?
@@ -331,6 +362,24 @@ impl ModelProvider for FakeProvider {
     }
 }
 
+fn user_agent_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        reqwest::header::USER_AGENT,
+        HeaderValue::from_static(USER_AGENT),
+    );
+    headers
+}
+fn is_opencode_go_endpoint(base_url: &str) -> bool {
+    match base_url
+        .trim_end_matches('/')
+        .strip_prefix(OPENCODE_GO_BASE)
+    {
+        Some(rest) => rest.is_empty() || rest.starts_with('/'),
+        None => false,
+    }
+}
+
 fn openai_request(r: &ModelRequest, model: &str) -> Value {
     let mut messages = vec![json!({"role":"system","content":r.system})];
     messages.extend(
@@ -417,5 +466,63 @@ mod tests {
         assert!(d.push(b"data: {\"a\":").is_empty());
         assert_eq!(d.push(b"1}\n\n"), ["{\"a\":1}"]);
         assert_eq!(d.push(b"data: ok\r\n\r\n"), ["ok"]);
+    }
+    #[test]
+    fn generic_endpoints_send_only_the_user_agent() {
+        let provider = OpenAiProvider::new(
+            "https://api.openai.com/v1/".into(),
+            "key".into(),
+            "m".into(),
+        )
+        .with_session(Uuid::new_v4());
+        let headers = provider.request_headers();
+        assert_eq!(
+            headers.get(reqwest::header::USER_AGENT).unwrap(),
+            USER_AGENT
+        );
+        assert!(headers.get(OPENCODE_SESSION_HEADER).is_none());
+    }
+    #[test]
+    fn opencode_go_session_header_is_stable_for_the_session_lifetime() {
+        let session = Uuid::new_v4();
+        let base = "https://opencode.ai/zen/go/models/gpt-5".to_string();
+        let provider =
+            OpenAiProvider::new(base.clone(), "key".into(), "m".into()).with_session(session);
+        let first = provider.request_headers();
+        assert_eq!(
+            first.get(OPENCODE_SESSION_HEADER).unwrap(),
+            &session.to_string()
+        );
+        // Stable across requests within a process...
+        assert_eq!(
+            provider.request_headers().get(OPENCODE_SESSION_HEADER),
+            first.get(OPENCODE_SESSION_HEADER)
+        );
+        // ...and across provider rebuilds that resume the same durable session.
+        let resumed = OpenAiProvider::new(base, "key".into(), "m".into()).with_session(session);
+        assert_eq!(
+            resumed.request_headers().get(OPENCODE_SESSION_HEADER),
+            first.get(OPENCODE_SESSION_HEADER)
+        );
+        assert_eq!(first.get(reqwest::header::USER_AGENT).unwrap(), "latch/0.1");
+    }
+    #[test]
+    fn detects_opencode_go_endpoints_at_path_boundaries() {
+        for url in [
+            "https://opencode.ai/zen/go",
+            "https://opencode.ai/zen/go/",
+            "https://opencode.ai/zen/go/some/model",
+        ] {
+            assert!(is_opencode_go_endpoint(url), "should match {url}");
+        }
+        for url in [
+            "https://opencode.ai/zen/v1",
+            "https://opencode.ai/zen/gopher",
+            "https://api.openai.com/v1",
+            "https://opencode.evil.com/zen/go/x",
+            "http://opencode.ai/zen/go/x",
+        ] {
+            assert!(!is_opencode_go_endpoint(url), "should not match {url}");
+        }
     }
 }

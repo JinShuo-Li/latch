@@ -25,7 +25,10 @@ For Anthropic, copy `config.example.toml` to
 `~/.config/latch/config.toml`, set `provider.kind = "anthropic"`, choose a model,
 and export `ANTHROPIC_API_KEY`. OpenAI-compatible servers can set `base_url` and
 the environment variable named by `api_key_env`. Credentials are read from the
-environment, never stored in a session or logged.
+environment, never stored in a session or logged. Provider requests identify as
+`latch/0.1`; OpenCode Go endpoints (`base_url` under `https://opencode.ai/zen/go`)
+additionally receive a stable `x-opencode-session` header carrying the durable
+session id, so `--resume` keeps the same value.
 
 Run one prompt without the TUI with `latch -p "Explain this repository"`.
 Continue the latest session for the current workspace with `latch --resume`.

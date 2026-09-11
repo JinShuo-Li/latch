@@ -6,6 +6,8 @@ kind = "openai-compatible" # or "anthropic"
 model = "gpt-5-mini"
 # base_url = "https://api.openai.com/v1"
 # api_key_env = "OPENAI_API_KEY"
+# OpenCode Go (base_url under https://opencode.ai/zen/go) uses the same
+# provider and additionally receives a stable x-opencode-session header.
 
 [permissions]
 workspace_write = true
