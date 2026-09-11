@@ -720,6 +720,7 @@ fn bounded_output(text: &str) -> String {
     let mut out = String::new();
     let mut shown = 0usize;
     let total = text.lines().count();
+    let total_chars: usize = text.lines().map(|line| line.chars().count()).sum();
     for line in text.lines().take(DEFAULT_OUTPUT_LINES) {
         if shown + line.chars().count() > DEFAULT_OUTPUT_CHARS {
             break;
@@ -730,7 +731,10 @@ fn bounded_output(text: &str) -> String {
         out.push_str(line);
         shown += line.chars().count();
     }
-    if total > out.lines().count() || text.chars().count() > shown {
+    // Newline separators are not content: compare characters actually shown
+    // against characters that exist, or every multiline output would claim to
+    // be truncated.
+    if total > out.lines().count() || total_chars > shown {
         if !out.is_empty() {
             out.push('\n');
         }
@@ -1261,6 +1265,24 @@ mod tests {
         assert!(rendered.contains("+1"));
         assert!(rendered.contains("−1"));
         assert!(rendered.contains("@@ -1 +1 @@"));
+    }
+
+    #[test]
+    fn bounded_output_only_marks_real_truncation() {
+        assert_eq!(
+            bounded_output("exit code 1\nassertion failed"),
+            "exit code 1\nassertion failed",
+            "short multiline output is not truncated"
+        );
+        let long = (0..40)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let bounded = bounded_output(&long);
+        assert!(bounded.contains("output truncated"));
+        assert!(bounded.lines().count() <= DEFAULT_OUTPUT_LINES + 1);
+        let wide = "x".repeat(4_000);
+        assert!(bounded_output(&wide).contains("output truncated"));
     }
 
     #[test]
