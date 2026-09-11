@@ -162,6 +162,8 @@ pub struct ToolExecutor {
     read_slots: Arc<Semaphore>,
     restored: Arc<std::sync::atomic::AtomicBool>,
     processes: Arc<Mutex<HashMap<String, ManagedProcess>>>,
+    /// Call ids the interactive layer approved for an `Ask` policy decision.
+    approved: Arc<std::sync::Mutex<HashSet<String>>>,
 }
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScopeStats {
@@ -219,7 +221,28 @@ impl ToolExecutor {
             read_slots: Arc::new(Semaphore::new(8)),
             restored: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             processes: Arc::new(Mutex::new(HashMap::new())),
+            approved: Arc::new(std::sync::Mutex::new(HashSet::new())),
         })
+    }
+    /// Marks a call id as approved by the human approval path so the policy
+    /// `Ask` decision executes once instead of behaving like a denial.
+    pub fn approve_call(&self, call_id: &str) {
+        if let Ok(mut approved) = self.approved.lock() {
+            approved.insert(call_id.to_owned());
+        }
+    }
+
+    fn is_call_approved(&self, call_id: &str) -> bool {
+        self.approved
+            .lock()
+            .map(|approved| approved.contains(call_id))
+            .unwrap_or(false)
+    }
+
+    fn clear_approval(&self, call_id: &str) {
+        if let Ok(mut approved) = self.approved.lock() {
+            approved.remove(call_id);
+        }
     }
     pub fn set_mode(&self, mode: Mode) {
         self.policy.set_mode(mode);
@@ -371,7 +394,13 @@ impl ToolExecutor {
         ]
     }
     pub async fn execute(&self, call: &ToolCall, cancel: CancellationToken) -> ToolResult {
-        let decision = self.policy.decide(&call.name, &call.arguments);
+        let mut decision = self.policy.decide(&call.name, &call.arguments);
+        // A human-approved `Ask` executes exactly once. Approval is keyed by
+        // the kernel call id, which the model never supplies.
+        let approved = self.is_call_approved(&call.id);
+        if approved && matches!(decision, PolicyDecision::Ask(_)) {
+            decision = PolicyDecision::Allow;
+        }
         if let Err(error) = self.store.append(
             self.session_id,
             EventPayload::PermissionDecision {
@@ -425,8 +454,8 @@ impl ToolExecutor {
             "exec_start" => self.process_start(call).await,
             "exec_poll" => self.process_poll(call).await,
             "exec_terminate" => self.process_terminate(call).await,
-            "patch" => self.patch(call).await,
-            "write" => self.write(call).await,
+            "patch" => self.patch(call, approved).await,
+            "write" => self.write(call, approved).await,
             "shell" => self.shell(call, cancel).await,
             "git_status" => self.git_status(call).await,
             "git_diff" => self.git_diff(call).await,
@@ -434,6 +463,8 @@ impl ToolExecutor {
             "undo" => self.undo(call).await,
             _ => Err(anyhow!("unknown tool {}", call.name)),
         };
+        // Approval is single-use for exactly this call id.
+        self.clear_approval(&call.id);
         let r = match outcome {
             Ok(v) => result(call, v.0, false, v.1),
             Err(e) => result(call, format!("{e:#}"), true, None),
@@ -782,9 +813,13 @@ impl ToolExecutor {
         }
         Ok(canonical)
     }
-    async fn patch(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+    async fn patch(
+        &self,
+        call: &ToolCall,
+        approved_outside: bool,
+    ) -> Result<(String, Option<String>)> {
         let _guard = self.mutation_lock.lock().await;
-        let path = self.path_arg(call)?;
+        let path = self.write_path_arg(call, approved_outside)?;
         let base = str_arg(call, "base_hash")?;
         let old = str_arg(call, "old")?;
         let new = str_arg(call, "new")?;
@@ -799,9 +834,13 @@ impl ToolExecutor {
         self.commit_change(path, Some(before), updated, ChangeOwner::Latch)
             .await
     }
-    async fn write(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+    async fn write(
+        &self,
+        call: &ToolCall,
+        approved_outside: bool,
+    ) -> Result<(String, Option<String>)> {
         let _guard = self.mutation_lock.lock().await;
-        let path = self.path_arg(call)?;
+        let path = self.write_path_arg(call, approved_outside)?;
         let content = str_arg(call, "content")?.as_bytes().to_vec();
         let before = tokio::fs::read(&path).await.ok();
         match (
@@ -1309,6 +1348,23 @@ impl ToolExecutor {
     }
     fn path_arg(&self, call: &ToolCall) -> Result<PathBuf> {
         resolve_workspace_path(&self.workspace, str_arg(call, "path")?)
+    }
+
+    /// Write paths honor an explicit outside-workspace approval: the user saw
+    /// the exact call and approved it, so the write may target an absolute path
+    /// outside the workspace. Without approval the normal containment rules
+    /// apply and the call never reaches this point.
+    fn write_path_arg(&self, call: &ToolCall, approved_outside: bool) -> Result<PathBuf> {
+        let raw = str_arg(call, "path")?;
+        if approved_outside {
+            let candidate = if Path::new(raw).is_absolute() {
+                lexical_normalize(Path::new(raw))
+            } else {
+                lexical_normalize(&self.workspace.join(raw))
+            };
+            return Ok(candidate);
+        }
+        resolve_workspace_path(&self.workspace, raw)
     }
 }
 

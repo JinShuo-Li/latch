@@ -265,6 +265,13 @@ async fn build_agent(
     let mut restored = None;
     let resume = resume_session.is_some();
     let session_id = if let Some(session) = resume_session {
+        // Approval requests that were pending at exit can no longer be
+        // answered; mark them durably before the transcript replay so resume
+        // shows honest state instead of a phantom prompt.
+        let expired = Agent::expire_pending_permissions(&store, session)?;
+        if expired > 0 {
+            tracing::info!("expired {expired} unresolved permission request(s)");
+        }
         let events = store.events(session)?;
         store.append(session, EventPayload::SessionResumed)?;
         for (id, description) in store.interrupted_operations(session)? {
@@ -423,6 +430,9 @@ async fn interactive(
     restored: Option<Restored>,
     pricing: Option<ModelPricing>,
 ) -> Result<InteractiveOutcome> {
+    // The TUI is the only path that can approve `Ask` policy decisions.
+    agent.enable_interactive_permissions();
+    let broker = agent.permission_broker();
     let (input_tx, mut input_rx) = mpsc::channel(16);
     let (output_tx, output_rx) = mpsc::channel(512);
     let start_mode = agent.mode();
@@ -455,6 +465,12 @@ async fn interactive(
                 break;
             }
             Input::Cancel => {}
+            Input::Permission {
+                request_id,
+                approved,
+            } => {
+                broker.resolve(request_id, approved).await;
+            }
             Input::Submit(text) => {
                 if is_slash_command_input(&text) {
                     handle_command(&mut agent, &text, &output_tx).await?;
@@ -492,6 +508,7 @@ async fn interactive(
                         }
                         next = input_rx.recv() => match next {
                             Some(Input::Cancel) => active.cancel(),
+                            Some(Input::Permission { request_id, approved }) => { broker.resolve(request_id, approved).await; }
                             Some(Input::Quit) | None => { active.cancel(); let _ = (&mut running).await; break 'session; }
                             Some(Input::Resume) => { output_tx.send(Output::Notice("cancel the active turn before resuming another session".into())).await?; }
                             Some(Input::Submit(_)) => output_tx.send(Output::Notice("finish or cancel the active turn before submitting another message".into())).await?,
@@ -546,6 +563,7 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                  palette: typing / filters commands · ↑/↓ select · Tab complete · Enter run · Esc close\n\
                  detail: Ctrl+T or /raw · sidebar: Ctrl+B or /sidebar · resume: /resume\n\
                  diff: /diff opens the inspector (↑/↓ PgUp/PgDn · Ctrl+T raw · Esc close)\n\
+                 permission: when a tool needs approval, y approves and n/Esc denies\n\
                  commands:\n{commands}"
             ))).await?;
         }

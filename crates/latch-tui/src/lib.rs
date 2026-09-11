@@ -29,7 +29,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use std::io::{self, Stdout, Write};
 use tokio::sync::mpsc;
@@ -58,6 +58,11 @@ pub enum Input {
     Cancel,
     Resume,
     Quit,
+    /// A real human decision for a kernel approval request.
+    Permission {
+        request_id: uuid::Uuid,
+        approved: bool,
+    },
 }
 #[derive(Debug, Clone)]
 pub enum Output {
@@ -606,6 +611,17 @@ struct App {
     diff_scroll: usize,
     diff_max_scroll: usize,
     diff_viewport_rows: usize,
+    /// A pending kernel approval request awaiting a human decision.
+    permission: Option<PermissionPrompt>,
+}
+
+/// Human-visible form of a `PermissionRequested` event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionPrompt {
+    pub request_id: uuid::Uuid,
+    pub tool: String,
+    pub arguments: String,
+    pub reason: String,
 }
 impl Default for App {
     fn default() -> Self {
@@ -633,6 +649,7 @@ impl Default for App {
             diff_scroll: 0,
             diff_max_scroll: 0,
             diff_viewport_rows: 0,
+            permission: None,
         }
     }
 }
@@ -670,6 +687,33 @@ impl App {
                 self.busy = false;
             }
             Output::Event(event) => {
+                match &event.payload {
+                    latch_protocol::EventPayload::PermissionRequested {
+                        request_id,
+                        tool,
+                        arguments,
+                        reason,
+                    } => {
+                        self.permission = Some(PermissionPrompt {
+                            request_id: *request_id,
+                            tool: tool.clone(),
+                            arguments: crate::sidebar::fit(
+                                &serde_json::to_string(arguments).unwrap_or_default(),
+                                160,
+                            ),
+                            reason: reason.clone(),
+                        });
+                    }
+                    latch_protocol::EventPayload::PermissionResolved { request_id, .. }
+                        if self
+                            .permission
+                            .as_ref()
+                            .is_some_and(|prompt| prompt.request_id == *request_id) =>
+                    {
+                        self.permission = None;
+                    }
+                    _ => {}
+                }
                 if matches!(
                     &event.payload,
                     latch_protocol::EventPayload::AssistantMessageCompleted { .. }
@@ -861,6 +905,24 @@ impl App {
 
     /// Handles a key press. Returns an action for the session loop.
     fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
+        // A pending approval owns the keyboard: approve, deny, or cancel.
+        if let Some(request_id) = self.permission.as_ref().map(|prompt| prompt.request_id) {
+            let decision = match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(false),
+                _ => None,
+            };
+            if let Some(approved) = decision {
+                self.permission = None;
+                return Some(Action::Permission {
+                    request_id,
+                    approved,
+                });
+            }
+            if !(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')) {
+                return None;
+            }
+        }
         if self.diff_overlay.is_some()
             && !(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
         {
@@ -1011,6 +1073,10 @@ enum Action {
     Cancel,
     Resume,
     Quit,
+    Permission {
+        request_id: uuid::Uuid,
+        approved: bool,
+    },
 }
 
 impl App {
@@ -1789,6 +1855,54 @@ pub fn sidebar_width(width: u16, visible: bool) -> u16 {
     }
 }
 
+/// Centered approval prompt. Human approval is the only path that lets an
+/// `Ask` policy decision execute; the model never controls this surface.
+fn draw_permission_modal(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui::layout::Rect) {
+    let Some(prompt) = &app.permission else {
+        return;
+    };
+    let width = area.width.saturating_sub(4).clamp(24, 84).min(area.width);
+    // Five content rows plus the top and bottom border.
+    let height = 7.min(area.height).max(3);
+    let rect = ratatui::layout::Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    let inner = width.saturating_sub(2) as usize;
+    let lines = vec![
+        Line::styled(
+            "Permission required",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::from(vec![
+            Span::styled(format!("{} ", prompt.tool), Style::default().bold()),
+            Span::raw(crate::sidebar::fit(
+                &prompt.arguments,
+                inner.saturating_sub(prompt.tool.len() + 1),
+            )),
+        ]),
+        Line::styled(crate::sidebar::fit(&prompt.reason, inner), notice_style()),
+        Line::from(""),
+        Line::styled(
+            "[y] approve   [n] deny   [Ctrl+C] cancel",
+            Style::default().fg(Color::Cyan),
+        ),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        ),
+        rect,
+    );
+}
+
 /// Full-width diff inspector with its own scrolling and a raw toggle.
 fn draw_diff_overlay(frame: &mut ratatui::Frame<'_>, app: &mut App, area: ratatui::layout::Rect) {
     let rows = Layout::default()
@@ -1979,6 +2093,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             frame.render_widget(sidebar, sidebar_area);
         }
     }
+    draw_permission_modal(frame, app, chunks[1]);
 
     if palette_active && !candidates.is_empty() {
         let palette_area = chunks[2];
@@ -2097,6 +2212,9 @@ pub async fn run(
                 Some(Action::Cancel) => input_tx.send(Input::Cancel).await?,
                 Some(Action::Resume) => { input_tx.send(Input::Resume).await?; break; }
                 Some(Action::Quit) => { input_tx.send(Input::Quit).await?; break; }
+                Some(Action::Permission { request_id, approved }) => {
+                    input_tx.send(Input::Permission { request_id, approved }).await?;
+                }
                 None => {}
             },
             Some(Event::Mouse(mouse)) => match mouse.kind {
@@ -3095,6 +3213,76 @@ mod tests {
         assert!(app.input.text().is_empty());
         app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.diff_overlay.is_none());
+    }
+
+    fn permission_event(
+        request_id: uuid::Uuid,
+        resolved: Option<(bool, &str)>,
+    ) -> latch_protocol::Event {
+        let payload = match resolved {
+            None => latch_protocol::EventPayload::PermissionRequested {
+                request_id,
+                tool: "shell".into(),
+                arguments: serde_json::json!({"command":"sudo make install"}),
+                reason: "outside-workspace write requires explicit approval".into(),
+            },
+            Some((approved, source)) => latch_protocol::EventPayload::PermissionResolved {
+                request_id,
+                approved,
+                source: source.into(),
+            },
+        };
+        latch_protocol::Event {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::nil(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
+            payload,
+        }
+    }
+
+    #[test]
+    fn permission_modal_owns_the_keyboard_and_emits_real_decisions() {
+        let mut app = App::default();
+        let request_id = uuid::Uuid::new_v4();
+        app.output(Output::Event(Box::new(permission_event(request_id, None))));
+        assert!(app.permission.is_some());
+        let text = render_to_text(&mut app, 100, 30);
+        assert!(text.contains("Permission required"), "{text}");
+        assert!(text.contains("approve"), "{text}");
+        let approved = app.on_key(key(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(matches!(
+            approved,
+            Some(Action::Permission {
+                approved: true,
+                request_id: id
+            }) if id == request_id
+        ));
+        assert!(app.permission.is_none());
+
+        app.output(Output::Event(Box::new(permission_event(request_id, None))));
+        let denied = app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(
+            denied,
+            Some(Action::Permission {
+                approved: false,
+                request_id: id
+            }) if id == request_id
+        ));
+        // A resolution event clears a prompt that arrived out of band (for
+        // example a cancelled turn).
+        app.output(Output::Event(Box::new(permission_event(request_id, None))));
+        app.output(Output::Event(Box::new(permission_event(
+            request_id,
+            Some((false, "cancelled")),
+        ))));
+        assert!(app.permission.is_none());
+        assert!(
+            app.on_key(key(KeyCode::Char('x'), KeyModifiers::NONE))
+                .is_none()
+                || app.input.text().is_empty()
+        );
     }
 
     #[test]

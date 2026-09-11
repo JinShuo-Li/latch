@@ -184,6 +184,22 @@ pub enum EventPayload {
         decision: String,
         reason: String,
     },
+    /// A policy or extension guard asked for human approval. The request is
+    /// durable and is resolved exactly once by a real user decision (or marked
+    /// expired on resume); the model can never fabricate approval.
+    PermissionRequested {
+        request_id: Uuid,
+        tool: String,
+        #[serde(default)]
+        arguments: Value,
+        reason: String,
+    },
+    PermissionResolved {
+        request_id: Uuid,
+        approved: bool,
+        /// `user`, `cancelled`, `non_interactive`, or `resume_expired`.
+        source: String,
+    },
     ToolStarted {
         call_id: String,
         tool: String,
@@ -693,6 +709,20 @@ pub fn display_items(event: &Event) -> Vec<DisplayItem> {
         }],
         EventPayload::ProcessExited { id, status, .. } => vec![DisplayItem::KernelNotice {
             text: format!("process {id} {status}"),
+        }],
+        EventPayload::PermissionRequested { tool, reason, .. } => {
+            vec![DisplayItem::KernelNotice {
+                text: format!("permission requested: {tool} — {reason}"),
+            }]
+        }
+        EventPayload::PermissionResolved {
+            approved, source, ..
+        } => vec![DisplayItem::KernelNotice {
+            text: if *approved {
+                format!("permission approved ({source})")
+            } else {
+                format!("permission denied ({source})")
+            },
         }],
         EventPayload::ProgressStagnation {
             unchanged,

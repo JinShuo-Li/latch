@@ -1,6 +1,7 @@
 use crate::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS};
 use crate::continuity::{ContinuityEngine, MaterializeBudget};
 use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
+use crate::permissions::PermissionBroker;
 use crate::progress::{DEFAULT_STAGNATION_BUDGET, ProgressSupervisor, StagnationDecision};
 use crate::prompt::PromptCompiler;
 use crate::provider::{ModelProvider, StreamSink};
@@ -9,7 +10,7 @@ use crate::state::{
 };
 use crate::store::EventStore;
 use crate::tokens::TokenEstimator;
-use crate::tools::ToolExecutor;
+use crate::tools::{PolicyDecision, ToolExecutor};
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use latch_protocol::{
@@ -52,6 +53,8 @@ pub struct Agent {
     max_model_turns: Option<u32>,
     context_window_tokens: usize,
     estimator: TokenEstimator,
+    permissions: PermissionBroker,
+    interactive_permissions: bool,
     scope_warned: bool,
     last_completion: Option<CompletionState>,
 }
@@ -95,9 +98,26 @@ impl Agent {
             max_model_turns: None,
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
             estimator,
+            permissions: PermissionBroker::new(),
+            interactive_permissions: false,
             scope_warned: false,
             last_completion: None,
         }
+    }
+    /// Enables the interactive human approval path. Non-interactive sessions
+    /// (`-p`, kernel APIs, tests) leave this off so an `Ask` resolves as an
+    /// explicit, durable non-interactive denial instead of hanging.
+    pub fn enable_interactive_permissions(&mut self) {
+        self.interactive_permissions = true;
+    }
+    #[must_use]
+    pub fn permission_broker(&self) -> PermissionBroker {
+        self.permissions.clone()
+    }
+    /// Resolves a pending approval. Returns false when the request is unknown
+    /// or already resolved, so a stale or forged id can never approve twice.
+    pub async fn resolve_permission(&self, request_id: Uuid, approved: bool) -> bool {
+        self.permissions.resolve(request_id, approved).await
     }
     /// Configures how many consecutive redundant inspection turns are
     /// tolerated before the kernel re-grounds the model.
@@ -608,12 +628,12 @@ impl Agent {
                 .await
             {
                 Ok(ExtensionGuardDecision::Allow) => permitted.push(call),
-                Ok(ExtensionGuardDecision::Deny(reason) | ExtensionGuardDecision::Ask(reason)) => {
+                Ok(ExtensionGuardDecision::Deny(reason)) => {
                     let denied = tool_error(&call, reason.clone());
                     let _ = self.emit(
                         EventPayload::PermissionDecision {
                             tool: call.name.clone(),
-                            decision: "extension_guard".into(),
+                            decision: "extension_guard_denied".into(),
                             reason,
                         },
                         sink,
@@ -625,6 +645,31 @@ impl Agent {
                         sink,
                     );
                     results.push(denied);
+                }
+                Ok(ExtensionGuardDecision::Ask(reason)) => {
+                    if self.ask_permission(&call, &reason, sink, &cancel).await {
+                        permitted.push(call);
+                    } else {
+                        let denied = tool_error(
+                            &call,
+                            format!("permission denied for {}: {reason}", call.name),
+                        );
+                        let _ = self.emit(
+                            EventPayload::PermissionDecision {
+                                tool: call.name.clone(),
+                                decision: "extension_guard_denied".into(),
+                                reason,
+                            },
+                            sink,
+                        );
+                        let _ = self.emit(
+                            EventPayload::ToolFailed {
+                                result: denied.clone(),
+                            },
+                            sink,
+                        );
+                        results.push(denied);
+                    }
                 }
                 Err(error) => {
                     let failed = tool_error(&call, format!("extension guard failed: {error}"));
@@ -638,6 +683,34 @@ impl Agent {
                 }
             }
         }
+        // Policy `Ask` is a real approval request, not a denial. Only an
+        // approval keyed to this kernel call id (which the model never
+        // supplies) lets the executor proceed.
+        let mut policy_allowed = Vec::with_capacity(permitted.len());
+        for call in permitted {
+            match self.tools.policy_decision(&call.name, &call.arguments) {
+                PolicyDecision::Allow => policy_allowed.push(call),
+                PolicyDecision::Deny(reason) => {
+                    let denied = self.denied_result(&call, "policy_denied", reason, sink);
+                    results.push(denied);
+                }
+                PolicyDecision::Ask(reason) => {
+                    if self.ask_permission(&call, &reason, sink, &cancel).await {
+                        self.tools.approve_call(&call.id);
+                        policy_allowed.push(call);
+                    } else {
+                        let denied = self.denied_result(
+                            &call,
+                            "policy_denied",
+                            format!("permission denied: {reason}"),
+                            sink,
+                        );
+                        results.push(denied);
+                    }
+                }
+            }
+        }
+        permitted = policy_allowed;
         // Deterministic suppression: after the model ignored an explicit
         // re-ground, repeated observations of unchanged reality are rejected
         // with a synthetic terminal result instead of spending a tool cycle.
@@ -718,6 +791,128 @@ impl Agent {
         results.append(&mut executed);
         results
     }
+    /// Emits a durable approval request and waits for exactly one resolution.
+    /// Non-interactive sessions resolve immediately as an explicit denial so
+    /// `Ask` never becomes an indefinite hang and never silently behaves like
+    /// `Deny` without a record.
+    async fn ask_permission(
+        &mut self,
+        call: &ToolCall,
+        reason: &str,
+        sink: &AgentEventSink,
+        cancel: &CancellationToken,
+    ) -> bool {
+        let request_id = Uuid::new_v4();
+        if self
+            .emit(
+                EventPayload::PermissionRequested {
+                    request_id,
+                    tool: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    reason: reason.to_owned(),
+                },
+                sink,
+            )
+            .is_err()
+        {
+            return false;
+        }
+        if !self.interactive_permissions {
+            let _ = self.emit(
+                EventPayload::PermissionResolved {
+                    request_id,
+                    approved: false,
+                    source: "non_interactive".into(),
+                },
+                sink,
+            );
+            return false;
+        }
+        let approved = tokio::select! {
+            decision = self.permissions.request(request_id) => decision.unwrap_or(false),
+            () = cancel.cancelled() => {
+                self.permissions.cancel(request_id).await;
+                false
+            }
+        };
+        let source = if cancel.is_cancelled() {
+            "cancelled"
+        } else {
+            "user"
+        };
+        let _ = self.emit(
+            EventPayload::PermissionResolved {
+                request_id,
+                approved,
+                source: source.into(),
+            },
+            sink,
+        );
+        approved
+    }
+
+    fn denied_result(
+        &mut self,
+        call: &ToolCall,
+        decision: &str,
+        reason: String,
+        sink: &AgentEventSink,
+    ) -> ToolResult {
+        let denied = tool_error(call, reason.clone());
+        let _ = self.emit(
+            EventPayload::PermissionDecision {
+                tool: call.name.clone(),
+                decision: decision.into(),
+                reason,
+            },
+            sink,
+        );
+        let _ = self.emit(
+            EventPayload::ToolFailed {
+                result: denied.clone(),
+            },
+            sink,
+        );
+        denied
+    }
+
+    /// Expires approval requests that were pending when a session ended.
+    /// Resuming cannot continue a tool call that no longer exists, so each
+    /// unresolved request is durably marked, not silently forgotten.
+    pub fn expire_pending_permissions(store: &EventStore, session_id: Uuid) -> Result<usize> {
+        let events = store.events(session_id)?;
+        let mut pending = std::collections::BTreeSet::new();
+        for event in &events {
+            match &event.payload {
+                EventPayload::PermissionRequested { request_id, .. } => {
+                    pending.insert(*request_id);
+                }
+                EventPayload::PermissionResolved { request_id, .. } => {
+                    pending.remove(request_id);
+                }
+                _ => {}
+            }
+        }
+        let count = pending.len();
+        for request_id in pending {
+            store.append(
+                session_id,
+                EventPayload::PermissionResolved {
+                    request_id,
+                    approved: false,
+                    source: "resume_expired".into(),
+                },
+            )?;
+        }
+        Ok(count)
+    }
+
+    /// Convenience wrapper over [`Self::expire_pending_permissions`] for an
+    /// agent that has not finished restoring yet.
+    pub fn restore_permissions(&mut self) -> Result<usize> {
+        Self::expire_pending_permissions(&self.store, self.session_id)
+    }
+
     async fn execute_extension_tool(
         &mut self,
         owner: &str,
@@ -929,27 +1124,25 @@ impl Agent {
         let (Some(requirement), Some(command)) = (requirement, command) else {
             return tool_error(call, "requirement and command are required".into());
         };
-        // Validation runs commands, so it obeys the same policy as shell.
-        let decision = self.tools.policy_decision("validate", &call.arguments);
-        if let crate::tools::PolicyDecision::Deny(reason)
-        | crate::tools::PolicyDecision::Ask(reason) = decision
-        {
-            let _ = self.emit(
-                EventPayload::PermissionDecision {
-                    tool: call.name.clone(),
-                    decision: "policy".into(),
-                    reason: reason.clone(),
-                },
-                sink,
-            );
-            let denied = tool_error(call, reason);
-            let _ = self.emit(
-                EventPayload::ToolFailed {
-                    result: denied.clone(),
-                },
-                sink,
-            );
-            return denied;
+        // Validation runs commands, so it obeys the same policy as shell. An
+        // `Ask` here is a real approval request, not a denial.
+        match self.tools.policy_decision("validate", &call.arguments) {
+            PolicyDecision::Allow => {}
+            PolicyDecision::Deny(reason) => {
+                return self.denied_result(call, "policy_denied", reason, sink);
+            }
+            PolicyDecision::Ask(reason) => {
+                if self.ask_permission(call, &reason, sink, &cancel).await {
+                    self.tools.approve_call(&call.id);
+                } else {
+                    return self.denied_result(
+                        call,
+                        "policy_denied",
+                        format!("permission denied: {reason}"),
+                        sink,
+                    );
+                }
+            }
         }
         let timeout = call
             .arguments
@@ -2039,6 +2232,199 @@ mod tests {
             stats.headroom_tokens,
             stats.budget_tokens.saturating_sub(sum)
         );
+    }
+
+    #[tokio::test]
+    async fn approved_outside_write_executes_and_denied_write_does_not() {
+        use crate::config::OutsidePolicy;
+        let workspace_dir = tempdir().unwrap();
+        let outside_dir = tempdir().unwrap();
+        let outside_path = outside_dir.path().join("outside.txt");
+
+        for approve in [true, false] {
+            let store = EventStore::open_memory().unwrap();
+            let sid = store.create_session(workspace_dir.path()).unwrap();
+            let responses = vec![
+                ModelResponse {
+                    text: "writing outside".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "write-1".into(),
+                        name: "write".into(),
+                        arguments: json!({"path": outside_path.to_string_lossy(), "content": "approved", "base_hash": null}),
+                    }],
+                    stop_reason: "tool_calls".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+                ModelResponse {
+                    text: "done".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ];
+            let tools = ToolExecutor::new(
+                workspace_dir.path().into(),
+                workspace_dir.path().join("art"),
+                store.clone(),
+                sid,
+                PolicyEngine::new(
+                    Mode::Work,
+                    workspace_dir.path().into(),
+                    PermissionConfig {
+                        outside_workspace: OutsidePolicy::Ask,
+                        ..PermissionConfig::default()
+                    },
+                ),
+            )
+            .unwrap();
+            let mut agent = Agent::new(AgentRuntime {
+                session_id: sid,
+                workspace: workspace_dir.path().into(),
+                mode: Mode::Work,
+                store: store.clone(),
+                provider: Arc::new(FakeProvider::scripted(responses)),
+                tools,
+                continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+                retry_budget: 2,
+            });
+            agent.enable_interactive_permissions();
+            let broker = agent.permission_broker();
+            let run = agent.run("write outside", CancellationToken::new(), Arc::new(|_| {}));
+            let approver = async {
+                for _ in 0..400 {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    if let Some(request_id) = broker.pending_ids().await.first().copied() {
+                        broker.resolve(request_id, approve).await;
+                        return;
+                    }
+                }
+                panic!("agent never requested approval");
+            };
+            let (result, ()) = tokio::join!(run, approver);
+            result.unwrap();
+            let events = store.events(sid).unwrap();
+            assert!(
+                events.iter().any(|event| matches!(
+                    &event.payload,
+                    EventPayload::PermissionRequested { .. }
+                ))
+            );
+            assert!(events.iter().any(|event| matches!(
+                &event.payload,
+                EventPayload::PermissionResolved {
+                    approved: decision,
+                    source,
+                    ..
+                } if *decision == approve && source == "user"
+            )));
+            if approve {
+                assert_eq!(std::fs::read_to_string(&outside_path).unwrap(), "approved");
+                std::fs::remove_file(&outside_path).unwrap();
+            } else {
+                assert!(
+                    !outside_path.exists(),
+                    "denied outside write must not execute"
+                );
+                assert!(events.iter().any(|event| matches!(
+                    &event.payload,
+                    EventPayload::ToolFailed { result } if result.output.contains("permission denied")
+                )));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn non_interactive_ask_is_denied_with_a_durable_record() {
+        let workspace_dir = tempdir().unwrap();
+        let outside_dir = tempdir().unwrap();
+        let outside_path = outside_dir.path().join("outside.txt");
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(workspace_dir.path()).unwrap();
+        let responses = vec![
+            ModelResponse {
+                text: "writing outside".into(),
+                tool_calls: vec![ToolCall {
+                    id: "write-1".into(),
+                    name: "write".into(),
+                    arguments: json!({"path": outside_path.to_string_lossy(), "content": "x", "base_hash": null}),
+                }],
+                stop_reason: "tool_calls".into(),
+                usage: None,
+                reasoning_content: None,
+            },
+            ModelResponse {
+                text: "done".into(),
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: None,
+                reasoning_content: None,
+            },
+        ];
+        let tools = ToolExecutor::new(
+            workspace_dir.path().into(),
+            workspace_dir.path().join("art"),
+            store.clone(),
+            sid,
+            PolicyEngine::new(
+                Mode::Work,
+                workspace_dir.path().into(),
+                PermissionConfig {
+                    outside_workspace: crate::config::OutsidePolicy::Ask,
+                    ..PermissionConfig::default()
+                },
+            ),
+        )
+        .unwrap();
+        let mut agent = Agent::new(AgentRuntime {
+            session_id: sid,
+            workspace: workspace_dir.path().into(),
+            mode: Mode::Work,
+            store: store.clone(),
+            provider: Arc::new(FakeProvider::scripted(responses)),
+            tools,
+            continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+            retry_budget: 2,
+        });
+        // Interactive approval is intentionally not enabled.
+        agent
+            .run("write outside", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        assert!(!outside_path.exists());
+        let events = store.events(sid).unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::PermissionResolved { approved: false, source, .. } if source == "non_interactive"
+        )));
+    }
+
+    #[test]
+    fn resume_expires_unresolved_permission_requests() {
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(std::path::Path::new("/tmp")).unwrap();
+        let request_id = Uuid::new_v4();
+        store
+            .append(
+                sid,
+                EventPayload::PermissionRequested {
+                    request_id,
+                    tool: "shell".into(),
+                    arguments: json!({"command":"rm -rf /"}),
+                    reason: "test".into(),
+                },
+            )
+            .unwrap();
+        let expired = Agent::expire_pending_permissions(&store, sid).unwrap();
+        assert_eq!(expired, 1);
+        let events = store.events(sid).unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::PermissionResolved { request_id: id, approved: false, source } if *id == request_id && source == "resume_expired"
+        )));
+        // Expiring again is a no-op: the request is durably resolved.
+        assert_eq!(Agent::expire_pending_permissions(&store, sid).unwrap(), 0);
     }
 
     #[tokio::test]
