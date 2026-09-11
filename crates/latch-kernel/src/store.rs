@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
-use latch_protocol::{Event, EventPayload, MemoryRecord};
+use chrono::{DateTime, Utc};
+use latch_protocol::{CompletionState, Event, EventPayload, MemoryRecord, Mode};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -9,6 +9,27 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct EventStore {
     connection: Arc<Mutex<Connection>>,
+}
+
+/// Lightweight row for session discovery. Transcript bodies are intentionally
+/// absent; the picker can render its first frame without deserializing events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummary {
+    pub id: Uuid,
+    pub workspace: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub mode: Option<Mode>,
+    pub model: Option<String>,
+    pub event_count: u64,
+    pub prompt_preview: Option<String>,
+    pub completion: Option<CompletionState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionPreviewLine {
+    pub speaker: &'static str,
+    pub text: String,
 }
 
 impl EventStore {
@@ -43,6 +64,8 @@ impl EventStore {
             CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, workspace TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS events(session_id TEXT NOT NULL, sequence INTEGER NOT NULL, id TEXT NOT NULL UNIQUE, parent_id TEXT, timestamp TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(session_id, sequence));
             CREATE INDEX IF NOT EXISTS events_kind ON events(session_id, kind);
+            CREATE INDEX IF NOT EXISTS sessions_workspace_updated ON sessions(workspace, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS sessions_updated ON sessions(updated_at DESC);
             CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, originating_event TEXT NOT NULL, created_at TEXT NOT NULL, validity TEXT NOT NULL, json TEXT NOT NULL);
             CREATE VIRTUAL TABLE IF NOT EXISTS event_search USING fts5(session_id UNINDEXED, event_id UNINDEXED, text);
             CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL);")?;
@@ -79,6 +102,128 @@ impl EventStore {
         value
             .map(|v| Uuid::parse_str(&v).context("invalid session UUID"))
             .transpose()
+    }
+
+    /// Lists resumable sessions newest-first using scalar indexed lookups only.
+    /// It never loads or mutates a transcript.
+    pub fn list_sessions(&self, workspace: Option<&Path>) -> Result<Vec<SessionSummary>> {
+        let conn = self.conn()?;
+        let sql = "SELECT s.id,s.workspace,s.created_at,s.updated_at,
+            (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='mode_changed' ORDER BY sequence DESC LIMIT 1),
+            (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='model_request_started' ORDER BY sequence DESC LIMIT 1),
+            (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id),
+            (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='user_message' ORDER BY sequence ASC LIMIT 1),
+            (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='completion_changed' ORDER BY sequence DESC LIMIT 1)
+            FROM sessions s WHERE (?1 IS NULL OR s.workspace=?1) ORDER BY s.updated_at DESC,s.id ASC";
+        let workspace = workspace.map(|path| path.to_string_lossy().into_owned());
+        let mut statement = conn.prepare(sql)?;
+        let rows = statement.query_map([workspace.as_deref()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, u64>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                id,
+                workspace,
+                created_at,
+                updated_at,
+                mode,
+                model,
+                event_count,
+                prompt,
+                completion,
+            ) = row?;
+            Ok(SessionSummary {
+                id: Uuid::parse_str(&id)?,
+                workspace,
+                created_at: created_at.parse()?,
+                updated_at: updated_at.parse()?,
+                mode: payload(mode)?.and_then(|payload| match payload {
+                    EventPayload::ModeChanged { mode } => Some(mode),
+                    _ => None,
+                }),
+                model: payload(model)?.and_then(|payload| match payload {
+                    EventPayload::ModelRequestStarted { model, .. } => Some(model),
+                    _ => None,
+                }),
+                event_count,
+                prompt_preview: payload(prompt)?.and_then(|payload| match payload {
+                    EventPayload::UserMessage { text } => Some(compact_preview(&text, 140)),
+                    _ => None,
+                }),
+                completion: payload(completion)?.and_then(|payload| match payload {
+                    EventPayload::CompletionChanged { completion } => Some(completion),
+                    _ => None,
+                }),
+            })
+        })
+        .collect()
+    }
+
+    /// Resolves an exact UUID or unambiguous UUID prefix across saved sessions.
+    pub fn resolve_session(&self, selector: &str) -> Result<SessionSummary> {
+        let selector = selector.trim().to_ascii_lowercase();
+        if selector.is_empty() {
+            bail!("session selector cannot be empty");
+        }
+        let matches: Vec<_> = self
+            .list_sessions(None)?
+            .into_iter()
+            .filter(|session| session.id.to_string().starts_with(&selector))
+            .collect();
+        match matches.as_slice() {
+            [] => bail!("no session matches `{selector}`"),
+            [session] => Ok(session.clone()),
+            many => bail!(
+                "session prefix `{selector}` is ambiguous; matches: {}",
+                many.iter()
+                    .map(|session| session.id.to_string()[..8].to_owned())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+
+    /// Lazily loads a bounded user-visible transcript preview. Reasoning and
+    /// internal events are excluded by the SQL predicate and payload match.
+    pub fn session_preview(
+        &self,
+        session_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<SessionPreviewLine>> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare("SELECT payload FROM events WHERE session_id=?1 AND kind IN ('user_message','assistant_message_completed') ORDER BY sequence DESC LIMIT ?2")?;
+        let payloads: Vec<String> = statement
+            .query_map(params![session_id.to_string(), limit], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        let mut lines: Vec<_> = payloads
+            .into_iter()
+            .filter_map(|json| serde_json::from_str::<EventPayload>(&json).ok())
+            .filter_map(|payload| match payload {
+                EventPayload::UserMessage { text } => Some(SessionPreviewLine {
+                    speaker: "You",
+                    text: compact_preview(&text, 220),
+                }),
+                EventPayload::AssistantMessageCompleted { text, .. } if !text.trim().is_empty() => {
+                    Some(SessionPreviewLine {
+                        speaker: "Latch",
+                        text: compact_preview(&text, 220),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        lines.reverse();
+        Ok(lines)
     }
 
     pub fn append(&self, session_id: Uuid, payload: EventPayload) -> Result<Event> {
@@ -275,6 +420,21 @@ fn fts_query(q: &str) -> String {
         .join(" OR ")
 }
 
+fn payload(json: Option<String>) -> Result<Option<EventPayload>> {
+    json.map(|value| serde_json::from_str(&value).context("invalid session metadata event"))
+        .transpose()
+}
+
+fn compact_preview(text: &str, limit: usize) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= limit {
+        return normalized;
+    }
+    let mut value: String = normalized.chars().take(limit.saturating_sub(1)).collect();
+    value.push('…');
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +451,65 @@ mod tests {
         assert_eq!((a.sequence, b.sequence), (1, 2));
         let es = s.events(id).unwrap();
         assert_eq!(es[1].parent_id, Some(es[0].id));
+    }
+
+    #[test]
+    fn session_listing_is_newest_first_and_preview_is_public_only() {
+        let store = EventStore::open_memory().unwrap();
+        let workspace = Path::new("/tmp/project");
+        let first = store.create_session(workspace).unwrap();
+        store
+            .append(
+                first,
+                EventPayload::UserMessage {
+                    text: "first prompt".into(),
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                first,
+                EventPayload::AssistantMessageCompleted {
+                    text: "visible answer".into(),
+                    tool_calls: vec![],
+                    reasoning_content: Some("hidden chain".into()),
+                },
+            )
+            .unwrap();
+        let second = store.create_session(workspace).unwrap();
+        store
+            .append(
+                second,
+                EventPayload::UserMessage {
+                    text: "new prompt".into(),
+                },
+            )
+            .unwrap();
+        let listed = store.list_sessions(Some(workspace)).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, second);
+        assert_eq!(listed[0].prompt_preview.as_deref(), Some("new prompt"));
+        let preview = store.session_preview(first, 6).unwrap();
+        let shown = format!("{preview:?}");
+        assert!(shown.contains("visible answer"));
+        assert!(!shown.contains("hidden chain"));
+    }
+
+    #[test]
+    fn session_prefix_resolution_reports_ambiguity_and_missing() {
+        let store = EventStore::open_memory().unwrap();
+        let a = store.create_session(Path::new("/a")).unwrap();
+        let exact = store.resolve_session(&a.to_string()).unwrap();
+        assert_eq!(exact.id, a);
+        assert!(
+            store
+                .resolve_session("not-a-session")
+                .unwrap_err()
+                .to_string()
+                .contains("no session")
+        );
+        // Empty prefixes are rejected instead of selecting an arbitrary row.
+        assert!(store.resolve_session("").is_err());
     }
 
     #[test]

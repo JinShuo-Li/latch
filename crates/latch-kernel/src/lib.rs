@@ -16,5 +16,5 @@ pub use config::Config;
 pub use continuity::{ContinuityEngine, MaterializedContext};
 pub use provider::{AnthropicProvider, FakeProvider, ModelProvider, OpenAiProvider};
 pub use state::{EvidenceLedger, FailureManager, TaskStateManager};
-pub use store::EventStore;
+pub use store::{EventStore, SessionPreviewLine, SessionSummary};
 pub use tools::{PolicyEngine, ToolExecutor};
