@@ -73,13 +73,14 @@ compact, while failures retain a bounded diagnostic:
   └ cargo test · 3 tests passed · 0.42s
 ```
 
-The composer is the main control surface: a distinct left-accented editor with
-comfortable padding, a placeholder, mode/model/branch metadata, live status
-(`ready`, `● working`, `interrupted`, `approval needed`), and subdued keyboard
-hints. It grows with the prompt up to a fraction of the terminal height and is
-backed by a real scrollable viewport, so a prompt pasted as hundreds of lines
-can be inspected from anywhere before submission. When the sidebar is hidden,
-the composer also carries a compact `≈tokens/window` working-set summary.
+The composer is the main control surface: a closed rounded frame (cyan while it
+owns input, quiet gray during overlays or approvals) with comfortable padding, a
+placeholder, mode/model/branch metadata, live status (`ready`, `● working`,
+`interrupted`, `approval needed`), and subdued keyboard hints. It grows with the
+prompt up to a fraction of the terminal height and is backed by a real
+scrollable viewport, so a prompt pasted as hundreds of lines can be inspected
+from anywhere before submission. When the sidebar is hidden, the composer also
+carries a compact `≈tokens/window` working-set summary.
 
 On an empty session a restrained welcome state keeps the composer as the
 focus; it disappears once the conversation starts. Assistant responses render

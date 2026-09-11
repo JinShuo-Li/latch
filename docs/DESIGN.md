@@ -109,10 +109,12 @@ semantics, so compiler output or shell text can never be misclassified.
 
 ## Terminal experience
 
-The composer is the application's control surface: a left-accented editor with
+The composer is the application's control surface: a closed rounded frame with
 padding, a placeholder, mode/model/branch metadata, live status, and subdued
-hints. It is a real scrollable viewport over the untouched buffer, so large
-pastes can be inspected at any position before submission. An empty session
+hints. The frame is accented while the editor owns input and steps down to gray
+when an overlay or approval owns the screen. It is a real scrollable viewport
+over the untouched buffer, so large pastes can be inspected at any position
+before submission. An empty session
 shows a restrained centered identity instead of a dead terminal. The transcript
 is typed and dense: user messages, assistant messages rendered with a small
 deterministic Markdown subset, one visual lifecycle row per tool call (running
