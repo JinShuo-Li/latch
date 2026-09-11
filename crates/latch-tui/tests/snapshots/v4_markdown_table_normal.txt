@@ -1,0 +1,24 @@
+Here is the plan:                                                                                   
+                                                                                                    
+Step                       Owner    Status                                                          
+──────────────────────────────────────────                                                          
+Inspect the failing tests  Latch      done                                                          
+Patch the parser           Latch    active                                                          
+Verify with cargo test     Kernel  pending                                                          
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Ask Latch…                                                                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│ WORK · deepseek-flash · main                                                               ready │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+enter send  ctrl+j newline  ctrl+p commands                                                         
+/tmp/latch-ui                                                                           latch v0.1.1

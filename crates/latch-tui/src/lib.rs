@@ -974,10 +974,15 @@ impl App {
 /// Builds the transcript as Ratatui lines with the item's own styling,
 /// splitting embedded newlines so the wrapper and the scroll calculation agree
 /// on the visual row layout.
-fn transcript_lines(cells: &[Cell], streaming: Option<&str>, detail: bool) -> Vec<Line<'static>> {
+fn transcript_lines(
+    cells: &[Cell],
+    streaming: Option<&str>,
+    detail: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for cell in cells {
-        for line in cell_lines(cell, detail) {
+        for line in cell_lines(cell, detail, width) {
             out.push(line);
         }
         out.push(Line::from(""));
@@ -999,7 +1004,7 @@ fn transcript_lines(cells: &[Cell], streaming: Option<&str>, detail: bool) -> Ve
 /// Copy-friendly rendering used by tests and transcript export paths.
 #[must_use]
 pub fn render_cells_plain(cells: &[Cell], detail: bool) -> String {
-    transcript_lines(cells, None, detail)
+    transcript_lines(cells, None, detail, MARKDOWN_DEFAULT_WIDTH)
         .into_iter()
         .map(|line| {
             line.spans
@@ -1011,7 +1016,7 @@ pub fn render_cells_plain(cells: &[Cell], detail: bool) -> String {
         .join("\n")
 }
 
-fn cell_lines(cell: &Cell, detail: bool) -> Vec<Line<'static>> {
+fn cell_lines(cell: &Cell, detail: bool, width: usize) -> Vec<Line<'static>> {
     if detail {
         return cell
             .raw_text()
@@ -1033,7 +1038,7 @@ fn cell_lines(cell: &Cell, detail: bool) -> Vec<Line<'static>> {
                 )
             })
             .collect(),
-        Cell::Assistant { text } => render_markdown(text),
+        Cell::Assistant { text } => render_markdown_at(text, width),
         Cell::Exploration { operations } => exploration_lines(operations),
         Cell::Command {
             command,
@@ -1456,7 +1461,7 @@ fn semantic_visual_height(
     if width == 0 {
         return 0;
     }
-    Paragraph::new(transcript_lines(cells, streaming, detail))
+    Paragraph::new(transcript_lines(cells, streaming, detail, width as usize))
         .wrap(Wrap { trim: false })
         .line_count(width)
 }
@@ -1489,17 +1494,26 @@ fn visual_height(items: &[TranscriptItem], width: u16) -> usize {
         .line_count(width)
 }
 
+/// Width assumed when no terminal viewport is available (plain export).
+const MARKDOWN_DEFAULT_WIDTH: usize = 100;
+
 /// A small deterministic Markdown subset for assistant text: headings, bullet
-/// and numbered lists, fenced code blocks, inline code, and bold. Enough that
-/// model output stops reading like raw Markdown source; not a browser engine.
-fn render_markdown(text: &str) -> Vec<Line<'static>> {
+/// and numbered lists, fenced code blocks, inline code, bold, links, and
+/// aligned tables. Enough that model output stops reading like raw Markdown
+/// source; not a browser engine. `width` bounds table column sizing so the
+/// paragraph wrapper never has to break an aligned row.
+fn render_markdown_at(text: &str, width: usize) -> Vec<Line<'static>> {
+    let raw_lines: Vec<&str> = text.split('\n').collect();
     let mut out = Vec::new();
     let mut in_code = false;
-    for raw in text.split('\n') {
+    let mut index = 0;
+    while index < raw_lines.len() {
+        let raw = raw_lines[index];
         let trimmed = raw.trim_end();
         if let Some(rest) = trimmed.trim().strip_prefix("```") {
             let _ = rest;
             in_code = !in_code;
+            index += 1;
             continue;
         }
         if in_code {
@@ -1507,6 +1521,7 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
                 format!("  │ {trimmed}"),
                 Style::default().fg(Color::Cyan),
             ));
+            index += 1;
             continue;
         }
         let indent = trimmed.len() - trimmed.trim_start().len();
@@ -1525,6 +1540,7 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
                     .add_modifier(Modifier::BOLD)
             };
             out.push(Line::styled(heading.to_owned(), style));
+            index += 1;
             continue;
         }
         if let Some(rest) = body.strip_prefix("- ").or_else(|| body.strip_prefix("* ")) {
@@ -1534,6 +1550,7 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             )];
             spans.extend(inline_spans(rest, assistant_style()));
             out.push(Line::from(spans));
+            index += 1;
             continue;
         }
         let numbered = body.split_once(". ").is_some_and(|(marker, _)| {
@@ -1548,13 +1565,22 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             spans.push(Span::raw(" "));
             spans.extend(inline_spans(rest, assistant_style()));
             out.push(Line::from(spans));
+            index += 1;
             continue;
         }
         if body.is_empty() {
             out.push(Line::from(String::new()));
+            index += 1;
             continue;
         }
         if body.contains('|') {
+            if let Some((consumed, table)) = render_table_block(&raw_lines[index..], width) {
+                out.extend(table);
+                index += consumed;
+                continue;
+            }
+            // Pipe content that is not an ordinary table keeps the previous
+            // single-line treatment; separator rows are still never literal.
             let cells = body
                 .trim_matches('|')
                 .split('|')
@@ -1563,22 +1589,271 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             if cells.iter().all(|cell| {
                 !cell.is_empty() && cell.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
             }) {
+                index += 1;
                 continue;
             }
             let mut spans = vec![Span::styled("│ ", notice_style())];
-            for (index, cell) in cells.iter().enumerate() {
-                if index > 0 {
+            for (cell_index, cell) in cells.iter().enumerate() {
+                if cell_index > 0 {
                     spans.push(Span::styled(" │ ", notice_style()));
                 }
                 spans.extend(inline_spans(cell, assistant_style()));
             }
             spans.push(Span::styled(" │", notice_style()));
             out.push(Line::from(spans));
+            index += 1;
             continue;
         }
         out.push(Line::from(inline_spans(body, assistant_style())));
+        index += 1;
     }
     out
+}
+
+/// Column alignment parsed from a Markdown separator row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableAlign {
+    Left,
+    Center,
+    Right,
+}
+
+/// Splits one Markdown table row into trimmed cells, honoring `\|` escapes.
+/// Returns `None` when the line has no pipe or fewer than two cells, which
+/// keeps prose and single-pipe content on the raw path.
+fn split_table_row(line: &str) -> Option<Vec<String>> {
+    let trimmed = line.trim();
+    if !trimmed.contains('|') {
+        return None;
+    }
+    let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let inner = inner.strip_suffix('|').unwrap_or(inner);
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => current.push(chars.next().unwrap_or('\\')),
+            '|' => {
+                cells.push(current.trim().to_owned());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    cells.push(current.trim().to_owned());
+    if cells.len() < 2 {
+        return None;
+    }
+    Some(cells)
+}
+
+/// True when every cell is a `---`/`:---:` style delimiter. The width source
+/// cell must contain at least one dash.
+fn is_table_separator(cells: &[String]) -> bool {
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let cell = cell.trim();
+            !cell.is_empty() && cell.contains('-') && cell.chars().all(|ch| ch == '-' || ch == ':')
+        })
+}
+
+fn table_align(cell: &str) -> TableAlign {
+    let cell = cell.trim();
+    match (cell.starts_with(':'), cell.ends_with(':')) {
+        (true, true) => TableAlign::Center,
+        (false, true) => TableAlign::Right,
+        _ => TableAlign::Left,
+    }
+}
+
+/// Detects and renders an ordinary Markdown table at the head of `lines`.
+/// Returns the number of source lines consumed and the rendered rows, or
+/// `None` when the block is malformed, too narrow for even minimum columns, or
+/// simply not a table.
+fn render_table_block(lines: &[&str], width: usize) -> Option<(usize, Vec<Line<'static>>)> {
+    let header = split_table_row(lines.first()?)?;
+    let separator = split_table_row(lines.get(1)?)?;
+    if separator.len() != header.len() || !is_table_separator(&separator) {
+        return None;
+    }
+    let aligns: Vec<TableAlign> = separator.iter().map(|cell| table_align(cell)).collect();
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut consumed = 2;
+    for line in &lines[2..] {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("```") || trimmed.starts_with('#') {
+            break;
+        }
+        let Some(mut cells) = split_table_row(line) else {
+            break;
+        };
+        cells.truncate(header.len());
+        while cells.len() < header.len() {
+            cells.push(String::new());
+        }
+        rows.push(cells);
+        consumed += 1;
+    }
+    let table = table_lines(&header, &aligns, &rows, width)?;
+    Some((consumed, table))
+}
+
+/// Renders a detected table with proportional column widths and cell wrapping.
+/// `None` means the available width cannot hold readable columns; the caller
+/// then falls back to the raw line treatment.
+fn table_lines(
+    header: &[String],
+    aligns: &[TableAlign],
+    rows: &[Vec<String>],
+    width: usize,
+) -> Option<Vec<Line<'static>>> {
+    const GAP: usize = 2;
+    const MIN_CELL: usize = 3;
+    const MAX_CELL: usize = 48;
+    let columns = header.len();
+    if columns < 2 || aligns.len() != columns {
+        return None;
+    }
+    let gap_total = GAP * (columns - 1);
+    if width <= gap_total + columns * MIN_CELL {
+        return None;
+    }
+    let available = width - gap_total;
+    let natural: Vec<usize> = (0..columns)
+        .map(|column| {
+            std::iter::once(&header[column])
+                .chain(rows.iter().map(|row| &row[column]))
+                .map(|cell| display_width(cell))
+                .max()
+                .unwrap_or(1)
+                .clamp(1, MAX_CELL)
+        })
+        .collect();
+    let widths = if natural.iter().sum::<usize>() <= available {
+        natural
+    } else {
+        distribute_widths(&natural, available)
+    };
+    let mut out = Vec::new();
+    let header_style = Style::default().add_modifier(Modifier::BOLD);
+    let header_rows = wrap_row(header, &widths);
+    let header_height = header_rows.iter().map(Vec::len).max().unwrap_or(1);
+    for line_index in 0..header_height {
+        out.push(table_row_line(
+            &header_rows,
+            &widths,
+            aligns,
+            line_index,
+            header_style,
+        ));
+    }
+    let total: usize = widths.iter().sum::<usize>() + gap_total;
+    out.push(Line::styled("─".repeat(total), notice_style()));
+    for row in rows {
+        let wrapped = wrap_row(row, &widths);
+        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+        for line_index in 0..height {
+            out.push(table_row_line(
+                &wrapped,
+                &widths,
+                aligns,
+                line_index,
+                assistant_style(),
+            ));
+        }
+    }
+    Some(out)
+}
+
+/// Max-min fair column widths: short columns keep their natural width first,
+/// and whatever remains is split evenly among the columns that still need to
+/// wrap. `available` is the space left after the gutters.
+fn distribute_widths(natural: &[usize], available: usize) -> Vec<usize> {
+    let mut widths = vec![0usize; natural.len()];
+    let mut pending: Vec<usize> = (0..natural.len()).collect();
+    let mut remaining = available;
+    while !pending.is_empty() {
+        let share = remaining / pending.len();
+        let small: Vec<usize> = pending
+            .iter()
+            .copied()
+            .filter(|column| natural[*column] <= share)
+            .collect();
+        if small.is_empty() {
+            for (position, &column) in pending.iter().enumerate() {
+                let per = remaining / (pending.len() - position);
+                widths[column] = per;
+                remaining -= per;
+            }
+            break;
+        }
+        for &column in &small {
+            widths[column] = natural[column];
+            remaining -= natural[column];
+        }
+        pending.retain(|column| !small.contains(column));
+    }
+    widths
+}
+
+fn wrap_row(cells: &[String], widths: &[usize]) -> Vec<Vec<String>> {
+    cells
+        .iter()
+        .zip(widths)
+        .map(|(cell, width)| wrap_cell(cell, *width))
+        .collect()
+}
+
+/// One physical line of a table row: each column is wrapped separately, then
+/// padded to its width and joined with a two-space gutter.
+fn table_row_line(
+    wrapped: &[Vec<String>],
+    widths: &[usize],
+    aligns: &[TableAlign],
+    line_index: usize,
+    base: Style,
+) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (column, cells) in wrapped.iter().enumerate() {
+        if column > 0 {
+            spans.push(Span::raw(" ".repeat(2)));
+        }
+        let text = cells.get(line_index).map_or("", String::as_str);
+        let padded = pad_cell(text, widths[column], aligns[column]);
+        spans.extend(inline_spans(&padded, base));
+    }
+    Line::from(spans)
+}
+
+fn wrap_cell(text: &str, width: usize) -> Vec<String> {
+    let text = text.trim();
+    if text.is_empty() || width == 0 {
+        return vec![String::new()];
+    }
+    let points = composer::wrap_points(text, width);
+    let mut rows = Vec::new();
+    for (index, start) in points.iter().enumerate() {
+        let end = points.get(index + 1).copied().unwrap_or(text.len());
+        rows.push(text[*start..end].trim_end().to_owned());
+    }
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows
+}
+
+fn pad_cell(text: &str, width: usize, align: TableAlign) -> String {
+    let text_width = display_width(text).min(width);
+    let padding = width - text_width;
+    match align {
+        TableAlign::Left => format!("{text}{}", " ".repeat(padding)),
+        TableAlign::Right => format!("{}{text}", " ".repeat(padding)),
+        TableAlign::Center => {
+            let left = padding / 2;
+            format!("{}{text}{}", " ".repeat(left), " ".repeat(padding - left))
+        }
+    }
 }
 
 /// Inline formatting: `` `code` `` → dim cyan, `**bold**` → bold.
@@ -2422,6 +2697,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
                 app.presentation.cells(),
                 app.streaming.as_deref(),
                 app.detail,
+                viewport.width as usize,
             ))
             .wrap(Wrap { trim: false })
             .scroll((offset, 0));
@@ -2778,7 +3054,7 @@ mod tests {
     #[test]
     fn markdown_renders_headings_bullets_and_code() {
         let text = "# Title\n\n- bullet `code`\n```py\nx = 1\n```\n1. first\nplain **bold**";
-        let lines = render_markdown(text);
+        let lines = render_markdown_at(text, MARKDOWN_DEFAULT_WIDTH);
         let rendered: Vec<String> = lines
             .iter()
             .map(|line| {
@@ -2801,7 +3077,7 @@ mod tests {
 
     #[test]
     fn markdown_hides_fence_markers() {
-        let lines = render_markdown("```\nhello\n```");
+        let lines = render_markdown_at("```\nhello\n```", MARKDOWN_DEFAULT_WIDTH);
         let rendered: Vec<String> = lines
             .iter()
             .map(|line| {
@@ -2818,8 +3094,9 @@ mod tests {
 
     #[test]
     fn markdown_renders_links_italics_urls_and_tables() {
-        let lines = render_markdown(
+        let lines = render_markdown_at(
             "*note* [Latch](https://example.test)\n\n| A | B |\n|---|---|\n| 你 | https://example.test/x |",
+            MARKDOWN_DEFAULT_WIDTH,
         );
         let rendered = lines
             .iter()
@@ -2828,8 +3105,13 @@ mod tests {
             .collect::<String>();
         assert!(rendered.contains("note"));
         assert!(rendered.contains("Latch (https://example.test)"));
-        assert!(rendered.contains("│ A │ B │"));
-        assert!(!rendered.contains("|---"));
+        assert!(rendered.contains("A"));
+        assert!(rendered.contains("你"));
+        assert!(!rendered.contains("|---"), "separator rows are not literal");
+        assert!(
+            !rendered.contains("│ A │ B │"),
+            "tables are aligned, not raw"
+        );
         assert!(
             lines
                 .iter()
@@ -2842,6 +3124,62 @@ mod tests {
                 .flat_map(|line| line.spans.iter())
                 .any(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
         );
+    }
+
+    #[test]
+    fn markdown_tables_align_columns_and_hide_separators() {
+        let lines = render_markdown_at(
+            "| Name | Qty |\n|:-----|----:|\n| apple | 12 |\n| kiwi | 3 |",
+            40,
+        );
+        assert_eq!(
+            lines_text(&lines),
+            "Name   Qty\n──────────\napple   12\nkiwi     3"
+        );
+        // The rule after the header is dim and bold header cells stay bold.
+        assert_eq!(lines[0].spans[0].style.add_modifier, Modifier::BOLD);
+        assert_eq!(lines[1].style.fg, Some(Color::DarkGray));
+    }
+
+    #[test]
+    fn markdown_tables_wrap_wide_cells_within_the_width() {
+        let lines = render_markdown_at(
+            "| Feature | Description |\n|---|---|\n| alpha | a moderately long description that wraps |",
+            30,
+        );
+        for line in &lines {
+            let text = lines_text(std::slice::from_ref(line));
+            assert!(
+                display_width(&text) <= 30,
+                "table line {text:?} exceeds the viewport"
+            );
+        }
+        assert!(lines.len() > 4, "the wide cell wrapped onto extra rows");
+        assert!(lines_text(&lines).contains("alpha"));
+    }
+
+    #[test]
+    fn markdown_tables_measure_cjk_by_display_width() {
+        let lines = render_markdown_at("| 名称 | 数量 |\n|---|---|\n| 苹果 | 12 |", 40);
+        assert_eq!(lines_text(&lines), "名称  数量\n──────────\n苹果  12  ");
+        for line in &lines {
+            let text = lines_text(std::slice::from_ref(line));
+            assert_eq!(display_width(&text), 10);
+        }
+    }
+
+    #[test]
+    fn malformed_pipe_content_keeps_the_raw_treatment() {
+        let lines = render_markdown_at("| a | b |\nno separator here", MARKDOWN_DEFAULT_WIDTH);
+        let rendered = lines_text(&lines);
+        assert!(rendered.contains("│ a │ b │"), "{rendered}");
+        assert!(!rendered.contains('─'), "{rendered}");
+
+        // A single-column pipe line is not an ordinary table.
+        let single = render_markdown_at("| solo |\n|---|", MARKDOWN_DEFAULT_WIDTH);
+        let rendered = lines_text(&single);
+        assert!(rendered.contains("│ solo │"), "{rendered}");
+        assert!(!rendered.contains("---"), "{rendered}");
     }
 
     // ---- input editor ----
@@ -4100,6 +4438,83 @@ mod tests {
         assert_eq!(ComposerChrome::responsive(24, 1).body, 3);
         assert_eq!(ComposerChrome::responsive(30, 20).body, 8);
         assert_eq!(ComposerChrome::responsive(12, 1).body, 1);
+    }
+
+    fn markdown_table_fixture(app: &mut App, text: &str) {
+        app.output(Output::Event(Box::new(presentation_event(
+            latch_protocol::EventPayload::AssistantMessageCompleted {
+                text: text.into(),
+                tool_calls: vec![],
+                reasoning_content: None,
+            },
+        ))));
+    }
+
+    #[test]
+    fn snapshot_markdown_table_normal() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        markdown_table_fixture(
+            &mut app,
+            "Here is the plan:\n\n\
+             | Step | Owner | Status |\n\
+             |:-----|:------|-------:|\n\
+             | Inspect the failing tests | Latch | done |\n\
+             | Patch the parser | Latch | active |\n\
+             | Verify with cargo test | Kernel | pending |",
+        );
+        assert_snapshot(
+            "v4_markdown_table_normal.txt",
+            &render_to_text(&mut app, 100, 24),
+        );
+    }
+
+    #[test]
+    fn snapshot_markdown_table_narrow() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        markdown_table_fixture(
+            &mut app,
+            "| Module | Responsibility | Notes |\n\
+             |:-------|:---------------|:------|\n\
+             | composer | scrollable multiline editor viewport | keeps the cursor visible while wrapping |\n\
+             | sidebar | responsive session state | hidden below 110 columns |",
+        );
+        assert_snapshot(
+            "v4_markdown_table_narrow.txt",
+            &render_to_text(&mut app, 56, 24),
+        );
+    }
+
+    #[test]
+    fn snapshot_markdown_table_wide() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        markdown_table_fixture(
+            &mut app,
+            "| Mode | Mutation | Validation | Notes |\n\
+             |:-----|:---------|:-----------|:------|\n\
+             | ASK | denied | not run | read-only inspection |\n\
+             | PLAN | denied | not run | produces a plan |\n\
+             | WORK | policy-approved | required | implements and verifies |",
+        );
+        assert_snapshot(
+            "v4_markdown_table_wide.txt",
+            &render_to_text(&mut app, 160, 24),
+        );
+    }
+
+    #[test]
+    fn snapshot_markdown_table_cjk() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        markdown_table_fixture(
+            &mut app,
+            "| 模块 | 职责 | 状态 |\n\
+             |:-----|:-----|-----:|\n\
+             | 编辑器 | 可滚动的多行输入视口 | 完成 |\n\
+             | 侧边栏 | 响应式会话状态 | 进行中 |",
+        );
+        assert_snapshot(
+            "v4_markdown_table_cjk.txt",
+            &render_to_text(&mut app, 100, 24),
+        );
     }
 
     #[test]

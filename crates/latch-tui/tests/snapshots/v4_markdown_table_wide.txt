@@ -1,0 +1,24 @@
+Mode  Mutation         Validation  Notes                                                                            │deepseek-flash                             
+──────────────────────────────────────────────────────────                                                          │WORK · 0 turns · 0s                        
+ASK   denied           not run     read-only inspection                                                             │on main                                    
+PLAN  denied           not run     produces a plan                                                                  │                                           
+WORK  policy-approved  required    implements and verifies                                                          │CONTEXT                                    
+                                                                                                                    │                                           
+                                                                                                                    │TASK                                       
+                                                                                                                    │                                           
+                                                                                                                    │USAGE                                      
+                                                                                                                    │                                           
+                                                                                                                    │CHANGES                                    
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                                                                
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Ask Latch…                                                                                                                                                   │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│ WORK · deepseek-flash · main                                                                                                                           ready │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+enter send  ctrl+j newline  ctrl+p commands                                                                                                                     
+/tmp/latch-ui                                                                                                                                       latch v0.1.1

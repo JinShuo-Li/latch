@@ -1,0 +1,24 @@
+Module    Responsibility          Notes                 
+────────────────────────────────────────────────────────
+composer  scrollable multiline    keeps the cursor      
+          editor viewport         visible while wrapping
+sidebar   responsive session      hidden below 110      
+          state                   columns               
+                                                        
+                                                        
+                                                        
+                                                        
+                                                        
+                                                        
+                                                        
+                                                        
+                                                        
+╭──────────────────────────────────────────────────────╮
+│ Ask Latch…                                           │
+│                                                      │
+│                                                      │
+│                                                      │
+│ WORK · deepseek-flash · main                   ready │
+╰──────────────────────────────────────────────────────╯
+ctrl+p commands                                         
+/tmp/latch-ui                               latch v0.1.1
