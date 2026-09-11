@@ -1,11 +1,11 @@
 use crate::continuity::ContinuityEngine;
-use crate::extension::ExtensionRegistry;
+use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
 use crate::prompt::PromptCompiler;
 use crate::provider::{ModelProvider, StreamSink};
 use crate::state::{EvidenceLedger, FailureManager, StateUpdate, TaskStateManager};
 use crate::store::EventStore;
 use crate::tools::ToolExecutor;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use latch_protocol::{
     Event, EventPayload, EvidenceStatus, MemoryKind, MemoryRecord, Mode, ModelMessage,
@@ -182,14 +182,24 @@ impl Agent {
             )?;
             let _ = event;
             let messages = context_messages(&ctx);
+            let extension_context = self.extensions.context().await?;
             let request = ModelRequest {
                 system: format!(
-                    "{}\n\n{}\n\nRECALLED ORIGINAL MATERIAL\n{}",
-                    ctx.system, ctx.canonical, ctx.recalled
+                    "{}\n\n{}\n\nRECALLED ORIGINAL MATERIAL\n{}\n\nEXTENSION CONTEXT SOURCES\n{}",
+                    ctx.system,
+                    ctx.canonical,
+                    ctx.recalled,
+                    serde_json::to_string_pretty(&extension_context)?
                 ),
                 messages,
                 tools: self.tool_definitions(),
             };
+            let request: ModelRequest = serde_json::from_value(
+                self.extensions
+                    .transform("model_request", serde_json::to_value(request)?)
+                    .await?,
+            )
+            .context("extension returned invalid model_request transform")?;
             self.emit(
                 EventPayload::ModelRequestStarted {
                     provider: self.provider.name().into(),
@@ -317,13 +327,49 @@ impl Agent {
         cancel: CancellationToken,
         sink: &AgentEventSink,
     ) -> Vec<ToolResult> {
-        if calls.iter().all(|c| {
+        let mut permitted = Vec::new();
+        let mut results = Vec::new();
+        for call in calls {
+            match self
+                .extensions
+                .guard(
+                    "tool.execute",
+                    json!({"name":call.name,"arguments":call.arguments}),
+                )
+                .await
+            {
+                Ok(ExtensionGuardDecision::Allow) => permitted.push(call),
+                Ok(ExtensionGuardDecision::Deny(reason) | ExtensionGuardDecision::Ask(reason)) => {
+                    let denied = tool_error(&call, reason.clone());
+                    let _ = self.emit(
+                        EventPayload::PermissionDecision {
+                            tool: call.name.clone(),
+                            decision: "extension_guard".into(),
+                            reason,
+                        },
+                        sink,
+                    );
+                    let _ = self.emit(
+                        EventPayload::ToolFailed {
+                            result: denied.clone(),
+                        },
+                        sink,
+                    );
+                    results.push(denied);
+                }
+                Err(error) => results.push(tool_error(
+                    &call,
+                    format!("extension guard failed: {error}"),
+                )),
+            }
+        }
+        let mut executed = if permitted.iter().all(|c| {
             matches!(
                 c.name.as_str(),
                 "read_file" | "search" | "git_status" | "git_diff"
             )
         }) {
-            let tasks = calls
+            let tasks = permitted
                 .into_iter()
                 .map(|call| {
                     let tools = self.tools.clone();
@@ -331,11 +377,11 @@ impl Agent {
                     tokio::spawn(async move { tools.execute(&call, c).await })
                 })
                 .collect::<Vec<_>>();
-            let mut results = Vec::new();
+            let mut batch = Vec::new();
             for task in tasks {
                 match task.await {
-                    Ok(r) => results.push(r),
-                    Err(e) => results.push(ToolResult {
+                    Ok(r) => batch.push(r),
+                    Err(e) => batch.push(ToolResult {
                         call_id: "join".into(),
                         name: "scheduler".into(),
                         output: e.to_string(),
@@ -344,23 +390,25 @@ impl Agent {
                     }),
                 }
             }
-            results
+            batch
         } else {
-            let mut results = Vec::new();
-            for call in calls {
+            let mut batch = Vec::new();
+            for call in permitted {
                 if matches!(
                     call.name.as_str(),
                     "task_update" | "record_evidence" | "complete"
                 ) {
-                    results.push(self.execute_kernel_tool(&call, sink));
+                    batch.push(self.execute_kernel_tool(&call, sink));
                 } else if let Some(owner) = self.extensions.owner_for_tool(&call.name) {
-                    results.push(self.execute_extension_tool(&owner, &call, sink).await);
+                    batch.push(self.execute_extension_tool(&owner, &call, sink).await);
                 } else {
-                    results.push(self.tools.execute(&call, cancel.clone()).await);
+                    batch.push(self.tools.execute(&call, cancel.clone()).await);
                 }
             }
-            results
-        }
+            batch
+        };
+        results.append(&mut executed);
+        results
     }
     async fn execute_extension_tool(
         &mut self,

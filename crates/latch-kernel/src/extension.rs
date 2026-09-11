@@ -80,6 +80,12 @@ pub struct ExtensionCapabilities {
     pub guard: Vec<String>,
     pub context_sources: Vec<String>,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtensionGuardDecision {
+    Allow,
+    Deny(String),
+    Ask(String),
+}
 pub struct ExtensionHost {
     name: String,
     child: Child,
@@ -214,15 +220,73 @@ impl ExtensionHost {
         if !self.capabilities.tools.iter().any(|t| t.name == name) {
             bail!("extension {} did not register tool {name}", self.name);
         }
+        self.request_value("tool.execute", json!({"name":name,"arguments":arguments}))
+            .await
+    }
+    pub async fn guard(&mut self, action: &str, payload: Value) -> Result<ExtensionGuardDecision> {
+        if !self
+            .capabilities
+            .guard
+            .iter()
+            .any(|registered| registered == action || registered == "*")
+        {
+            return Ok(ExtensionGuardDecision::Allow);
+        }
+        let value = self
+            .request_value("hook.guard", json!({"action":action,"payload":payload}))
+            .await?;
+        match value
+            .get("decision")
+            .and_then(Value::as_str)
+            .unwrap_or("allow")
+        {
+            "allow" => Ok(ExtensionGuardDecision::Allow),
+            "deny" => Ok(ExtensionGuardDecision::Deny(
+                value
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("extension denied action")
+                    .into(),
+            )),
+            "ask" => Ok(ExtensionGuardDecision::Ask(
+                value
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("extension requests approval")
+                    .into(),
+            )),
+            other => bail!("extension returned invalid guard decision {other}"),
+        }
+    }
+    pub async fn transform(&mut self, structure: &str, value: Value) -> Result<Value> {
+        if !self
+            .capabilities
+            .transform
+            .iter()
+            .any(|registered| registered == structure)
+        {
+            return Ok(value);
+        }
+        self.request_value(
+            "hook.transform",
+            json!({"structure":structure,"value":value}),
+        )
+        .await
+    }
+    pub async fn context(&mut self) -> Result<Vec<Value>> {
+        let mut values = Vec::new();
+        for name in self.capabilities.context_sources.clone() {
+            values.push(
+                self.request_value("context_source.get", json!({"name":name}))
+                    .await?,
+            );
+        }
+        Ok(values)
+    }
+    async fn request_value(&mut self, method: &str, params: Value) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
-        self.writer
-            .write(&request(
-                id,
-                "tool.execute",
-                json!({"name":name,"arguments":arguments}),
-            ))
-            .await?;
+        self.writer.write(&request(id, method, params)).await?;
         loop {
             let msg = self.reader.read().await?;
             if msg.id == Some(json!(id)) {
@@ -334,6 +398,28 @@ impl ExtensionRegistry {
             .execute_tool(tool, args)
             .await
     }
+    pub async fn guard(&mut self, action: &str, payload: Value) -> Result<ExtensionGuardDecision> {
+        for host in self.hosts.values_mut() {
+            match host.guard(action, payload.clone()).await? {
+                ExtensionGuardDecision::Allow => {}
+                decision => return Ok(decision),
+            }
+        }
+        Ok(ExtensionGuardDecision::Allow)
+    }
+    pub async fn transform(&mut self, structure: &str, mut value: Value) -> Result<Value> {
+        for host in self.hosts.values_mut() {
+            value = host.transform(structure, value).await?;
+        }
+        Ok(value)
+    }
+    pub async fn context(&mut self) -> Result<Vec<Value>> {
+        let mut values = Vec::new();
+        for host in self.hosts.values_mut() {
+            values.extend(host.context().await?);
+        }
+        Ok(values)
+    }
     pub async fn shutdown_all(&mut self) -> Result<()> {
         let hosts = std::mem::take(&mut self.hosts);
         let mut errors = Vec::new();
@@ -398,6 +484,20 @@ mod tests {
             .unwrap();
         assert_eq!(host.capabilities.tools[0].name, "fixture.echo");
         assert_eq!(host.capabilities.commands, ["fixture-about"]);
+        assert_eq!(
+            host.guard("tool.execute", json!({})).await.unwrap(),
+            ExtensionGuardDecision::Allow
+        );
+        assert_eq!(
+            host.transform("model_request", json!({"unchanged":true}))
+                .await
+                .unwrap()["unchanged"],
+            true
+        );
+        assert_eq!(
+            host.context().await.unwrap()[0]["content"],
+            "fixture context"
+        );
         let value = host
             .execute_tool("fixture.echo", json!({"value":"hello"}))
             .await

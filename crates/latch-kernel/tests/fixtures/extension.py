@@ -32,9 +32,18 @@ while True:
     elif method == "initialized":
         send({"jsonrpc": "2.0", "id": 101, "method": "tool.register", "params": {"name": "fixture.echo", "description": "echo", "inputSchema": {"type": "object"}}})
         send({"jsonrpc": "2.0", "id": 102, "method": "command.register", "params": {"name": "fixture-about"}})
+        send({"jsonrpc": "2.0", "id": 103, "method": "hook.guard", "params": {"action": "tool.execute"}})
+        send({"jsonrpc": "2.0", "id": 104, "method": "hook.transform", "params": {"structure": "model_request"}})
+        send({"jsonrpc": "2.0", "id": 105, "method": "context_source.register", "params": {"name": "fixture.context"}})
         send({"jsonrpc": "2.0", "method": "ready", "params": {}})
     elif method == "tool.execute":
         send({"jsonrpc": "2.0", "id": message["id"], "result": {"echoed": message["params"]["arguments"]["value"]}})
+    elif method == "hook.guard":
+        send({"jsonrpc": "2.0", "id": message["id"], "result": {"decision": "allow"}})
+    elif method == "hook.transform":
+        send({"jsonrpc": "2.0", "id": message["id"], "result": message["params"]["value"]})
+    elif method == "context_source.get":
+        send({"jsonrpc": "2.0", "id": message["id"], "result": {"name": "fixture.context", "content": "fixture context"}})
     elif method == "shutdown":
         send({"jsonrpc": "2.0", "id": message["id"], "result": None})
     elif method == "exit":
