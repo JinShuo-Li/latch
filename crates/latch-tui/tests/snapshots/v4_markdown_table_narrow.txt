@@ -21,4 +21,4 @@ sidebar   responsive session      hidden below 110
 │ WORK · deepseek-flash · main · std · ask       ready │
 ╰──────────────────────────────────────────────────────╯
 ctrl+p commands                                         
-/tmp/latch-ui                               latch v0.1.1
+/tmp/latch-ui                               latch v0.2.0

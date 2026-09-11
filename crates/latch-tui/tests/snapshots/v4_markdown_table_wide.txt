@@ -21,4 +21,4 @@ WORK  policy-approved  required    implements and verifies                      
 │ WORK · deepseek-flash · main · std · ask                                                                                                               ready │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 enter send  ctrl+j newline  ctrl+p commands                                                                                                                     
-/tmp/latch-ui                                                                                                                                       latch v0.1.1
+/tmp/latch-ui                                                                                                                                       latch v0.2.0

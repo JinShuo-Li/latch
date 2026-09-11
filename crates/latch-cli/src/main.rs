@@ -629,7 +629,7 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
         "/diff" => send_tool(agent, "git_diff", tx).await?,
         "/checkpoint" => send_tool(agent, "checkpoint", tx).await?,
         "/undo" => send_tool(agent, "undo", tx).await?,
-        "/model" => tx.send(Output::Notice("model changes require config and a new invocation in V0.1; durable sessions remain provider-independent".into())).await?,
+        "/model" => tx.send(Output::Notice("model changes require config and a new invocation; durable sessions remain provider-independent".into())).await?,
         "/help" => {
             let commands = SLASH_COMMANDS.iter().map(|c| format!("{}  {}", c.name, c.description)).collect::<Vec<_>>().join("\n");
             tx.send(Output::Notice(format!(

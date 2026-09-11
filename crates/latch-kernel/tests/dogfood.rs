@@ -88,7 +88,7 @@ impl ModelProvider for RecordingProvider {
     }
 }
 
-/// The full V0.1.1 dogfood: ASK inspects, PLAN scopes with a validation
+/// The full V0.2.0 dogfood: ASK inspects, PLAN scopes with a validation
 /// requirement, WORK validates (fails), fixes through a guarded edit,
 /// revalidates (passes), and completion becomes VERIFIED — without the model
 /// ever seeing or supplying an internal event/call id. Resume restores the

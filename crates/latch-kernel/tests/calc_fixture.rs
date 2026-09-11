@@ -1,4 +1,4 @@
-//! The V0.1.1 acceptance fixture: a buggy `calc.py` with an existing unittest
+//! The V0.2.0 acceptance fixture: a buggy `calc.py` with an existing unittest
 //! must finish as VERIFIED through ASK → PLAN → WORK, with kernel-linked
 //! validation evidence and without the model ever seeing or supplying an
 //! internal event/call UUID.
