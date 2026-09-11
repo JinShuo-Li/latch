@@ -154,6 +154,15 @@ for Latch / Shell / Extension / External ownership. Optional user-configured
 components stay unavailable. The kernel forwards tool-appended durable events
 to the live sink so live and replay observe identical event order.
 
+The composer (`latch-tui::composer`) is a real editor rather than a text field:
+the complete buffer is wrapped into grapheme-safe visual rows, an independent
+viewport offset tracks the visible window, and the terminal cursor is placed
+only while its visual row is visible. PageUp/PageDown move through an
+overflowing prompt and fall back to transcript scrolling when it fits; the
+wheel routes by pointer position. Layout chrome (footer, spacer, hints, gap,
+metadata) drops before the editor body shrinks, so the prompt stays usable on
+narrow or short terminals.
+
 Diffs are first-class: `git_diff` completions become a typed
 `DiffDocument` (parser in `latch-tui::diff`) rendered with restrained semantic
 colors. Red/green semantics only ever apply inside a parsed unified diff;

@@ -109,9 +109,14 @@ semantics, so compiler output or shell text can never be misclassified.
 
 ## Terminal experience
 
-The transcript is typed and dense: user messages, assistant messages rendered
-with a small deterministic Markdown subset, one visual lifecycle row per tool
-call (running → done/FAIL, keyed by call id), kernel notices, and errors.
+The composer is the application's control surface: a left-accented editor with
+padding, a placeholder, mode/model/branch metadata, live status, and subdued
+hints. It is a real scrollable viewport over the untouched buffer, so large
+pastes can be inspected at any position before submission. An empty session
+shows a restrained centered identity instead of a dead terminal. The transcript
+is typed and dense: user messages, assistant messages rendered with a small
+deterministic Markdown subset, one visual lifecycle row per tool call (running
+→ done/FAIL, keyed by call id), kernel notices, and errors.
 Hidden internals — reasoning content, context statistics, model usage, raw task
 state — are never displayed, live or on resume. Typing `/` opens a command
 palette filtered from the same list `/help` prints. The input is a real editor:

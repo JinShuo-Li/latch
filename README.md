@@ -55,7 +55,7 @@ under `~/.local/state/latch/` by default; large output is stored in its
 
 ## Terminal interface
 
-The V3 transcript is a semantic conversation rather than a kernel event log.
+The transcript is a semantic conversation rather than a kernel event log.
 Inspection calls coalesce into an updating exploration cell; commands, edits,
 and validation have dedicated lifecycle cells. Successful routine work stays
 compact, while failures retain a bounded diagnostic:
@@ -73,11 +73,21 @@ compact, while failures retain a bounded diagnostic:
   └ cargo test · 3 tests passed · 0.42s
 ```
 
-Assistant responses render headings, paragraphs, lists, fenced and inline code,
-bold/italic text, links, URLs, and simple Markdown tables. ANSI and progress
-control sequences are normalized. Ctrl+T or `/raw` toggles a copy-friendly
-detailed transcript; `/diff` deliberately shows the complete bounded workspace
-diff (with artifact spill for very large output).
+The composer is the main control surface: a distinct left-accented editor with
+comfortable padding, a placeholder, mode/model/branch metadata, live status
+(`ready`, `● working`, `interrupted`, `approval needed`), and subdued keyboard
+hints. It grows with the prompt up to a fraction of the terminal height and is
+backed by a real scrollable viewport, so a prompt pasted as hundreds of lines
+can be inspected from anywhere before submission. When the sidebar is hidden,
+the composer also carries a compact `≈tokens/window` working-set summary.
+
+On an empty session a restrained welcome state keeps the composer as the
+focus; it disappears once the conversation starts. Assistant responses render
+headings, paragraphs, lists, fenced and inline code, bold/italic text, links,
+URLs, and simple Markdown tables. ANSI and progress control sequences are
+normalized. Ctrl+T or `/raw` toggles a copy-friendly detailed transcript;
+`/diff` deliberately shows the complete bounded workspace diff (with artifact
+spill for very large output).
 
 ## Observability sidebar
 
@@ -185,15 +195,22 @@ working set while retaining durable history and canonical state.
 
 ## TUI controls
 
-- **Input:** Enter submits, Alt+Enter inserts a newline, Left/Right move the
-  cursor, Ctrl+A/E jump to line start/end, Ctrl+W deletes a word, Ctrl+U/K
-  clear to line start/end. The input area expands (bounded) with visible
-  wrapping. Bracketed clipboard paste preserves multiline text, CRLF, Unicode,
-  and blank lines without submitting; Enter remains the only submit action.
-- **History:** Up/Down recall previous prompts; the draft returns past the
-  newest entry; recalled entries are never mutated.
-- **Scrollback:** PageUp/PageDown, Home/End, mouse wheel. Auto-follow resumes at
-  the bottom; a subtle indicator shows newer content while scrolled up.
+- **Composer:** Enter submits, Alt+Enter inserts a newline, Left/Right move the
+  cursor, Home/End jump within the current line, Ctrl+Home/End jump to the
+  start/end of the whole prompt, Ctrl+A/E also move to line edges, Ctrl+W
+  deletes a word, Ctrl+U/K delete to line start/end. Bracketed clipboard paste
+  preserves multiline text, CRLF, Unicode, and blank lines without submitting;
+  Enter remains the only submit action. The editor wraps Unicode correctly and
+  never truncates the buffer.
+- **Composer scrolling:** when the prompt overflows the visible editor,
+  PageUp/PageDown move through it, as does the mouse wheel over the composer.
+  Somewhere-hidden content is marked with `↑`/`↓`/`↕`; the cursor stays visible
+  as you type and navigation re-pins the viewport.
+- **History:** Up/Down at the first/last composer line recall previous prompts;
+  the draft returns past the newest entry; recalled entries are never mutated.
+- **Transcript scrolling:** Shift+PageUp/PageDown, Shift+Home/End, and the mouse
+  wheel outside the composer. Auto-follow resumes at the bottom; a subtle hint
+  shows when newer content is below.
 - **Cancel/quit:** Ctrl+C cancels a running turn, or quits when idle.
 - **Permission:** when a tool needs approval, `y` approves and `n`/Esc denies;
   Ctrl+C cancels the turn.
