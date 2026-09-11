@@ -1,3 +1,4 @@
+use crate::sandbox::{SandboxProfile, SandboxRunner};
 use anyhow::{Context, Result, anyhow, bail};
 use latch_protocol::{EXTENSION_PROTOCOL_VERSION, RpcMessage};
 use serde_json::{Value, json};
@@ -100,9 +101,23 @@ impl ExtensionHost {
         command: &str,
         args: &[String],
         workspace: &str,
+        sandbox: Option<(&SandboxRunner, &SandboxProfile)>,
     ) -> Result<Self> {
-        let mut child = Command::new(command)
-            .args(args)
+        let mut process = match sandbox {
+            Some((runner, profile)) => {
+                // The extension host runs through the same sandbox as every
+                // other process: read-only workspace, masked home, network
+                // available for protocol work. Extension tool arguments are a
+                // cooperative boundary documented in docs/ARCHITECTURE.md.
+                runner.command(profile, &sandbox_command(command, args))
+            }
+            None => {
+                let mut command = Command::new(command);
+                command.args(args);
+                command
+            }
+        };
+        let mut child = process
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -355,6 +370,18 @@ fn string<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow!("missing {key}"))
 }
 
+fn sandbox_command(command: &str, args: &[String]) -> String {
+    fn quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+    let mut line = format!("exec {}", quote(command));
+    for arg in args {
+        line.push(' ');
+        line.push_str(&quote(arg));
+    }
+    line
+}
+
 pub struct ExtensionRegistry {
     hosts: BTreeMap<String, ExtensionHost>,
 }
@@ -371,8 +398,9 @@ impl ExtensionRegistry {
         command: &str,
         args: &[String],
         workspace: &str,
+        sandbox: Option<(&SandboxRunner, &SandboxProfile)>,
     ) -> Result<()> {
-        let host = ExtensionHost::start(name.clone(), command, args, workspace).await?;
+        let host = ExtensionHost::start(name.clone(), command, args, workspace, sandbox).await?;
         self.hosts.insert(name, host);
         Ok(())
     }
@@ -479,7 +507,7 @@ mod tests {
     #[tokio::test]
     async fn host_registers_and_executes_external_tool() {
         let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
-        let mut host = ExtensionHost::start("fixture".into(), "python3", &[fixture], "/tmp")
+        let mut host = ExtensionHost::start("fixture".into(), "python3", &[fixture], "/tmp", None)
             .await
             .unwrap();
         assert_eq!(host.capabilities.tools[0].name, "fixture.echo");

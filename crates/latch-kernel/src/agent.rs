@@ -281,8 +281,19 @@ impl Agent {
         command: &str,
         args: &[String],
     ) -> Result<()> {
+        // The extension host runs inside the mandatory sandbox. If the
+        // sandbox is unavailable, loading fails instead of spawning an
+        // unsandboxed process.
+        let runner = self.tools.sandbox_runner_for_extension()?;
+        let profile = self.tools.extension_sandbox_profile();
         self.extensions
-            .add(name, command, args, &self.workspace.to_string_lossy())
+            .add(
+                name,
+                command,
+                args,
+                &self.workspace.to_string_lossy(),
+                Some((&runner, &profile)),
+            )
             .await
     }
     pub async fn shutdown_extensions(&mut self) -> Result<()> {
@@ -2629,5 +2640,317 @@ mod tests {
             .await
             .expect_err("breaker must fire");
         assert!(error.to_string().contains("circuit breaker"));
+    }
+
+    fn policy_agent(
+        dir: &tempfile::TempDir,
+        config: PermissionConfig,
+        responses: Vec<ModelResponse>,
+    ) -> (EventStore, Uuid, Agent) {
+        let workspace = dir.path();
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(workspace).unwrap();
+        let tools = ToolExecutor::new(
+            workspace.into(),
+            dir.path().join("art"),
+            store.clone(),
+            sid,
+            PolicyEngine::new(Mode::Work, workspace.into(), config),
+        )
+        .unwrap();
+        let agent = Agent::new(AgentRuntime {
+            session_id: sid,
+            workspace: workspace.into(),
+            mode: Mode::Work,
+            store: store.clone(),
+            provider: Arc::new(FakeProvider::scripted(responses)),
+            tools,
+            continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+            retry_budget: 3,
+        });
+        (store, sid, agent)
+    }
+
+    fn tool_then_final(id: &str, name: &str, arguments: serde_json::Value) -> Vec<ModelResponse> {
+        vec![
+            ModelResponse {
+                text: "acting".into(),
+                tool_calls: vec![ToolCall {
+                    id: id.into(),
+                    name: name.into(),
+                    arguments,
+                }],
+                stop_reason: "tool_calls".into(),
+                usage: None,
+                reasoning_content: None,
+            },
+            ModelResponse {
+                text: "done".into(),
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: None,
+                reasoning_content: None,
+            },
+        ]
+    }
+
+    fn review_response(risk: &str, reason: &str) -> ModelResponse {
+        ModelResponse {
+            text: json!({"risk": risk, "reason": reason}).to_string(),
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: None,
+        }
+    }
+
+    type PermissionRecord = (Vec<String>, Option<bool>, Option<String>, Option<String>);
+
+    fn permission_events(events: &[Event]) -> Vec<PermissionRecord> {
+        let mut requests: Vec<PermissionRecord> = Vec::new();
+        for event in events {
+            match &event.payload {
+                EventPayload::PermissionRequested { capabilities, .. } => {
+                    requests.push((capabilities.clone(), None, None, None));
+                }
+                EventPayload::PermissionResolved {
+                    approved,
+                    source,
+                    risk,
+                    ..
+                } => {
+                    if let Some(last) = requests.last_mut() {
+                        last.1 = Some(*approved);
+                        last.2 = Some(source.clone());
+                        last.3 = risk.clone();
+                    }
+                }
+                _ => {}
+            }
+        }
+        requests
+    }
+
+    #[tokio::test]
+    async fn external_effects_are_asked_even_under_autonomous_auto_approve() {
+        use crate::config::OutsidePolicy;
+        let d = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let target = outside.path().join("note.txt");
+        let responses = tool_then_final(
+            "w1",
+            "write",
+            json!({"path": target.to_string_lossy(), "content": "hi", "base_hash": null}),
+        );
+        let (store, sid, mut agent) = policy_agent(
+            &d,
+            PermissionConfig {
+                outside_workspace: OutsidePolicy::Ask,
+                mode: PermissionMode::AutoApprove,
+                ..PermissionConfig::default()
+            },
+            responses,
+        );
+        agent.set_safety(Safety::Autonomous).unwrap();
+        agent
+            .run("write outside", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let events = store.events(sid).unwrap();
+        let requests = permission_events(&events);
+        assert_eq!(
+            requests.len(),
+            1,
+            "external effect must become an Ask first"
+        );
+        assert!(
+            requests[0]
+                .0
+                .iter()
+                .any(|cap| cap == "external_filesystem_write"),
+            "{:?}",
+            requests[0].0
+        );
+        assert_eq!(requests[0].1, Some(true));
+        assert_eq!(requests[0].2.as_deref(), Some("auto"));
+        assert!(target.exists());
+    }
+
+    #[tokio::test]
+    async fn auto_approve_never_overrides_hard_deny() {
+        use crate::config::OutsidePolicy;
+        let d = tempdir().unwrap();
+        let responses = tool_then_final(
+            "w1",
+            "write",
+            json!({"path": "/etc/sudoers", "content": "x", "base_hash": null}),
+        );
+        let (store, sid, mut agent) = policy_agent(
+            &d,
+            PermissionConfig {
+                outside_workspace: OutsidePolicy::Ask,
+                mode: PermissionMode::AutoApprove,
+                ..PermissionConfig::default()
+            },
+            responses,
+        );
+        agent.set_safety(Safety::Autonomous).unwrap();
+        agent
+            .run(
+                "write system file",
+                CancellationToken::new(),
+                Arc::new(|_| {}),
+            )
+            .await
+            .unwrap();
+        let events = store.events(sid).unwrap();
+        assert!(
+            permission_events(&events).is_empty(),
+            "hard deny must not even ask"
+        );
+        let failed = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::ToolFailed { result } => Some(result.output.clone()),
+                _ => None,
+            })
+            .expect("hard deny result");
+        assert!(failed.contains("denied by policy"), "{failed}");
+    }
+
+    #[tokio::test]
+    async fn ai_review_low_approves_and_records_provenance() {
+        let d = tempdir().unwrap();
+        let mut responses =
+            tool_then_final("p1", "shell", json!({"command": "git push origin main"}));
+        responses.insert(1, review_response("low", "routine branch push"));
+        let (store, sid, mut agent) = policy_agent(
+            &d,
+            PermissionConfig {
+                mode: PermissionMode::AiReview,
+                ..PermissionConfig::default()
+            },
+            responses,
+        );
+        agent
+            .run("push", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        let events = store.events(sid).unwrap();
+        let requests = permission_events(&events);
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0].0.iter().any(|cap| cap == "remote_side_effect"),
+            "{:?}",
+            requests[0].0
+        );
+        assert_eq!(requests[0].1, Some(true));
+        assert_eq!(requests[0].2.as_deref(), Some("ai"));
+        assert_eq!(requests[0].3.as_deref(), Some("low"));
+    }
+
+    #[tokio::test]
+    async fn ai_review_rejects_medium_risk_with_its_reason() {
+        let d = tempdir().unwrap();
+        let mut responses =
+            tool_then_final("p1", "shell", json!({"command": "git push origin main"}));
+        responses.insert(1, review_response("medium", "pushes to a shared remote"));
+        let (store, sid, mut agent) = policy_agent(
+            &d,
+            PermissionConfig {
+                mode: PermissionMode::AiReview,
+                ..PermissionConfig::default()
+            },
+            responses,
+        );
+        agent
+            .run("push", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        let events = store.events(sid).unwrap();
+        let requests = permission_events(&events);
+        assert_eq!(requests[0].1, Some(false));
+        assert_eq!(requests[0].2.as_deref(), Some("ai"));
+        assert_eq!(requests[0].3.as_deref(), Some("medium"));
+        let failed = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::ToolFailed { result } if result.call_id == "p1" => {
+                    Some(result.output.clone())
+                }
+                _ => None,
+            })
+            .expect("denied result");
+        assert!(
+            failed.contains("Permission denied: medium risk — pushes to a shared remote"),
+            "{failed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ai_review_unparseable_output_rejects_conservatively() {
+        let d = tempdir().unwrap();
+        let mut responses =
+            tool_then_final("p1", "shell", json!({"command": "git push origin main"}));
+        responses.insert(
+            1,
+            ModelResponse {
+                text: "I think this is fine, go ahead".into(),
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: None,
+                reasoning_content: None,
+            },
+        );
+        let (store, sid, mut agent) = policy_agent(
+            &d,
+            PermissionConfig {
+                mode: PermissionMode::AiReview,
+                ..PermissionConfig::default()
+            },
+            responses,
+        );
+        agent
+            .run("push", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        let events = store.events(sid).unwrap();
+        let requests = permission_events(&events);
+        assert_eq!(requests[0].1, Some(false));
+        assert_eq!(requests[0].3.as_deref(), Some("critical"));
+    }
+
+    #[test]
+    fn reviewer_output_parsing_is_strict() {
+        assert_eq!(
+            parse_review("{\"risk\":\"low\",\"reason\":\"routine\"}"),
+            ("low".into(), "routine".into())
+        );
+        assert_eq!(parse_review("no json here").0, "critical");
+        assert_eq!(
+            parse_review("{\"risk\":\"maybe\",\"reason\":\"x\"}").0,
+            "critical"
+        );
+        assert_eq!(parse_review("{\"risk\":\"low\"}").0, "critical");
+    }
+
+    #[tokio::test]
+    async fn policy_changes_are_durable_for_resume() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent) = policy_agent(&d, PermissionConfig::default(), vec![]);
+        assert_eq!(agent.safety(), Safety::Standard);
+        assert_eq!(agent.permissions(), PermissionMode::Human);
+        agent.set_safety(Safety::Strict).unwrap();
+        agent.set_permissions(PermissionMode::AutoApprove).unwrap();
+        let events = store.events(sid).unwrap();
+        assert_eq!(
+            crate::session::resumed_safety(&events, Safety::Standard),
+            Safety::Strict
+        );
+        assert_eq!(
+            crate::session::resumed_permissions(&events, PermissionMode::Human),
+            PermissionMode::AutoApprove
+        );
     }
 }

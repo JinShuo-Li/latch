@@ -12,6 +12,7 @@ async fn main() -> Result<()> {
         "node",
         &[script],
         &std::env::current_dir()?.to_string_lossy(),
+        None,
     )
     .await?;
     let result = host

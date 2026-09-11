@@ -483,6 +483,25 @@ mod tests {
         SandboxProfile::new(workspace.to_path_buf(), home.to_path_buf(), capabilities)
     }
 
+    #[tokio::test]
+    async fn sensitive_host_sockets_are_not_exposed() {
+        let Some(runner) = runner() else {
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let output = run(
+            &runner,
+            &base_profile(dir.path(), &home),
+            "for f in /run/docker.sock /run/dbus/system_bus_socket /run/user; do test ! -e \"$f\" || echo LEAK:$f; done; echo SOCKETS_CHECKED",
+        )
+        .await;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("SOCKETS_CHECKED"), "{stdout}");
+        assert!(!stdout.contains("LEAK:"), "{stdout}");
+    }
+
     #[test]
     fn probe_succeeds_on_this_host() {
         let dir = tempdir().unwrap();
