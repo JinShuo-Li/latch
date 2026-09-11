@@ -185,7 +185,7 @@ impl ToolExecutor {
             ),
             def(
                 "shell",
-                "Run a Linux developer command with cancellation, timeout, and bounded output.",
+                "Run a bounded Linux developer command. Prefer read_file, search, git_status, and git_diff for inspection; shell is for checks those tools cannot express. ASK/PLAN allow only conservative read-only commands and deny test/build execution.",
                 json!({"type":"object","required":["command"],"properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer"}}}),
             ),
             def(
@@ -707,24 +707,139 @@ fn is_dependency_file(path: &Path) -> bool {
         Some("Cargo.toml" | "package.json" | "pyproject.toml" | "go.mod")
     )
 }
-fn is_read_only_shell(c: &str) -> bool {
-    if c.chars()
-        .any(|ch| matches!(ch, ';' | '&' | '|' | '$' | '`' | '<' | '>'))
-    {
+/// Conservatively classifies a shell command as read-only.
+///
+/// Only simple inspection commands and compound commands built exclusively
+/// from them are accepted. Any shell feature that could expand, substitute,
+/// redirect, background, or nest is rejected, as is `||`. This deliberately
+/// keeps read-only classification stricter than the shell's actual grammar so
+/// ASK/PLAN can never be used to mutate the workspace.
+fn is_read_only_shell(command: &str) -> bool {
+    let command = command.trim();
+    if command.is_empty() || command.contains("||") {
         return false;
     }
-    let mut words = c.split_whitespace();
-    let first = words.next().unwrap_or("");
-    if first != "git" {
-        return matches!(
-            first,
-            "rg" | "grep" | "find" | "ls" | "pwd" | "sed" | "head" | "tail" | "wc"
-        );
+    // `&&` is the only context where `&` is permitted; reject it everywhere
+    // else (background jobs) along with expansion and redirection operators.
+    let without_and = command.replace("&&", " ");
+    if without_and.chars().any(|ch| {
+        matches!(
+            ch,
+            '$' | '`'
+                | '<'
+                | '>'
+                | '&'
+                | '('
+                | ')'
+                | '\\'
+                | '\n'
+                | '\r'
+                | '"'
+                | '\''
+                | '*'
+                | '?'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '~'
+                | '!'
+        )
+    }) {
+        return false;
     }
-    matches!(
-        words.next().unwrap_or(""),
-        "status" | "diff" | "log" | "show" | "rev-parse" | "branch" | "ls-files"
-    )
+    let Some(segments) = split_simple_commands(command) else {
+        return false;
+    };
+    segments.iter().all(|segment| is_read_only_command(segment))
+}
+
+fn split_simple_commands(command: &str) -> Option<Vec<&str>> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let bytes = command.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let separator = match bytes[index] {
+            b'&' if bytes.get(index + 1) == Some(&b'&') => 2,
+            b'|' | b';' => 1,
+            _ => {
+                index += 1;
+                continue;
+            }
+        };
+        let segment = command[start..index].trim();
+        if segment.is_empty() {
+            return None;
+        }
+        segments.push(segment);
+        index += separator;
+        start = index;
+    }
+    let segment = command[start..].trim();
+    if segment.is_empty() {
+        return None;
+    }
+    segments.push(segment);
+    Some(segments)
+}
+
+fn is_read_only_command(command: &str) -> bool {
+    let mut words = command.split_whitespace();
+    let Some(first) = words.next() else {
+        return false;
+    };
+    let args = words.collect::<Vec<_>>();
+    match first {
+        "rg" => !args.iter().any(|arg| arg.starts_with("--pre")),
+        "grep" | "ls" | "pwd" | "head" | "tail" | "wc" | "cat" => true,
+        "find" => !args.iter().any(|arg| {
+            matches!(
+                *arg,
+                "-delete"
+                    | "-exec"
+                    | "-execdir"
+                    | "-ok"
+                    | "-okdir"
+                    | "-fls"
+                    | "-fprint"
+                    | "-fprint0"
+                    | "-fprintf"
+            )
+        }),
+        "git" => {
+            if args
+                .iter()
+                .any(|arg| *arg == "--output" || arg.starts_with("--output="))
+            {
+                return false;
+            }
+            match args.first().copied() {
+                Some(
+                    "status" | "diff" | "log" | "show" | "rev-parse" | "ls-files" | "describe"
+                    | "blame" | "shortlog",
+                ) => true,
+                Some("branch") => args[1..].iter().all(|arg| {
+                    matches!(
+                        *arg,
+                        "--list"
+                            | "--all"
+                            | "--remotes"
+                            | "-a"
+                            | "-r"
+                            | "-v"
+                            | "-vv"
+                            | "--show-current"
+                    )
+                }),
+                Some("remote") => args[1..]
+                    .iter()
+                    .all(|arg| matches!(*arg, "-v" | "--verbose" | "show")),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 fn dangerous_shell(c: &str) -> bool {
     let l = c.to_ascii_lowercase();
@@ -903,6 +1018,7 @@ mod tests {
                 "touch injected",
                 "git branch -D main",
                 "rg x .; touch injected",
+                "cargo test",
             ] {
                 let result = executor
                     .execute(
@@ -913,6 +1029,56 @@ mod tests {
                 assert!(result.is_error, "{mode} allowed {command}");
             }
         }
+    }
+
+    #[test]
+    fn read_only_shell_classification_is_conservative() {
+        for allowed in [
+            "git status",
+            "git status && git diff",
+            "rg foo src | head -n 20",
+            "git branch --show-current",
+            "git log --oneline -5 | cat",
+            "find . -name app.txt",
+        ] {
+            assert!(is_read_only_shell(allowed), "should allow {allowed}");
+        }
+        for denied in [
+            "git branch -D main",
+            "cargo test",
+            "rg foo | tee out",
+            "git diff > out.patch",
+            "git diff --output=out.patch",
+            "rg foo || true",
+            "rg --pre sh foo",
+            "find . -exec rm {} +",
+            "find . -fls out.txt",
+            "sed -i 's/a/b/' f",
+            "sed 1e app.txt",
+            "echo $HOME",
+            "pwd && touch injected",
+        ] {
+            assert!(!is_read_only_shell(denied), "should deny {denied}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_allows_conservative_read_only_compound_shell() {
+        let (_d, executor) = setup(Mode::Ask);
+        let allowed = executor
+            .execute(
+                &call("shell", json!({"command":"pwd && ls"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!allowed.is_error, "{}", allowed.output);
+        let denied = executor
+            .execute(
+                &call("shell", json!({"command":"pwd && touch injected"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(denied.is_error, "{}", denied.output);
     }
     #[tokio::test]
     async fn writes_nested_new_file_without_path_collapse() {

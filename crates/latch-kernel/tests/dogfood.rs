@@ -1,12 +1,13 @@
 use latch_kernel::config::{ContextConfig, PermissionConfig};
-use latch_kernel::provider::ModelProvider;
+use latch_kernel::provider::{ModelProvider, StreamSink};
 use latch_kernel::{
     Agent, AgentRuntime, ContinuityEngine, EventStore, FakeProvider, PolicyEngine, ToolExecutor,
 };
-use latch_protocol::{EventPayload, Mode, ModelResponse, ToolCall};
+use latch_protocol::{EventPayload, Mode, ModelRequest, ModelResponse, StreamEvent, ToolCall};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
@@ -16,6 +17,7 @@ fn response(text: &str, calls: Vec<ToolCall>) -> ModelResponse {
         tool_calls: calls,
         stop_reason: "stop".into(),
         usage: None,
+        reasoning_content: None,
     }
 }
 fn call(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
@@ -27,6 +29,57 @@ fn call(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
 }
 fn digest(text: &str) -> String {
     hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+/// Provider that records every request so tests can inspect the exact
+/// serialized history the kernel would send to an OpenAI-compatible endpoint.
+struct RecordingProvider {
+    requests: Mutex<Vec<ModelRequest>>,
+    responses: Mutex<VecDeque<ModelResponse>>,
+}
+
+impl RecordingProvider {
+    fn new(responses: Vec<ModelResponse>) -> Self {
+        Self {
+            requests: Mutex::new(Vec::new()),
+            responses: Mutex::new(responses.into()),
+        }
+    }
+
+    fn requests(&self) -> Vec<ModelRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for RecordingProvider {
+    fn name(&self) -> &str {
+        "recording"
+    }
+    fn model(&self) -> &str {
+        "deepseek-test"
+    }
+    async fn stream(
+        &self,
+        request: ModelRequest,
+        _cancel: CancellationToken,
+        sink: StreamSink,
+    ) -> anyhow::Result<ModelResponse> {
+        self.requests.lock().unwrap().push(request);
+        let response = self
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("scripted response exhausted");
+        for chunk in response.text.as_bytes().chunks(8) {
+            sink(StreamEvent::TextDelta(
+                String::from_utf8_lossy(chunk).into_owned(),
+            ));
+        }
+        sink(StreamEvent::Completed(response.clone()));
+        Ok(response)
+    }
 }
 
 #[tokio::test]
@@ -266,5 +319,180 @@ async fn scripted_long_session_dogfood() {
             .unwrap()
             .iter()
             .any(|e| matches!(e.payload, EventPayload::ManualCompact { .. }))
+    );
+}
+
+#[tokio::test]
+async fn reasoning_and_tool_history_round_trip_across_resume() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().join("sample");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("app.txt"), "bug").unwrap();
+    let db = dir.path().join("state.sqlite3");
+
+    let scripted = vec![
+        ModelResponse {
+            text: "I will inspect it.".into(),
+            tool_calls: vec![call("read-1", "read_file", json!({"path":"app.txt"}))],
+            stop_reason: "tool_calls".into(),
+            usage: None,
+            reasoning_content: Some("I should read the file before deciding".into()),
+        },
+        ModelResponse {
+            text: "The file contains the bug marker.".into(),
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: Some("final reasoning".into()),
+        },
+    ];
+    let provider = Arc::new(RecordingProvider::new(scripted));
+    let store = EventStore::open(&db).unwrap();
+    let session = store.create_session(&workspace).unwrap();
+    let tools = ToolExecutor::new(
+        workspace.clone(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Ask, workspace.clone(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Ask,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    agent
+        .run(
+            "What is in this repository?",
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2, "one tool turn plus one final turn");
+    let second = &requests[1];
+    let assistant = second
+        .messages
+        .iter()
+        .find(|m| m.role == "assistant" && !m.tool_calls.is_empty())
+        .expect("assistant tool call must be replayed structurally");
+    assert_eq!(
+        assistant.reasoning_content.as_deref(),
+        Some("I should read the file before deciding")
+    );
+    assert_eq!(assistant.tool_calls[0].id, "read-1");
+    assert_eq!(assistant.tool_calls[0].name, "read_file");
+    let tool = second
+        .messages
+        .iter()
+        .find(|m| m.role == "tool")
+        .expect("tool result must be replayed as role tool");
+    assert_eq!(tool.tool_call_id.as_deref(), Some("read-1"));
+
+    let body = latch_kernel::provider::openai_request(second, "deepseek-test");
+    let messages = body["messages"].as_array().unwrap();
+    let assistant_json = messages
+        .iter()
+        .find(|m| m["role"] == "assistant" && m["tool_calls"].is_array())
+        .expect("assistant tool_calls present in serialized request");
+    assert_eq!(
+        assistant_json["reasoning_content"],
+        "I should read the file before deciding"
+    );
+    assert_eq!(assistant_json["tool_calls"][0]["id"], "read-1");
+    assert_eq!(
+        assistant_json["tool_calls"][0]["function"]["name"],
+        "read_file"
+    );
+    let tool_json = messages
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .expect("role tool present in serialized request");
+    assert_eq!(tool_json["tool_call_id"], "read-1");
+    assert!(
+        tool_json["content"].as_str().unwrap().contains("hash:"),
+        "tool result carries the observed file content"
+    );
+
+    drop(agent);
+    drop(store);
+
+    // Resume from disk and verify the durable reasoning and tool linkage still
+    // serialize into the next request.
+    let store = EventStore::open(&db).unwrap();
+    assert_eq!(
+        store.latest_session(Some(&workspace)).unwrap(),
+        Some(session)
+    );
+    let provider = Arc::new(RecordingProvider::new(vec![ModelResponse {
+        text: "resumed".into(),
+        tool_calls: vec![],
+        stop_reason: "stop".into(),
+        usage: None,
+        reasoning_content: None,
+    }]));
+    let tools = ToolExecutor::new(
+        workspace.clone(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Ask, workspace.clone(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Ask,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    agent
+        .run(
+            "Continue the inspection.",
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+    let resumed = provider.requests();
+    assert_eq!(resumed.len(), 1);
+    let assistant = resumed[0]
+        .messages
+        .iter()
+        .find(|m| m.role == "assistant" && !m.tool_calls.is_empty())
+        .expect("assistant tool call must survive resume");
+    assert_eq!(
+        assistant.reasoning_content.as_deref(),
+        Some("I should read the file before deciding")
+    );
+    assert_eq!(assistant.tool_calls[0].id, "read-1");
+    let tool = resumed[0]
+        .messages
+        .iter()
+        .find(|m| m.role == "tool")
+        .expect("tool result must survive resume");
+    assert_eq!(tool.tool_call_id.as_deref(), Some("read-1"));
+    let body = latch_kernel::provider::openai_request(&resumed[0], "deepseek-test");
+    let messages = body["messages"].as_array().unwrap();
+    assert!(messages.iter().any(|m| {
+        m["role"] == "assistant"
+            && m["reasoning_content"] == "I should read the file before deciding"
+            && m["tool_calls"][0]["id"] == "read-1"
+    }));
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == "tool" && m["tool_call_id"] == "read-1")
     );
 }

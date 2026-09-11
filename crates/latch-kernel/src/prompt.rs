@@ -45,7 +45,7 @@ impl PromptCompiler {
                 "core.tool_semantics",
                 30,
                 true,
-                "Use dedicated read/search/edit tools for provenance-sensitive work. Read a file before editing and pass its observed hash. Tool failures are evidence; reconsider assumptions rather than inventing success.",
+                "Prefer the dedicated read_file, search, git_status, and git_diff tools for inspection; they preserve provenance and version hashes. Use shell only for checks those tools cannot express, and prefer a single dedicated tool over a compound shell pipeline. Read a file before editing and pass its observed hash. Tool failures are evidence; reconsider assumptions rather than inventing success.",
             ),
             fragment(
                 "policy.evidence",
@@ -74,10 +74,10 @@ impl PromptCompiler {
         ];
         let mode_text = match mode {
             Mode::Ask => {
-                "ASK is read-only. Inspect and answer; no workspace mutation is permitted."
+                "ASK is read-only. Inspect with read_file, search, git_status, and git_diff. Do not run tests, builds, or package managers, and do not use shell to modify the workspace; shell is limited to conservative read-only commands."
             }
             Mode::Plan => {
-                "PLAN is deep read-only exploration. Produce an implementation plan; no workspace mutation is permitted."
+                "PLAN is deep read-only exploration. Produce an implementation plan; no workspace mutation is permitted. Prefer dedicated inspection tools over shell, which is limited to conservative read-only commands."
             }
             Mode::Work => {
                 "WORK permits policy-approved changes. Investigate, modify, verify, review, and stop naturally; a formal plan is optional."

@@ -232,6 +232,7 @@ impl Agent {
                 EventPayload::AssistantMessageCompleted {
                     text: response.text.clone(),
                     tool_calls: response.tool_calls.clone(),
+                    reasoning_content: response.reasoning_content.clone(),
                 },
                 &sink,
             )?;
@@ -725,32 +726,48 @@ fn tool_error(call: &ToolCall, output: String) -> ToolResult {
     }
 }
 fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMessage> {
-    let raw = ctx.recent
+    let raw = ctx
+        .recent
         .iter()
         .filter_map(|e| match &e.payload {
-            EventPayload::UserMessage { text } => Some(ModelMessage {
-                role: "user".into(),
-                content: text.clone(),
-            }),
-            EventPayload::AssistantMessageCompleted { text, .. } => Some(ModelMessage {
+            EventPayload::UserMessage { text } => Some(ModelMessage::text("user", text.clone())),
+            EventPayload::AssistantMessageCompleted {
+                text,
+                tool_calls,
+                reasoning_content,
+            } => Some(ModelMessage {
                 role: "assistant".into(),
                 content: text.clone(),
+                tool_calls: tool_calls.clone(),
+                tool_call_id: None,
+                reasoning_content: reasoning_content.clone(),
             }),
             EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } => {
                 Some(ModelMessage {
-                    role: "user".into(),
-                    content: format!("Tool {}: {}", result.name, result.output),
+                    role: "tool".into(),
+                    content: result.output.clone(),
+                    tool_calls: vec![],
+                    tool_call_id: Some(result.call_id.clone()),
+                    reasoning_content: None,
                 })
             }
-            EventPayload::RegroundRequested { signature } => Some(ModelMessage { role: "user".into(), content: format!("Kernel re-ground required after repeated failure {signature}. Re-read current reality, identify disproven assumptions, and form a materially different strategy before another mutation.") }),
-            EventPayload::ScopeExpansionRequested { mutations, reason } => Some(ModelMessage { role: "user".into(), content: format!("Kernel scope review after {mutations} mutations: {reason}") }),
+            EventPayload::RegroundRequested { signature } => Some(ModelMessage::text("user", format!("Kernel re-ground required after repeated failure {signature}. Re-read current reality, identify disproven assumptions, and form a materially different strategy before another mutation."))),
+            EventPayload::ScopeExpansionRequested { mutations, reason } => Some(ModelMessage::text("user", format!("Kernel scope review after {mutations} mutations: {reason}"))),
             _ => None,
         })
         .collect::<Vec<_>>();
+    let sanitized = sanitize_tool_history(raw);
     let mut normalized: Vec<ModelMessage> = Vec::new();
-    for message in raw.into_iter().skip_while(|message| message.role != "user") {
+    for message in sanitized
+        .into_iter()
+        .skip_while(|message| message.role != "user")
+    {
         if let Some(previous) = normalized.last_mut()
             && previous.role == message.role
+            && previous.tool_calls.is_empty()
+            && previous.tool_call_id.is_none()
+            && message.tool_calls.is_empty()
+            && message.tool_call_id.is_none()
         {
             previous.content.push_str("\n\n");
             previous.content.push_str(&message.content);
@@ -759,6 +776,60 @@ fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMe
         }
     }
     normalized
+}
+
+/// Enforces structurally valid tool history before it reaches a provider.
+///
+/// An assistant message proposing tool calls is only kept if every proposed
+/// call is answered by a following `tool` message; otherwise the calls are
+/// stripped so a provider can never observe a dangling assistant tool call.
+/// Tool messages that do not belong to the immediately preceding assistant
+/// tool-call turn are dropped so a provider can never observe a dangling tool
+/// result.
+fn sanitize_tool_history(messages: Vec<ModelMessage>) -> Vec<ModelMessage> {
+    let mut sanitized = Vec::new();
+    let mut index = 0;
+    while index < messages.len() {
+        let message = &messages[index];
+        if message.role == "assistant" && !message.tool_calls.is_empty() {
+            let expected = message
+                .tool_calls
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let mut end = index + 1;
+            while end < messages.len() && messages[end].role == "tool" {
+                end += 1;
+            }
+            let available = messages[index + 1..end]
+                .iter()
+                .filter_map(|tool| tool.tool_call_id.as_deref())
+                .collect::<std::collections::BTreeSet<_>>();
+            if expected.is_subset(&available) {
+                sanitized.push(message.clone());
+                for tool in &messages[index + 1..end] {
+                    if tool
+                        .tool_call_id
+                        .as_deref()
+                        .is_some_and(|id| expected.contains(id))
+                    {
+                        sanitized.push(tool.clone());
+                    }
+                }
+            } else {
+                let mut stripped = message.clone();
+                stripped.tool_calls.clear();
+                sanitized.push(stripped);
+            }
+            index = end;
+        } else if message.role == "tool" {
+            index += 1;
+        } else {
+            sanitized.push(message.clone());
+            index += 1;
+        }
+    }
+    sanitized
 }
 
 #[cfg(test)]
@@ -795,12 +866,14 @@ mod tests {
                 ],
                 stop_reason: "tool_calls".into(),
                 usage: None,
+                reasoning_content: None,
             },
             ModelResponse {
                 text: "done".into(),
                 tool_calls: vec![],
                 stop_reason: "stop".into(),
                 usage: None,
+                reasoning_content: None,
             },
         ];
         let p = Arc::new(FakeProvider::scripted(responses));
@@ -854,12 +927,14 @@ mod tests {
                 }],
                 stop_reason: "tool_calls".into(),
                 usage: None,
+                reasoning_content: None,
             },
             ModelResponse {
                 text: "extension complete".into(),
                 tool_calls: vec![],
                 stop_reason: "stop".into(),
                 usage: None,
+                reasoning_content: None,
             },
         ]));
         let tools = ToolExecutor::new(

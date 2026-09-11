@@ -82,18 +82,21 @@ impl ModelProvider for OpenAiProvider {
         sink: StreamSink,
     ) -> Result<ModelResponse> {
         let body = openai_request(&request, &self.model);
-        let response = self
-            .client
-            .post(format!("{}/chat/completions", self.base_url))
-            .bearer_auth(&self.api_key)
-            .headers(self.request_headers())
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?;
+        let response = checked_response(
+            "openai-compatible",
+            self.client
+                .post(format!("{}/chat/completions", self.base_url))
+                .bearer_auth(&self.api_key)
+                .headers(self.request_headers())
+                .json(&body)
+                .send()
+                .await?,
+        )
+        .await?;
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut text = String::new();
+        let mut reasoning = String::new();
         let mut calls: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
         let mut stop = "stop".to_string();
         let mut usage = None;
@@ -132,6 +135,9 @@ impl ModelProvider for OpenAiProvider {
                     text.push_str(t);
                     sink(StreamEvent::TextDelta(t.into()));
                 }
+                if let Some(t) = delta.get("reasoning_content").and_then(Value::as_str) {
+                    reasoning.push_str(t);
+                }
                 if let Some(tc) = delta.get("tool_calls").and_then(Value::as_array) {
                     for c in tc {
                         let i = c.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -165,6 +171,7 @@ impl ModelProvider for OpenAiProvider {
             tool_calls,
             stop_reason: stop,
             usage,
+            reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
         };
         sink(StreamEvent::Completed(result.clone()));
         Ok(result)
@@ -202,16 +209,18 @@ impl ModelProvider for AnthropicProvider {
         cancel: CancellationToken,
         sink: StreamSink,
     ) -> Result<ModelResponse> {
-        let response = self
-            .client
-            .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .headers(user_agent_headers())
-            .json(&anthropic_request(&request, &self.model))
-            .send()
-            .await?
-            .error_for_status()?;
+        let response = checked_response(
+            "anthropic",
+            self.client
+                .post(format!("{}/v1/messages", self.base_url))
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .headers(user_agent_headers())
+                .json(&anthropic_request(&request, &self.model))
+                .send()
+                .await?,
+        )
+        .await?;
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut text = String::new();
@@ -307,6 +316,7 @@ impl ModelProvider for AnthropicProvider {
             tool_calls,
             stop_reason: stop,
             usage: Some(usage),
+            reasoning_content: None,
         };
         sink(StreamEvent::Completed(result.clone()));
         Ok(result)
@@ -380,17 +390,139 @@ fn is_opencode_go_endpoint(base_url: &str) -> bool {
     }
 }
 
-fn openai_request(r: &ModelRequest, model: &str) -> Value {
-    let mut messages = vec![json!({"role":"system","content":r.system})];
-    messages.extend(
-        r.messages
-            .iter()
-            .map(|m| json!({"role":m.role,"content":m.content})),
-    );
-    json!({"model":model,"messages":messages,"tools":r.tools.iter().map(|t|json!({"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.input_schema}})).collect::<Vec<_>>(),"stream":true,"stream_options":{"include_usage":true}})
+/// Inspects the HTTP status before streaming. On failure the provider body is
+/// retained so callers get an actionable diagnostic instead of a bare status
+/// code. Only the status and body are surfaced; request headers (and therefore
+/// credentials) are never included.
+async fn checked_response(
+    provider: &str,
+    response: reqwest::Response,
+) -> Result<reqwest::Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let body = response.text().await.unwrap_or_default();
+    bail!(
+        "{provider} request failed with HTTP {}: {}",
+        status.as_u16(),
+        bound_error_body(&body)
+    )
 }
-fn anthropic_request(r: &ModelRequest, model: &str) -> Value {
-    json!({"model":model,"max_tokens":8192,"system":r.system,"messages":r.messages,"tools":r.tools.iter().map(|t|json!({"name":t.name,"description":t.description,"input_schema":t.input_schema})).collect::<Vec<_>>(),"stream":true})
+
+fn bound_error_body(body: &str) -> String {
+    const LIMIT: usize = 4_000;
+    let body = body.trim();
+    if body.len() <= LIMIT {
+        return body.to_string();
+    }
+    let mut end = LIMIT;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… [truncated {} bytes]", &body[..end], body.len() - end)
+}
+
+/// Serializes a provider-independent request into the OpenAI chat-completions
+/// wire format. Assistant tool calls and `role: "tool"` results are preserved
+/// structurally, and reasoning is replayed verbatim for tool-call turns.
+#[must_use]
+pub fn openai_request(request: &ModelRequest, model: &str) -> Value {
+    let mut messages = vec![json!({"role":"system","content":request.system})];
+    messages.extend(request.messages.iter().map(openai_message));
+    json!({"model":model,"messages":messages,"tools":request.tools.iter().map(|t|json!({"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.input_schema}})).collect::<Vec<_>>(),"stream":true,"stream_options":{"include_usage":true}})
+}
+
+fn openai_message(message: &latch_protocol::ModelMessage) -> Value {
+    match message.role.as_str() {
+        "assistant" => {
+            let mut value = json!({"role":"assistant","content":message.content});
+            if !message.tool_calls.is_empty() {
+                value["tool_calls"] = Value::Array(
+                    message
+                        .tool_calls
+                        .iter()
+                        .map(openai_tool_call)
+                        .collect::<Vec<_>>(),
+                );
+                if let Some(reasoning) = &message.reasoning_content {
+                    value["reasoning_content"] = Value::String(reasoning.clone());
+                }
+            }
+            value
+        }
+        "tool" => json!({
+            "role":"tool",
+            "tool_call_id": message.tool_call_id.clone().unwrap_or_default(),
+            "content": message.content,
+        }),
+        role => json!({"role": role, "content": message.content}),
+    }
+}
+
+fn openai_tool_call(call: &ToolCall) -> Value {
+    json!({
+        "id": call.id,
+        "type": "function",
+        "function": {
+            "name": call.name,
+            "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".into()),
+        }
+    })
+}
+
+/// Serializes a provider-independent request into the Anthropic Messages wire
+/// format. Tool calls become `tool_use` blocks and tool results become
+/// `tool_result` blocks; OpenAI-only fields such as `reasoning_content` are
+/// deliberately not emitted.
+#[must_use]
+pub fn anthropic_request(request: &ModelRequest, model: &str) -> Value {
+    let mut messages: Vec<Value> = Vec::new();
+    let mut index = 0;
+    while index < request.messages.len() {
+        let message = &request.messages[index];
+        match message.role.as_str() {
+            "assistant" => {
+                let mut blocks = Vec::new();
+                if !message.content.is_empty() {
+                    blocks.push(json!({"type":"text","text":message.content}));
+                }
+                for call in &message.tool_calls {
+                    blocks.push(json!({
+                        "type":"tool_use",
+                        "id": call.id,
+                        "name": call.name,
+                        "input": call.arguments,
+                    }));
+                }
+                if blocks.is_empty() {
+                    blocks.push(json!({"type":"text","text":""}));
+                }
+                messages.push(json!({"role":"assistant","content":blocks}));
+                index += 1;
+            }
+            "tool" => {
+                let mut blocks = Vec::new();
+                while index < request.messages.len() && request.messages[index].role == "tool" {
+                    blocks.push(json!({
+                        "type":"tool_result",
+                        "tool_use_id": request.messages[index]
+                            .tool_call_id
+                            .clone()
+                            .unwrap_or_default(),
+                        "content": request.messages[index].content,
+                    }));
+                    index += 1;
+                }
+                messages.push(json!({"role":"user","content":blocks}));
+            }
+            role => {
+                messages.push(json!({"role": role, "content": message.content}));
+                index += 1;
+            }
+        }
+    }
+    json!({"model":model,"max_tokens":8192,"system":request.system,"messages":messages,"tools":request.tools.iter().map(|t|json!({"name":t.name,"description":t.description,"input_schema":t.input_schema})).collect::<Vec<_>>(),"stream":true})
 }
 
 #[derive(Default)]
@@ -443,10 +575,7 @@ mod tests {
     fn converts_provider_requests() {
         let r = ModelRequest {
             system: "s".into(),
-            messages: vec![ModelMessage {
-                role: "user".into(),
-                content: "hi".into(),
-            }],
+            messages: vec![ModelMessage::text("user", "hi")],
             tools: vec![ToolDefinition {
                 name: "read".into(),
                 description: "r".into(),
@@ -459,6 +588,99 @@ mod tests {
         let a = anthropic_request(&r, "m");
         assert_eq!(a["system"], "s");
         assert_eq!(a["tools"][0]["name"], "read");
+    }
+
+    #[test]
+    fn openai_preserves_tool_calls_results_and_reasoning() {
+        let r = ModelRequest {
+            system: "s".into(),
+            messages: vec![
+                ModelMessage::text("user", "inspect"),
+                ModelMessage {
+                    role: "assistant".into(),
+                    content: "working".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path": "a.txt"}),
+                    }],
+                    tool_call_id: None,
+                    reasoning_content: Some("step by step".into()),
+                },
+                ModelMessage {
+                    role: "tool".into(),
+                    content: "contents".into(),
+                    tool_calls: vec![],
+                    tool_call_id: Some("call-1".into()),
+                    reasoning_content: None,
+                },
+            ],
+            tools: vec![],
+        };
+        let body = openai_request(&r, "m");
+        let assistant = &body["messages"][2];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(assistant["reasoning_content"], "step by step");
+        assert_eq!(assistant["tool_calls"][0]["id"], "call-1");
+        assert_eq!(assistant["tool_calls"][0]["function"]["name"], "read_file");
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["arguments"],
+            "{\"path\":\"a.txt\"}"
+        );
+        let tool = &body["messages"][3];
+        assert_eq!(tool["role"], "tool");
+        assert_eq!(tool["tool_call_id"], "call-1");
+        assert_eq!(tool["content"], "contents");
+    }
+
+    #[test]
+    fn anthropic_uses_content_blocks_and_drops_openai_fields() {
+        let r = ModelRequest {
+            system: "s".into(),
+            messages: vec![
+                ModelMessage::text("user", "inspect"),
+                ModelMessage {
+                    role: "assistant".into(),
+                    content: "working".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path": "a.txt"}),
+                    }],
+                    tool_call_id: None,
+                    reasoning_content: Some("secret reasoning".into()),
+                },
+                ModelMessage {
+                    role: "tool".into(),
+                    content: "contents".into(),
+                    tool_calls: vec![],
+                    tool_call_id: Some("call-1".into()),
+                    reasoning_content: None,
+                },
+            ],
+            tools: vec![],
+        };
+        let body = anthropic_request(&r, "m");
+        let assistant = &body["messages"][1];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(assistant["content"][0]["type"], "text");
+        assert_eq!(assistant["content"][1]["type"], "tool_use");
+        assert_eq!(assistant["content"][1]["id"], "call-1");
+        assert_eq!(assistant["content"][1]["input"]["path"], "a.txt");
+        assert!(!assistant.to_string().contains("reasoning_content"));
+        let tool = &body["messages"][2];
+        assert_eq!(tool["role"], "user");
+        assert_eq!(tool["content"][0]["type"], "tool_result");
+        assert_eq!(tool["content"][0]["tool_use_id"], "call-1");
+    }
+
+    #[test]
+    fn error_diagnostics_include_status_and_body_without_headers() {
+        let body = bound_error_body("{\"error\":{\"message\":\"bad request\"}}");
+        assert!(body.contains("bad request"));
+        let long = "x".repeat(10_000);
+        let bounded = bound_error_body(&long);
+        assert!(bounded.len() < long.len() && bounded.contains("truncated"));
     }
     #[test]
     fn decodes_fragmented_sse() {

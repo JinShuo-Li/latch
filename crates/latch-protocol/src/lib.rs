@@ -129,6 +129,12 @@ pub enum EventPayload {
     AssistantMessageCompleted {
         text: String,
         tool_calls: Vec<ToolCall>,
+        /// Opaque reasoning emitted by reasoning-capable OpenAI-compatible
+        /// models (for example DeepSeek). It is persisted so that later
+        /// requests can replay it verbatim for tool-call turns. `None` means
+        /// no reasoning was present or the field is not applicable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
     },
     ModelRequestStarted {
         provider: String,
@@ -320,6 +326,30 @@ pub enum ChangeOwner {
 pub struct ModelMessage {
     pub role: String,
     pub content: String,
+    /// Tool calls proposed by an assistant message. Empty for every other role.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    /// Correlation id for a `role: "tool"` result message. Providers map this
+    /// onto their native tool-result linkage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Reasoning that accompanied an assistant turn. Providers that support
+    /// reasoning replay it; others ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+}
+
+impl ModelMessage {
+    #[must_use]
+    pub fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+            reasoning_content: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -336,12 +366,15 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ModelResponse {
     pub text: String,
     pub tool_calls: Vec<ToolCall>,
     pub stop_reason: String,
     pub usage: Option<Usage>,
+    /// Reasoning returned by a reasoning-capable model, preserved verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -153,18 +153,76 @@ impl ContinuityEngine {
 }
 
 fn select_recent(events: &[Event], budget: usize) -> Vec<Event> {
+    let units = conversation_units(events);
     let mut size = 0;
     let mut selected = Vec::new();
-    for event in events.iter().rev() {
-        let n = render_event(event).len();
+    for &(start, end) in units.iter().rev() {
+        let n = events[start..end]
+            .iter()
+            .map(|event| render_event(event).len())
+            .sum::<usize>();
         if !selected.is_empty() && size + n > budget {
             break;
         }
         size += n;
-        selected.push(event.clone());
+        selected.push((start, end));
     }
     selected.reverse();
-    selected
+    let mut recent = Vec::new();
+    for (start, end) in selected {
+        recent.extend_from_slice(&events[start..end]);
+    }
+    recent
+}
+
+/// Groups events into atomic conversation transactions.
+///
+/// A tool transaction is an assistant turn that proposes tool calls together
+/// with every tool result answering those calls. Selecting recent context must
+/// never observe only one half of such a transaction: a dangling tool result or
+/// an unanswered assistant tool call is invalid for OpenAI-compatible and
+/// Anthropic protocols alike.
+fn conversation_units(events: &[Event]) -> Vec<(usize, usize)> {
+    let mut units = Vec::new();
+    let mut index = 0;
+    while index < events.len() {
+        if let EventPayload::AssistantMessageCompleted { tool_calls, .. } = &events[index].payload
+            && !tool_calls.is_empty()
+        {
+            let expected = tool_calls
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let mut seen = std::collections::BTreeSet::new();
+            let mut end = index + 1;
+            let mut cursor = index + 1;
+            while cursor < events.len() {
+                if matches!(
+                    &events[cursor].payload,
+                    EventPayload::AssistantMessageCompleted { tool_calls, .. } if !tool_calls.is_empty()
+                ) {
+                    break;
+                }
+                if let EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } =
+                    &events[cursor].payload
+                    && expected.contains(result.call_id.as_str())
+                {
+                    seen.insert(result.call_id.as_str());
+                    end = cursor + 1;
+                    if seen.len() == expected.len() {
+                        break;
+                    }
+                }
+                cursor += 1;
+            }
+            units.push((index, end));
+            index = end;
+        } else {
+            units.push((index, index + 1));
+            index += 1;
+        }
+    }
+    units
 }
 fn build_episodes(events: &[Event]) -> Vec<Episode> {
     events
@@ -246,7 +304,9 @@ fn render_canonical(state: &TaskState, memories: &[MemoryRecord]) -> Result<Stri
 fn render_event(e: &Event) -> String {
     match &e.payload {
         EventPayload::UserMessage { text } => format!("user: {text}"),
-        EventPayload::AssistantMessageCompleted { text, tool_calls } => format!(
+        EventPayload::AssistantMessageCompleted {
+            text, tool_calls, ..
+        } => format!(
             "assistant: {text}{}",
             if tool_calls.is_empty() {
                 String::new()
@@ -427,5 +487,147 @@ mod tests {
             .materialize(id, &TaskState::default(), None, "system".into())
             .unwrap();
         assert!(context.recent.is_empty());
+    }
+
+    fn event(session: Uuid, sequence: u64, payload: EventPayload) -> Event {
+        Event {
+            id: Uuid::new_v4(),
+            session_id: session,
+            sequence,
+            timestamp: Utc::now(),
+            parent_id: None,
+            payload,
+        }
+    }
+
+    #[test]
+    fn recent_selection_keeps_tool_transactions_atomic() {
+        use latch_protocol::{ToolCall, ToolResult};
+        use serde_json::json;
+        let session = Uuid::new_v4();
+        let events = vec![
+            event(
+                session,
+                1,
+                EventPayload::UserMessage {
+                    text: "inspect".into(),
+                },
+            ),
+            event(
+                session,
+                2,
+                EventPayload::AssistantMessageCompleted {
+                    text: "calling".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path":"a"}),
+                    }],
+                    reasoning_content: Some("reasoning".into()),
+                },
+            ),
+            event(
+                session,
+                3,
+                EventPayload::ToolCompleted {
+                    result: ToolResult {
+                        call_id: "call-1".into(),
+                        name: "read_file".into(),
+                        output: "contents".into(),
+                        is_error: false,
+                        artifact_id: None,
+                    },
+                },
+            ),
+            event(
+                session,
+                4,
+                EventPayload::AssistantMessageCompleted {
+                    text: "done".into(),
+                    tool_calls: vec![],
+                    reasoning_content: None,
+                },
+            ),
+        ];
+        let transaction = render_event(&events[1]).len() + render_event(&events[2]).len();
+        let tail = render_event(&events[3]).len();
+
+        // Budget fits the trailing assistant reply and the tool result but not
+        // the assistant tool-call message: the transaction must be dropped
+        // whole, never leaving a dangling tool result.
+        let split = select_recent(&events, tail + transaction - 1);
+        assert_eq!(split.len(), 1);
+        assert!(matches!(
+            split[0].payload,
+            EventPayload::AssistantMessageCompleted { ref tool_calls, .. } if tool_calls.is_empty()
+        ));
+        assert!(
+            !split
+                .iter()
+                .any(|e| matches!(e.payload, EventPayload::ToolCompleted { .. }))
+        );
+
+        // Budget fits the whole transaction: both halves are selected.
+        let whole = select_recent(&events, tail + transaction);
+        assert!(
+            whole
+                .iter()
+                .any(|e| matches!(e.payload, EventPayload::ToolCompleted { .. }))
+        );
+        assert!(whole.iter().any(|e| matches!(
+            &e.payload,
+            EventPayload::AssistantMessageCompleted { tool_calls, .. } if !tool_calls.is_empty()
+        )));
+    }
+
+    #[test]
+    fn recent_selection_never_splits_assistant_from_results() {
+        use latch_protocol::{ToolCall, ToolResult};
+        use serde_json::json;
+        let session = Uuid::new_v4();
+        let events = vec![
+            event(
+                session,
+                1,
+                EventPayload::AssistantMessageCompleted {
+                    text: "calling".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path":"a"}),
+                    }],
+                    reasoning_content: None,
+                },
+            ),
+            event(
+                session,
+                2,
+                EventPayload::ToolCompleted {
+                    result: ToolResult {
+                        call_id: "call-1".into(),
+                        name: "read_file".into(),
+                        output: "contents".into(),
+                        is_error: false,
+                        artifact_id: None,
+                    },
+                },
+            ),
+        ];
+        let units = conversation_units(&events);
+        assert_eq!(units, vec![(0, 2)]);
+        for budget in [0, 1, 10, 100, 10_000] {
+            let recent = select_recent(&events, budget);
+            let has_assistant = recent.iter().any(|e| matches!(
+                &e.payload,
+                EventPayload::AssistantMessageCompleted { tool_calls, .. } if !tool_calls.is_empty()
+            ));
+            let has_result = recent
+                .iter()
+                .any(|e| matches!(e.payload, EventPayload::ToolCompleted { .. }));
+            assert_eq!(
+                has_assistant, has_result,
+                "budget {budget} split a transaction"
+            );
+        }
     }
 }
