@@ -469,11 +469,37 @@ fn is_hidden_tool(name: &str) -> bool {
 
 fn exploration_label(call: &ToolCall) -> Option<String> {
     match call.name.as_str() {
-        "read_file" => Some(format!("Read {}", string_arg(&call.arguments, "path")?)),
+        "read_file" => {
+            let path = string_arg(&call.arguments, "path")?;
+            let mut label = format!("Read {path}");
+            if let Some(tail) = number_arg(&call.arguments, "tail") {
+                label.push_str(&format!(" (last {tail} lines)"));
+            } else if let Some(offset) = number_arg(&call.arguments, "offset") {
+                label.push_str(&format!(" from line {offset}"));
+            }
+            if let Some(limit) = number_arg(&call.arguments, "limit") {
+                label.push_str(&format!(" · {limit} lines"));
+            }
+            Some(label)
+        }
+        "read_artifact" => {
+            let id = string_arg(&call.arguments, "id")?;
+            let mut label = format!("Read artifact {id}");
+            if let Some(tail) = number_arg(&call.arguments, "tail") {
+                label.push_str(&format!(" (last {tail} lines)"));
+            } else if let Some(offset) = number_arg(&call.arguments, "offset") {
+                label.push_str(&format!(" from line {offset}"));
+            }
+            Some(label)
+        }
         "search" => {
             let query = string_arg(&call.arguments, "query")?;
             let path = string_arg(&call.arguments, "path").unwrap_or(".");
-            Some(format!("Search \"{query}\" in {path}"))
+            let mut label = format!("Search \"{query}\" in {path}");
+            if let Some(offset) = number_arg(&call.arguments, "offset") {
+                label.push_str(&format!(" from match {}", offset + 1));
+            }
+            Some(label)
         }
         "git_status" => Some("Inspect git status".into()),
         "shell" => shell_exploration_label(string_arg(&call.arguments, "command")?),
@@ -630,6 +656,10 @@ fn targets(words: &[&str]) -> String {
 
 fn string_arg<'a>(arguments: &'a Value, key: &str) -> Option<&'a str> {
     arguments.get(key).and_then(Value::as_str)
+}
+
+fn number_arg(arguments: &Value, key: &str) -> Option<u64> {
+    arguments.get(key).and_then(Value::as_u64)
 }
 
 fn patch_delta(call: &ToolCall) -> (usize, usize) {
@@ -871,6 +901,29 @@ mod tests {
         assert!(rendered.contains("List src"));
         assert!(rendered.contains("Search normalize"));
         assert!(!rendered.contains("Running ls"));
+    }
+
+    #[test]
+    fn ranged_reads_and_artifacts_render_semantic_labels() {
+        let model = PresentationModel::from_events(&[
+            request(
+                "a",
+                "read_file",
+                json!({"path":"big.rs","offset":2001,"limit":2000}),
+            ),
+            request("b", "read_artifact", json!({"id":"shell-x.log","tail":50})),
+            request("c", "search", json!({"query":"needle","offset":10})),
+        ]);
+        let visible = format!("{:?}", model.cells());
+        assert!(
+            visible.contains("Read big.rs from line 2001 · 2000 lines"),
+            "{visible}"
+        );
+        assert!(
+            visible.contains("Read artifact shell-x.log (last 50 lines)"),
+            "{visible}"
+        );
+        assert!(visible.contains("Search \\\"needle\\\" in . from match 11"));
     }
 
     #[test]
