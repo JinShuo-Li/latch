@@ -85,9 +85,11 @@ dirty work is captured at startup and never conflated with Latch's changes.
 
 OpenAI-compatible chat completions and Anthropic Messages translate only at the
 API boundary. Durable state remains provider-neutral. Assistant reasoning
-(`reasoning_content`) is persisted and replayed verbatim for tool-call turns on
-models that support it; it is never displayed in the transcript. Repository
-instruction precedence is `CLAUDE.md`, `AGENTS.md`, then
+(`reasoning_content`) is persisted and replayed verbatim by reasoning-capable
+endpoints (DeepSeek, OpenCode Go) through a small wire profile; replay is
+decoupled from tool-call structure so a defensive history transform can never
+drop required reasoning state. Reasoning is never displayed in the transcript.
+Repository instruction precedence is `CLAUDE.md`, `AGENTS.md`, then
 `.latch/instructions.md`; current user input follows them. Kernel invariants
 override project text.
 

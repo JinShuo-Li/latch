@@ -1,12 +1,14 @@
+use latch_kernel::agent::AgentOutput;
 use latch_kernel::config::{ContextConfig, PermissionConfig};
-use latch_kernel::provider::{ModelProvider, StreamSink};
+use latch_kernel::provider::{ModelProvider, ReasoningReplay, StreamSink};
 use latch_kernel::session::{prompt_history, replay_items, resumed_mode};
 use latch_kernel::{
-    Agent, AgentRuntime, ContinuityEngine, EventStore, FakeProvider, PolicyEngine, ToolExecutor,
+    Agent, AgentEventSink, AgentRuntime, ContinuityEngine, EventStore, FakeProvider, PolicyEngine,
+    ToolExecutor,
 };
 use latch_protocol::{
-    CompletionState, DisplayItem, EventPayload, EvidenceStatus, Mode, ModelRequest, ModelResponse,
-    StreamEvent, ToolCall, ToolResult,
+    CompletionState, DisplayItem, Event, EventPayload, EvidenceStatus, Mode, ModelRequest,
+    ModelResponse, StreamEvent, ToolCall, ToolResult, display_items,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -695,7 +697,8 @@ async fn reasoning_and_tool_history_round_trip_across_resume() {
         .expect("tool result must be replayed as role tool");
     assert_eq!(tool.tool_call_id.as_deref(), Some("read-1"));
 
-    let body = latch_kernel::provider::openai_request(second, "deepseek-test");
+    let body =
+        latch_kernel::provider::openai_request(second, "deepseek-test", ReasoningReplay::Replay);
     let messages = body["messages"].as_array().unwrap();
     let assistant_json = messages
         .iter()
@@ -781,7 +784,11 @@ async fn reasoning_and_tool_history_round_trip_across_resume() {
         .find(|m| m.role == "tool")
         .expect("tool result must survive resume");
     assert_eq!(tool.tool_call_id.as_deref(), Some("read-1"));
-    let body = latch_kernel::provider::openai_request(&resumed[0], "deepseek-test");
+    let body = latch_kernel::provider::openai_request(
+        &resumed[0],
+        "deepseek-test",
+        ReasoningReplay::Replay,
+    );
     let messages = body["messages"].as_array().unwrap();
     assert!(messages.iter().any(|m| {
         m["role"] == "assistant"
@@ -877,4 +884,560 @@ async fn agent_undo(tools: &ToolExecutor) -> ToolResult {
             CancellationToken::new(),
         )
         .await
+}
+
+fn first_line(text: &str) -> String {
+    text.lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .take(80)
+        .collect()
+}
+
+/// Generic lifecycle invariant over completed tool transactions: every
+/// model-issued ToolRequested id has exactly one terminal result id. No
+/// zero-result calls, no two-result calls.
+fn assert_tool_transaction_invariant(events: &[Event]) {
+    let mut terminals: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for event in events {
+        match &event.payload {
+            EventPayload::ToolRequested { call } => {
+                terminals.insert(call.id.as_str(), 0);
+            }
+            EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } => {
+                *terminals.entry(result.call_id.as_str()).or_insert(0) += 1;
+            }
+            _ => {}
+        }
+    }
+    for (id, count) in &terminals {
+        assert_eq!(*count, 1, "call {id} must have exactly one terminal result");
+    }
+}
+
+/// The exact live regression: one assistant turn with reasoning_content and
+/// TWO tool calls, one denied by ASK policy and one succeeding. The durable
+/// stream must give every ToolRequested exactly one terminal result, and the
+/// next model request must replay the complete provider transaction — both
+/// tool_calls, both role="tool" results, and reasoning_content — so the next
+/// DeepSeek/OpenCode Go request is protocol-valid.
+#[tokio::test]
+async fn denied_tool_call_preserves_complete_provider_transaction() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().join("sample");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("app.txt"), "bug").unwrap();
+    let db = dir.path().join("state.sqlite3");
+    let store = EventStore::open(&db).unwrap();
+    let session = store.create_session(&workspace).unwrap();
+    let scripted = vec![
+        ModelResponse {
+            text: "inspecting and mutating".into(),
+            tool_calls: vec![
+                call("denied-shell", "shell", json!({"command":"touch injected"})),
+                call("read-ok", "read_file", json!({"path":"app.txt"})),
+            ],
+            stop_reason: "tool_calls".into(),
+            usage: None,
+            reasoning_content: Some("I should inspect before deciding".into()),
+        },
+        ModelResponse {
+            text: "The read succeeded; the mutation was refused.".into(),
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: Some("final reasoning".into()),
+        },
+    ];
+    let provider = Arc::new(RecordingProvider::new(scripted));
+    let tools = ToolExecutor::new(
+        workspace.clone(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Ask, workspace.clone(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Ask,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    agent
+        .run(
+            "inspect this repository",
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+
+    // 1-6: durable stream has exactly one terminal result per requested call.
+    let events = store.events(session).unwrap();
+    assert_tool_transaction_invariant(&events);
+    let requested: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match &e.payload {
+            EventPayload::ToolRequested { call } => Some(call.id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(requested, vec!["denied-shell", "read-ok"]);
+    assert!(events.iter().any(|e| matches!(
+        &e.payload,
+        EventPayload::ToolFailed { result } if result.call_id == "denied-shell"
+    )));
+    assert!(events.iter().any(|e| matches!(
+        &e.payload,
+        EventPayload::PermissionDecision { tool, .. } if tool == "shell"
+    )));
+    assert!(events.iter().any(|e| matches!(
+        &e.payload,
+        EventPayload::ToolCompleted { result } if result.call_id == "read-ok"
+    )));
+    // The denied call is one failed tool lifecycle item to the user.
+    let visible = replay_items(&events);
+    let denied_rows = visible
+        .iter()
+        .filter(|item| {
+            item.call_id() == Some("denied-shell")
+                && matches!(
+                    item,
+                    DisplayItem::ToolActivity {
+                        status: latch_protocol::ToolRunStatus::Failed,
+                        ..
+                    }
+                )
+        })
+        .count();
+    assert_eq!(
+        denied_rows, 1,
+        "denied tool shows as one failed lifecycle row"
+    );
+
+    // 7-10: the next model request replays the complete transaction.
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2, "one tool turn plus one final turn");
+    let second = &requests[1];
+    let assistant = second
+        .messages
+        .iter()
+        .find(|m| m.role == "assistant" && !m.tool_calls.is_empty())
+        .expect("assistant tool_calls preserved");
+    assert_eq!(assistant.tool_calls.len(), 2);
+    assert_eq!(
+        assistant.reasoning_content.as_deref(),
+        Some("I should inspect before deciding")
+    );
+    let tool_ids: Vec<Option<&str>> = second
+        .messages
+        .iter()
+        .filter(|m| m.role == "tool")
+        .map(|m| m.tool_call_id.as_deref())
+        .collect();
+    assert!(
+        tool_ids.contains(&Some("denied-shell")) && tool_ids.contains(&Some("read-ok")),
+        "both role=tool results present: {tool_ids:?}"
+    );
+    let denied_tool = second
+        .messages
+        .iter()
+        .find(|m| m.tool_call_id.as_deref() == Some("denied-shell"))
+        .expect("denied result present");
+    assert!(
+        denied_tool.content.contains("cannot mutate"),
+        "denial comes back as a structured tool result: {}",
+        denied_tool.content
+    );
+
+    // 11: serialize and assert protocol validity for the thinking wire profile.
+    let body =
+        latch_kernel::provider::openai_request(second, "deepseek-test", ReasoningReplay::Replay);
+    let messages = body["messages"].as_array().unwrap();
+    let assistant_json = messages
+        .iter()
+        .find(|m| m["role"] == "assistant" && m["tool_calls"].is_array())
+        .expect("assistant tool_calls present in serialized request");
+    assert_eq!(assistant_json["tool_calls"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        assistant_json["reasoning_content"],
+        "I should inspect before deciding"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == "tool" && m["tool_call_id"] == "denied-shell")
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == "tool" && m["tool_call_id"] == "read-ok")
+    );
+
+    // ---- Session persistence/resume: the transaction survives intact. ----
+    drop(agent);
+    drop(store);
+    let store = EventStore::open(&db).unwrap();
+    let resumed_provider = Arc::new(RecordingProvider::new(vec![ModelResponse {
+        text: "resumed".into(),
+        tool_calls: vec![],
+        stop_reason: "stop".into(),
+        usage: None,
+        reasoning_content: None,
+    }]));
+    let tools = ToolExecutor::new(
+        workspace.clone(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Ask, workspace.clone(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Ask,
+        store: store.clone(),
+        provider: resumed_provider.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    let events = store.events(session).unwrap();
+    assert_tool_transaction_invariant(&events);
+    agent.restore_state(
+        events
+            .iter()
+            .rev()
+            .find_map(|e| match &e.payload {
+                EventPayload::TaskStateUpdated { state } => Some(state.clone()),
+                _ => None,
+            })
+            .unwrap_or_default(),
+    );
+    agent.restore_evidence(
+        events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
+                _ => None,
+            })
+            .collect(),
+    );
+    agent.restore_failures().unwrap();
+    agent
+        .run(
+            "Continue after the denial.",
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+    let resumed = resumed_provider.requests();
+    assert_eq!(resumed.len(), 1);
+    let assistant = resumed[0]
+        .messages
+        .iter()
+        .find(|m| m.role == "assistant" && !m.tool_calls.is_empty())
+        .expect("assistant tool_calls survive resume");
+    assert_eq!(assistant.tool_calls.len(), 2);
+    assert_eq!(
+        assistant.reasoning_content.as_deref(),
+        Some("I should inspect before deciding")
+    );
+    let tool_ids: Vec<Option<&str>> = resumed[0]
+        .messages
+        .iter()
+        .filter(|m| m.role == "tool")
+        .map(|m| m.tool_call_id.as_deref())
+        .collect();
+    assert!(
+        tool_ids.contains(&Some("denied-shell")) && tool_ids.contains(&Some("read-ok")),
+        "both tool results survive resume"
+    );
+    let body = latch_kernel::provider::openai_request(
+        &resumed[0],
+        "deepseek-test",
+        ReasoningReplay::Replay,
+    );
+    let messages = body["messages"].as_array().unwrap();
+    assert!(messages.iter().any(|m| {
+        m["role"] == "assistant"
+            && m["reasoning_content"] == "I should inspect before deciding"
+            && m["tool_calls"]
+                .as_array()
+                .is_some_and(|calls| calls.len() == 2)
+    }));
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == "tool" && m["tool_call_id"] == "denied-shell")
+    );
+}
+
+/// A single denied tool call still completes its lifecycle with one terminal
+/// result and replays reasoning + the denial result to the next request.
+#[tokio::test]
+async fn single_denied_tool_call_gets_one_terminal_result() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().join("sample");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("app.txt"), "bug").unwrap();
+    let db = dir.path().join("state.sqlite3");
+    let store = EventStore::open(&db).unwrap();
+    let session = store.create_session(&workspace).unwrap();
+    let scripted = vec![
+        ModelResponse {
+            text: "trying to mutate".into(),
+            tool_calls: vec![call(
+                "only-denied",
+                "shell",
+                json!({"command":"touch injected"}),
+            )],
+            stop_reason: "tool_calls".into(),
+            usage: None,
+            reasoning_content: Some("reasoning for the denied call".into()),
+        },
+        ModelResponse {
+            text: "denied.".into(),
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: None,
+        },
+    ];
+    let provider = Arc::new(RecordingProvider::new(scripted));
+    let tools = ToolExecutor::new(
+        workspace.clone(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Ask, workspace.clone(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Ask,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    agent
+        .run("mutate", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    let events = store.events(session).unwrap();
+    assert_tool_transaction_invariant(&events);
+    let second = &provider.requests()[1];
+    let assistant = second
+        .messages
+        .iter()
+        .find(|m| m.role == "assistant" && !m.tool_calls.is_empty())
+        .expect("assistant tool_calls preserved");
+    assert_eq!(assistant.tool_calls.len(), 1);
+    assert_eq!(
+        assistant.reasoning_content.as_deref(),
+        Some("reasoning for the denied call")
+    );
+    assert!(
+        second
+            .messages
+            .iter()
+            .any(|m| { m.role == "tool" && m.tool_call_id.as_deref() == Some("only-denied") })
+    );
+}
+
+/// Multiple denied calls in one turn each complete their lifecycle; the next
+/// request replays every denial as a structured tool result.
+#[tokio::test]
+async fn multiple_denied_calls_in_one_turn_each_get_a_terminal_result() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().join("sample");
+    std::fs::create_dir(&workspace).unwrap();
+    let db = dir.path().join("state.sqlite3");
+    let store = EventStore::open(&db).unwrap();
+    let session = store.create_session(&workspace).unwrap();
+    let scripted = vec![
+        ModelResponse {
+            text: "two mutations".into(),
+            tool_calls: vec![
+                call("deny-1", "shell", json!({"command":"touch one"})),
+                call("deny-2", "shell", json!({"command":"touch two"})),
+            ],
+            stop_reason: "tool_calls".into(),
+            usage: None,
+            reasoning_content: Some("thinking about both".into()),
+        },
+        ModelResponse {
+            text: "both refused.".into(),
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: None,
+        },
+    ];
+    let provider = Arc::new(RecordingProvider::new(scripted));
+    let tools = ToolExecutor::new(
+        workspace.clone(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Ask, workspace.clone(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Ask,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    agent
+        .run("two mutations", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    let events = store.events(session).unwrap();
+    assert_tool_transaction_invariant(&events);
+    let second = &provider.requests()[1];
+    let assistant = second
+        .messages
+        .iter()
+        .find(|m| m.role == "assistant" && !m.tool_calls.is_empty())
+        .expect("assistant tool_calls preserved");
+    assert_eq!(assistant.tool_calls.len(), 2);
+    let tool_ids: Vec<Option<&str>> = second
+        .messages
+        .iter()
+        .filter(|m| m.role == "tool")
+        .map(|m| m.tool_call_id.as_deref())
+        .collect();
+    assert!(
+        tool_ids.contains(&Some("deny-1")) && tool_ids.contains(&Some("deny-2")),
+        "both denial results replayed: {tool_ids:?}"
+    );
+    assert_eq!(
+        assistant.reasoning_content.as_deref(),
+        Some("thinking about both")
+    );
+}
+
+/// The live sink and resume replay share one authoritative display path: one
+/// normal prompt produces exactly one visible user item, two identical prompts
+/// produce two, and the live formatter and replay formatter agree exactly.
+#[tokio::test]
+async fn live_and_replay_transcripts_converge() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().join("sample");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("app.txt"), "bug").unwrap();
+    let db = dir.path().join("state.sqlite3");
+    let store = EventStore::open(&db).unwrap();
+    let session = store.create_session(&workspace).unwrap();
+    let scripted = vec![
+        response(
+            "inspecting",
+            vec![call("read-1", "read_file", json!({"path":"app.txt"}))],
+        ),
+        response("inspected.", vec![]),
+        response(
+            "inspecting again",
+            vec![call("read-2", "read_file", json!({"path":"app.txt"}))],
+        ),
+        response("inspected again.", vec![]),
+    ];
+    let provider = Arc::new(RecordingProvider::new(scripted));
+    let tools = ToolExecutor::new(
+        workspace.clone(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Ask, workspace.clone(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Ask,
+        store: store.clone(),
+        provider,
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    let live: Arc<Mutex<Vec<DisplayItem>>> = Arc::new(Mutex::new(Vec::new()));
+    let live_sink = live.clone();
+    // Replicates the CLI's live display path: durable events go through the
+    // shared formatter, and terminal tool results arrive as ToolResult rows.
+    let sink: AgentEventSink = Arc::new(move |event| match event {
+        AgentOutput::Durable(e) => {
+            for item in display_items(&e) {
+                live_sink.lock().unwrap().push(item);
+            }
+        }
+        AgentOutput::ToolResult(result) => {
+            live_sink.lock().unwrap().push(DisplayItem::ToolActivity {
+                call_id: result.call_id,
+                verb: result.name,
+                target: String::new(),
+                detail: first_line(&result.output),
+                status: if result.is_error {
+                    latch_protocol::ToolRunStatus::Failed
+                } else {
+                    latch_protocol::ToolRunStatus::Passed
+                },
+            });
+        }
+        AgentOutput::Transient(_) => {}
+    });
+    // Two intentionally identical prompts: both must remain visible.
+    agent
+        .run("same prompt", CancellationToken::new(), sink.clone())
+        .await
+        .unwrap();
+    agent
+        .run("same prompt", CancellationToken::new(), sink.clone())
+        .await
+        .unwrap();
+    let live_items = live.lock().unwrap().clone();
+    let user_live: Vec<&str> = live_items
+        .iter()
+        .filter_map(|item| match item {
+            DisplayItem::UserMessage { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        user_live,
+        vec!["same prompt", "same prompt"],
+        "one visible user item per submitted prompt"
+    );
+
+    // Resume replay restores exactly one visible item per durable prompt, and
+    // the user-prompt portion of live and replay converges through the shared
+    // formatter.
+    let replay = replay_items(&store.events(session).unwrap());
+    let user_replay: Vec<&str> = replay
+        .iter()
+        .filter_map(|item| match item {
+            DisplayItem::UserMessage { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(user_replay, vec!["same prompt", "same prompt"]);
+    assert_eq!(
+        user_live, user_replay,
+        "live and replay user history converge"
+    );
 }

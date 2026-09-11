@@ -28,12 +28,44 @@ pub trait ModelProvider: Send + Sync {
     ) -> Result<ModelResponse>;
 }
 
+/// Wire capability for OpenAI-compatible endpoints: whether persisted
+/// assistant `reasoning_content` must be replayed verbatim on the next request.
+///
+/// Reasoning-capable OpenAI-compatible servers (DeepSeek, and OpenCode Go
+/// serving reasoning models) require every previously emitted
+/// `reasoning_content` value to be passed back; generic OpenAI-compatible
+/// servers reject the field. The provider derives the profile from its
+/// endpoint and model, keeping the internal `ModelMessage` provider-neutral.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningReplay {
+    /// Replay persisted `reasoning_content` on assistant messages.
+    Replay,
+    /// Never emit `reasoning_content` (providers that do not accept it).
+    Omit,
+}
+
+#[must_use]
+pub fn reasoning_replay_for(base_url: &str, model: &str) -> ReasoningReplay {
+    let base = base_url.to_ascii_lowercase();
+    let model = model.to_ascii_lowercase();
+    if is_opencode_go_endpoint(base_url)
+        || base.contains("deepseek")
+        || model.contains("deepseek")
+        || model.contains("reasoner")
+    {
+        ReasoningReplay::Replay
+    } else {
+        ReasoningReplay::Omit
+    }
+}
+
 pub struct OpenAiProvider {
     client: Client,
     base_url: String,
     api_key: String,
     model: String,
     session_id: Option<Uuid>,
+    reasoning: ReasoningReplay,
 }
 impl OpenAiProvider {
     #[must_use]
@@ -42,8 +74,9 @@ impl OpenAiProvider {
             client: Client::new(),
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
-            model,
+            model: model.clone(),
             session_id: None,
+            reasoning: reasoning_replay_for(&base_url, &model),
         }
     }
     /// Tags requests with the durable Latch session id. OpenCode Go endpoints
@@ -81,7 +114,7 @@ impl ModelProvider for OpenAiProvider {
         cancel: CancellationToken,
         sink: StreamSink,
     ) -> Result<ModelResponse> {
-        let body = openai_request(&request, &self.model);
+        let body = openai_request(&request, &self.model, self.reasoning);
         let response = checked_response(
             "openai-compatible",
             self.client
@@ -425,15 +458,23 @@ fn bound_error_body(body: &str) -> String {
 
 /// Serializes a provider-independent request into the OpenAI chat-completions
 /// wire format. Assistant tool calls and `role: "tool"` results are preserved
-/// structurally, and reasoning is replayed verbatim for tool-call turns.
+/// structurally, and reasoning is replayed verbatim for reasoning-capable
+/// endpoints. Reasoning replay is decoupled from tool-call structure so a
+/// defensive transform that changes tool calls can never drop required
+/// reasoning state.
 #[must_use]
-pub fn openai_request(request: &ModelRequest, model: &str) -> Value {
+pub fn openai_request(request: &ModelRequest, model: &str, reasoning: ReasoningReplay) -> Value {
     let mut messages = vec![json!({"role":"system","content":request.system})];
-    messages.extend(request.messages.iter().map(openai_message));
+    messages.extend(
+        request
+            .messages
+            .iter()
+            .map(|message| openai_message(message, reasoning)),
+    );
     json!({"model":model,"messages":messages,"tools":request.tools.iter().map(|t|json!({"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.input_schema}})).collect::<Vec<_>>(),"stream":true,"stream_options":{"include_usage":true}})
 }
 
-fn openai_message(message: &latch_protocol::ModelMessage) -> Value {
+fn openai_message(message: &latch_protocol::ModelMessage, reasoning: ReasoningReplay) -> Value {
     match message.role.as_str() {
         "assistant" => {
             let mut value = json!({"role":"assistant","content":message.content});
@@ -445,9 +486,15 @@ fn openai_message(message: &latch_protocol::ModelMessage) -> Value {
                         .map(openai_tool_call)
                         .collect::<Vec<_>>(),
                 );
-                if let Some(reasoning) = &message.reasoning_content {
-                    value["reasoning_content"] = Value::String(reasoning.clone());
-                }
+            }
+            // Reasoning replay is its own wire requirement, independent of
+            // tool calls: a thinking provider requires every persisted
+            // reasoning_content value back, and a provider that does not
+            // accept the field never produces or receives it.
+            if matches!(reasoning, ReasoningReplay::Replay)
+                && let Some(reasoning_content) = &message.reasoning_content
+            {
+                value["reasoning_content"] = Value::String(reasoning_content.clone());
             }
             value
         }
@@ -582,7 +629,7 @@ mod tests {
                 input_schema: json!({"type":"object"}),
             }],
         };
-        let o = openai_request(&r, "m");
+        let o = openai_request(&r, "m", ReasoningReplay::Replay);
         assert_eq!(o["messages"][0]["role"], "system");
         assert_eq!(o["tools"][0]["function"]["name"], "read");
         let a = anthropic_request(&r, "m");
@@ -617,7 +664,7 @@ mod tests {
             ],
             tools: vec![],
         };
-        let body = openai_request(&r, "m");
+        let body = openai_request(&r, "m", ReasoningReplay::Replay);
         let assistant = &body["messages"][2];
         assert_eq!(assistant["role"], "assistant");
         assert_eq!(assistant["reasoning_content"], "step by step");
@@ -631,6 +678,68 @@ mod tests {
         assert_eq!(tool["role"], "tool");
         assert_eq!(tool["tool_call_id"], "call-1");
         assert_eq!(tool["content"], "contents");
+    }
+
+    #[test]
+    fn reasoning_replay_is_decoupled_from_tool_calls() {
+        // A defensive transform (sanitize_tool_history) may strip tool calls
+        // from an assistant message; required reasoning must survive anyway.
+        let r = ModelRequest {
+            system: "s".into(),
+            messages: vec![
+                ModelMessage::text("user", "inspect"),
+                ModelMessage {
+                    role: "assistant".into(),
+                    content: "working".into(),
+                    tool_calls: vec![],
+                    tool_call_id: None,
+                    reasoning_content: Some("step by step".into()),
+                },
+            ],
+            tools: vec![],
+        };
+        let replaying = openai_request(&r, "m", ReasoningReplay::Replay);
+        let assistant = &replaying["messages"][2];
+        assert_eq!(assistant["reasoning_content"], "step by step");
+        assert!(
+            assistant["tool_calls"].is_null(),
+            "reasoning is emitted even when tool_calls were stripped"
+        );
+        // Providers that do not accept the field never receive it.
+        let omitting = openai_request(&r, "m", ReasoningReplay::Omit);
+        assert!(
+            !omitting["messages"][2]
+                .to_string()
+                .contains("reasoning_content"),
+            "generic OpenAI-compatible providers must not receive reasoning_content"
+        );
+    }
+
+    #[test]
+    fn reasoning_replay_profile_detects_deepseek_and_opencode_go() {
+        for (base, model) in [
+            ("https://opencode.ai/zen/go/models/gpt-5", "gpt-5"),
+            ("https://api.deepseek.com", "deepseek-chat"),
+            ("https://api.deepseek.com/v1", "deepseek-reasoner"),
+            ("https://generic.example.com/v1", "deepseek-v4-flash"),
+        ] {
+            assert_eq!(
+                reasoning_replay_for(base, model),
+                ReasoningReplay::Replay,
+                "should replay for {base} / {model}"
+            );
+        }
+        for (base, model) in [
+            ("https://api.openai.com/v1", "gpt-5-mini"),
+            ("https://api.anthropic.com", "claude-sonnet"),
+            ("https://generic.example.com/v1", "gpt-5"),
+        ] {
+            assert_eq!(
+                reasoning_replay_for(base, model),
+                ReasoningReplay::Omit,
+                "should omit for {base} / {model}"
+            );
+        }
     }
 
     #[test]

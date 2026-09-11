@@ -45,7 +45,7 @@ impl PromptCompiler {
                 "core.tool_semantics",
                 30,
                 true,
-                "Prefer the dedicated read_file, search, git_status, and git_diff tools for inspection; they preserve provenance and version hashes. Use shell only for checks those tools cannot express, and prefer a single dedicated tool over a compound shell pipeline. Read a file before editing and pass its observed hash. Tool failures are evidence; reconsider assumptions rather than inventing success.",
+                "Prefer the dedicated read_file, search, git_status, and git_diff tools for inspection; they preserve provenance and version hashes. Use shell only for checks those tools cannot express, and prefer a single dedicated tool over a compound shell pipeline. Shell commands already run with the workspace as the working directory, so `cd <workspace> &&` is redundant — write plain `git log --oneline -20`. `cd` into a workspace subdirectory is allowed for read-only inspection (for example `cd src && rg normalize_username .`); never `cd` outside the workspace. Read a file before editing and pass its observed hash. Tool failures are evidence; reconsider assumptions rather than inventing success.",
             ),
             fragment(
                 "policy.evidence",

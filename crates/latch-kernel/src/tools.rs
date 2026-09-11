@@ -44,7 +44,8 @@ impl PolicyEngine {
     pub fn decide(&self, tool: &str, args: &Value) -> PolicyDecision {
         let command = || args.get("command").and_then(Value::as_str).unwrap_or("");
         let mutation = matches!(tool, "patch" | "write" | "undo" | "checkpoint")
-            || matches!(tool, "shell" | "validate") && !is_read_only_shell(command());
+            || matches!(tool, "shell" | "validate")
+                && !is_read_only_shell(command(), &self.workspace);
         let mode = self.mode.read().map_or(Mode::Ask, |m| *m);
         if mutation && !mode.can_mutate() {
             return PolicyDecision::Deny(format!("{mode} mode cannot mutate the workspace"));
@@ -283,7 +284,7 @@ impl ToolExecutor {
             ),
             def(
                 "shell",
-                "Run a bounded Linux developer command. Prefer read_file, search, git_status, and git_diff for inspection; shell is for checks those tools cannot express. ASK/PLAN allow only conservative read-only commands and deny test/build execution.",
+                "Run a bounded Linux developer command. Commands execute with the workspace as the working directory, so `cd <workspace> &&` is redundant — prefer plain `git log --oneline -20`. A `cd` into a subdirectory is allowed for read-only inspection (for example `cd src && rg normalize_username .`), but never `cd` out of the workspace. ASK/PLAN allow only conservative read-only commands and deny test/build execution.",
                 json!({"type":"object","required":["command"],"properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer"}}}),
             ),
             def(
@@ -316,7 +317,26 @@ impl ToolExecutor {
             );
         }
         if let PolicyDecision::Deny(reason) | PolicyDecision::Ask(reason) = decision {
-            return result(call, reason, true, None);
+            // Lifecycle invariant: every model-issued ToolRequested(call_id)
+            // must eventually have exactly one terminal result. A denial is a
+            // terminal outcome even though execution never started, so persist
+            // ToolFailed. PermissionDecision above remains the separate audit
+            // event; this is the structured result the model sees.
+            let denied = result(call, reason, true, None);
+            if let Err(error) = self.store.append(
+                self.session_id,
+                EventPayload::ToolFailed {
+                    result: denied.clone(),
+                },
+            ) {
+                return result(
+                    call,
+                    format!("persist denied tool result: {error}"),
+                    true,
+                    None,
+                );
+            }
+            return denied;
         }
         if let Err(error) = self.store.append(
             self.session_id,
@@ -559,7 +579,7 @@ impl ToolExecutor {
         timeout_seconds: u64,
         cancel: CancellationToken,
     ) -> Result<ProcessOutput> {
-        let drift = !is_read_only_shell(command);
+        let drift = !is_read_only_shell(command, &self.workspace);
         let before = if drift {
             self.snapshot_dirty().await.ok().flatten()
         } else {
@@ -1053,10 +1073,13 @@ fn is_dependency_file(path: &Path) -> bool {
 ///
 /// Only simple inspection commands and compound commands built exclusively
 /// from them are accepted. Any shell feature that could expand, substitute,
-/// redirect, background, or nest is rejected, as is `||`. This deliberately
-/// keeps read-only classification stricter than the shell's actual grammar so
-/// ASK/PLAN can never be used to mutate the workspace.
-fn is_read_only_shell(command: &str) -> bool {
+/// redirect, background, or nest is rejected, as is `||`. A `cd` into a
+/// workspace-local subdirectory is accepted for compound read-only inspection,
+/// but the target is resolved and normalized against the workspace root and
+/// may never escape through `..`, an absolute path, or a symlink. This
+/// deliberately keeps read-only classification stricter than the shell's
+/// actual grammar so ASK/PLAN can never be used to mutate the workspace.
+fn is_read_only_shell(command: &str, workspace: &Path) -> bool {
     let command = command.trim();
     if command.is_empty() || command.contains("||") {
         return false;
@@ -1093,7 +1116,40 @@ fn is_read_only_shell(command: &str) -> bool {
     let Some(segments) = split_simple_commands(command) else {
         return false;
     };
-    segments.iter().all(|segment| is_read_only_command(segment))
+    if !segments
+        .iter()
+        .any(|segment| segment.split_whitespace().next() == Some("cd"))
+    {
+        // No `cd`: workspace is irrelevant, keep the fast conservative path.
+        return segments.iter().all(|segment| is_read_only_command(segment));
+    }
+    // Workspace-aware: thread a virtual cwd through the chain starting at the
+    // workspace root. Every `cd` target must resolve to a path that stays
+    // inside the workspace, both lexically and canonically.
+    let Some(root) = workspace.canonicalize().ok() else {
+        return false;
+    };
+    let mut cwd = root.clone();
+    for segment in segments {
+        let mut words = segment.split_whitespace();
+        let Some(first) = words.next() else {
+            return false;
+        };
+        if first == "cd" {
+            let args = words.collect::<Vec<_>>();
+            if args.len() != 1 {
+                return false;
+            }
+            let target = cwd.join(args[0]);
+            let Ok(resolved) = resolve_workspace_path(&root, &target.to_string_lossy()) else {
+                return false;
+            };
+            cwd = resolved;
+        } else if !is_read_only_command(segment) {
+            return false;
+        }
+    }
+    true
 }
 
 fn split_simple_commands(command: &str) -> Option<Vec<&str>> {
@@ -1412,6 +1468,12 @@ mod tests {
 
     #[test]
     fn read_only_shell_classification_is_conservative() {
+        let d = tempdir().unwrap();
+        std::fs::create_dir(d.path().join("src")).unwrap();
+        let outside = tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), d.path().join("link")).unwrap();
+        let ws = d.path().to_path_buf();
+        let workspace_cd = format!("cd {} && git log --oneline -20", d.path().display());
         for allowed in [
             "git status",
             "git status && git diff",
@@ -1419,8 +1481,19 @@ mod tests {
             "git branch --show-current",
             "git log --oneline -5 | cat",
             "find . -name app.txt",
+            // Workspace-local cd composition is read-only.
+            &workspace_cd,
+            "cd . && git status --short",
+            "cd src && rg normalize_username .",
+            "pwd && git diff",
+            "git log --oneline -20 | head",
+            "cd src && git log --oneline -20",
+            "cd src && cd . && pwd",
+            "cd src && cd .. && pwd",
+            // A cd that returns into the workspace is still workspace-local.
+            "cd src; cd ..",
         ] {
-            assert!(is_read_only_shell(allowed), "should allow {allowed}");
+            assert!(is_read_only_shell(allowed, &ws), "should allow {allowed}");
         }
         for denied in [
             "git branch -D main",
@@ -1436,8 +1509,102 @@ mod tests {
             "sed 1e app.txt",
             "echo $HOME",
             "pwd && touch injected",
+            // cd that escapes or cannot be proven safe is denied.
+            "cd .. && git log",
+            "cd ../outside && git status",
+            "cd /tmp && git log",
+            "cd / && git status",
+            "cd ~ && git status",
+            "cd $HOME && git status",
+            "cd link && git status",
+            "cd /tmp/latch-playground && git log",
+            // Non-read-only commands after a safe cd stay denied.
+            "cd src && cargo test",
+            "cd src && cargo fmt",
+            "cd src && sed -i 's/a/b/' f",
+            "cd src && git checkout main",
+            "cd src && git reset --hard",
+            "cd src && git branch -D main",
+            "cd src && touch injected",
+            "cd src && git diff > out.patch",
+            "cd src || git status",
+            "cd src && echo hi",
+            // Malformed or unprovable cd forms.
+            "cd",
+            "cd src extra",
+            "cd src; cd ../..",
         ] {
-            assert!(!is_read_only_shell(denied), "should deny {denied}");
+            assert!(!is_read_only_shell(denied, &ws), "should deny {denied}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_allows_workspace_local_read_only_cd_compound() {
+        let d = tempdir().unwrap();
+        std::fs::write(d.path().join("a.txt"), "old").unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(d.path())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=t@l",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ])
+            .current_dir(d.path())
+            .status()
+            .unwrap();
+        std::fs::create_dir(d.path().join("src")).unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let session = store.create_session(d.path()).unwrap();
+        let executor = ToolExecutor::new(
+            d.path().into(),
+            d.path().join("artifacts"),
+            store.clone(),
+            session,
+            PolicyEngine::new(Mode::Ask, d.path().into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        for command in [
+            "cd . && git status --short",
+            "cd src && ls",
+            "pwd && git diff",
+            "git log --oneline -20 | head",
+        ] {
+            let result = executor
+                .execute(
+                    &call("shell", json!({"command":command})),
+                    CancellationToken::new(),
+                )
+                .await;
+            assert!(
+                !result.is_error,
+                "ASK should allow {command}: {}",
+                result.output
+            );
+        }
+        for command in [
+            "cd .. && git status",
+            "cd /tmp && git status",
+            "cd src && cargo test",
+            "cd src && git checkout main",
+            "cd src && touch injected",
+        ] {
+            let result = executor
+                .execute(
+                    &call("shell", json!({"command":command})),
+                    CancellationToken::new(),
+                )
+                .await;
+            assert!(result.is_error, "ASK must deny {command}");
         }
     }
 

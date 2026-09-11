@@ -453,10 +453,16 @@ impl Agent {
                     );
                     results.push(denied);
                 }
-                Err(error) => results.push(tool_error(
-                    &call,
-                    format!("extension guard failed: {error}"),
-                )),
+                Err(error) => {
+                    let failed = tool_error(&call, format!("extension guard failed: {error}"));
+                    let _ = self.emit(
+                        EventPayload::ToolFailed {
+                            result: failed.clone(),
+                        },
+                        sink,
+                    );
+                    results.push(failed);
+                }
             }
         }
         let mut executed = if permitted.iter().all(|c| {
@@ -1530,5 +1536,101 @@ mod tests {
         assert_eq!(failed_entries, 2, "history keeps the failed attempts");
         // A passing validation resolved its failure lineage.
         assert!(agent.failure_lineages().is_empty());
+    }
+
+    #[test]
+    fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
+        // A genuinely corrupt old session: assistant proposes two calls but
+        // only one result exists. The sanitizer must still keep reasoning so a
+        // thinking provider never loses required state, even though the
+        // dangling tool call is stripped.
+        let corrupt = vec![
+            ModelMessage::text("user", "inspect"),
+            ModelMessage {
+                role: "assistant".into(),
+                content: "thinking".into(),
+                tool_calls: vec![
+                    ToolCall {
+                        id: "a".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path": "a"}),
+                    },
+                    ToolCall {
+                        id: "b".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path": "b"}),
+                    },
+                ],
+                tool_call_id: None,
+                reasoning_content: Some("reasoned".into()),
+            },
+            ModelMessage {
+                role: "tool".into(),
+                content: "b result".into(),
+                tool_calls: vec![],
+                tool_call_id: Some("b".into()),
+                reasoning_content: None,
+            },
+        ];
+        let sanitized = sanitize_tool_history(corrupt);
+        let assistant = sanitized
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant kept");
+        assert!(assistant.tool_calls.is_empty(), "dangling calls stripped");
+        assert_eq!(
+            assistant.reasoning_content.as_deref(),
+            Some("reasoned"),
+            "reasoning survives the defensive transform"
+        );
+        // With the lifecycle invariant, complete transactions (denied call
+        // included) are kept whole: reasoning + both tool_calls + all results.
+        let complete = vec![
+            ModelMessage::text("user", "inspect"),
+            ModelMessage {
+                role: "assistant".into(),
+                content: "thinking".into(),
+                tool_calls: vec![
+                    ToolCall {
+                        id: "a".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path": "a"}),
+                    },
+                    ToolCall {
+                        id: "b".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path": "b"}),
+                    },
+                ],
+                tool_call_id: None,
+                reasoning_content: Some("reasoned".into()),
+            },
+            ModelMessage {
+                role: "tool".into(),
+                content: "a denied".into(),
+                tool_calls: vec![],
+                tool_call_id: Some("a".into()),
+                reasoning_content: None,
+            },
+            ModelMessage {
+                role: "tool".into(),
+                content: "b result".into(),
+                tool_calls: vec![],
+                tool_call_id: Some("b".into()),
+                reasoning_content: None,
+            },
+        ];
+        let kept = sanitize_tool_history(complete);
+        let assistant = kept
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant kept");
+        assert_eq!(assistant.tool_calls.len(), 2);
+        assert_eq!(assistant.reasoning_content.as_deref(), Some("reasoned"));
+        assert_eq!(
+            kept.iter().filter(|m| m.role == "tool").count(),
+            2,
+            "both results kept"
+        );
     }
 }
