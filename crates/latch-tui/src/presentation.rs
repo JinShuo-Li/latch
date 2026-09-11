@@ -502,27 +502,25 @@ fn humanize_edit_error(path: &str, detail: &str) -> String {
 
 fn command_summary(command: &str, output: &str, failed: bool) -> String {
     let lower = command.to_ascii_lowercase();
-    if lower.contains("cargo test") {
-        if let Some(line) = output
+    if lower.contains("cargo test")
+        && let Some(line) = output
             .lines()
             .rev()
             .find(|line| line.contains("test result:"))
-        {
-            return line
-                .trim()
-                .trim_start_matches("test result:")
-                .trim()
-                .to_owned();
-        }
+    {
+        return line
+            .trim()
+            .trim_start_matches("test result:")
+            .trim()
+            .to_owned();
     }
-    if lower.contains("pytest") {
-        if let Some(line) = output
+    if lower.contains("pytest")
+        && let Some(line) = output
             .lines()
             .rev()
             .find(|line| line.contains("passed") || line.contains("failed"))
-        {
-            return line.trim_matches('=').trim().to_owned();
-        }
+    {
+        return line.trim_matches('=').trim().to_owned();
     }
     if failed {
         useful_error(output)
@@ -540,11 +538,17 @@ fn validation_summary(detail: &str) -> String {
 }
 
 fn clean_validation_detail(detail: &str) -> String {
-    detail
+    let first = detail.lines().next().unwrap_or(detail).trim();
+    if let Some((status_duration, summary)) = first.split_once(": ")
+        && let Some(start) = status_duration.rfind('(')
+        && let Some(duration) = status_duration[start + 1..].strip_suffix(')')
+        && !summary.is_empty()
+    {
+        return format!("{summary} · {duration}");
+    }
+    first
         .replace("exit code 0", "passed")
         .replace("exit code 1", "failed")
-        .trim()
-        .to_owned()
 }
 
 #[cfg(test)]
@@ -691,6 +695,42 @@ mod tests {
     }
 
     #[test]
+    fn failed_validation_and_multi_file_edit_render_semantically() {
+        let model = PresentationModel::from_events(&[
+            request(
+                "v",
+                "validate",
+                json!({"requirement":"tests", "command":"cargo test"}),
+            ),
+            event(EventPayload::ValidationResult {
+                command: "cargo test".into(),
+                passed: false,
+                detail: "exit code 1 (0.38s): average_preserves_fraction FAILED".into(),
+            }),
+            request(
+                "a",
+                "write",
+                json!({"path":"tests/new.rs", "content":"one\ntwo"}),
+            ),
+            request(
+                "b",
+                "patch",
+                json!({"path":"src/lib.rs", "old":"old", "new":"new"}),
+            ),
+            result("a", "write", "updated tests/new.rs @ abc", false),
+            result("b", "patch", "updated src/lib.rs @ def", false),
+        ]);
+        let rendered = super::super::render_cells_plain(model.cells(), false);
+        assert!(rendered.contains("✗ Validation failed"));
+        assert!(rendered.contains("cargo test · average_preserves_fraction FAILED · 0.38s"));
+        assert!(rendered.contains("Edited 2 files"));
+        assert!(rendered.contains("A tests/new.rs"));
+        assert!(rendered.contains("M src/lib.rs"));
+        assert!(!rendered.contains("abc"));
+        assert!(!rendered.contains("call"));
+    }
+
+    #[test]
     fn internal_ids_hashes_and_reasoning_do_not_form_cells() {
         let model = PresentationModel::from_events(&[
             event(EventPayload::AssistantMessageCompleted {
@@ -738,5 +778,75 @@ mod tests {
             live.apply_event(item);
         }
         assert_eq!(live, replay);
+    }
+
+    #[test]
+    fn semantic_history_snapshot() {
+        let cells = vec![
+            Cell::Exploration {
+                operations: vec![
+                    ExplorationOperation {
+                        call_id: "a".into(),
+                        label: "Read Cargo.toml".into(),
+                        status: CellStatus::Passed,
+                        diagnostic: String::new(),
+                        raw: String::new(),
+                    },
+                    ExplorationOperation {
+                        call_id: "b".into(),
+                        label: "Read src/lib.rs".into(),
+                        status: CellStatus::Passed,
+                        diagnostic: String::new(),
+                        raw: String::new(),
+                    },
+                ],
+            },
+            Cell::Patch {
+                files: vec![PatchFile {
+                    call_id: "p".into(),
+                    path: "src/lib.rs".into(),
+                    kind: 'M',
+                    additions: 2,
+                    deletions: 2,
+                    status: CellStatus::Passed,
+                    diagnostic: String::new(),
+                    raw: String::new(),
+                }],
+            },
+            Cell::Validation {
+                call_id: "v".into(),
+                command: "cargo test".into(),
+                requirement: "tests".into(),
+                status: CellStatus::Passed,
+                summary: "3 tests passed · 0.42s".into(),
+                output: String::new(),
+                raw: String::new(),
+            },
+        ];
+        assert_eq!(
+            super::super::render_cells_plain(&cells, false).trim_end(),
+            include_str!("../tests/snapshots/v3_semantic.txt").trim_end()
+        );
+    }
+
+    #[test]
+    fn narrow_failure_snapshot_content() {
+        let cells = vec![
+            Cell::User {
+                text: "修复 failing test".into(),
+            },
+            Cell::Command {
+                call_id: "c".into(),
+                command: "cargo test".into(),
+                status: CellStatus::Failed,
+                summary: "test failed".into(),
+                output: "assertion failed".into(),
+                raw: String::new(),
+            },
+        ];
+        assert_eq!(
+            super::super::render_cells_plain(&cells, false).trim_end(),
+            include_str!("../tests/snapshots/v3_narrow.txt").trim_end()
+        );
     }
 }

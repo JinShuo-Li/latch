@@ -1,0 +1,7 @@
+• Explored
+  └ Read Cargo.toml, src/lib.rs
+
+• Edited src/lib.rs  +2 −2
+
+✓ Verified
+  └ cargo test · 3 tests passed · 0.42s

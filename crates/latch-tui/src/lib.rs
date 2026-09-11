@@ -61,7 +61,7 @@ pub enum Output {
     AssistantDone,
     /// One user-visible transcript element from the shared durable-event
     /// formatter. Used for live kernel events and resume replay alike.
-    Event(DurableEvent),
+    Event(Box<DurableEvent>),
     ToolResult(ToolResult),
     Notice(String),
     Mode(Mode),
@@ -972,7 +972,7 @@ fn cell_lines(cell: &Cell, detail: bool) -> Vec<Line<'static>> {
                 CellStatus::Passed => "Verified",
                 CellStatus::Failed => "Validation failed",
             };
-            activity_lines(*status, title, command, summary, output)
+            validation_lines(*status, title, command, summary, output)
         }
         Cell::Patch { files } => patch_lines(files),
         Cell::Notice { text } => text
@@ -1001,7 +1001,11 @@ fn activity_lines(
     summary: &str,
     output: &str,
 ) -> Vec<Line<'static>> {
-    let (marker, marker_style) = status_marker(status);
+    let (marker, marker_style) = if status == CellStatus::Passed && title == "Ran" {
+        ("•", Style::default().fg(Color::Cyan))
+    } else {
+        status_marker(status)
+    };
     let mut lines = vec![Line::from(vec![
         Span::styled(format!("{marker} "), marker_style),
         Span::styled(
@@ -1026,6 +1030,38 @@ fn activity_lines(
     lines
 }
 
+fn validation_lines(
+    status: CellStatus,
+    title: &str,
+    command: &str,
+    summary: &str,
+    output: &str,
+) -> Vec<Line<'static>> {
+    let (marker, style) = status_marker(status);
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{marker} "), style),
+        Span::styled(title.to_owned(), Style::default().bold()),
+    ])];
+    let detail = if summary.is_empty() {
+        command.to_owned()
+    } else {
+        format!("{command} · {summary}")
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  └ ", notice_style()),
+        Span::raw(detail),
+    ]));
+    if status == CellStatus::Failed && !output.is_empty() {
+        lines.push(Line::from(""));
+        lines.extend(
+            output
+                .lines()
+                .map(|line| Line::styled(format!("    {line}"), Style::default().fg(Color::Red))),
+        );
+    }
+    lines
+}
+
 fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line<'static>> {
     let running = operations.iter().any(|op| op.status == CellStatus::Running);
     let failed = operations.iter().any(|op| op.status == CellStatus::Failed);
@@ -1036,7 +1072,11 @@ fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line<'static>> 
     } else {
         CellStatus::Passed
     };
-    let (marker, style) = status_marker(status);
+    let (marker, style) = if status == CellStatus::Passed {
+        ("•", Style::default().fg(Color::Cyan))
+    } else {
+        status_marker(status)
+    };
     let title = if running { "Exploring" } else { "Explored" };
     let mut labels = Vec::new();
     let mut reads = Vec::new();
@@ -1050,18 +1090,32 @@ fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line<'static>> 
         }
     }
     if !reads.is_empty() {
-        labels.insert(0, format!("Read {}", reads.join(", ")));
+        let mut read_label = format!(
+            "Read {}",
+            reads.iter().take(8).copied().collect::<Vec<_>>().join(", ")
+        );
+        if reads.len() > 8 {
+            read_label.push_str(&format!(", … {} more", reads.len() - 8));
+        }
+        labels.insert(0, read_label);
     }
     let mut lines = vec![Line::from(vec![
         Span::styled(format!("{marker} "), style),
         Span::styled(title, Style::default().bold()),
     ])];
-    for (index, label) in labels.iter().enumerate() {
+    const MAX_VISIBLE_OPERATIONS: usize = 8;
+    for (index, label) in labels.iter().take(MAX_VISIBLE_OPERATIONS).enumerate() {
         let prefix = if index == 0 { "  └ " } else { "    " };
         lines.push(Line::from(vec![
             Span::styled(prefix, notice_style()),
             Span::raw(label.clone()),
         ]));
+    }
+    if labels.len() > MAX_VISIBLE_OPERATIONS {
+        lines.push(Line::styled(
+            format!("    … and {} more", labels.len() - MAX_VISIBLE_OPERATIONS),
+            notice_style(),
+        ));
     }
     for operation in operations
         .iter()
@@ -1085,7 +1139,11 @@ fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
     } else {
         CellStatus::Passed
     };
-    let (marker, style) = status_marker(status);
+    let (marker, style) = if status == CellStatus::Passed {
+        ("•", Style::default().fg(Color::Cyan))
+    } else {
+        status_marker(status)
+    };
     let title = if running {
         "Editing"
     } else if failed {
@@ -1939,6 +1997,34 @@ mod tests {
         assert!(!rendered[0].contains("```"));
     }
 
+    #[test]
+    fn markdown_renders_links_italics_urls_and_tables() {
+        let lines = render_markdown(
+            "*note* [Latch](https://example.test)\n\n| A | B |\n|---|---|\n| 你 | https://example.test/x |",
+        );
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(rendered.contains("note"));
+        assert!(rendered.contains("Latch (https://example.test)"));
+        assert!(rendered.contains("│ A │ B │"));
+        assert!(!rendered.contains("|---"));
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .any(|span| span.style.add_modifier.contains(Modifier::ITALIC))
+        );
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .any(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
+        );
+    }
+
     // ---- input editor ----
 
     fn editor_with(text: &str) -> InputEditor {
@@ -2274,5 +2360,53 @@ mod tests {
         let cut = truncate(&text, 5);
         assert!(cut.chars().count() <= 5);
         assert!(cut.ends_with('…') || cut.chars().count() < 5);
+    }
+
+    #[test]
+    fn exit_aliases_are_local_and_graceful() {
+        for command in ["/quit", "/exit"] {
+            let mut app = App::default();
+            for ch in command.chars() {
+                app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+            assert!(matches!(
+                app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)),
+                Some(Action::Quit)
+            ));
+            assert!(app.presentation.cells().is_empty());
+            assert!(
+                app.items.is_empty(),
+                "exit commands must never look like user messages"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_c_cancels_when_busy_and_quits_when_idle() {
+        let mut app = App::default();
+        assert!(matches!(
+            app.on_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(Action::Quit)
+        ));
+        app.busy = true;
+        assert!(matches!(
+            app.on_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(Action::Cancel)
+        ));
+    }
+
+    #[test]
+    fn grapheme_cursor_uses_terminal_display_width() {
+        let mut editor = editor_with("你e\u{301}");
+        assert_eq!(cursor_position(&editor, 20), (0, 3));
+        editor.left();
+        assert_eq!(
+            editor.cursor(),
+            (0, 1),
+            "combining sequence moves as one grapheme"
+        );
+        assert_eq!(cursor_position(&editor, 20), (0, 2));
+        editor.backspace();
+        assert_eq!(editor.text(), "e\u{301}");
     }
 }

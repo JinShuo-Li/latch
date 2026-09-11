@@ -1,0 +1,6 @@
+› 修复 failing test
+
+✗ Ran cargo test
+  └ test failed
+
+    assertion failed
