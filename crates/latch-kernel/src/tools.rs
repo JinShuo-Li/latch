@@ -1060,14 +1060,7 @@ fn hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 fn line_delta(before: &[u8], after: &[u8]) -> (usize, usize) {
-    let before = String::from_utf8_lossy(before);
-    let after = String::from_utf8_lossy(after);
-    let before_lines = before.lines().collect::<HashSet<_>>();
-    let after_lines = after.lines().collect::<HashSet<_>>();
-    (
-        after_lines.difference(&before_lines).count(),
-        before_lines.difference(&after_lines).count(),
-    )
+    crate::linediff::line_delta(before, after)
 }
 fn is_dependency_file(path: &Path) -> bool {
     matches!(

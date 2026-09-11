@@ -4,6 +4,7 @@ pub mod agent;
 pub mod config;
 pub mod continuity;
 pub mod extension;
+pub mod linediff;
 pub mod progress;
 pub mod prompt;
 pub mod provider;
