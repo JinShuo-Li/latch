@@ -723,7 +723,15 @@ impl App {
                 if text.trim().is_empty() {
                     return None;
                 }
-                self.items.push(TranscriptItem::User { text: text.clone() });
+                // Normal prompts are displayed by the ONE authoritative path:
+                // the durable UserMessage event, rendered through the shared
+                // formatter that resume replay uses. They must not be echoed
+                // here a second time. Slash commands are different: they are
+                // local control commands that never become durable UserMessage
+                // events, so echo them exactly once at submit.
+                if text.trim_start().starts_with('/') {
+                    self.items.push(TranscriptItem::User { text: text.clone() });
+                }
                 if text == "/quit" || text == "/exit" {
                     return Some(Action::Quit);
                 }
@@ -1793,6 +1801,85 @@ mod tests {
         assert_eq!(app.input.text(), "earlier");
         app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(app.input.text(), "");
+    }
+
+    // ---- single display path for user prompts ----
+
+    #[test]
+    fn normal_prompt_is_not_echoed_by_the_tui() {
+        let mut app = App::default();
+        for ch in "inspect this".chars() {
+            app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(action, Some(Action::Submit(ref text)) if text == "inspect this"));
+        assert!(
+            app.items.is_empty(),
+            "normal prompts render from the durable UserMessage event, not a local echo"
+        );
+        // The durable event, delivered through the shared formatter, is the
+        // one authoritative display path: exactly one visible item.
+        app.apply_item(DisplayItem::UserMessage {
+            text: "inspect this".into(),
+        });
+        assert_eq!(app.items.len(), 1);
+    }
+
+    #[test]
+    fn two_identical_normal_prompts_stay_two_visible_items() {
+        let mut app = App::default();
+        for text in ["same prompt", "same prompt"] {
+            for ch in text.chars() {
+                app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+            let before = app.items.len();
+            let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+            assert!(matches!(action, Some(Action::Submit(_))));
+            assert_eq!(
+                app.items.len(),
+                before,
+                "no local echo for normal prompts; durable event is pending"
+            );
+            // One durable UserMessage event per submission.
+            app.apply_item(DisplayItem::UserMessage { text: text.into() });
+        }
+        assert_eq!(app.items.len(), 2);
+        assert!(matches!(
+            app.items[0],
+            TranscriptItem::User { ref text } if text == "same prompt"
+        ));
+        assert!(matches!(
+            app.items[1],
+            TranscriptItem::User { ref text } if text == "same prompt"
+        ));
+    }
+
+    #[test]
+    fn slash_command_echoes_exactly_once() {
+        let mut app = App::default();
+        // The palette completes "/diff" to "/diff " on Enter; the next Enter
+        // submits the completed command.
+        for ch in "/diff".chars() {
+            app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(action, Some(Action::Submit(ref text)) if text.trim() == "/diff"));
+        assert_eq!(
+            app.items.len(),
+            1,
+            "slash command is a local control command echoed once"
+        );
+        assert!(matches!(
+            app.items[0],
+            TranscriptItem::User { ref text } if text.trim() == "/diff"
+        ));
+        // Slash commands produce no durable UserMessage, so replay never adds
+        // a second copy: the local echo is the only copy.
+        app.apply_item(DisplayItem::KernelNotice {
+            text: "mode: WORK".into(),
+        });
+        assert_eq!(app.items.len(), 2);
     }
 
     // ---- shared formatter integration ----
