@@ -36,59 +36,84 @@ impl PromptCompiler {
                 "core.identity",
                 10,
                 true,
-                "You are Latch, a quiet terminal coding agent. Reason about reality; the kernel owns and records reality.",
+                "You are Latch, a coding agent working autonomously in a terminal inside the user's workspace. Interpret requests as software engineering work: when asked to change code, find the relevant code and change it instead of describing the change.",
             ),
             fragment(
-                "core.communication",
+                "core.execution",
                 20,
                 true,
-                "Communicate concisely. Explain findings, actions, and evidence. Stop when the requested task is satisfied.",
+                "Default to action. Once the task is clear enough to proceed, carry it through without asking for confirmation on ordinary, reversible decisions; an approved task covers its in-scope steps end to end. Do not stop at understanding the repository, proposing a plan, finding the likely bug, the first edit, or the first green build.\n\nFor implementation work the loop is: understand -> modify -> validate -> diagnose -> modify -> validate. Every tool call should resolve a specific unknown, change the implementation, validate behavior, or diagnose a concrete failure.\n\nContinue until the task is complete or you are blocked on something only the user can resolve. A successful tool call, a passing narrow test, or a large amount of work already done is not completion: before finishing, check the original request against the implementation and confirm every material requirement was addressed. Long tasks may take many tool calls; never stop merely because the session is long.",
+            ),
+            fragment(
+                "core.inspection",
+                30,
+                true,
+                "Inspect with a purpose: read enough code to make the next informed change, then act. Prefer targeted reads and searches over exhaustive repository archaeology. Re-inspect a file, symbol, or query only when the code changed, a result gives new evidence, or a concrete question remains; if several actions yield no new information or repository change, change approach. Batch independent inspections in one response.",
+            ),
+            fragment(
+                "core.scope",
+                40,
+                true,
+                "Deliver the requested scope completely. Do not add features, abstractions, compatibility layers, refactors, or speculative error handling beyond the task; validate only at real boundaries and trust internal guarantees. Minimal changes are not an excuse for an incomplete or brittle result: make the smallest coherent change that fully solves the problem.",
+            ),
+            fragment(
+                "core.decisions",
+                50,
+                true,
+                "When several ordinary implementation choices exist, inspect repository conventions, tests, and configuration and pick one. Infer what the repository already answers instead of asking; ask only when the choice materially changes the requested behavior or is irreversible.",
             ),
             fragment(
                 "core.tool_semantics",
-                30,
+                60,
                 true,
-                "Prefer the dedicated read_file, search, git_status, and git_diff tools for inspection; they preserve provenance and version hashes. read_file returns a bounded line window with a continuation offset and search returns a bounded result page; read ranges instead of expecting whole files, and use read_artifact to page through spilled shell, search, diff, or validation output by id. Use shell only for checks those tools cannot express, and prefer a single dedicated tool over a compound shell pipeline. For long-running commands (servers, watchers, long builds) use exec_start, then exec_poll for new output and exec_terminate to stop, instead of a blocking shell call. Shell commands already run with the workspace as the working directory, so `cd <workspace> &&` is redundant — write plain `git log --oneline -20`. `cd` into a workspace subdirectory is allowed for read-only inspection (for example `cd src && rg normalize_username .`); never `cd` outside the workspace. Read a file before editing and pass its observed hash. Tool failures are evidence; reconsider assumptions rather than inventing success.",
+                "Prefer read_file, search, git_status, and git_diff over shell for inspection; they preserve provenance and version hashes. read_file returns a bounded window with the file hash and a continuation offset, so read ranges instead of whole files; search returns a bounded page, and read_artifact pages through spilled shell, search, diff, or validation output. Shell runs in the workspace root: write plain commands, `cd` into a subdirectory only for read-only inspection, and never `cd` outside the workspace. Use shell only for checks the dedicated tools cannot express, as one focused command rather than a compound pipeline. For servers, watchers, and long builds use exec_start, then exec_poll and exec_terminate instead of a blocking call. Read a file before editing it and pass the hash from that read; tool failures are evidence — reconsider assumptions rather than retrying the same call.",
+            ),
+            fragment(
+                "core.communication",
+                70,
+                true,
+                "Your text output is what the user reads between tool calls. Say in one sentence what you are about to do before the first tool call, then give a short update only at load-bearing findings, direction changes, or blockers; do not narrate deliberation or restate the plan. End with a concise, outcome-first summary of what changed, what was verified, and any remaining limitation — not a chronological transcript. Match length to the task.",
             ),
             fragment(
                 "policy.evidence",
-                40,
+                80,
                 true,
-                "Validation intent is yours; validation truth is the kernel's. To check a requirement, run the validate tool with a semantic requirement name and the command that proves it. The kernel executes the command, records the evidence, and derives completion — you never supply or need internal identifiers. Re-running validate for a requirement that now passes supersedes its earlier failure. Use record_evidence only for pending or unavailable non-command claims; you cannot self-certify passed or failed evidence. Do not report the task complete until required validation has produced passing evidence; if validation is unavailable, the kernel reports IMPLEMENTED, NOT VERIFIED.",
-            ),
-            fragment(
-                "policy.failure",
-                50,
-                true,
-                "When re-ground is requested, inspect current reality, name disproven assumptions, and choose a materially different strategy before further mutation.",
+                "Validation intent is yours; validation truth is the kernel's. Call validate with a semantic requirement name and the proving command: the kernel runs it, records the evidence, and derives completion. A failed requirement that now passes is superseded. record_evidence reports only pending or unavailable non-command claims; you cannot self-certify passed or failed. Do not claim completion until required validation has passing evidence — otherwise the kernel reports IMPLEMENTED, NOT VERIFIED.",
             ),
             fragment(
                 "policy.stale_context",
-                70,
+                90,
                 true,
-                "Treat observations as versioned. If an edit is stale, re-read and regenerate it; never overwrite newer changes.",
+                "Observations are versioned. If an edit is rejected as stale, the file changed outside Latch since it was read: re-read and regenerate the change instead of forcing the old base, and never overwrite newer changes.",
+            ),
+            fragment(
+                "policy.failure",
+                100,
+                true,
+                "When re-ground is requested, inspect current reality, name the disproven assumptions, and choose a materially different strategy before any further mutation.",
             ),
         ];
         let mode_text = match mode {
             Mode::Ask => {
-                "ASK is read-only. Inspect with read_file, search, git_status, and git_diff. Do not run tests, builds, or package managers, and do not use shell to modify the workspace; shell is limited to conservative read-only commands."
+                "ASK is read-only. Inspect with read_file, search, git_status, and git_diff. Do not run tests, builds, or package managers, do not modify the workspace, and keep shell to conservative read-only commands."
             }
             Mode::Plan => {
-                "PLAN is deep read-only exploration. Produce an implementation plan; no workspace mutation is permitted. Prefer dedicated inspection tools over shell, which is limited to conservative read-only commands."
+                "PLAN is deep read-only exploration. Inspect and produce an implementation plan; no workspace mutation is permitted. Prefer the dedicated inspection tools; shell stays limited to conservative read-only commands."
             }
             Mode::Work => {
-                "WORK permits policy-approved changes. Investigate, modify, verify, review, and stop naturally; a formal plan is optional."
+                "WORK permits policy-approved changes. Investigate, implement, validate, and fix failures until the requested work is complete; a formal plan is optional."
             }
         };
         f.push(fragment(
             &format!("mode.{}", mode.to_string().to_ascii_lowercase()),
-            80,
+            110,
             true,
             mode_text,
         ));
+        // Per-session context follows the stable coding-agent behavior above.
         f.push(fragment(
             "task.state",
-            90,
+            120,
             false,
             &format!(
                 "Current canonical task state:\n{}",
@@ -97,7 +122,7 @@ impl PromptCompiler {
         ));
         f.push(fragment(
             "environment.workspace",
-            100,
+            130,
             false,
             &format!("Workspace: {}", workspace.display()),
         ));
@@ -107,7 +132,7 @@ impl PromptCompiler {
         {
             f.push(fragment(
                 &format!("environment.instructions.{name}"),
-                110 + index as i32,
+                140 + index as i32,
                 false,
                 &format!("Repository instructions from {name}:\n{content}"),
             ));
@@ -144,6 +169,13 @@ fn load_repository_instructions(workspace: &Path) -> Result<Vec<(String, String)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn work_prompt() -> (tempfile::TempDir, CompiledPrompt) {
+        let d = tempfile::tempdir().unwrap();
+        let p = PromptCompiler::compile(Mode::Work, &TaskState::default(), d.path()).unwrap();
+        (d, p)
+    }
+
     #[test]
     fn assembles_fragments_in_order() {
         let d = tempfile::tempdir().unwrap();
@@ -155,5 +187,135 @@ mod tests {
                 .windows(2)
                 .all(|w| w[0].priority <= w[1].priority)
         );
+    }
+
+    #[test]
+    fn coding_agent_execution_prompt_is_used() {
+        let (_d, p) = work_prompt();
+        let ids: Vec<&str> = p.fragments.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "core.identity",
+                "core.execution",
+                "core.inspection",
+                "core.scope",
+                "core.decisions",
+                "core.tool_semantics",
+                "core.communication",
+                "policy.evidence",
+                "policy.stale_context",
+                "policy.failure",
+                "mode.work",
+                "task.state",
+                "environment.workspace",
+            ]
+        );
+        let execution = p.fragment("core.execution").unwrap();
+        assert!(execution.content.contains("Default to action"));
+        assert!(
+            execution
+                .content
+                .contains("understand -> modify -> validate")
+        );
+        assert!(execution.content.contains("not completion"));
+        let inspection = p.fragment("core.inspection").unwrap();
+        assert!(inspection.content.contains("Inspect with a purpose"));
+        let scope = p.fragment("core.scope").unwrap();
+        assert!(
+            scope
+                .content
+                .contains("Deliver the requested scope completely")
+        );
+        let communication = p.fragment("core.communication").unwrap();
+        assert!(communication.content.contains("outcome-first"));
+    }
+
+    #[test]
+    fn obsolete_scope_and_hedging_instructions_are_gone() {
+        let (_d, p) = work_prompt();
+        for banned in [
+            "policy.scope",
+            "Keep changes within the requested scope",
+            "Justify substantial growth",
+            "quiet terminal coding agent",
+            "Stop when the requested task is satisfied",
+        ] {
+            assert!(
+                !p.text.contains(banned),
+                "obsolete instruction `{banned}` is still injected"
+            );
+        }
+    }
+
+    #[test]
+    fn latch_tool_and_runtime_guidance_remains() {
+        let (_d, p) = work_prompt();
+        for required in [
+            "read_file",
+            "read_artifact",
+            "search",
+            "git_diff",
+            "exec_start",
+            "exec_poll",
+            "never `cd` outside the workspace",
+            "hash from that read",
+            "validate",
+            "record_evidence",
+            "IMPLEMENTED, NOT VERIFIED",
+            "re-ground",
+        ] {
+            assert!(
+                p.text.contains(required),
+                "required Latch guidance `{required}` is missing"
+            );
+        }
+    }
+
+    #[test]
+    fn stable_behavior_precedes_per_session_context() {
+        let (_d, p) = work_prompt();
+        let dynamic = ["task.state", "environment.workspace"];
+        let lowest_static = p
+            .fragments
+            .iter()
+            .filter(|f| !dynamic.contains(&f.id.as_str()))
+            .map(|f| f.priority)
+            .max()
+            .unwrap();
+        for fragment in p
+            .fragments
+            .iter()
+            .filter(|f| dynamic.contains(&f.id.as_str()))
+        {
+            assert!(
+                fragment.priority > lowest_static,
+                "{} must follow stable behavior",
+                fragment.id
+            );
+            assert!(!fragment.cacheable);
+        }
+    }
+
+    #[test]
+    fn prompt_does_not_grow_without_bound() {
+        let (_d, p) = work_prompt();
+        let estimator = crate::tokens::TokenEstimator::generic();
+        let static_tokens: usize = p
+            .fragments
+            .iter()
+            .filter(|f| f.cacheable)
+            .map(|f| estimator.estimate(&f.content))
+            .sum();
+        assert!(
+            static_tokens <= 1_450,
+            "static coding prompt grew to {static_tokens} tokens"
+        );
+        assert!(
+            p.approximate_tokens() <= 1_550,
+            "compiled prompt grew to {} tokens",
+            p.approximate_tokens()
+        );
+        assert_eq!(p.fragments.len(), 13);
     }
 }

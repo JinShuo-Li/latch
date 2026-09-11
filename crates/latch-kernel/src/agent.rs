@@ -1467,7 +1467,7 @@ fn tool_error(call: &ToolCall, output: String) -> ToolResult {
 /// Deterministic provider-valid anchor used when the recent window no longer
 /// contains the original user prompt. Canonical state carries the actual task,
 /// so this only restores conversational continuity.
-const CONTINUATION_ANCHOR: &str = "Kernel: the original user prompt has scrolled out of the active recent window; the canonical task state above remains authoritative. The transcript below continues the current task.";
+const CONTINUATION_ANCHOR: &str = "Kernel: the original user prompt has scrolled out of the active recent window; the canonical task state above remains authoritative. The transcript below continues the current task — keep working until it is complete or you are blocked on something only the user can resolve.";
 
 fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMessage> {
     let raw = ctx

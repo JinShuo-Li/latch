@@ -29,6 +29,19 @@ flowchart LR
     X[stdio extensions] <--> K
 ```
 
+## Prompt architecture
+
+`PromptCompiler` assembles the model-facing system prompt from prioritized
+fragments. Stable coding-agent behavior comes first: identity, execution
+(default to action, the implementation loop, completion discipline),
+inspection focus, scope discipline, decision-making, tool semantics,
+communication style, and the validation/stale/reground policies. Mode text
+follows, then per-session context (canonical task state, workspace, repository
+instructions). Only the stable fragments are marked cacheable; dynamic context
+is never mixed into them. The compiled prompt is intentionally bounded and
+covered by tests that pin the fragment order, forbid obsolete policy text, keep
+Latch-specific tool/runtime guidance, and cap its size.
+
 ## The V0.1.1 shift: models express validation intent, the kernel owns truth
 
 The model names what must hold — `validate {"requirement": "existing unittest
