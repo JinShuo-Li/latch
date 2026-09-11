@@ -1515,10 +1515,13 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     normalized
 }
 fn relative(root: &Path, path: &Path) -> Result<String> {
-    Ok(path
-        .strip_prefix(root.canonicalize()?)?
-        .to_string_lossy()
-        .into_owned())
+    let root = root.canonicalize()?;
+    // A path outside the workspace only reaches here after an explicit human
+    // approval; record it absolutely so provenance and undo stay honest.
+    match path.strip_prefix(&root) {
+        Ok(relative) => Ok(relative.to_string_lossy().into_owned()),
+        Err(_) => Ok(path.to_string_lossy().into_owned()),
+    }
 }
 fn version(root: &Path, path: &Path, bytes: &[u8]) -> Result<FileVersion> {
     Ok(FileVersion {
@@ -2464,6 +2467,59 @@ mod tests {
     }
 
     // ---- ranged reads, artifact reads, and managed processes ----
+
+    #[tokio::test]
+    async fn approved_outside_write_succeeds_and_records_absolute_path() {
+        let d = tempdir().unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let session = store.create_session(d.path()).unwrap();
+        let e = ToolExecutor::new(
+            d.path().into(),
+            d.path().join("artifacts"),
+            store.clone(),
+            session,
+            PolicyEngine::new(
+                Mode::Work,
+                d.path().into(),
+                PermissionConfig {
+                    outside_workspace: OutsidePolicy::Ask,
+                    ..PermissionConfig::default()
+                },
+            ),
+        )
+        .unwrap();
+        let outside = tempdir().unwrap();
+        let target = outside.path().join("note.txt");
+        let call = ToolCall {
+            id: "write-outside".into(),
+            name: "write".into(),
+            arguments: json!({"path": target.to_string_lossy(), "content": "hello", "base_hash": null}),
+        };
+        // Without approval the same call is refused by resolution.
+        let refused = e.execute(&call, CancellationToken::new()).await;
+        assert!(refused.is_error);
+        e.approve_call("write-outside");
+        let ok = e.execute(&call, CancellationToken::new()).await;
+        assert!(!ok.is_error, "{}", ok.output);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
+        let events = store.events(session).unwrap();
+        let changed = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::FileChanged { after, owner, .. } if *owner == ChangeOwner::Latch => {
+                    Some(after.path.clone())
+                }
+                _ => None,
+            })
+            .expect("file change recorded");
+        assert!(
+            Path::new(&changed).is_absolute(),
+            "outside paths are recorded absolutely: {changed}"
+        );
+        // Approval is single-use: a second execution is refused again.
+        let reused = e.execute(&call, CancellationToken::new()).await;
+        assert!(reused.is_error);
+    }
 
     #[tokio::test]
     async fn read_file_supports_ranges_and_continuation() {
