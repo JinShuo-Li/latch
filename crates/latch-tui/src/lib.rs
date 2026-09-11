@@ -26,20 +26,21 @@ use latch_protocol::{Event as DurableEvent, Mode, ToolResult, ToolRunStatus};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use std::io::{self, Stdout, Write};
 use tokio::sync::mpsc;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
+mod composer;
 mod diff;
 mod presentation;
 mod session_picker;
 mod sidebar;
+use composer::display_width;
+pub use composer::{Composer, VisualRow};
 pub use diff::{DiffDocument, DiffFile, DiffHunk, DiffLine, DiffLineKind, parse_unified_diff};
 pub use presentation::{Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel};
 pub use session_picker::{PickerSelection, SessionItem, SessionPreviewLine, run_session_picker};
@@ -47,8 +48,6 @@ pub use sidebar::{Pricing, SidebarModel, SidebarSession};
 
 /// Visual rows moved per mouse wheel event.
 const WHEEL_ROWS: usize = 3;
-/// Maximum visual rows the input area may occupy before it scrolls internally.
-const MAX_INPUT_ROWS: usize = 8;
 /// Maximum slash palette entries shown at once.
 const MAX_PALETTE_ROWS: usize = 6;
 
@@ -76,6 +75,10 @@ pub enum Output {
     Mode(Mode),
     Header {
         model: String,
+        /// Friendly provider label, for example `OpenCode Go` or `Anthropic`.
+        provider: String,
+        /// Session workspace, shown in the welcome state and composer footer.
+        workspace: String,
         branch: String,
         resumed: bool,
         /// Optional user-configured pricing for the session model. `None` means
@@ -254,288 +257,7 @@ impl TranscriptItem {
     }
 }
 
-/// Multiline input editor with a real cursor and shell-like prompt history.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct InputEditor {
-    lines: Vec<String>,
-    row: usize,
-    /// Cursor column as a char offset within `lines[row]`.
-    col: usize,
-    history: Vec<String>,
-    history_index: Option<usize>,
-    draft: Option<String>,
-}
-
-impl InputEditor {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            lines: vec![String::new()],
-            ..Self::default()
-        }
-    }
-    #[must_use]
-    pub fn text(&self) -> String {
-        self.lines.join("\n")
-    }
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.lines.iter().all(|line| line.is_empty())
-    }
-    #[must_use]
-    pub fn cursor(&self) -> (usize, usize) {
-        (self.row, self.col)
-    }
-    fn current_len(&self) -> usize {
-        self.lines[self.row].chars().count()
-    }
-    pub fn insert(&mut self, ch: char) {
-        let line = &mut self.lines[self.row];
-        let byte = line
-            .char_indices()
-            .nth(self.col)
-            .map(|(byte, _)| byte)
-            .unwrap_or(line.len());
-        line.insert(byte, ch);
-        self.col += 1;
-    }
-
-    /// Inserts one paste payload without interpreting any embedded newline as
-    /// an input event. CRLF and bare CR are normalized to durable `\n`.
-    pub fn insert_text(&mut self, text: &str) {
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-        if normalized.is_empty() {
-            return;
-        }
-        let parts = normalized.split('\n').collect::<Vec<_>>();
-        let cursor_byte = char_to_byte(&self.lines[self.row], self.col);
-        let suffix = self.lines[self.row][cursor_byte..].to_owned();
-        self.lines[self.row].truncate(cursor_byte);
-        self.lines[self.row].push_str(parts[0]);
-
-        if parts.len() == 1 {
-            self.lines[self.row].push_str(&suffix);
-            self.col += parts[0].chars().count();
-            return;
-        }
-
-        let insert_at = self.row + 1;
-        for (offset, part) in parts.iter().skip(1).enumerate() {
-            let mut line = (*part).to_owned();
-            if offset + 2 == parts.len() {
-                line.push_str(&suffix);
-            }
-            self.lines.insert(insert_at + offset, line);
-        }
-        self.row += parts.len() - 1;
-        self.col = parts.last().map_or(0, |part| part.chars().count());
-    }
-    /// Inserts a newline (Alt+Enter): splits the current line at the cursor.
-    pub fn newline(&mut self) {
-        let line = self.lines[self.row].clone();
-        let byte = line
-            .char_indices()
-            .nth(self.col)
-            .map(|(byte, _)| byte)
-            .unwrap_or(line.len());
-        let (head, tail) = line.split_at(byte);
-        let tail = tail.to_owned();
-        self.lines[self.row] = head.to_owned();
-        self.lines.insert(self.row + 1, tail);
-        self.row += 1;
-        self.col = 0;
-    }
-    pub fn backspace(&mut self) {
-        if self.col > 0 {
-            let line = &mut self.lines[self.row];
-            let cursor_byte = char_to_byte(line, self.col);
-            let previous = line[..cursor_byte]
-                .grapheme_indices(true)
-                .next_back()
-                .map_or(0, |(byte, _)| byte);
-            let removed_chars = line[previous..cursor_byte].chars().count();
-            line.drain(previous..cursor_byte);
-            self.col = self.col.saturating_sub(removed_chars);
-        } else if self.row > 0 {
-            let line = self.lines.remove(self.row);
-            self.row -= 1;
-            self.col = self.lines[self.row].chars().count();
-            self.lines[self.row].push_str(&line);
-        }
-    }
-    pub fn delete(&mut self) {
-        let line = &mut self.lines[self.row];
-        if self.col < line.chars().count() {
-            let byte = char_to_byte(line, self.col);
-            let removed = line[byte..]
-                .graphemes(true)
-                .next()
-                .map(str::len)
-                .unwrap_or(0);
-            line.drain(byte..byte + removed);
-        } else if self.row + 1 < self.lines.len() {
-            let next = self.lines.remove(self.row + 1);
-            self.lines[self.row].push_str(&next);
-        }
-    }
-    pub fn left(&mut self) {
-        if self.col > 0 {
-            let byte = char_to_byte(&self.lines[self.row], self.col);
-            let step = self.lines[self.row][..byte]
-                .graphemes(true)
-                .next_back()
-                .map_or(1, |g| g.chars().count());
-            self.col = self.col.saturating_sub(step);
-        } else if self.row > 0 {
-            self.row -= 1;
-            self.col = self.current_len();
-        }
-    }
-    pub fn right(&mut self) {
-        if self.col < self.current_len() {
-            let byte = char_to_byte(&self.lines[self.row], self.col);
-            let step = self.lines[self.row][byte..]
-                .graphemes(true)
-                .next()
-                .map_or(1, |g| g.chars().count());
-            self.col = (self.col + step).min(self.current_len());
-        } else if self.row + 1 < self.lines.len() {
-            self.row += 1;
-            self.col = 0;
-        }
-    }
-    pub fn line_home(&mut self) {
-        self.col = 0;
-    }
-    pub fn line_end(&mut self) {
-        self.col = self.current_len();
-    }
-    pub fn kill_to_line_start(&mut self) {
-        let line = &mut self.lines[self.row];
-        let byte = line
-            .char_indices()
-            .nth(self.col)
-            .map(|(byte, _)| byte)
-            .unwrap_or(line.len());
-        line.drain(..byte);
-        self.col = 0;
-    }
-    pub fn kill_to_line_end(&mut self) {
-        let line = &mut self.lines[self.row];
-        let byte = line
-            .char_indices()
-            .nth(self.col)
-            .map(|(byte, _)| byte)
-            .unwrap_or(line.len());
-        line.drain(byte..);
-    }
-    /// Ctrl+W: delete the word before the cursor.
-    pub fn kill_word(&mut self) {
-        let line = &mut self.lines[self.row];
-        let chars: Vec<char> = line.chars().collect();
-        let end = self.col.min(chars.len());
-        let mut start = end;
-        while start > 0 && chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        while start > 0 && !chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        if start < end {
-            let tail: String = chars[end..].iter().collect();
-            let head: String = chars[..start].iter().collect();
-            *line = format!("{head}{tail}");
-            self.col = start;
-        } else if self.row > 0 && end == 0 {
-            self.backspace();
-        }
-    }
-    /// Up: previous input line when multiline, otherwise prompt history.
-    pub fn up(&mut self) {
-        if self.row > 0 {
-            self.row -= 1;
-            self.col = self.col.min(self.current_len());
-        } else {
-            self.history_previous();
-        }
-    }
-    /// Down: next input line when multiline, otherwise prompt history.
-    pub fn down(&mut self) {
-        if self.row + 1 < self.lines.len() {
-            self.row += 1;
-            self.col = self.col.min(self.current_len());
-        } else {
-            self.history_next();
-        }
-    }
-    /// Recalls the previous submitted prompt. Editing a recalled prompt never
-    /// mutates the stored history entry.
-    pub fn history_previous(&mut self) {
-        if self.history.is_empty() {
-            return;
-        }
-        match self.history_index {
-            None => {
-                self.draft = Some(self.text());
-                let index = self.history.len() - 1;
-                self.history_index = Some(index);
-                self.set_text(&self.history[index].clone());
-            }
-            Some(0) => {}
-            Some(index) => {
-                self.history_index = Some(index - 1);
-                self.set_text(&self.history[index - 1].clone());
-            }
-        }
-    }
-    /// Returns toward the newest entry; passing it restores the in-progress
-    /// draft unchanged.
-    pub fn history_next(&mut self) {
-        match self.history_index {
-            None => {}
-            Some(index) if index + 1 < self.history.len() => {
-                self.history_index = Some(index + 1);
-                self.set_text(&self.history[index + 1].clone());
-            }
-            Some(_) => {
-                self.history_index = None;
-                if let Some(draft) = self.draft.take() {
-                    self.set_text(&draft);
-                }
-            }
-        }
-    }
-    fn set_text(&mut self, text: &str) {
-        self.lines = text.split('\n').map(str::to_owned).collect();
-        self.row = self.lines.len() - 1;
-        self.col = self.current_len();
-    }
-    /// Seeds prompt history from the durable session (resume).
-    pub fn seed_history(&mut self, history: Vec<String>) {
-        self.history = history;
-    }
-    /// Takes the composed text for submission, records it in history, and
-    /// resets the editor to empty.
-    pub fn take_for_submit(&mut self) -> String {
-        let text = self.text();
-        if self
-            .history
-            .last()
-            .map(|last| last != &text)
-            .unwrap_or(true)
-            && !text.trim().is_empty()
-        {
-            self.history.push(text.clone());
-        }
-        self.history_index = None;
-        self.draft = None;
-        self.lines = vec![String::new()];
-        self.row = 0;
-        self.col = 0;
-        text
-    }
-}
-
 struct Palette {
     selected: usize,
     dismissed: bool,
@@ -550,10 +272,10 @@ impl Palette {
     }
     /// The palette is active while the input's first line is a bare command
     /// prefix: starts with `/` and contains no whitespace yet.
-    fn active(&self, input: &InputEditor) -> bool {
-        let first = &input.lines[0];
+    fn active(&self, input: &Composer) -> bool {
+        let first = input.first_line();
         !self.dismissed
-            && input.lines.len() == 1
+            && input.line_count() == 1
             && first.starts_with('/')
             && !first.contains(char::is_whitespace)
     }
@@ -580,17 +302,21 @@ impl Palette {
 }
 
 struct App {
-    input: InputEditor,
+    input: Composer,
     palette: Palette,
     presentation: PresentationModel,
     items: Vec<TranscriptItem>,
     streaming: Option<String>,
     mode: Mode,
     model: String,
+    provider: String,
+    workspace: String,
     branch: String,
     resumed: bool,
     detail: bool,
     busy: bool,
+    /// True after a cancelled or errored run, until the next prompt starts.
+    interrupted: bool,
     /// Offset from the top of the transcript in visual (wrapped) rows.
     scroll: usize,
     /// Whether the viewport is pinned to the newest content.
@@ -613,6 +339,13 @@ struct App {
     diff_viewport_rows: usize,
     /// A pending kernel approval request awaiting a human decision.
     permission: Option<PermissionPrompt>,
+    /// Composer body width/height from the last render, for visual navigation.
+    last_input_width: usize,
+    last_input_height: usize,
+    /// Screen rect of the composer body, for mouse-wheel routing.
+    composer_body: ratatui::layout::Rect,
+    /// Screen position of the terminal cursor from the last render.
+    last_cursor: Option<(u16, u16)>,
 }
 
 /// Human-visible form of a `PermissionRequested` event.
@@ -626,17 +359,20 @@ pub struct PermissionPrompt {
 impl Default for App {
     fn default() -> Self {
         Self {
-            input: InputEditor::new(),
+            input: Composer::new(),
             palette: Palette::new(),
             presentation: PresentationModel::default(),
             items: Vec::new(),
             streaming: None,
             mode: Mode::default(),
             model: String::new(),
+            provider: String::new(),
+            workspace: String::new(),
             branch: String::new(),
             resumed: false,
             detail: false,
             busy: false,
+            interrupted: false,
             scroll: 0,
             follow: true,
             content_rows: 0,
@@ -650,6 +386,10 @@ impl Default for App {
             diff_max_scroll: 0,
             diff_viewport_rows: 0,
             permission: None,
+            last_input_width: 0,
+            last_input_height: 0,
+            composer_body: ratatui::layout::Rect::default(),
+            last_cursor: None,
         }
     }
 }
@@ -658,7 +398,7 @@ impl App {
         self.input.insert_text(text);
         self.palette.dismissed = false;
         self.palette
-            .clamp(filter_commands(&self.input.lines[0]).len());
+            .clamp(filter_commands(self.input.first_line()).len());
     }
 
     fn output(&mut self, out: Output) {
@@ -678,6 +418,7 @@ impl App {
                     });
                 }
                 self.busy = true;
+                self.interrupted = false;
             }
             Output::AssistantDone => {
                 self.streaming = None;
@@ -724,7 +465,13 @@ impl App {
                 self.sidebar.apply_event(&event);
             }
             Output::ToolResult(result) => self.presentation.apply_tool_result(&result),
-            Output::Notice(text) => self.presentation.push_notice(text),
+            Output::Notice(text) => {
+                if text.starts_with("error:") {
+                    self.interrupted = true;
+                    self.busy = false;
+                }
+                self.presentation.push_notice(text);
+            }
             Output::Mode(mode) => {
                 self.mode = mode;
                 let mut session = self.sidebar.session().clone();
@@ -733,11 +480,15 @@ impl App {
             }
             Output::Header {
                 model,
+                provider,
+                workspace,
                 branch,
                 resumed,
                 pricing,
             } => {
                 self.model = model.clone();
+                self.provider = provider;
+                self.workspace = workspace;
                 self.branch = branch.clone();
                 self.resumed = resumed;
                 let mut session = self.sidebar.session().clone();
@@ -930,11 +681,14 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
-                KeyCode::Char('c') => Some(if self.busy {
-                    Action::Cancel
-                } else {
-                    Action::Quit
-                }),
+                KeyCode::Char('c') => {
+                    if self.busy {
+                        self.interrupted = true;
+                        Some(Action::Cancel)
+                    } else {
+                        Some(Action::Quit)
+                    }
+                }
                 KeyCode::Char('a') => {
                     self.input.line_home();
                     None
@@ -955,6 +709,14 @@ impl App {
                     self.input.kill_to_line_end();
                     None
                 }
+                KeyCode::Home => {
+                    self.input.buffer_home();
+                    None
+                }
+                KeyCode::End => {
+                    self.input.buffer_end();
+                    None
+                }
                 KeyCode::Char('t') => {
                     self.detail = !self.detail;
                     None
@@ -964,12 +726,12 @@ impl App {
                     None
                 }
                 KeyCode::Char('p') if self.palette.active(&self.input) => {
-                    let len = filter_commands(&self.input.lines[0]).len();
+                    let len = filter_commands(self.input.first_line()).len();
                     self.palette.previous(len);
                     None
                 }
                 KeyCode::Char('n') if self.palette.active(&self.input) => {
-                    let len = filter_commands(&self.input.lines[0]).len();
+                    let len = filter_commands(self.input.first_line()).len();
                     self.palette.next(len);
                     None
                 }
@@ -980,9 +742,32 @@ impl App {
             self.input.newline();
             return None;
         }
+        // Shift+Home/End and Shift+PageUp/PageDown stay with the transcript so
+        // full scrollback navigation survives the composer owning plain keys.
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            match key.code {
+                KeyCode::Home => {
+                    self.scroll_home();
+                    return None;
+                }
+                KeyCode::End => {
+                    self.scroll_end();
+                    return None;
+                }
+                KeyCode::PageUp => {
+                    self.scroll_up(self.viewport_rows.max(1));
+                    return None;
+                }
+                KeyCode::PageDown => {
+                    self.scroll_down(self.viewport_rows.max(1));
+                    return None;
+                }
+                _ => {}
+            }
+        }
         let palette_active = self.palette.active(&self.input);
         let candidates = if palette_active {
-            filter_commands(&self.input.lines[0])
+            filter_commands(self.input.first_line())
         } else {
             Vec::new()
         };
@@ -1017,7 +802,7 @@ impl App {
                 self.input.backspace();
                 self.palette.dismissed = false;
                 self.palette
-                    .clamp(filter_commands(&self.input.lines[0]).len());
+                    .clamp(filter_commands(self.input.first_line()).len());
                 None
             }
             KeyCode::Delete => {
@@ -1033,38 +818,69 @@ impl App {
                 None
             }
             KeyCode::Up => {
-                self.input.up();
+                self.input.up(self.last_input_width.max(1));
                 None
             }
             KeyCode::Down => {
-                self.input.down();
+                self.input.down(self.last_input_width.max(1));
                 None
             }
             KeyCode::Home => {
-                self.scroll_home();
+                self.input.line_home();
                 None
             }
             KeyCode::End => {
-                self.scroll_end();
+                self.input.line_end();
                 None
             }
             KeyCode::PageUp => {
-                self.scroll_up(self.viewport_rows.max(1));
+                self.page_composer_or_transcript(-1);
                 None
             }
             KeyCode::PageDown => {
-                self.scroll_down(self.viewport_rows.max(1));
+                self.page_composer_or_transcript(1);
                 None
             }
             KeyCode::Char(ch) => {
                 self.input.insert(ch);
                 self.palette.dismissed = false;
                 self.palette
-                    .clamp(filter_commands(&self.input.lines[0]).len());
+                    .clamp(filter_commands(self.input.first_line()).len());
                 None
             }
             _ => None,
         }
+    }
+
+    /// Page keys move through the composer when it overflows; otherwise they
+    /// keep their long-standing transcript-scroll role.
+    fn page_composer_or_transcript(&mut self, direction: i32) {
+        let width = self.last_input_width.max(1);
+        let height = self.last_input_height.max(1);
+        if self.input.is_scrollable(width, height) {
+            if direction < 0 {
+                self.input.page_up(width, height);
+            } else {
+                self.input.page_down(width, height);
+            }
+            self.input.reconcile_viewport(width, height);
+        } else if direction < 0 {
+            self.scroll_up(self.viewport_rows.max(1));
+        } else {
+            self.scroll_down(self.viewport_rows.max(1));
+        }
+    }
+
+    fn composer_scroll_up(&mut self, rows: usize) {
+        let width = self.last_input_width.max(1);
+        let height = self.last_input_height.max(1);
+        self.input.scroll_lines(-(rows as isize), width, height);
+    }
+
+    fn composer_scroll_down(&mut self, rows: usize) {
+        let width = self.last_input_width.max(1);
+        let height = self.last_input_height.max(1);
+        self.input.scroll_lines(rows as isize, width, height);
     }
 }
 
@@ -1579,66 +1395,6 @@ fn visual_height(items: &[TranscriptItem], width: u16) -> usize {
         .line_count(width)
 }
 
-fn char_to_byte(text: &str, offset: usize) -> usize {
-    text.char_indices()
-        .nth(offset)
-        .map_or(text.len(), |(byte, _)| byte)
-}
-
-/// Greedy word-wrap of one logical input line into visual rows, each paired
-/// with the char offset it starts at. The cursor position uses this exact
-/// layout, so wrapping and cursor placement always agree.
-fn wrap_input_line(line: &str, width: usize) -> Vec<(usize, String)> {
-    if width == 0 {
-        return vec![(0, line.to_owned())];
-    }
-    let mut rows = Vec::new();
-    let mut start_chars = 0usize;
-    let mut row = String::new();
-    let mut row_width = 0usize;
-    for grapheme in line.graphemes(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme).max(1);
-        if !row.is_empty() && row_width + grapheme_width > width {
-            rows.push((start_chars, std::mem::take(&mut row)));
-            start_chars += rows.last().map_or(0, |(_, text)| text.chars().count());
-            row_width = 0;
-        }
-        row.push_str(grapheme);
-        row_width += grapheme_width;
-    }
-    if !row.is_empty() || rows.is_empty() {
-        rows.push((start_chars, row));
-    }
-    rows
-}
-
-/// Visual (row, column) of the editor cursor within the wrapped input rows.
-fn cursor_position(editor: &InputEditor, width: usize) -> (usize, usize) {
-    let mut visual_row = 0usize;
-    for (index, line) in editor.lines.iter().enumerate() {
-        let rows = wrap_input_line(line, width);
-        if index == editor.row {
-            for (row_index, (start, content)) in rows.iter().enumerate() {
-                let row_len = content.chars().count();
-                if editor.col >= *start && editor.col <= start + row_len {
-                    let byte = char_to_byte(content, editor.col - start);
-                    return (
-                        visual_row + row_index,
-                        UnicodeWidthStr::width(&content[..byte]),
-                    );
-                }
-            }
-            let (_start, content) = rows.last().expect("wrap never yields empty");
-            return (
-                visual_row + rows.len() - 1,
-                UnicodeWidthStr::width(content.as_str()),
-            );
-        }
-        visual_row += rows.len();
-    }
-    (visual_row, 0)
-}
-
 /// A small deterministic Markdown subset for assistant text: headings, bullet
 /// and numbered lists, fenced code blocks, inline code, and bold. Enough that
 /// model output stops reading like raw Markdown source; not a browser engine.
@@ -1986,101 +1742,511 @@ fn draw_diff_overlay(frame: &mut ratatui::Frame<'_>, app: &mut App, area: ratatu
     frame.render_widget(Paragraph::new(Line::styled(hint, notice_style())), rows[2]);
 }
 
+/// Responsive chrome rows around the composer.
+///
+/// Rows are dropped in priority order as the terminal shrinks: footer, top
+/// spacer, hints, gap, then the metadata row. The editor body itself is only
+/// ever reduced to a single row, never removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ComposerChrome {
+    spacer: u16,
+    body: u16,
+    gap: u16,
+    meta: u16,
+    rule: u16,
+    hints: u16,
+    footer: u16,
+}
+
+impl ComposerChrome {
+    fn total(self) -> u16 {
+        self.spacer + self.body + self.gap + self.meta + self.rule + self.hints + self.footer
+    }
+
+    fn responsive(height: u16, content_rows: usize) -> Self {
+        if height < 3 {
+            return Self {
+                body: 1,
+                ..Self::default()
+            };
+        }
+        let max_body = (u32::from(height) * 2 / 5).saturating_sub(4).clamp(1, 16) as u16;
+        let mut chrome = Self {
+            spacer: u16::from(height >= 14),
+            body: (content_rows.max(1) as u16).min(max_body),
+            gap: u16::from(height >= 9),
+            meta: 1,
+            rule: 1,
+            hints: u16::from(height >= 10),
+            footer: u16::from(height >= 16),
+        };
+        let floor = if height >= 10 { 3 } else { 1 };
+        for optional in ["footer", "spacer", "hints", "gap", "meta"] {
+            if height.saturating_sub(chrome.total()) >= floor {
+                break;
+            }
+            match optional {
+                "footer" => chrome.footer = 0,
+                "spacer" => chrome.spacer = 0,
+                "hints" => chrome.hints = 0,
+                "gap" => chrome.gap = 0,
+                "meta" => chrome.meta = 0,
+                _ => {}
+            }
+        }
+        chrome
+    }
+}
+
+fn yellow() -> Style {
+    Style::default().fg(Color::Yellow)
+}
+
+fn focused_accent() -> Style {
+    Style::default().fg(Color::Cyan)
+}
+
+/// Composer status word and color, derived from real run state.
+fn composer_status(app: &App) -> (String, Style) {
+    if app.permission.is_some() {
+        ("approval needed".into(), yellow())
+    } else if app.busy {
+        ("● working".into(), focused_accent())
+    } else if app.interrupted {
+        ("interrupted".into(), yellow())
+    } else {
+        ("ready".into(), notice_style())
+    }
+}
+
+fn hint_spans(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (index, (key, label)) in hints.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled("  ", notice_style()));
+        }
+        spans.push(Span::styled(
+            (*key).to_owned(),
+            Style::default().fg(Color::Gray),
+        ));
+        spans.push(Span::styled(format!(" {label}"), notice_style()));
+    }
+    spans
+}
+
+fn draw_palette(
+    frame: &mut ratatui::Frame<'_>,
+    app: &App,
+    area: ratatui::layout::Rect,
+    candidates: &[&SlashCommand],
+) {
+    if area.height == 0 || area.width == 0 || candidates.is_empty() {
+        return;
+    }
+    let window_start = app
+        .palette
+        .selected
+        .saturating_sub(MAX_PALETTE_ROWS - 1)
+        .min(candidates.len().saturating_sub(1));
+    let mut rows = Vec::new();
+    for (index, command) in candidates
+        .iter()
+        .skip(window_start)
+        .take(MAX_PALETTE_ROWS)
+        .enumerate()
+    {
+        let selected = window_start + index == app.palette.selected;
+        let name_style = if selected {
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let description_style = if selected {
+            Style::default().fg(Color::White).bg(Color::DarkGray)
+        } else {
+            notice_style()
+        };
+        rows.push(Line::from(vec![
+            Span::styled(format!("  {:<12}", command.name), name_style),
+            Span::styled(command.description, description_style),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(rows), area);
+}
+
+fn draw_welcome(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(""),
+        Line::styled(
+            "Latch",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::styled("a quiet terminal coding agent", notice_style()),
+        Line::from(""),
+        Line::styled(
+            "Ask Latch to inspect, change, or verify code. /help lists commands.",
+            notice_style(),
+        ),
+    ];
+    let top = area.height.saturating_sub(lines.len() as u16) / 3;
+    let mut text = vec![Line::from(""); top as usize];
+    text.append(&mut lines);
+    frame.render_widget(
+        Paragraph::new(text)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn draw_footer(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui::layout::Rect) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let width = area.width as usize;
+    let workspace = if app.workspace.is_empty() {
+        ".".to_owned()
+    } else {
+        app.workspace.clone()
+    };
+    let right = format!("latch v{}", env!("CARGO_PKG_VERSION"));
+    let right_width = display_width(&right);
+    let left_width = display_width(&workspace).min(width);
+    let text = if left_width + right_width < width {
+        format!(
+            "{workspace}{}{right}",
+            " ".repeat(width - left_width - right_width)
+        )
+    } else {
+        sidebar::fit(&workspace, width)
+    };
+    frame.render_widget(Paragraph::new(Line::styled(text, notice_style())), area);
+}
+
+fn draw_composer_hints(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui::layout::Rect) {
+    if area.height == 0 || area.width < 28 {
+        return;
+    }
+    let width = area.width as usize;
+    // Secondary shortcuts are abbreviated before the row is clipped.
+    let hints: &[(&str, &str)] = if width < 64 {
+        &[("ctrl+p", "commands")]
+    } else {
+        &[
+            ("enter", "send"),
+            ("alt+enter", "newline"),
+            ("ctrl+p", "commands"),
+        ]
+    };
+    let left = hint_spans(hints);
+    let left_width: usize = left.iter().map(|span| display_width(&span.content)).sum();
+    let right = if !app.follow {
+        "shift+pgup/pgdn scroll".to_owned()
+    } else if !app.sidebar_visible_now() && app.last_width >= SIDEBAR_MIN_AUTO_WIDTH {
+        "ctrl+b sidebar".to_owned()
+    } else if app.detail {
+        "detail view".to_owned()
+    } else {
+        String::new()
+    };
+    let right_width = display_width(&right);
+    let mut spans = left;
+    if !right.is_empty() && left_width + right_width + 2 <= width {
+        spans.push(Span::raw(" ".repeat(width - left_width - right_width)));
+        spans.push(Span::styled(right, notice_style()));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Metadata row inside the composer: mode, model, branch on the left; status
+/// and (when the sidebar is hidden) a compact working-set summary on the
+/// right. Secondary detail is dropped before the status.
+fn composer_meta_line(app: &App, width: usize, sidebar_shown: bool) -> Line<'static> {
+    let mode_style = match app.mode {
+        Mode::Work => focused_accent().add_modifier(Modifier::BOLD),
+        _ => notice_style().add_modifier(Modifier::BOLD),
+    };
+    let mode_text = app.mode.to_string();
+    let mode_width = display_width(&mode_text);
+    let mut fields: Vec<(String, Style)> = Vec::new();
+    if !app.model.is_empty() {
+        fields.push((app.model.clone(), Style::default()));
+    }
+    if !app.branch.is_empty() && app.branch != "-" {
+        fields.push((app.branch.clone(), notice_style()));
+    }
+    if app.resumed {
+        fields.push(("resumed".to_owned(), notice_style()));
+    }
+    let field_width = |count: usize| -> usize {
+        fields
+            .iter()
+            .take(count)
+            .map(|(text, _)| 3 + display_width(text))
+            .sum()
+    };
+    let (status, status_style) = composer_status(app);
+    let status_width = display_width(&status);
+
+    // Longest left prefix that still leaves room for the status word, falling
+    // back to a prefix without it, and finally to just the mode.
+    let with_status = (0..=fields.len())
+        .rev()
+        .find(|count| mode_width + field_width(*count) + 2 + status_width <= width);
+    let without_status = (0..=fields.len())
+        .rev()
+        .find(|count| mode_width + field_width(*count) <= width);
+    let (field_count, include_status) = match (with_status, without_status) {
+        (Some(count), _) => (count, true),
+        (None, Some(count)) => (count, false),
+        (None, None) => (0, false),
+    };
+
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(mode_text, mode_style)];
+    for (text, style) in fields.iter().take(field_count) {
+        spans.push(Span::styled(" · ".to_owned(), notice_style()));
+        spans.push(Span::styled(text.clone(), *style));
+    }
+    let left_width: usize = spans.iter().map(|span| display_width(&span.content)).sum();
+    if !include_status || left_width > width {
+        return Line::from(spans);
+    }
+
+    // Prefer status + context + cost, then status + context, then status.
+    let mut context_span = None;
+    if !sidebar_shown && let Some(context) = app.sidebar.context() {
+        context_span = Some(Span::styled(
+            format!(
+                "≈{}/{} tok",
+                sidebar::format_tokens(context.total_tokens as u64),
+                sidebar::format_tokens(context.window_tokens as u64)
+            ),
+            notice_style(),
+        ));
+    }
+    let cost_span = app.sidebar.estimated_cost().map(|cost| {
+        Span::styled(
+            format!(
+                "est. {}",
+                sidebar::format_money(cost.amount, &cost.currency)
+            ),
+            notice_style(),
+        )
+    });
+    let mut variants: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut full = Vec::new();
+    if let Some(context) = &context_span {
+        full.push(context.clone());
+    }
+    if let Some(cost) = &cost_span {
+        if !full.is_empty() {
+            full.push(Span::styled(" · ".to_owned(), notice_style()));
+        }
+        full.push(cost.clone());
+    }
+    if !full.is_empty() {
+        full.push(Span::styled(" · ".to_owned(), notice_style()));
+    }
+    full.push(Span::styled(status.clone(), status_style));
+    variants.push(full);
+    let mut context_only = Vec::new();
+    if let Some(context) = &context_span {
+        context_only.push(context.clone());
+        context_only.push(Span::styled(" · ".to_owned(), notice_style()));
+    }
+    context_only.push(Span::styled(status.clone(), status_style));
+    if context_only.len() > 1 {
+        variants.push(context_only);
+    }
+    variants.push(vec![Span::styled(status, status_style)]);
+    for variant in variants {
+        let right_width: usize = variant
+            .iter()
+            .map(|span| display_width(&span.content))
+            .sum();
+        if left_width + right_width + 2 <= width {
+            spans.push(Span::raw(" ".repeat(width - left_width - right_width)));
+            spans.extend(variant);
+            return Line::from(spans);
+        }
+    }
+    Line::from(spans)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_composer(
+    frame: &mut ratatui::Frame<'_>,
+    app: &mut App,
+    area: ratatui::layout::Rect,
+    hints_area: ratatui::layout::Rect,
+    footer_area: ratatui::layout::Rect,
+    chrome: &ComposerChrome,
+    sidebar_shown: bool,
+) {
+    draw_composer_hints(frame, app, hints_area);
+    draw_footer(frame, app, footer_area);
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let focused = app.permission.is_none() && app.diff_overlay.is_none();
+    let bar_style = if focused {
+        focused_accent()
+    } else {
+        notice_style()
+    };
+    let inner_width = area.width.saturating_sub(3).max(1) as usize;
+    let body_height = chrome.body.max(1) as usize;
+    app.last_input_width = inner_width;
+    app.last_input_height = body_height;
+    app.composer_body = area;
+    app.input.reconcile_viewport(inner_width, body_height);
+
+    let layout = app.input.layout(inner_width);
+    let viewport = app.input.viewport();
+    let (cursor_row, cursor_col) = app.input.cursor_visual(&layout);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for _ in 0..chrome.spacer {
+        lines.push(Line::from(""));
+    }
+    let body_start = lines.len();
+    for offset in 0..body_height {
+        let index = viewport + offset;
+        let Some(row) = layout.get(index) else {
+            lines.push(Line::from(vec![Span::styled("│", bar_style)]));
+            continue;
+        };
+        let text = sidebar::fit(&app.input.row_text(row), inner_width);
+        if app.input.is_empty() && index == 0 {
+            lines.push(Line::from(vec![
+                Span::styled("│ ", bar_style),
+                Span::styled("Ask Latch…", notice_style()),
+            ]));
+            continue;
+        }
+        let mut spans = vec![Span::styled("│ ", bar_style)];
+        spans.push(Span::raw(text.clone()));
+        let above = index == viewport && viewport > 0;
+        let below = index + 1 == layout.len() && viewport + body_height < layout.len();
+        let indicator = match (above, below) {
+            (true, true) => Some("↕"),
+            (true, false) => Some("↑"),
+            (false, true) => Some("↓"),
+            _ => None,
+        };
+        if let Some(symbol) = indicator {
+            let text_width = display_width(&text);
+            if text_width + 3 <= inner_width {
+                spans.push(Span::raw(" ".repeat(inner_width - text_width - 2)));
+                spans.push(Span::styled(symbol.to_owned(), notice_style()));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    for _ in 0..chrome.gap {
+        lines.push(Line::from(vec![Span::styled("│", bar_style)]));
+    }
+    if chrome.meta > 0 {
+        lines.push(composer_meta_line(app, inner_width, sidebar_shown));
+    }
+    if chrome.rule > 0 {
+        lines.push(Line::styled(
+            format!("╰{}", "─".repeat(area.width.saturating_sub(1) as usize)),
+            notice_style(),
+        ));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+
+    // The terminal cursor is only placed while it is inside the visible body;
+    // a viewport scrolled away hides it rather than pinning it to an edge.
+    if focused && cursor_row >= viewport && cursor_row < viewport + body_height {
+        let row = body_start + (cursor_row - viewport);
+        let col = (3 + cursor_col).min(area.width.saturating_sub(1) as usize) as u16;
+        let position = (area.x + col, area.y + row as u16);
+        frame.set_cursor_position(position);
+        app.last_cursor = Some(position);
+    }
+}
+
 fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let area = frame.area();
-    let width = area.width.max(1) as usize;
+    app.last_width = area.width;
+    app.last_cursor = None;
     let palette_active = app.palette.active(&app.input);
     let candidates = if palette_active {
-        filter_commands(&app.input.lines[0])
+        filter_commands(app.input.first_line())
     } else {
         Vec::new()
     };
     app.palette.clamp(candidates.len());
 
-    // Input height: wrapped visual rows (capped) plus the border row.
-    let input_rows: usize = app
-        .input
-        .lines
-        .iter()
-        .map(|line| wrap_input_line(line, width.saturating_sub(4)).len())
-        .sum::<usize>()
-        .clamp(1, MAX_INPUT_ROWS);
-    let palette_rows = if palette_active {
-        candidates.len().min(MAX_PALETTE_ROWS)
-    } else {
-        0
-    };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(3),
-            Constraint::Length(palette_rows as u16),
-            Constraint::Length((input_rows + 1) as u16),
-        ])
-        .split(area);
-    app.last_width = area.width;
     let overlay_open = app.diff_overlay.is_some();
     let sidebar_shown = sidebar_visible(area.width, app.sidebar_override) && !overlay_open;
     let sidebar_cols = sidebar_width(area.width, sidebar_shown);
-    let mut header = vec![
-        Span::styled(
-            " latch ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!("  {}  {}  {}", app.mode, app.model, app.branch)),
-    ];
-    if app.resumed {
-        header.push(Span::styled("  resumed", notice_style()));
-    }
-    if app.detail {
-        header.push(Span::styled("  detail", Style::default().fg(Color::Cyan)));
-    }
-    if overlay_open {
-        header.push(Span::styled("  diff", Style::default().fg(Color::Cyan)));
-    } else if !sidebar_shown && area.width >= SIDEBAR_MIN_AUTO_WIDTH {
-        header.push(Span::styled("  ^B sidebar", notice_style()));
-    }
-    if !app.follow {
-        let indicator = if app.scroll > 0 {
-            "  ↑ scroll  ↓ newer"
-        } else {
-            "  ↓ newer"
-        };
-        header.push(Span::styled(
-            indicator,
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(header)), chunks[0]);
+
+    let composer_inner = area.width.saturating_sub(3).max(1) as usize;
+    let content_rows = app.input.total_visual_rows(composer_inner);
+    let palette_rows = if palette_active {
+        candidates.len().min(MAX_PALETTE_ROWS) as u16
+    } else {
+        0
+    };
+    let chrome = ComposerChrome::responsive(area.height, content_rows);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(palette_rows),
+            Constraint::Length(
+                chrome.spacer + chrome.body + chrome.gap + chrome.meta + chrome.rule,
+            ),
+            Constraint::Length(chrome.hints),
+            Constraint::Length(chrome.footer),
+        ])
+        .split(area);
+    let transcript_area = chunks[0];
+    let palette_area = chunks[1];
+    let composer_area = chunks[2];
+    let hints_area = chunks[3];
+    let footer_area = chunks[4];
 
     if overlay_open {
-        draw_diff_overlay(frame, app, chunks[1]);
+        draw_diff_overlay(frame, app, transcript_area);
     } else {
         let panes = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(20), Constraint::Length(sidebar_cols)])
-            .split(chunks[1]);
+            .split(transcript_area);
         let viewport = panes[0];
-        let content_rows = semantic_visual_height(
-            app.presentation.cells(),
-            app.streaming.as_deref(),
-            app.detail,
-            viewport.width,
-        );
-        app.sync_viewport(content_rows, viewport.height as usize);
-        let offset = app.scroll.min(u16::MAX as usize) as u16;
-        let paragraph = Paragraph::new(transcript_lines(
-            app.presentation.cells(),
-            app.streaming.as_deref(),
-            app.detail,
-        ))
-        .wrap(Wrap { trim: false })
-        .scroll((offset, 0));
-        frame.render_widget(paragraph, viewport);
+        if app.presentation.cells().is_empty() && app.streaming.is_none() {
+            app.sync_viewport(0, viewport.height as usize);
+            draw_welcome(frame, viewport);
+        } else {
+            let content_rows = semantic_visual_height(
+                app.presentation.cells(),
+                app.streaming.as_deref(),
+                app.detail,
+                viewport.width,
+            );
+            app.sync_viewport(content_rows, viewport.height as usize);
+            let offset = app.scroll.min(u16::MAX as usize) as u16;
+            let paragraph = Paragraph::new(transcript_lines(
+                app.presentation.cells(),
+                app.streaming.as_deref(),
+                app.detail,
+            ))
+            .wrap(Wrap { trim: false })
+            .scroll((offset, 0));
+            frame.render_widget(paragraph, viewport);
+        }
         if sidebar_cols > 0 && panes.len() > 1 {
             let sidebar_area = panes[1];
             let inner_width = sidebar_area.width.saturating_sub(2);
@@ -2093,84 +2259,17 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             frame.render_widget(sidebar, sidebar_area);
         }
     }
-    draw_permission_modal(frame, app, chunks[1]);
-
-    if palette_active && !candidates.is_empty() {
-        let palette_area = chunks[2];
-        let mut rows = Vec::new();
-        let window_start = app
-            .palette
-            .selected
-            .saturating_sub(MAX_PALETTE_ROWS - 1)
-            .min(candidates.len().saturating_sub(1));
-        for (index, command) in candidates
-            .iter()
-            .skip(window_start)
-            .take(MAX_PALETTE_ROWS)
-            .enumerate()
-        {
-            let selected = window_start + index == app.palette.selected;
-            let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            rows.push(Line::from(vec![
-                Span::styled(format!(" {:<10}", command.name), style),
-                Span::styled(
-                    command.description,
-                    if selected { style } else { notice_style() },
-                ),
-            ]));
-        }
-        frame.render_widget(Paragraph::new(rows), palette_area);
-    }
-
-    // Input: wrapped rows windowed around the cursor when longer than the cap.
-    let inner_width = width.saturating_sub(4);
-    let mut visual: Vec<String> = Vec::new();
-    for line in &app.input.lines {
-        for (_, row) in wrap_input_line(line, inner_width) {
-            visual.push(row);
-        }
-    }
-    let (cursor_row, cursor_col) = cursor_position(&app.input, inner_width);
-    let total_visual = visual.len();
-    let start_row = if total_visual <= MAX_INPUT_ROWS {
-        0
-    } else {
-        cursor_row
-            .saturating_sub(MAX_INPUT_ROWS - 1)
-            .min(total_visual - MAX_INPUT_ROWS)
-    };
-    let visible: Vec<Line<'_>> = visual
-        .into_iter()
-        .enumerate()
-        .skip(start_row)
-        .take(MAX_INPUT_ROWS)
-        .map(|(row_index, row)| {
-            Line::from(vec![
-                Span::styled(
-                    if row_index == 0 { "❯ " } else { "  " },
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::raw(row),
-            ])
-        })
-        .collect();
-    let input = Paragraph::new(visible).block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::DarkGray)),
+    draw_permission_modal(frame, app, transcript_area);
+    draw_palette(frame, app, palette_area, &candidates);
+    draw_composer(
+        frame,
+        app,
+        composer_area,
+        hints_area,
+        footer_area,
+        &chrome,
+        sidebar_shown,
     );
-    frame.render_widget(input, chunks[3]);
-
-    // The prompt and its continuation indent both occupy two columns.
-    let prompt_indent = 2u16;
-    frame.set_cursor_position((
-        chunks[3].x + prompt_indent + cursor_col.min(u16::MAX as usize) as u16,
-        chunks[3].y + 1 + cursor_row.saturating_sub(start_row).min(MAX_INPUT_ROWS - 1) as u16,
-    ));
 }
 
 pub async fn run(
@@ -2217,11 +2316,32 @@ pub async fn run(
                 }
                 None => {}
             },
-            Some(Event::Mouse(mouse)) => match mouse.kind {
-                MouseEventKind::ScrollUp => app.scroll_up(WHEEL_ROWS),
-                MouseEventKind::ScrollDown => app.scroll_down(WHEEL_ROWS),
-                _=>{}
-            },
+            Some(Event::Mouse(mouse)) => {
+                // The wheel scrolls whichever surface is under the pointer:
+                // the composer when it overflows, otherwise the transcript.
+                let over_composer = {
+                    let r = app.composer_body;
+                    r.width > 0
+                        && mouse.column >= r.x
+                        && mouse.column < r.x + r.width
+                        && mouse.row >= r.y
+                        && mouse.row < r.y + r.height
+                };
+                let composer_scrollable = app
+                    .input
+                    .is_scrollable(app.last_input_width.max(1), app.last_input_height.max(1));
+                match mouse.kind {
+                    MouseEventKind::ScrollUp if over_composer && composer_scrollable => {
+                        app.composer_scroll_up(WHEEL_ROWS)
+                    }
+                    MouseEventKind::ScrollDown if over_composer && composer_scrollable => {
+                        app.composer_scroll_down(WHEEL_ROWS)
+                    }
+                    MouseEventKind::ScrollUp => app.scroll_up(WHEEL_ROWS),
+                    MouseEventKind::ScrollDown => app.scroll_down(WHEEL_ROWS),
+                    _ => {}
+                }
+            }
             Some(Event::Paste(text)) => app.on_paste(&text),
             None=>break,
             _=>{}
@@ -2546,8 +2666,8 @@ mod tests {
 
     // ---- input editor ----
 
-    fn editor_with(text: &str) -> InputEditor {
-        let mut editor = InputEditor::new();
+    fn editor_with(text: &str) -> Composer {
+        let mut editor = Composer::new();
         for ch in text.chars() {
             editor.insert(ch);
         }
@@ -2616,37 +2736,38 @@ mod tests {
         editor.delete();
         assert_eq!(editor.text(), "one\n!");
         editor.left();
-        editor.down();
+        editor.down(40);
         assert_eq!(editor.cursor(), (1, 0));
     }
 
     #[test]
     fn input_wraps_within_bounded_rows() {
         let editor = editor_with(&"word ".repeat(60));
-        let rows = wrap_input_line(&editor.lines[0], 20);
+        let rows = editor.layout(20);
         assert!(rows.len() > 1);
         assert!(rows.len() < 40);
-        let (row, col) = cursor_position(&editor, 20);
+        let (row, col) = editor.cursor_visual(&rows);
         assert!(row > 0);
         assert!(col <= 20);
-        // Cursor position agrees with the wrapped layout it renders.
+        // Every visual row stays inside the width and the complete buffer is
+        // reachable by concatenating rows in order.
         let joined: String = rows
             .iter()
-            .map(|(_, content)| content.as_str())
+            .map(|row| editor.row_text(row))
             .collect::<Vec<_>>()
             .join("");
-        assert_eq!(joined, editor.lines[0]);
+        assert_eq!(joined, editor.text());
     }
 
     #[test]
     fn multiline_wrapping_accounts_for_every_line() {
-        let mut editor = InputEditor::new();
+        let mut editor = Composer::new();
         for ch in
             "first line here\nsecond much longer line that wraps around a narrow width".chars()
         {
             editor.insert(ch);
         }
-        let (row, _) = cursor_position(&editor, 20);
+        let (row, _) = editor.cursor_visual(&editor.layout(20));
         assert!(row >= 1, "cursor sits on the second logical line");
     }
 
@@ -2654,7 +2775,7 @@ mod tests {
 
     #[test]
     fn history_recalls_without_mutating_and_restores_draft() {
-        let mut editor = InputEditor::new();
+        let mut editor = Composer::new();
         editor.seed_history(vec!["first".into(), "second".into()]);
         editor.insert('x');
         editor.history_previous();
@@ -2675,7 +2796,7 @@ mod tests {
 
     #[test]
     fn submit_records_history_and_resets() {
-        let mut editor = InputEditor::new();
+        let mut editor = Composer::new();
         editor.insert('h');
         editor.insert('i');
         assert_eq!(editor.take_for_submit(), "hi");
@@ -2917,28 +3038,28 @@ mod tests {
     #[test]
     fn grapheme_cursor_uses_terminal_display_width() {
         let mut editor = editor_with("你e\u{301}");
-        assert_eq!(cursor_position(&editor, 20), (0, 3));
+        assert_eq!(editor.cursor_visual(&editor.layout(20)), (0, 3));
         editor.left();
         assert_eq!(
             editor.cursor(),
             (0, 1),
             "combining sequence moves as one grapheme"
         );
-        assert_eq!(cursor_position(&editor, 20), (0, 2));
+        assert_eq!(editor.cursor_visual(&editor.layout(20)), (0, 2));
         editor.backspace();
         assert_eq!(editor.text(), "e\u{301}");
     }
 
     #[test]
     fn paste_multiline_into_empty_editor() {
-        let mut editor = InputEditor::new();
+        let mut editor = Composer::new();
         editor.insert_text("hello\nworld");
         assert_eq!(editor.text(), "hello\nworld");
         assert_eq!(editor.cursor(), (1, 5));
     }
 
     #[test]
-    fn multiline_paste_cursor_is_aligned_with_continuation_indent() {
+    fn multiline_paste_places_the_cursor_on_the_visible_composer_row() {
         let backend = ratatui::backend::TestBackend::new(20, 10);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::default();
@@ -2946,7 +3067,14 @@ mod tests {
 
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
 
-        terminal.backend_mut().assert_cursor_position((5, 9));
+        // The cursor is on the second pasted line inside the composer body:
+        // bar column + two padding spaces + cursor display column.
+        let body = app.composer_body;
+        assert_eq!(app.input.cursor(), (1, 3));
+        assert_eq!(app.last_cursor, Some((body.x + 3 + 3, body.y)));
+        terminal
+            .backend_mut()
+            .assert_cursor_position((body.x + 3 + 3, body.y));
     }
 
     #[test]
@@ -2964,7 +3092,7 @@ mod tests {
 
     #[test]
     fn paste_normalizes_crlf_and_bare_cr() {
-        let mut editor = InputEditor::new();
+        let mut editor = Composer::new();
         editor.insert_text("one\r\ntwo\rthree");
         assert_eq!(editor.text(), "one\ntwo\nthree");
         assert_eq!(editor.cursor(), (2, 5));
@@ -2972,7 +3100,7 @@ mod tests {
 
     #[test]
     fn paste_preserves_trailing_newline_and_blank_lines() {
-        let mut editor = InputEditor::new();
+        let mut editor = Composer::new();
         editor.insert_text("hello\n\n\n");
         assert_eq!(editor.text(), "hello\n\n\n");
         assert_eq!(editor.lines, vec!["hello", "", "", ""]);
@@ -2981,7 +3109,7 @@ mod tests {
 
     #[test]
     fn paste_preserves_cjk_emoji_and_combining_graphemes() {
-        let mut editor = InputEditor::new();
+        let mut editor = Composer::new();
         editor.insert_text("你好 👨‍👩‍👧‍👦 e\u{301}");
         assert_eq!(editor.text(), "你好 👨‍👩‍👧‍👦 e\u{301}");
         editor.backspace();
@@ -3341,6 +3469,8 @@ mod tests {
         let mut app = App::default();
         app.output(Output::Header {
             model: "deepseek-flash".into(),
+            provider: "OpenCode Go".into(),
+            workspace: "/tmp/latch".into(),
             branch: "main".into(),
             resumed: false,
             pricing: Some(crate::sidebar::Pricing {
@@ -3368,6 +3498,289 @@ mod tests {
         })));
         let cost = app.sidebar.estimated_cost().expect("configured pricing");
         assert!((cost.amount - 0.28).abs() < 1e-9);
+    }
+
+    // ---- V4 composer and layout redesign ----
+
+    fn assert_snapshot(name: &str, actual: &str) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/snapshots")
+            .join(name);
+        if std::env::var("LATCH_UPDATE_SNAPSHOTS").is_ok() {
+            std::fs::write(&path, actual).unwrap();
+            return;
+        }
+        let expected =
+            std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing snapshot {name}"));
+        assert_eq!(
+            actual.trim_end(),
+            expected.trim_end(),
+            "snapshot {name} changed"
+        );
+    }
+
+    fn app_with_header(model: &str, workspace: &str) -> App {
+        let mut app = App::default();
+        app.output(Output::Header {
+            model: model.into(),
+            provider: "OpenCode Go".into(),
+            workspace: workspace.into(),
+            branch: "main".into(),
+            resumed: false,
+            pricing: None,
+        });
+        app
+    }
+
+    fn presentation_event(payload: latch_protocol::EventPayload) -> latch_protocol::Event {
+        latch_protocol::Event {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::nil(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
+            payload,
+        }
+    }
+
+    /// A deterministic transcript for layout snapshots, fed through the same
+    /// durable-event path the live TUI uses.
+    fn transcript_fixture(app: &mut App) {
+        for payload in [
+            latch_protocol::EventPayload::UserMessage {
+                text: "Fix the failing test.".into(),
+            },
+            latch_protocol::EventPayload::ToolRequested {
+                call: latch_protocol::ToolCall {
+                    id: "t1".into(),
+                    name: "shell".into(),
+                    arguments: serde_json::json!({"command": "cargo test"}),
+                },
+            },
+            latch_protocol::EventPayload::ToolFailed {
+                result: ToolResult {
+                    call_id: "t1".into(),
+                    name: "shell".into(),
+                    output: "exit code 1\nassertion failed".into(),
+                    is_error: true,
+                    artifact_id: None,
+                },
+            },
+            latch_protocol::EventPayload::AssistantMessageCompleted {
+                text: "The addend is wrong; fixing it now.".into(),
+                tool_calls: vec![],
+                reasoning_content: None,
+            },
+        ] {
+            app.output(Output::Event(Box::new(presentation_event(payload))));
+        }
+    }
+
+    #[test]
+    fn snapshot_welcome_state() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        assert_snapshot("v4_welcome.txt", &render_to_text(&mut app, 100, 24));
+    }
+
+    #[test]
+    fn snapshot_single_line_composer() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        app.input.insert_text("fix the failing test");
+        assert_snapshot("v4_composer_single.txt", &render_to_text(&mut app, 100, 24));
+    }
+
+    #[test]
+    fn snapshot_multiline_composer() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        app.input.insert_text(
+            "line one\nline two\nline three\nline four\nline five\nline six\nline seven",
+        );
+        assert_snapshot(
+            "v4_composer_multiline.txt",
+            &render_to_text(&mut app, 100, 24),
+        );
+    }
+
+    #[test]
+    fn snapshot_large_paste_scrolled_to_top_middle_and_bottom() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        let text = (0..80)
+            .map(|index| format!("pasted line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.input.insert_text(&text);
+        let _ = render_to_text(&mut app, 100, 30);
+        // Bottom (cursor pinned).
+        assert_snapshot("v4_paste_bottom.txt", &render_to_text(&mut app, 100, 30));
+        // Middle: scroll the viewport without touching the buffer.
+        app.input
+            .scroll_lines(-30, app.last_input_width, app.last_input_height);
+        assert_snapshot("v4_paste_middle.txt", &render_to_text(&mut app, 100, 30));
+        // Top.
+        app.input
+            .scroll_lines(-1000, app.last_input_width, app.last_input_height);
+        assert_snapshot("v4_paste_top.txt", &render_to_text(&mut app, 100, 30));
+        assert_eq!(app.input.text(), text, "scrolling never edits the buffer");
+    }
+
+    #[test]
+    fn snapshot_narrow_terminal() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        app.input.insert_text("a narrow but usable composer");
+        assert_snapshot("v4_narrow.txt", &render_to_text(&mut app, 48, 16));
+    }
+
+    #[test]
+    fn snapshot_wide_terminal_with_sidebar() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        app.sidebar.apply_event(&latch_protocol::Event {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::nil(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
+            payload: latch_protocol::EventPayload::ContextMaterialized {
+                stats: latch_protocol::ContextStats {
+                    instructions_tokens: 3_000,
+                    state_tokens: 3_300,
+                    recent_tokens: 37_900,
+                    recall_tokens: 1_500,
+                    tools_tokens: 2_400,
+                    total_tokens: 48_100,
+                    budget_tokens: 243_808,
+                    window_tokens: 256_000,
+                    reserve_tokens: 12_192,
+                    headroom_tokens: 195_708,
+                    durable_events: 503,
+                    episodes: 11,
+                    estimated: true,
+                    status: "bounded".into(),
+                    ..latch_protocol::ContextStats::default()
+                },
+            },
+        });
+        transcript_fixture(&mut app);
+        assert_snapshot("v4_wide_sidebar.txt", &render_to_text(&mut app, 200, 40));
+    }
+
+    #[test]
+    fn snapshot_working_and_interrupted_states() {
+        let mut working = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        working.busy = true;
+        assert_snapshot("v4_working.txt", &render_to_text(&mut working, 100, 20));
+        let mut interrupted = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        interrupted.interrupted = true;
+        assert_snapshot(
+            "v4_interrupted.txt",
+            &render_to_text(&mut interrupted, 100, 20),
+        );
+    }
+
+    #[test]
+    fn snapshot_long_model_and_workspace_metadata() {
+        let mut app = app_with_header(
+            "a-very-long-model-name-that-keeps-going-and-going-flash",
+            "/home/someone/very/deeply/nested/workspace/path/that/is/long",
+        );
+        app.input.insert_text("check the long metadata handling");
+        assert_snapshot("v4_long_metadata.txt", &render_to_text(&mut app, 160, 20));
+    }
+
+    #[test]
+    fn snapshot_cjk_prompt() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        app.input.insert_text("请修复失败的测试并运行验证");
+        assert_snapshot("v4_cjk_prompt.txt", &render_to_text(&mut app, 100, 20));
+    }
+
+    #[test]
+    fn composer_home_end_and_ctrl_variants() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        app.input.insert_text("one\ntwo\nthree");
+        app.on_key(key(KeyCode::Home, KeyModifiers::NONE));
+        assert_eq!(app.input.cursor(), (2, 0), "Home is line start");
+        app.on_key(key(KeyCode::End, KeyModifiers::NONE));
+        assert_eq!(app.input.cursor(), (2, 5), "End is line end");
+        app.on_key(key(KeyCode::Home, KeyModifiers::CONTROL));
+        assert_eq!(app.input.cursor(), (0, 0), "Ctrl+Home is buffer start");
+        app.on_key(key(KeyCode::End, KeyModifiers::CONTROL));
+        assert_eq!(app.input.cursor(), (2, 5), "Ctrl+End is buffer end");
+    }
+
+    #[test]
+    fn page_keys_scroll_the_composer_only_when_it_overflows() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        app.input.insert_text(
+            &(0..60)
+                .map(|index| format!("line {index}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let _ = render_to_text(&mut app, 80, 24);
+        let before = app.input.viewport();
+        app.on_key(key(KeyCode::PageUp, KeyModifiers::NONE));
+        assert!(
+            app.input.viewport() < before,
+            "overflowing composer pages upward"
+        );
+        // A short composer leaves PageUp with its transcript role.
+        let mut short = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        short.sync_viewport(100, 10);
+        short.scroll_up(30);
+        let before = short.scroll;
+        short.on_key(key(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(short.scroll, before - 10, "transcript still pages");
+    }
+
+    #[test]
+    fn mouse_wheel_routing_targets_the_overflowing_composer() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        app.input.insert_text(
+            &(0..40)
+                .map(|index| format!("row {index}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let _ = render_to_text(&mut app, 80, 24);
+        assert!(app.composer_body.height > 0);
+        let before = app.input.viewport();
+        app.composer_scroll_up(WHEEL_ROWS);
+        assert!(app.input.viewport() < before);
+        app.composer_scroll_down(1);
+        assert!(app.input.viewport() <= before);
+    }
+
+    #[test]
+    fn resize_while_editing_preserves_the_buffer_and_cursor() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        let text = (0..40)
+            .map(|index| format!("resize line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.input.insert_text(&text);
+        let _ = render_to_text(&mut app, 120, 30);
+        let wide_height = app.composer_body.height;
+        let _ = render_to_text(&mut app, 56, 16);
+        let narrow_height = app.composer_body.height;
+        assert!(narrow_height <= wide_height);
+        assert_eq!(app.input.text(), text, "resize never edits the buffer");
+        assert!(
+            app.last_cursor.is_some(),
+            "cursor stays visible after resize"
+        );
+        let _ = render_to_text(&mut app, 180, 44);
+        assert_eq!(app.input.text(), text);
+        assert!(app.last_cursor.is_some());
+    }
+
+    #[test]
+    fn working_and_interrupted_states_are_visible_in_the_composer() {
+        let mut working = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        working.busy = true;
+        assert!(render_to_text(&mut working, 100, 20).contains("working"));
+        let mut interrupted = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        interrupted.interrupted = true;
+        assert!(render_to_text(&mut interrupted, 100, 20).contains("interrupted"));
     }
 
     #[test]

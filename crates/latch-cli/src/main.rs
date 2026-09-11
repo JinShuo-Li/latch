@@ -91,7 +91,16 @@ async fn main() -> Result<()> {
         return one_shot(&mut agent, &prompt).await;
     }
     loop {
-        match interactive(agent, model, session, pricing).await? {
+        match interactive(
+            agent,
+            model,
+            session,
+            pricing,
+            provider_label(&config),
+            workspace.clone(),
+        )
+        .await?
+        {
             InteractiveOutcome::Exit => return Ok(()),
             InteractiveOutcome::Resume => {
                 selected = match pick_session(&workspace, &config).await? {
@@ -106,6 +115,19 @@ async fn main() -> Result<()> {
                     build_agent(&workspace, &config, args.mode, selected).await?;
             }
         }
+    }
+}
+
+/// Friendly provider label for the composer metadata, derived from the
+/// configured endpoint and kind.
+fn provider_label(config: &Config) -> String {
+    let base = config.provider.base_url.as_deref().unwrap_or("");
+    if base.contains("opencode.ai/zen/go") {
+        "OpenCode Go".into()
+    } else if config.provider.kind == "anthropic" {
+        "Anthropic".into()
+    } else {
+        "OpenAI-compatible".into()
     }
 }
 
@@ -429,6 +451,8 @@ async fn interactive(
     model: String,
     restored: Option<Restored>,
     pricing: Option<ModelPricing>,
+    provider: String,
+    workspace: PathBuf,
 ) -> Result<InteractiveOutcome> {
     // The TUI is the only path that can approve `Ask` policy decisions.
     agent.enable_interactive_permissions();
@@ -451,6 +475,8 @@ async fn interactive(
     output_tx
         .send(Output::Header {
             model,
+            provider,
+            workspace: workspace.display().to_string(),
             branch: git_branch().unwrap_or_else(|_| "-".into()),
             resumed,
             pricing,
@@ -557,9 +583,12 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
             let commands = SLASH_COMMANDS.iter().map(|c| format!("{}  {}", c.name, c.description)).collect::<Vec<_>>().join("\n");
             tx.send(Output::Notice(format!(
                 "modes: /mode ask|plan|work (WORK mutates; ASK/PLAN are read-only)\n\
-                 scroll: PgUp/PgDn, Home/End, mouse wheel — Ctrl+C cancels a running turn\n\
-                 input: Enter submit · Alt+Enter newline · Ctrl+A/E line start/end · Ctrl+W delete word\n\
-                 history: Up/Down recalls previous prompts\n\
+                 composer: Enter send · Alt+Enter newline · Home/End line · Ctrl+Home/End buffer\n\
+                 composer scroll: PgUp/PgDn or mouse wheel when the prompt overflows\n\
+                 transcript: Shift+PgUp/PgDn · Shift+Home/End · mouse wheel\n\
+                 input: Ctrl+A/E line start/end · Ctrl+W delete word · Ctrl+U/K delete to line edges\n\
+                 history: Up/Down at the first/last composer line recalls previous prompts\n\
+                 interrupt: Ctrl+C cancels a running turn, or quits when idle\n\
                  palette: typing / filters commands · ↑/↓ select · Tab complete · Enter run · Esc close\n\
                  detail: Ctrl+T or /raw · sidebar: Ctrl+B or /sidebar · resume: /resume\n\
                  diff: /diff opens the inspector (↑/↓ PgUp/PgDn · Ctrl+T raw · Esc close)\n\

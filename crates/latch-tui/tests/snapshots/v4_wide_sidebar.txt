@@ -1,0 +1,40 @@
+› Fix the failing test.                                                                                                                                     │deepseek-flash                             
+                                                                                                                                                            │WORK · 0 turns · 0s                        
+✗ Ran cargo test                                                                                                                                            │on main                                    
+  └ exit code 1                                                                                                                                             │                                           
+                                                                                                                                                            │CONTEXT                                    
+    exit code 1                                                                                                                                             │Working set  ≈48.1k / 256k tok             
+    assertion failed                                                                                                                                        │██████░░░░░░░░░░░░░░░░░░░░░░░░░░           
+                                                                                                                                                            │Recent      37.9k tok                      
+The addend is wrong; fixing it now.                                                                                                                         │State       3.3k tok                       
+                                                                                                                                                            │Recall      1.5k tok                       
+                                                                                                                                                            │Tools+ext   2.4k tok                       
+                                                                                                                                                            │Reserve     12.2k tok                      
+                                                                                                                                                            │Headroom    195.7k tok                     
+                                                                                                                                                            │503 events · 11 episodes                   
+                                                                                                                                                            │                                           
+                                                                                                                                                            │TASK                                       
+                                                                                                                                                            │                                           
+                                                                                                                                                            │USAGE                                      
+                                                                                                                                                            │                                           
+                                                                                                                                                            │CHANGES                                    
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                                                                        
+│ Ask Latch…                                                                                                                                                                                            
+│                                                                                                                                                                                                       
+WORK · deepseek-flash · main                                                                                                                                                                    ready   
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+enter send  alt+enter newline  ctrl+p commands                                                                                                                                                          
+/tmp/latch-ui                                                                                                                                                                               latch v0.1.1
