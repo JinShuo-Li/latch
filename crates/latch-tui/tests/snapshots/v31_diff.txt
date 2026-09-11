@@ -1,0 +1,7 @@
+M src/lib.rs
+index 1111111..2222222 100644
+@@ -18,7 +18,7 @@ fn x() {
+ fn average(values: &[i32]) -> Option<f64> {
+-    Some((sum / values.len() as i32) as f64)
++    Some(sum as f64 / values.len() as f64)
+ }

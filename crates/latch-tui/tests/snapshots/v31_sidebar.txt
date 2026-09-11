@@ -1,0 +1,30 @@
+deepseek-flash
+WORK · 1 turns · 12m
+on main
+
+CONTEXT
+Working set  45.7k / 96k
+███████████████░░░░░░░░░░░░░░░░░
+Recent      37.9k
+Canonical   3.3k
+Recalled    3.1k
+Reserve     16k
+503 events · 11 episodes
+
+TASK
+TTL cache implementation
+● Implementing
+Validations  0 / 2
+
+USAGE
+last  in 428.6k · out 31.4k
+in          428.6k
+out         31.4k
+cache read  286.1k
+cache write —
+est. cost   $0.14
+
+CHANGES
+Latch      1 file  +53 −7
+Shell      1 file  +2 −0
+External   1 file

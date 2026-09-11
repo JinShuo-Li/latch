@@ -4,7 +4,8 @@
 //! person. It deliberately contains no Ratatui types, so live events and a
 //! replayed event stream produce the same committed cells.
 
-use latch_protocol::{Event, EventPayload, ToolCall, ToolResult};
+use crate::diff::{DiffDocument, parse_unified_diff};
+use latch_protocol::{ChangeOwner, Event, EventPayload, ToolCall, ToolResult};
 use serde_json::Value;
 
 const DEFAULT_OUTPUT_LINES: usize = 8;
@@ -69,6 +70,13 @@ pub enum Cell {
     Patch {
         files: Vec<PatchFile>,
     },
+    /// A first-class workspace diff (the `git_diff` tool or `/diff`). The
+    /// raw document is retained verbatim for the detail view and copy/paste.
+    Diff {
+        call_id: String,
+        status: CellStatus,
+        document: DiffDocument,
+    },
     Notice {
         text: String,
     },
@@ -100,6 +108,7 @@ impl Cell {
                 .map(|file| format!("{} {}\n{}", file.kind, file.path, file.raw))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            Self::Diff { document, .. } => document.raw.clone(),
             Self::Notice { text } | Self::Error { text } => text.clone(),
         }
     }
@@ -150,6 +159,13 @@ impl PresentationModel {
                 passed,
                 detail,
             } => self.finish_validation(command, *passed, detail),
+            EventPayload::FileChanged {
+                after,
+                owner: ChangeOwner::Latch,
+                additions,
+                deletions,
+                ..
+            } => self.update_patch_counts(&after.path, *additions, *deletions),
             EventPayload::ExternalFileChangeDetected { path, .. } => self.cells.push(Cell::Error {
                 text: format!("{path} changed since it was inspected; re-reading before editing."),
             }),
@@ -194,6 +210,14 @@ impl PresentationModel {
 
     fn begin_tool(&mut self, call: &ToolCall) {
         if is_hidden_tool(&call.name) {
+            return;
+        }
+        if call.name == "git_diff" {
+            self.cells.push(Cell::Diff {
+                call_id: call.id.clone(),
+                status: CellStatus::Running,
+                document: parse_unified_diff(""),
+            });
             return;
         }
         if let Some(label) = exploration_label(call) {
@@ -306,6 +330,23 @@ impl PresentationModel {
                         return;
                     }
                 }
+                Cell::Diff {
+                    call_id,
+                    status: cell_status,
+                    document,
+                } if *call_id == result.call_id => {
+                    *cell_status = status;
+                    *document = if result.is_error {
+                        DiffDocument {
+                            files: vec![],
+                            raw: clean,
+                            parsed: false,
+                        }
+                    } else {
+                        parse_unified_diff(&clean)
+                    };
+                    return;
+                }
                 Cell::Command {
                     call_id,
                     status: cell_status,
@@ -348,6 +389,24 @@ impl PresentationModel {
                 _ => {}
             }
         }
+        // A diff with no preceding model request (`/diff`) still becomes a
+        // first-class cell rather than an undifferentiated notice.
+        if result.name == "git_diff" {
+            self.cells.push(Cell::Diff {
+                call_id: result.call_id.clone(),
+                status,
+                document: if result.is_error {
+                    DiffDocument {
+                        files: vec![],
+                        raw: clean,
+                        parsed: false,
+                    }
+                } else {
+                    parse_unified_diff(&clean)
+                },
+            });
+            return;
+        }
         // Orphan terminal results remain visible, but never expose correlation
         // identifiers in the normal transcript.
         self.cells.push(if result.is_error {
@@ -359,6 +418,24 @@ impl PresentationModel {
                 text: format!("{} completed", semantic_tool_name(&result.name)),
             }
         });
+    }
+
+    /// Replaces argument-derived edit counts with the kernel ledger's recorded
+    /// deltas, so the transcript edit summary and the sidebar ownership totals
+    /// share one source of truth.
+    fn update_patch_counts(&mut self, path: &str, additions: usize, deletions: usize) {
+        for cell in self.cells.iter_mut().rev() {
+            if let Cell::Patch { files } = cell
+                && let Some(file) = files
+                    .iter_mut()
+                    .rev()
+                    .find(|file| file.path == path && file.status == CellStatus::Running)
+            {
+                file.additions = additions;
+                file.deletions = deletions;
+                return;
+            }
+        }
     }
 
     fn finish_validation(&mut self, command: &str, passed: bool, detail: &str) {
@@ -399,7 +476,6 @@ fn exploration_label(call: &ToolCall) -> Option<String> {
             Some(format!("Search \"{query}\" in {path}"))
         }
         "git_status" => Some("Inspect git status".into()),
-        "git_diff" => Some("Inspect workspace diff".into()),
         "shell" => shell_exploration_label(string_arg(&call.arguments, "command")?),
         _ => None,
     }
@@ -1054,6 +1130,84 @@ mod tests {
             super::super::render_cells_plain(&cells, false).trim_end(),
             include_str!("../tests/snapshots/v3_semantic.txt").trim_end()
         );
+    }
+
+    #[test]
+    fn edit_summary_uses_kernel_ledger_delta_not_patch_line_count() {
+        let model = PresentationModel::from_events(&[
+            request(
+                "p",
+                "patch",
+                json!({"path":"src/lib.rs","old":"a\nb\nc","new":"a\nX\nc"}),
+            ),
+            event(EventPayload::FileChanged {
+                before: None,
+                after: FileVersion {
+                    path: "src/lib.rs".into(),
+                    content_hash: "h".into(),
+                    size: 5,
+                },
+                owner: latch_protocol::ChangeOwner::Latch,
+                undo_artifact: None,
+                additions: 1,
+                deletions: 1,
+            }),
+            result("p", "patch", "updated src/lib.rs @ h", false),
+        ]);
+        let Cell::Patch { files } = &model.cells[0] else {
+            panic!("expected patch cell");
+        };
+        assert_eq!(files[0].additions, 1, "kernel ledger is authoritative");
+        assert_eq!(files[0].deletions, 1);
+        assert_eq!(files[0].status, CellStatus::Passed);
+    }
+
+    #[test]
+    fn git_diff_becomes_a_first_class_diff_cell_not_a_notice() {
+        let model = PresentationModel::from_events(&[
+            request("d", "git_diff", json!({})),
+            result(
+                "d",
+                "git_diff",
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
+                false,
+            ),
+        ]);
+        assert_eq!(model.cells.len(), 1);
+        let Cell::Diff {
+            status, document, ..
+        } = &model.cells[0]
+        else {
+            panic!("git_diff must become a Diff cell, got {:?}", model.cells[0]);
+        };
+        assert_eq!(*status, CellStatus::Passed);
+        assert!(document.parsed);
+        assert_eq!(document.added_lines(), 1);
+        assert_eq!(document.removed_lines(), 1);
+        assert!(
+            !matches!(&model.cells[0], Cell::Notice { .. }),
+            "a diff must never be an undifferentiated notice"
+        );
+        // Raw remains available for copy/paste and the detail view.
+        assert!(model.cells[0].raw_text().contains("diff --git"));
+    }
+
+    #[test]
+    fn diff_cell_renders_delta_summary_and_bounded_body() {
+        let model = PresentationModel::from_events(&[
+            request("d", "git_diff", json!({})),
+            result(
+                "d",
+                "git_diff",
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
+                false,
+            ),
+        ]);
+        let rendered = super::super::render_cells_plain(model.cells(), false);
+        assert!(rendered.contains("Workspace diff"));
+        assert!(rendered.contains("+1"));
+        assert!(rendered.contains("−1"));
+        assert!(rendered.contains("@@ -1 +1 @@"));
     }
 
     #[test]

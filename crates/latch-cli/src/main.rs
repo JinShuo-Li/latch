@@ -6,7 +6,7 @@ use latch_kernel::{
     Agent, AgentRuntime, AnthropicProvider, Config, ContinuityEngine, EventStore, ModelProvider,
     OpenAiProvider, PolicyEngine, ToolExecutor, prompt::PromptCompiler, session,
 };
-use latch_protocol::{EventPayload, Mode, StreamEvent, TaskState};
+use latch_protocol::{EventPayload, Mode, ModelPricing, StreamEvent, TaskState};
 use latch_tui::{Input, Output, SLASH_COMMANDS};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -85,13 +85,13 @@ async fn main() -> Result<()> {
         ResumeChoice::Fresh => None,
         ResumeChoice::Exit => return Ok(()),
     };
-    let (mut agent, mut model, mut session) =
+    let (mut agent, mut model, mut session, mut pricing) =
         build_agent(&workspace, &config, args.mode, selected).await?;
     if let Some(prompt) = args.prompt {
         return one_shot(&mut agent, &prompt).await;
     }
     loop {
-        match interactive(agent, model, session).await? {
+        match interactive(agent, model, session, pricing).await? {
             InteractiveOutcome::Exit => return Ok(()),
             InteractiveOutcome::Resume => {
                 selected = match pick_session(&workspace, &config).await? {
@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
                     ResumeChoice::Fresh => None,
                     ResumeChoice::Exit => return Ok(()),
                 };
-                (agent, model, session) =
+                (agent, model, session, pricing) =
                     build_agent(&workspace, &config, args.mode, selected).await?;
             }
         }
@@ -258,7 +258,7 @@ async fn build_agent(
     config: &Config,
     cli_mode: Option<Mode>,
     resume_session: Option<Uuid>,
-) -> Result<(Agent, String, Option<Restored>)> {
+) -> Result<(Agent, String, Option<Restored>, Option<ModelPricing>)> {
     let db = config.state_dir.join("latch.sqlite3");
     let store = EventStore::open(&db)?;
     let mut restored = None;
@@ -357,7 +357,10 @@ async fn build_agent(
         agent.restore_failures()?;
         agent.restore_progress()?;
     }
-    Ok((agent, model, restored))
+    // Pricing is optional and user-configured; it is resolved for the exact
+    // provider model name and passed to the display layer only.
+    let pricing = config.pricing_for(&model).cloned();
+    Ok((agent, model, restored, pricing))
 }
 
 fn provider(config: &Config, session_id: Uuid) -> Result<Arc<dyn ModelProvider>> {
@@ -415,6 +418,7 @@ async fn interactive(
     mut agent: Agent,
     model: String,
     restored: Option<Restored>,
+    pricing: Option<ModelPricing>,
 ) -> Result<InteractiveOutcome> {
     let (input_tx, mut input_rx) = mpsc::channel(16);
     let (output_tx, output_rx) = mpsc::channel(512);
@@ -436,6 +440,7 @@ async fn interactive(
             model,
             branch: git_branch().unwrap_or_else(|_| "-".into()),
             resumed,
+            pricing,
         })
         .await?;
     let mut outcome = InteractiveOutcome::Exit;
@@ -533,7 +538,8 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                  input: Enter submit · Alt+Enter newline · Ctrl+A/E line start/end · Ctrl+W delete word\n\
                  history: Up/Down recalls previous prompts\n\
                  palette: typing / filters commands · ↑/↓ select · Tab complete · Enter run · Esc close\n\
-                 detail: Ctrl+T or /raw · resume: /resume\n\
+                 detail: Ctrl+T or /raw · sidebar: Ctrl+B or /sidebar · resume: /resume\n\
+                 diff: /diff opens the inspector (↑/↓ PgUp/PgDn · Ctrl+T raw · Esc close)\n\
                  commands:\n{commands}"
             ))).await?;
         }
@@ -541,14 +547,26 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
     }
     Ok(())
 }
-async fn send_tool(agent: &Agent, name: &str, tx: &mpsc::Sender<Output>) -> Result<()> {
-    let r = agent.builtin_tool(name, CancellationToken::new()).await;
-    (if name == "git_diff" && !r.output.trim().is_empty() && !r.is_error {
-        tx.send(Output::Notice(r.output))
-    } else {
-        tx.send(Output::ToolResult(r))
-    })
-    .await?;
+async fn send_tool(agent: &mut Agent, name: &str, tx: &mpsc::Sender<Output>) -> Result<()> {
+    let event_tx = tx.clone();
+    let sink: latch_kernel::AgentEventSink = Arc::new(move |event| {
+        if let latch_kernel::agent::AgentOutput::Durable(event) = event {
+            let _ = event_tx.try_send(Output::Event(event));
+        }
+    });
+    let r = agent
+        .builtin_tool_streamed(name, CancellationToken::new(), &sink)
+        .await;
+    if name == "git_diff" {
+        // The transcript keeps a compact semantic diff cell; the inspector
+        // opens full-width with its own scrolling and raw toggle.
+        tx.send(Output::ToolResult(r.clone())).await?;
+        if !r.output.trim().is_empty() {
+            tx.send(Output::Diff(r.output)).await?;
+        }
+        return Ok(());
+    }
+    tx.send(Output::ToolResult(r)).await?;
     Ok(())
 }
 fn git_branch() -> Result<String> {

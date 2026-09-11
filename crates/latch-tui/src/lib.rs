@@ -36,10 +36,14 @@ use tokio::sync::mpsc;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+mod diff;
 mod presentation;
 mod session_picker;
+mod sidebar;
+pub use diff::{DiffDocument, DiffFile, DiffHunk, DiffLine, DiffLineKind, parse_unified_diff};
 pub use presentation::{Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel};
 pub use session_picker::{PickerSelection, SessionItem, SessionPreviewLine, run_session_picker};
+pub use sidebar::{Pricing, SidebarModel, SidebarSession};
 
 /// Visual rows moved per mouse wheel event.
 const WHEEL_ROWS: usize = 3;
@@ -69,7 +73,12 @@ pub enum Output {
         model: String,
         branch: String,
         resumed: bool,
+        /// Optional user-configured pricing for the session model. `None` means
+        /// the sidebar must show estimated cost as unavailable.
+        pricing: Option<Pricing>,
     },
+    /// A workspace diff to open in the full-width inspector.
+    Diff(String),
     /// Submitted prompts from the durable session, seeding prompt history on
     /// resume without a second history database.
     History(Vec<String>),
@@ -102,7 +111,11 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/diff",
-        description: "Show workspace changes",
+        description: "Open workspace diff inspector",
+    },
+    SlashCommand {
+        name: "/sidebar",
+        description: "Toggle state sidebar (Ctrl+B)",
     },
     SlashCommand {
         name: "/checkpoint",
@@ -581,6 +594,18 @@ struct App {
     content_rows: usize,
     /// Visual row count of the transcript viewport at the last render.
     viewport_rows: usize,
+    /// Authoritative observability state derived from durable events.
+    sidebar: SidebarModel,
+    /// Explicit user override for sidebar visibility; `None` follows width.
+    sidebar_override: Option<bool>,
+    /// Last rendered terminal width, so key handling can toggle responsively.
+    last_width: u16,
+    /// Full-width workspace diff inspector, when opened with `/diff`.
+    diff_overlay: Option<DiffDocument>,
+    diff_raw: bool,
+    diff_scroll: usize,
+    diff_max_scroll: usize,
+    diff_viewport_rows: usize,
 }
 impl Default for App {
     fn default() -> Self {
@@ -600,6 +625,14 @@ impl Default for App {
             follow: true,
             content_rows: 0,
             viewport_rows: 0,
+            sidebar: SidebarModel::new(SidebarSession::default()),
+            sidebar_override: None,
+            last_width: 0,
+            diff_overlay: None,
+            diff_raw: false,
+            diff_scroll: 0,
+            diff_max_scroll: 0,
+            diff_viewport_rows: 0,
         }
     }
 }
@@ -644,19 +677,33 @@ impl App {
                     self.streaming = None;
                 }
                 self.presentation.apply_event(&event);
+                self.sidebar.apply_event(&event);
             }
             Output::ToolResult(result) => self.presentation.apply_tool_result(&result),
             Output::Notice(text) => self.presentation.push_notice(text),
-            Output::Mode(mode) => self.mode = mode,
+            Output::Mode(mode) => {
+                self.mode = mode;
+                let mut session = self.sidebar.session().clone();
+                session.mode = mode;
+                self.sidebar.set_session(session);
+            }
             Output::Header {
                 model,
                 branch,
                 resumed,
+                pricing,
             } => {
-                self.model = model;
-                self.branch = branch;
+                self.model = model.clone();
+                self.branch = branch.clone();
                 self.resumed = resumed;
+                let mut session = self.sidebar.session().clone();
+                session.model = model;
+                session.branch = branch;
+                session.resumed = resumed;
+                session.pricing = pricing;
+                self.sidebar.set_session(session);
             }
+            Output::Diff(raw) => self.open_diff(raw),
             Output::History(history) => self.input.seed_history(history),
         }
     }
@@ -762,8 +809,63 @@ impl App {
         }
     }
 
+    /// Opens the full-width diff inspector.
+    fn open_diff(&mut self, raw: String) {
+        self.diff_overlay = Some(parse_unified_diff(&raw));
+        self.diff_raw = false;
+        self.diff_scroll = 0;
+        self.diff_max_scroll = 0;
+    }
+
+    fn close_diff(&mut self) {
+        self.diff_overlay = None;
+        self.diff_scroll = 0;
+        self.diff_max_scroll = 0;
+    }
+
+    fn sidebar_visible_now(&self) -> bool {
+        sidebar_visible(self.last_width, self.sidebar_override)
+    }
+
+    fn toggle_sidebar(&mut self) {
+        self.sidebar_override = Some(!self.sidebar_visible_now());
+    }
+
+    fn diff_scroll_up(&mut self, rows: usize) {
+        self.diff_scroll = self.diff_scroll.saturating_sub(rows);
+    }
+
+    fn diff_scroll_down(&mut self, rows: usize) {
+        self.diff_scroll = (self.diff_scroll.saturating_add(rows)).min(self.diff_max_scroll);
+    }
+
+    /// Diff inspector keys. Editing keys are swallowed while the inspector is
+    /// open; Ctrl+C still reaches normal cancel/quit handling.
+    fn on_diff_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
+            self.diff_raw = !self.diff_raw;
+            return None;
+        }
+        match key.code {
+            KeyCode::Esc => self.close_diff(),
+            KeyCode::Up => self.diff_scroll_up(1),
+            KeyCode::Down => self.diff_scroll_down(1),
+            KeyCode::PageUp => self.diff_scroll_up(self.diff_viewport_rows.max(1)),
+            KeyCode::PageDown => self.diff_scroll_down(self.diff_viewport_rows.max(1)),
+            KeyCode::Home => self.diff_scroll = 0,
+            KeyCode::End => self.diff_scroll = self.diff_max_scroll,
+            _ => {}
+        }
+        None
+    }
+
     /// Handles a key press. Returns an action for the session loop.
     fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if self.diff_overlay.is_some()
+            && !(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
+        {
+            return self.on_diff_key(key);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
                 KeyCode::Char('c') => Some(if self.busy {
@@ -793,6 +895,10 @@ impl App {
                 }
                 KeyCode::Char('t') => {
                     self.detail = !self.detail;
+                    None
+                }
+                KeyCode::Char('b') => {
+                    self.toggle_sidebar();
                     None
                 }
                 KeyCode::Char('p') if self.palette.active(&self.input) => {
@@ -925,6 +1031,10 @@ impl App {
             self.detail = !self.detail;
             return None;
         }
+        if command == "/sidebar" {
+            self.toggle_sidebar();
+            return None;
+        }
         if !slash_command {
             self.busy = true;
         }
@@ -1040,6 +1150,9 @@ fn cell_lines(cell: &Cell, detail: bool) -> Vec<Line<'static>> {
             validation_lines(*status, title, command, summary, output)
         }
         Cell::Patch { files } => patch_lines(files),
+        Cell::Diff {
+            status, document, ..
+        } => diff_cell_lines(*status, document),
         Cell::Notice { text } => text
             .split('\n')
             .map(|segment| Line::styled(format!("· {segment}"), notice_style()))
@@ -1194,6 +1307,61 @@ fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line<'static>> 
     lines
 }
 
+/// One transcript cell for a first-class diff. Bounded so a large model-issued
+/// diff never floods the transcript; `/diff` opens the full inspector.
+fn diff_cell_lines(status: CellStatus, document: &DiffDocument) -> Vec<Line<'static>> {
+    let (marker, marker_style) = if status == CellStatus::Passed {
+        ("•", Style::default().fg(Color::Cyan))
+    } else {
+        status_marker(status)
+    };
+    let title = match status {
+        CellStatus::Running => "Diff",
+        CellStatus::Passed => "Workspace diff",
+        CellStatus::Failed => "Diff failed",
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{marker} "), marker_style),
+        Span::styled(title.to_owned(), Style::default().bold()),
+    ])];
+    if document.is_empty() {
+        if status == CellStatus::Passed {
+            lines.push(Line::styled("  └ no workspace changes", notice_style()));
+        }
+        return lines;
+    }
+    let mut summary = vec![Span::styled(
+        format!(
+            "  {} file{}  ",
+            document.files.len(),
+            if document.files.len() == 1 { "" } else { "s" }
+        ),
+        notice_style(),
+    )];
+    let additions = document.added_lines();
+    let deletions = document.removed_lines();
+    summary.push(Span::styled(
+        format!("+{additions}"),
+        if additions > 0 {
+            Style::default().fg(Color::Green)
+        } else {
+            notice_style()
+        },
+    ));
+    summary.push(Span::styled(" ", notice_style()));
+    summary.push(Span::styled(
+        format!("−{deletions}"),
+        if deletions > 0 {
+            Style::default().fg(Color::Red)
+        } else {
+            notice_style()
+        },
+    ));
+    lines.push(Line::from(summary));
+    lines.extend(crate::diff::diff_lines_bounded(document, 30));
+    lines
+}
+
 fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
     let failed = files.iter().any(|file| file.status == CellStatus::Failed);
     let running = files.iter().any(|file| file.status == CellStatus::Running);
@@ -1219,14 +1387,13 @@ fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if files.len() == 1 {
         let file = &files[0];
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(format!("{marker} "), style),
             Span::styled(format!("{title} {}", file.path), Style::default().bold()),
-            Span::styled(
-                format!("  +{} −{}", file.additions, file.deletions),
-                notice_style(),
-            ),
-        ]));
+            Span::raw("  "),
+        ];
+        spans.extend(delta_spans(file.additions, file.deletions));
+        lines.push(Line::from(spans));
     } else {
         lines.push(Line::from(vec![
             Span::styled(format!("{marker} "), style),
@@ -1237,14 +1404,13 @@ fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
         ]));
         for (index, file) in files.iter().enumerate() {
             let prefix = if index == 0 { "  └ " } else { "    " };
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(prefix, notice_style()),
                 Span::raw(format!("{} {}", file.kind, file.path)),
-                Span::styled(
-                    format!("  +{} −{}", file.additions, file.deletions),
-                    notice_style(),
-                ),
-            ]));
+                Span::raw("  "),
+            ];
+            spans.extend(delta_spans(file.additions, file.deletions));
+            lines.push(Line::from(spans));
         }
     }
     for file in files
@@ -1257,6 +1423,30 @@ fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
         ));
     }
     lines
+}
+
+/// `+N −N` with independent semantic colors. Zero deltas stay dim so the eye
+/// lands on the direction that actually changed.
+fn delta_spans(additions: usize, deletions: usize) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            format!("+{additions}"),
+            if additions > 0 {
+                Style::default().fg(Color::Green)
+            } else {
+                notice_style()
+            },
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("−{deletions}"),
+            if deletions > 0 {
+                Style::default().fg(Color::Red)
+            } else {
+                notice_style()
+            },
+        ),
+    ]
 }
 
 fn assistant_style() -> Style {
@@ -1572,6 +1762,116 @@ fn find_double_star(chars: &[char], from: usize) -> Option<usize> {
         .find(|&index| chars[index] == '*' && chars.get(index + 1) == Some(&'*'))
 }
 
+/// Below this width the sidebar auto-collapses; narrower terminals stay clean
+/// unless the user explicitly toggles it.
+pub const SIDEBAR_MIN_AUTO_WIDTH: u16 = 110;
+
+/// Whether the sidebar should be shown, honoring an explicit user override.
+#[must_use]
+pub fn sidebar_visible(width: u16, override_state: Option<bool>) -> bool {
+    override_state.unwrap_or(width >= SIDEBAR_MIN_AUTO_WIDTH)
+}
+
+/// Responsive sidebar width in columns. Never a fixed third of the terminal:
+/// wide screens get ~32% clamped to 44, mid screens ~27%, compact screens ~24%.
+#[must_use]
+pub fn sidebar_width(width: u16, visible: bool) -> u16 {
+    if !visible {
+        return 0;
+    }
+    match width {
+        w if w >= 160 => (w as u32 * 32 / 100).clamp(28, 44) as u16,
+        w if w >= 130 => (w as u32 * 27 / 100).clamp(26, 40) as u16,
+        w if w >= 110 => (w as u32 * 24 / 100).clamp(22, 30) as u16,
+        w => (w as u32 * 24 / 100)
+            .clamp(20, 28)
+            .min(u32::from((w / 2).max(1))) as u16,
+    }
+}
+
+/// Full-width diff inspector with its own scrolling and a raw toggle.
+fn draw_diff_overlay(frame: &mut ratatui::Frame<'_>, app: &mut App, area: ratatui::layout::Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let (title, body_lines, parsed) = {
+        let document = app
+            .diff_overlay
+            .as_ref()
+            .expect("draw_diff_overlay requires an open document");
+        let additions = document.added_lines();
+        let deletions = document.removed_lines();
+        let mut title = vec![
+            Span::styled(
+                " diff ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                format!(
+                    "{} file{}",
+                    document.files.len(),
+                    if document.files.len() == 1 { "" } else { "s" }
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("+{additions}"),
+                if additions > 0 {
+                    Style::default().fg(Color::Green)
+                } else {
+                    notice_style()
+                },
+            ),
+            Span::raw(" "),
+            Span::styled(
+                format!("−{deletions}"),
+                if deletions > 0 {
+                    Style::default().fg(Color::Red)
+                } else {
+                    notice_style()
+                },
+            ),
+        ];
+        if !document.parsed && !document.raw.trim().is_empty() {
+            title.push(Span::styled("  raw (unparsed)", notice_style()));
+        }
+        let body = if app.diff_raw {
+            crate::diff::raw_diff_lines(document)
+        } else {
+            crate::diff::diff_lines(document)
+        };
+        (Line::from(title), body, document.parsed)
+    };
+    frame.render_widget(Paragraph::new(title), rows[0]);
+    let body = Paragraph::new(body_lines).wrap(Wrap { trim: false });
+    let body_rows = body.line_count(rows[1].width);
+    app.diff_viewport_rows = rows[1].height as usize;
+    app.diff_max_scroll = body_rows.saturating_sub(rows[1].height as usize);
+    app.diff_scroll = app.diff_scroll.min(app.diff_max_scroll);
+    let offset = app.diff_scroll.min(u16::MAX as usize) as u16;
+    frame.render_widget(body.scroll((offset, 0)), rows[1]);
+    let hint = format!(
+        " ↑/↓ PgUp/PgDn Home/End scroll · Ctrl+T {} · Esc close{}",
+        if app.diff_raw { "semantic" } else { "raw" },
+        if parsed {
+            ""
+        } else {
+            " · unparsed input shown raw"
+        }
+    );
+    frame.render_widget(Paragraph::new(Line::styled(hint, notice_style())), rows[2]);
+}
+
 fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let area = frame.area();
     let width = area.width.max(1) as usize;
@@ -1605,6 +1905,10 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             Constraint::Length((input_rows + 1) as u16),
         ])
         .split(area);
+    app.last_width = area.width;
+    let overlay_open = app.diff_overlay.is_some();
+    let sidebar_shown = sidebar_visible(area.width, app.sidebar_override) && !overlay_open;
+    let sidebar_cols = sidebar_width(area.width, sidebar_shown);
     let mut header = vec![
         Span::styled(
             " latch ",
@@ -1621,6 +1925,11 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     if app.detail {
         header.push(Span::styled("  detail", Style::default().fg(Color::Cyan)));
     }
+    if overlay_open {
+        header.push(Span::styled("  diff", Style::default().fg(Color::Cyan)));
+    } else if !sidebar_shown && area.width >= SIDEBAR_MIN_AUTO_WIDTH {
+        header.push(Span::styled("  ^B sidebar", notice_style()));
+    }
     if !app.follow {
         let indicator = if app.scroll > 0 {
             "  ↑ scroll  ↓ newer"
@@ -1634,23 +1943,42 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     }
     frame.render_widget(Paragraph::new(Line::from(header)), chunks[0]);
 
-    let viewport = chunks[1];
-    let content_rows = semantic_visual_height(
-        app.presentation.cells(),
-        app.streaming.as_deref(),
-        app.detail,
-        viewport.width,
-    );
-    app.sync_viewport(content_rows, viewport.height as usize);
-    let offset = app.scroll.min(u16::MAX as usize) as u16;
-    let paragraph = Paragraph::new(transcript_lines(
-        app.presentation.cells(),
-        app.streaming.as_deref(),
-        app.detail,
-    ))
-    .wrap(Wrap { trim: false })
-    .scroll((offset, 0));
-    frame.render_widget(paragraph, viewport);
+    if overlay_open {
+        draw_diff_overlay(frame, app, chunks[1]);
+    } else {
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(20), Constraint::Length(sidebar_cols)])
+            .split(chunks[1]);
+        let viewport = panes[0];
+        let content_rows = semantic_visual_height(
+            app.presentation.cells(),
+            app.streaming.as_deref(),
+            app.detail,
+            viewport.width,
+        );
+        app.sync_viewport(content_rows, viewport.height as usize);
+        let offset = app.scroll.min(u16::MAX as usize) as u16;
+        let paragraph = Paragraph::new(transcript_lines(
+            app.presentation.cells(),
+            app.streaming.as_deref(),
+            app.detail,
+        ))
+        .wrap(Wrap { trim: false })
+        .scroll((offset, 0));
+        frame.render_widget(paragraph, viewport);
+        if sidebar_cols > 0 && panes.len() > 1 {
+            let sidebar_area = panes[1];
+            let inner_width = sidebar_area.width.saturating_sub(2);
+            let lines = app.sidebar.render_lines(inner_width, sidebar_area.height);
+            let sidebar = Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::LEFT)
+                    .border_style(notice_style()),
+            );
+            frame.render_widget(sidebar, sidebar_area);
+        }
+    }
 
     if palette_active && !candidates.is_empty() {
         let palette_area = chunks[2];
@@ -1746,9 +2074,17 @@ pub async fn run(
         resumed: !replay.is_empty(),
         ..Default::default()
     };
-    for event in replay {
-        app.presentation.apply_event(&event);
+    let session = SidebarSession {
+        model: app.model.clone(),
+        mode: app.mode,
+        branch: app.branch.clone(),
+        resumed: app.resumed,
+        pricing: None,
+    };
+    for event in &replay {
+        app.presentation.apply_event(event);
     }
+    app.sidebar = SidebarModel::from_events(session, &replay);
     app.input.seed_history(history);
     let mut events = EventStream::new();
     loop {
@@ -2573,6 +2909,267 @@ mod tests {
             app.on_key(key(KeyCode::Enter, KeyModifiers::NONE))
                 .is_none()
         );
+    }
+
+    // ---- V3.1 responsive sidebar and diff inspector ----
+
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        let area = buffer.area;
+        let mut out = String::new();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                out.push_str(buffer.cell((x, y)).map_or(" ", |cell| cell.symbol()));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    fn render_to_text(app: &mut App, width: u16, height: u16) -> String {
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        buffer_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn responsive_sidebar_rules_are_clamped_and_not_a_fixed_third() {
+        assert!(!sidebar_visible(80, None));
+        assert!(!sidebar_visible(100, None));
+        assert!(sidebar_visible(110, None));
+        assert!(sidebar_visible(200, None));
+        // Explicit override wins at any width.
+        assert!(sidebar_visible(80, Some(true)));
+        assert!(!sidebar_visible(200, Some(false)));
+        assert_eq!(sidebar_width(200, true), 44, "wide screens clamp at 44");
+        assert_eq!(sidebar_width(160, true), 44);
+        assert_eq!(sidebar_width(159, true), 40);
+        assert_eq!(sidebar_width(130, true), 35);
+        assert_eq!(sidebar_width(129, true), 30);
+        assert_eq!(sidebar_width(110, true), 26);
+        assert_eq!(sidebar_width(80, true), 20);
+        assert!(sidebar_width(200, true) < 200 / 3);
+        assert_eq!(sidebar_width(200, false), 0);
+    }
+
+    #[test]
+    fn ctrl_b_and_slash_sidebar_toggle_agree() {
+        let mut app = App {
+            last_width: 200,
+            ..App::default()
+        };
+        assert!(app.sidebar_visible_now());
+        app.on_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(app.sidebar_override, Some(false));
+        assert!(!app.sidebar_visible_now());
+        app.on_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert!(app.sidebar_visible_now());
+        // The slash command goes through the same toggle and never submits.
+        for ch in "/sidebar".chars() {
+            app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert!(
+            app.on_key(key(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none()
+        );
+        assert_eq!(app.sidebar_override, Some(false));
+        assert!(app.presentation.cells().is_empty());
+    }
+
+    #[test]
+    fn draw_never_panics_across_responsive_sizes_and_cjk_goal() {
+        let mut app = App {
+            model: "a-very-long-model-name-that-should-truncate-gracefully".into(),
+            ..App::default()
+        };
+        app.sidebar.apply_event(&latch_protocol::Event {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::nil(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
+            payload: latch_protocol::EventPayload::ContextMaterialized {
+                stats: latch_protocol::ContextStats {
+                    total_bytes: 45_700,
+                    budget_bytes: 96_000,
+                    durable_events: 503,
+                    episodes: 11,
+                    status: "bounded".into(),
+                    ..latch_protocol::ContextStats::default()
+                },
+            },
+        });
+        app.sidebar.apply_event(&latch_protocol::Event {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::nil(),
+            sequence: 2,
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
+            payload: latch_protocol::EventPayload::TaskStateUpdated {
+                state: latch_protocol::TaskState {
+                    goal: "实现一个内存 TTL 缓存并验证边界条件 🚀".into(),
+                    ..latch_protocol::TaskState::default()
+                },
+            },
+        });
+        for width in [
+            1, 10, 20, 30, 40, 60, 80, 100, 110, 120, 130, 159, 160, 200, 240,
+        ] {
+            for height in [1, 2, 4, 6, 10, 24, 60] {
+                let _ = render_to_text(&mut app, width, height);
+            }
+        }
+    }
+
+    #[test]
+    fn wide_terminal_shows_sidebar_and_narrow_hides_it() {
+        let mut wide = App::default();
+        wide.sidebar.apply_event(&latch_protocol::Event {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::nil(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
+            payload: latch_protocol::EventPayload::ContextMaterialized {
+                stats: latch_protocol::ContextStats {
+                    total_bytes: 45_700,
+                    budget_bytes: 96_000,
+                    status: "bounded".into(),
+                    ..latch_protocol::ContextStats::default()
+                },
+            },
+        });
+        let text = render_to_text(&mut wide, 200, 40);
+        assert!(text.contains("CONTEXT"), "{text}");
+        assert!(text.contains("Working set"));
+
+        let mut narrow = App::default();
+        let text = render_to_text(&mut narrow, 80, 40);
+        assert!(!text.contains("Working set"));
+        // Resizing across the threshold recomputes visibility without panics.
+        let mut resizing = App {
+            last_width: 200,
+            ..App::default()
+        };
+        assert!(resizing.sidebar_visible_now());
+        let _ = render_to_text(&mut resizing, 80, 24);
+        assert!(!resizing.sidebar_visible_now());
+        let _ = render_to_text(&mut resizing, 200, 24);
+        assert!(resizing.sidebar_visible_now());
+    }
+
+    #[test]
+    fn diff_overlay_scrolls_toggles_raw_and_closes() {
+        let mut app = App {
+            last_width: 200,
+            ..App::default()
+        };
+        let mut raw = String::from(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,100 +1,100 @@\n",
+        );
+        for index in 0..100 {
+            raw.push_str(&format!("-old line {index}\n+new line {index}\n"));
+        }
+        app.open_diff(raw);
+        assert!(app.diff_overlay.is_some());
+        let _ = render_to_text(&mut app, 120, 20);
+        assert!(app.diff_max_scroll > 0 || app.diff_viewport_rows > 0);
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.diff_scroll, 1);
+        app.on_key(key(KeyCode::End, KeyModifiers::NONE));
+        assert_eq!(app.diff_scroll, app.diff_max_scroll);
+        app.on_key(key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        assert!(app.diff_raw);
+        // While the inspector is open, typing does not reach the composer.
+        app.on_key(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(app.input.text().is_empty());
+        app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.diff_overlay.is_none());
+    }
+
+    #[test]
+    fn patch_delta_colors_are_independent() {
+        let additions_only = patch_lines(&[PatchFile {
+            call_id: "a".into(),
+            path: "src/new.rs".into(),
+            kind: 'A',
+            additions: 18,
+            deletions: 0,
+            status: CellStatus::Passed,
+            diagnostic: String::new(),
+            raw: String::new(),
+        }]);
+        let spans = &additions_only[0].spans;
+        let added = spans
+            .iter()
+            .find(|span| span.content == "+18")
+            .expect("addition span");
+        assert_eq!(added.style.fg, Some(Color::Green));
+        let removed = spans
+            .iter()
+            .find(|span| span.content == "−0")
+            .expect("deletion span");
+        assert_ne!(
+            removed.style.fg,
+            Some(Color::Red),
+            "zero is not colored red"
+        );
+
+        let deletions_only = patch_lines(&[PatchFile {
+            call_id: "d".into(),
+            path: "src/old.rs".into(),
+            kind: 'D',
+            additions: 0,
+            deletions: 7,
+            status: CellStatus::Passed,
+            diagnostic: String::new(),
+            raw: String::new(),
+        }]);
+        let spans = &deletions_only[0].spans;
+        let added = spans
+            .iter()
+            .find(|span| span.content == "+0")
+            .expect("addition span");
+        assert_ne!(added.style.fg, Some(Color::Green));
+        let removed = spans
+            .iter()
+            .find(|span| span.content == "−7")
+            .expect("deletion span");
+        assert_eq!(removed.style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn header_pricing_reaches_the_sidebar() {
+        let mut app = App::default();
+        app.output(Output::Header {
+            model: "deepseek-flash".into(),
+            branch: "main".into(),
+            resumed: false,
+            pricing: Some(crate::sidebar::Pricing {
+                input_per_million: Some(0.28),
+                output_per_million: Some(0.42),
+                cache_read_per_million: None,
+                cache_write_per_million: None,
+                currency: "USD".into(),
+            }),
+        });
+        app.output(Output::Event(Box::new(latch_protocol::Event {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::nil(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
+            payload: latch_protocol::EventPayload::ModelUsage {
+                usage: latch_protocol::Usage {
+                    input_tokens: 1_000_000,
+                    output_tokens: 0,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                },
+            },
+        })));
+        let cost = app.sidebar.estimated_cost().expect("configured pricing");
+        assert!((cost.amount - 0.28).abs() < 1e-9);
     }
 
     #[test]
