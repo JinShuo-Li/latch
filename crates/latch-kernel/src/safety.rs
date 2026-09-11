@@ -586,8 +586,15 @@ pub fn hard_deny_command(command: &str) -> Option<String> {
     let lower = command.to_ascii_lowercase();
     let words = lower.split_whitespace().collect::<Vec<_>>();
     let first = words.first().copied().unwrap_or("");
+    let recursive_rm = first == "rm"
+        && words.iter().any(|word| {
+            let flag = word.trim_start_matches('-');
+            word.starts_with('-')
+                && (word.starts_with("--recursive")
+                    || (flag.chars().any(|ch| ch == 'r' || ch == 'R') && !flag.is_empty()))
+        });
     let denied = first == "sudo"
-        || (first == "rm" && words.iter().any(|word| word.contains('r')))
+        || recursive_rm
         || (words.starts_with(&["git", "push"])
             && words.iter().any(|word| word.starts_with("--force")))
         || lower.contains("git reset --hard")
@@ -745,7 +752,11 @@ mod tests {
             );
         }
         assert!(hard_deny_command("sudo rm -rf /").is_some());
+        assert!(hard_deny_command("rm -rf build").is_some());
         assert!(hard_deny_command("mkfs.ext4 /dev/sda1").is_some());
+        // A plain file removal is not a privileged/destructive shell denial;
+        // the sandbox still bounds what it can touch.
+        assert!(hard_deny_command("rm control-note.txt").is_none());
         assert!(hard_deny_command("git status").is_none());
     }
 
