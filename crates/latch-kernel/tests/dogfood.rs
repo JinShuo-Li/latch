@@ -1,6 +1,8 @@
 use latch_kernel::config::{ContextConfig, PermissionConfig};
 use latch_kernel::provider::ModelProvider;
-use latch_kernel::{Agent, ContinuityEngine, EventStore, FakeProvider, PolicyEngine, ToolExecutor};
+use latch_kernel::{
+    Agent, AgentRuntime, ContinuityEngine, EventStore, FakeProvider, PolicyEngine, ToolExecutor,
+};
 use latch_protocol::{EventPayload, Mode, ModelResponse, ToolCall};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -130,7 +132,7 @@ async fn scripted_long_session_dogfood() {
             vec![call(
                 "evidence",
                 "record_evidence",
-                json!({"claim":"fixture exact-content check","status":"passed","detail":"shell exited successfully"}),
+                json!({"claim":"fixture exact-content check","status":"passed","detail":"shell exited successfully","source_call_id":"pass"}),
             )],
         ),
         response(
@@ -161,16 +163,16 @@ async fn scripted_long_session_dogfood() {
             reserve_bytes: 300,
         },
     );
-    let mut agent = Agent::new(
-        session,
-        workspace.clone(),
-        Mode::Ask,
-        store.clone(),
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Ask,
+        store: store.clone(),
         provider,
         tools,
         continuity,
-        3,
-    );
+        retry_budget: 3,
+    });
     let sink = Arc::new(|_| {});
     agent
         .run(

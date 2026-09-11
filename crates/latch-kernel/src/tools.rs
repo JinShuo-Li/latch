@@ -80,6 +80,8 @@ struct ChangeRecord {
     path: PathBuf,
     before: Option<Vec<u8>>,
     after_hash: String,
+    additions: usize,
+    deletions: usize,
 }
 #[derive(Debug, Default)]
 struct ChangeLedger {
@@ -100,6 +102,14 @@ pub struct ToolExecutor {
     ledger: Arc<Mutex<ChangeLedger>>,
     mutation_lock: Arc<Mutex<()>>,
     read_slots: Arc<Semaphore>,
+}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScopeStats {
+    pub mutations: usize,
+    pub files: usize,
+    pub additions: usize,
+    pub deletions: usize,
+    pub dependency_files: usize,
 }
 impl ToolExecutor {
     pub fn new(
@@ -135,6 +145,21 @@ impl ToolExecutor {
     pub async fn latch_change_count(&self) -> usize {
         self.ledger.lock().await.latch.len()
     }
+    pub async fn scope_stats(&self) -> ScopeStats {
+        let ledger = self.ledger.lock().await;
+        let files = ledger
+            .latch
+            .iter()
+            .map(|change| &change.path)
+            .collect::<HashSet<_>>();
+        ScopeStats {
+            mutations: ledger.latch.len(),
+            files: files.len(),
+            additions: ledger.latch.iter().map(|change| change.additions).sum(),
+            deletions: ledger.latch.iter().map(|change| change.deletions).sum(),
+            dependency_files: files.iter().filter(|path| is_dependency_file(path)).count(),
+        }
+    }
     #[must_use]
     pub fn definitions() -> Vec<latch_protocol::ToolDefinition> {
         vec![
@@ -168,32 +193,42 @@ impl ToolExecutor {
                 "Show concise Git status and diff summary.",
                 json!({"type":"object","properties":{}}),
             ),
+            def(
+                "git_diff",
+                "Show the workspace diff, with artifact spill when large.",
+                json!({"type":"object","properties":{}}),
+            ),
         ]
     }
     pub async fn execute(&self, call: &ToolCall, cancel: CancellationToken) -> ToolResult {
         let decision = self.policy.decide(&call.name, &call.arguments);
-        self.store
-            .append(
-                self.session_id,
-                EventPayload::PermissionDecision {
-                    tool: call.name.clone(),
-                    decision: format!("{decision:?}"),
-                    reason: String::new(),
-                },
-            )
-            .ok();
+        if let Err(error) = self.store.append(
+            self.session_id,
+            EventPayload::PermissionDecision {
+                tool: call.name.clone(),
+                decision: format!("{decision:?}"),
+                reason: String::new(),
+            },
+        ) {
+            return result(
+                call,
+                format!("persist permission decision: {error}"),
+                true,
+                None,
+            );
+        }
         if let PolicyDecision::Deny(reason) | PolicyDecision::Ask(reason) = decision {
             return result(call, reason, true, None);
         }
-        self.store
-            .append(
-                self.session_id,
-                EventPayload::ToolStarted {
-                    call_id: call.id.clone(),
-                    tool: call.name.clone(),
-                },
-            )
-            .ok();
+        if let Err(error) = self.store.append(
+            self.session_id,
+            EventPayload::ToolStarted {
+                call_id: call.id.clone(),
+                tool: call.name.clone(),
+            },
+        ) {
+            return result(call, format!("persist tool start: {error}"), true, None);
+        }
         let outcome = match call.name.as_str() {
             "read_file" => self.read_file(call).await,
             "search" => self.search(call).await,
@@ -201,20 +236,50 @@ impl ToolExecutor {
             "write" => self.write(call).await,
             "shell" => self.shell(call, cancel).await,
             "git_status" => self.git_status(call).await,
+            "git_diff" => self.git_diff(call).await,
             "checkpoint" => self.checkpoint(call).await,
             "undo" => self.undo(call).await,
             _ => Err(anyhow!("unknown tool {}", call.name)),
         };
-        let r = match outcome {
+        let mut r = match outcome {
             Ok(v) => result(call, v.0, false, v.1),
             Err(e) => result(call, format!("{e:#}"), true, None),
         };
+        if call.name == "shell"
+            && let Err(error) = self.store.append(
+                self.session_id,
+                EventPayload::ValidationResult {
+                    command: call
+                        .arguments
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .into(),
+                    passed: !r.is_error,
+                    detail: r.output.lines().next().unwrap_or("").into(),
+                },
+            )
+        {
+            r = result(
+                call,
+                format!("persist validation result: {error}"),
+                true,
+                None,
+            );
+        }
         let payload = if r.is_error {
             EventPayload::ToolFailed { result: r.clone() }
         } else {
             EventPayload::ToolCompleted { result: r.clone() }
         };
-        self.store.append(self.session_id, payload).ok();
+        if let Err(error) = self.store.append(self.session_id, payload) {
+            return result(
+                call,
+                format!("persist tool result: {error}"),
+                true,
+                r.artifact_id,
+            );
+        }
         r
     }
     async fn read_file(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
@@ -224,7 +289,31 @@ impl ToolExecutor {
             .await
             .with_context(|| format!("read {}", path.display()))?;
         let version = version(&self.workspace, &path, &bytes)?;
-        self.observations.lock().await.insert(path, version.clone());
+        let previous = self
+            .observations
+            .lock()
+            .await
+            .insert(path.clone(), version.clone());
+        if let Some(previous) = previous
+            && previous.content_hash != version.content_hash
+            && !self
+                .ledger
+                .lock()
+                .await
+                .latch
+                .iter()
+                .any(|change| change.path == path && change.after_hash == version.content_hash)
+        {
+            self.store.append(
+                self.session_id,
+                EventPayload::ExternalFileChangeDetected {
+                    path: version.path.clone(),
+                    expected_hash: previous.content_hash,
+                    actual_hash: version.content_hash.clone(),
+                },
+            )?;
+            self.ledger.lock().await.externally_changed.insert(path);
+        }
         self.store.append(
             self.session_id,
             EventPayload::FileObserved {
@@ -249,6 +338,13 @@ impl ToolExecutor {
             .current_dir(&self.workspace)
             .output()
             .await?;
+        if !out.status.success() && out.status.code() != Some(1) {
+            bail!(
+                "search failed with {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
         self.bound_output(text, "search")
     }
@@ -330,10 +426,13 @@ impl ToolExecutor {
             .lock()
             .await
             .insert(path.clone(), after_version.clone());
+        let (additions, deletions) = line_delta(before.as_deref().unwrap_or_default(), &after);
         self.ledger.lock().await.latch.push(ChangeRecord {
             path,
             before,
             after_hash: after_version.content_hash.clone(),
+            additions,
+            deletions,
         });
         self.store.append(
             self.session_id,
@@ -439,6 +538,20 @@ impl ToolExecutor {
             None,
         ))
     }
+    async fn git_diff(&self, _: &ToolCall) -> Result<(String, Option<String>)> {
+        let output = Command::new("git")
+            .args(["diff", "--no-ext-diff", "--"])
+            .current_dir(&self.workspace)
+            .output()
+            .await?;
+        if !output.status.success() {
+            bail!(
+                "git diff failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        self.bound_output(String::from_utf8_lossy(&output.stdout).into_owned(), "diff")
+    }
     async fn checkpoint(&self, _: &ToolCall) -> Result<(String, Option<String>)> {
         let mut l = self.ledger.lock().await;
         let id = Uuid::new_v4();
@@ -523,33 +636,44 @@ fn str_arg<'a>(call: &'a ToolCall, name: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow!("missing string argument {name}"))
 }
 fn resolve_workspace_path(workspace: &Path, path: &str) -> Result<PathBuf> {
-    let joined = if Path::new(path).is_absolute() {
-        PathBuf::from(path)
-    } else {
-        workspace.join(path)
-    };
-    let canonical_parent = joined
-        .parent()
-        .unwrap_or(workspace)
-        .canonicalize()
-        .or_else(|_| canonical_existing_ancestor(joined.parent().unwrap_or(workspace)))?;
-    let candidate =
-        canonical_parent.join(joined.file_name().ok_or_else(|| anyhow!("invalid path"))?);
     let root = workspace.canonicalize()?;
+    let candidate = if Path::new(path).is_absolute() {
+        lexical_normalize(Path::new(path))
+    } else {
+        lexical_normalize(&root.join(path))
+    };
     if !candidate.starts_with(&root) {
         bail!("path escapes workspace");
     }
+    let mut ancestor = candidate.as_path();
+    while !ancestor.exists() {
+        ancestor = ancestor.parent().ok_or_else(|| anyhow!("invalid path"))?;
+    }
+    if !ancestor.canonicalize()?.starts_with(&root) {
+        bail!("path escapes workspace through a symbolic link");
+    }
+    if candidate.exists() {
+        let resolved = candidate.canonicalize()?;
+        if !resolved.starts_with(&root) {
+            bail!("path escapes workspace through a symbolic link");
+        }
+        return Ok(resolved);
+    }
     Ok(candidate)
 }
-fn canonical_existing_ancestor(mut p: &Path) -> Result<PathBuf> {
-    loop {
-        if let Ok(v) = p.canonicalize() {
-            return Ok(v);
+fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
         }
-        p = p
-            .parent()
-            .ok_or_else(|| anyhow!("no existing path ancestor"))?;
     }
+    normalized
 }
 fn relative(root: &Path, path: &Path) -> Result<String> {
     Ok(path
@@ -566,6 +690,22 @@ fn version(root: &Path, path: &Path, bytes: &[u8]) -> Result<FileVersion> {
 }
 fn hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+fn line_delta(before: &[u8], after: &[u8]) -> (usize, usize) {
+    let before = String::from_utf8_lossy(before);
+    let after = String::from_utf8_lossy(after);
+    let before_lines = before.lines().collect::<HashSet<_>>();
+    let after_lines = after.lines().collect::<HashSet<_>>();
+    (
+        after_lines.difference(&before_lines).count(),
+        before_lines.difference(&after_lines).count(),
+    )
+}
+fn is_dependency_file(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("Cargo.toml" | "package.json" | "pyproject.toml" | "go.mod")
+    )
 }
 fn is_read_only_shell(c: &str) -> bool {
     if c.chars()
@@ -773,6 +913,71 @@ mod tests {
                 assert!(result.is_error, "{mode} allowed {command}");
             }
         }
+    }
+    #[tokio::test]
+    async fn writes_nested_new_file_without_path_collapse() {
+        let (d, executor) = setup(Mode::Work);
+        let result = executor
+            .execute(
+                &call(
+                    "write",
+                    json!({"path":"new/deep/file.txt","content":"nested"}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!result.is_error, "{}", result.output);
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("new/deep/file.txt")).unwrap(),
+            "nested"
+        );
+    }
+
+    #[tokio::test]
+    async fn symlink_cannot_escape_workspace() {
+        let (d, executor) = setup(Mode::Work);
+        let outside = tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), d.path().join("link")).unwrap();
+        let result = executor
+            .execute(
+                &call("write", json!({"path":"link/escaped.txt","content":"bad"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(result.is_error);
+        assert!(!outside.path().join("escaped.txt").exists());
+    }
+    #[tokio::test]
+    async fn reread_detects_external_modification() {
+        let d = tempdir().unwrap();
+        std::fs::write(d.path().join("a.txt"), "first").unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let session = store.create_session(d.path()).unwrap();
+        let executor = ToolExecutor::new(
+            d.path().into(),
+            d.path().join("art"),
+            store.clone(),
+            session,
+            PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        executor
+            .execute(
+                &call("read_file", json!({"path":"a.txt"})),
+                CancellationToken::new(),
+            )
+            .await;
+        std::fs::write(d.path().join("a.txt"), "second").unwrap();
+        executor
+            .execute(
+                &call("read_file", json!({"path":"a.txt"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(store.events(session).unwrap().iter().any(|event| matches!(
+            event.payload,
+            EventPayload::ExternalFileChangeDetected { .. }
+        )));
     }
     #[test]
     fn work_policy_and_dangerous_commands() {

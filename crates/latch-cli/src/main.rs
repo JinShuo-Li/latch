@@ -3,8 +3,8 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use latch_kernel::{
-    Agent, AnthropicProvider, Config, ContinuityEngine, EventStore, ModelProvider, OpenAiProvider,
-    PolicyEngine, ToolExecutor, prompt::PromptCompiler,
+    Agent, AgentRuntime, AnthropicProvider, Config, ContinuityEngine, EventStore, ModelProvider,
+    OpenAiProvider, PolicyEngine, ToolExecutor, prompt::PromptCompiler,
 };
 use latch_protocol::{EventPayload, Mode, StreamEvent, TaskState};
 use latch_tui::{Input, Output, ToolStatus};
@@ -136,6 +136,7 @@ async fn build_agent(
                     description,
                 },
             )?;
+            store.mark_operation_reported(id)?;
         }
     }
     let provider = provider(config)?;
@@ -152,16 +153,16 @@ async fn build_agent(
         policy,
     )?;
     let continuity = ContinuityEngine::new(store.clone(), config.context.clone());
-    let mut agent = Agent::new(
+    let mut agent = Agent::new(AgentRuntime {
         session_id,
-        workspace.to_path_buf(),
+        workspace: workspace.to_path_buf(),
         mode,
-        store.clone(),
+        store: store.clone(),
         provider,
         tools,
         continuity,
-        config.failure.retry_budget,
-    );
+        retry_budget: config.failure.retry_budget,
+    });
     for extension in config
         .extensions
         .iter()
@@ -342,7 +343,7 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
             tx.send(Output::Notice(format!("continuity:{} | recent {} B | recalled {} B | canonical {} B | code/evidence {} B | reserve {} B | {} events | {} episodes", c.stats.status, c.stats.recent_bytes, c.stats.recalled_bytes, c.stats.canonical_bytes, c.stats.code_evidence_bytes, c.stats.reserve_bytes, c.stats.durable_events, c.stats.episodes))).await?;
         }
         "/compact" => { agent.compact()?; tx.send(Output::Notice("active context reset; durable history and state retained".into())).await?; }
-        "/diff" => send_tool(agent, "git_status", tx).await?,
+        "/diff" => send_tool(agent, "git_diff", tx).await?,
         "/checkpoint" => send_tool(agent, "checkpoint", tx).await?,
         "/undo" => send_tool(agent, "undo", tx).await?,
         "/model" => tx.send(Output::Notice("model changes require config and a new invocation in V0.1; durable sessions remain provider-independent".into())).await?,

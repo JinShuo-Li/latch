@@ -172,3 +172,16 @@ impl Config {
         .with_context(|| format!("parse {}", path.display()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn documented_configuration_parses() {
+        let config: Config = toml::from_str(include_str!("../../../config.example.toml")).unwrap();
+        assert_eq!(config.default_mode, Mode::Work);
+        assert_eq!(config.provider.kind, "openai-compatible");
+        assert_eq!(config.context.active_bytes, 96_000);
+    }
+}

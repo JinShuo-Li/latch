@@ -10,7 +10,7 @@ pub mod state;
 pub mod store;
 pub mod tools;
 
-pub use agent::{Agent, AgentEventSink};
+pub use agent::{Agent, AgentEventSink, AgentRuntime};
 pub use config::Config;
 pub use continuity::{ContinuityEngine, MaterializedContext};
 pub use provider::{AnthropicProvider, FakeProvider, ModelProvider, OpenAiProvider};

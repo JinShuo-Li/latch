@@ -38,33 +38,35 @@ pub struct Agent {
     extensions: ExtensionRegistry,
     failures: FailureManager,
     max_model_retries: u32,
+    scope_warned: bool,
+}
+pub struct AgentRuntime {
+    pub session_id: Uuid,
+    pub workspace: PathBuf,
+    pub mode: Mode,
+    pub store: EventStore,
+    pub provider: Arc<dyn ModelProvider>,
+    pub tools: ToolExecutor,
+    pub continuity: ContinuityEngine,
+    pub retry_budget: u32,
 }
 impl Agent {
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn new(
-        session_id: Uuid,
-        workspace: PathBuf,
-        mode: Mode,
-        store: EventStore,
-        provider: Arc<dyn ModelProvider>,
-        tools: ToolExecutor,
-        continuity: ContinuityEngine,
-        retry_budget: u32,
-    ) -> Self {
+    pub fn new(runtime: AgentRuntime) -> Self {
         Self {
-            session_id,
-            workspace,
-            mode,
-            store,
-            provider,
-            tools,
-            continuity,
+            session_id: runtime.session_id,
+            workspace: runtime.workspace,
+            mode: runtime.mode,
+            store: runtime.store,
+            provider: runtime.provider,
+            tools: runtime.tools,
+            continuity: runtime.continuity,
             state: TaskStateManager::default(),
             evidence: EvidenceLedger::default(),
             extensions: ExtensionRegistry::new(),
-            failures: FailureManager::new(retry_budget),
+            failures: FailureManager::new(runtime.retry_budget),
             max_model_retries: 2,
+            scope_warned: false,
         }
     }
     pub fn set_mode(&mut self, mode: Mode) {
@@ -230,8 +232,14 @@ impl Agent {
             for result in &tool_results {
                 sink(AgentOutput::ToolResult(result.clone()));
             }
-            if self.tools.latch_change_count().await > 12 {
-                self.emit(EventPayload::ScopeExpansionRequested { mutations: self.tools.latch_change_count().await, reason: "Explain why this expansion is required by the user task before continuing.".into() }, &sink)?;
+            let scope = self.tools.scope_stats().await;
+            if !self.scope_warned
+                && (scope.files > 8
+                    || scope.additions + scope.deletions > 500
+                    || scope.dependency_files > 1)
+            {
+                self.emit(EventPayload::ScopeExpansionRequested { mutations: scope.mutations, reason: format!("Scope reached {} files, +{} -{} lines, and {} dependency manifests. Explain why this expansion is required by the user task before continuing.", scope.files, scope.additions, scope.deletions, scope.dependency_files) }, &sink)?;
+                self.scope_warned = true;
             }
             for r in &tool_results {
                 if r.is_error {
@@ -295,10 +303,12 @@ impl Agent {
         cancel: CancellationToken,
         sink: &AgentEventSink,
     ) -> Vec<ToolResult> {
-        if calls
-            .iter()
-            .all(|c| matches!(c.name.as_str(), "read_file" | "search" | "git_status"))
-        {
+        if calls.iter().all(|c| {
+            matches!(
+                c.name.as_str(),
+                "read_file" | "search" | "git_status" | "git_diff"
+            )
+        }) {
             let tasks = calls
                 .into_iter()
                 .map(|call| {
@@ -429,13 +439,18 @@ impl Agent {
                     .and_then(parse_evidence_status);
                 match (claim, detail, status) {
                     (Some(claim), Some(detail), Some(status)) => {
-                        let evidence = self.evidence.add(claim, started.id, status, detail);
-                        if let Err(error) =
-                            self.emit(EventPayload::EvidenceCreated { evidence }, sink)
-                        {
-                            tool_error(call, error.to_string())
-                        } else {
-                            tool_ok(call, "evidence recorded".into())
+                        match self.evidence_source(&status, call, started.id) {
+                            Ok(source) => {
+                                let evidence = self.evidence.add(claim, source, status, detail);
+                                if let Err(error) =
+                                    self.emit(EventPayload::EvidenceCreated { evidence }, sink)
+                                {
+                                    tool_error(call, error.to_string())
+                                } else {
+                                    tool_ok(call, "evidence recorded".into())
+                                }
+                            }
+                            Err(error) => tool_error(call, error.to_string()),
                         }
                     }
                     _ => tool_error(call, "claim, detail, and valid status are required".into()),
@@ -476,24 +491,40 @@ impl Agent {
         result
     }
     fn record_state_memories(&self, update: &StateUpdate, source: Uuid) -> Result<()> {
+        let existing = self.store.memories(self.session_id)?;
         let records = update
             .add_constraints
             .iter()
+            .filter(|text| !self.state.state().constraints.contains(text))
             .map(|text| (MemoryKind::UserConstraint, text, Validity::Active))
             .chain(
                 update
                     .add_decisions
                     .iter()
+                    .filter(|text| !self.state.state().decisions.contains(text))
                     .map(|text| (MemoryKind::Decision, text, Validity::Active)),
             )
-            .chain(update.add_hypotheses.iter().map(|text| {
-                let validity = if update.reject_hypotheses.contains(text) {
-                    Validity::Rejected
-                } else {
-                    Validity::Active
-                };
-                (MemoryKind::Hypothesis, text, validity)
-            }));
+            .chain(
+                update
+                    .add_hypotheses
+                    .iter()
+                    .map(|text| {
+                        let validity = if update.reject_hypotheses.contains(text) {
+                            Validity::Rejected
+                        } else {
+                            Validity::Active
+                        };
+                        (MemoryKind::Hypothesis, text, validity)
+                    })
+                    .filter(|(_, text, _)| {
+                        !self
+                            .state
+                            .state()
+                            .hypotheses
+                            .iter()
+                            .any(|hypothesis| hypothesis.text.as_str() == text.as_str())
+                    }),
+            );
         for (kind, text, validity) in records {
             self.store.add_memory(&MemoryRecord {
                 id: Uuid::new_v4(),
@@ -508,7 +539,71 @@ impl Agent {
                 supersedes: None,
             })?;
         }
+        for rejected in update
+            .reject_hypotheses
+            .iter()
+            .filter(|text| !update.add_hypotheses.contains(text))
+        {
+            if let Some(previous) = existing.iter().rev().find(|memory| {
+                memory.kind == MemoryKind::Hypothesis
+                    && memory.content == **rejected
+                    && memory.validity == Validity::Active
+            }) {
+                self.store
+                    .set_memory_validity(previous.id, Validity::Superseded)?;
+                self.store.add_memory(&MemoryRecord {
+                    id: Uuid::new_v4(),
+                    session_id: self.session_id,
+                    kind: MemoryKind::Hypothesis,
+                    content: rejected.clone(),
+                    originating_event: source,
+                    created_at: Utc::now(),
+                    validity: Validity::Rejected,
+                    confidence: None,
+                    dependencies: vec![previous.id],
+                    supersedes: Some(previous.id),
+                })?;
+            }
+        }
         Ok(())
+    }
+    fn evidence_source(
+        &self,
+        status: &EvidenceStatus,
+        call: &ToolCall,
+        fallback: Uuid,
+    ) -> Result<Uuid> {
+        if matches!(
+            status,
+            EvidenceStatus::Pending | EvidenceStatus::Unavailable
+        ) {
+            return Ok(fallback);
+        }
+        let source_call = call
+            .arguments
+            .get("source_call_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("passed or failed evidence requires source_call_id"))?;
+        self.store
+            .events(self.session_id)?
+            .into_iter()
+            .rev()
+            .find_map(|event| match (&event.payload, status) {
+                (EventPayload::ToolCompleted { result }, EvidenceStatus::Passed)
+                    if result.call_id == source_call =>
+                {
+                    Some(event.id)
+                }
+                (EventPayload::ToolFailed { result }, EvidenceStatus::Failed)
+                    if result.call_id == source_call =>
+                {
+                    Some(event.id)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                anyhow!("source_call_id does not reference matching observed tool evidence")
+            })
     }
     fn emit(&self, payload: EventPayload, sink: &AgentEventSink) -> Result<Event> {
         let event = self.store.append(self.session_id, payload)?;
@@ -520,7 +615,7 @@ fn agent_tool_definitions() -> Vec<ToolDefinition> {
     let mut tools = ToolExecutor::definitions();
     tools.extend([
  ToolDefinition{name:"task_update".into(),description:"Propose a validated additive update to canonical task state.".into(),input_schema:json!({"type":"object","properties":{"goal":{"type":["string","null"]},"add_constraints":{"type":"array","items":{"type":"string"}},"add_decisions":{"type":"array","items":{"type":"string"}},"add_hypotheses":{"type":"array","items":{"type":"string"}},"reject_hypotheses":{"type":"array","items":{"type":"string"}},"touched_files":{"type":"array","items":{"type":"string"}},"required_validations":{"type":"array","items":{"type":"string"}},"validation_status":{"type":"object","additionalProperties":{"type":"boolean"}},"open_questions":{"type":["array","null"],"items":{"type":"string"}},"next_actions":{"type":["array","null"],"items":{"type":"string"}},"completion_criteria":{"type":"array","items":{"type":"string"}}}})},
- ToolDefinition{name:"record_evidence".into(),description:"Record provenance-linked evidence for a meaningful claim.".into(),input_schema:json!({"type":"object","required":["claim","status","detail"],"properties":{"claim":{"type":"string"},"status":{"enum":["pending","passed","failed","unavailable"]},"detail":{"type":"string"}}})},
+ ToolDefinition{name:"record_evidence".into(),description:"Record provenance-linked evidence. Passed/failed evidence requires source_call_id for a matching completed/failed tool.".into(),input_schema:json!({"type":"object","required":["claim","status","detail"],"properties":{"claim":{"type":"string"},"status":{"enum":["pending","passed","failed","unavailable"]},"detail":{"type":"string"},"source_call_id":{"type":"string"}}})},
  ToolDefinition{name:"complete".into(),description:"Ask the kernel to calculate completion from implementation and evidence state.".into(),input_schema:json!({"type":"object","required":["implementation_done"],"properties":{"implementation_done":{"type":"boolean"}}})}
 ]);
     tools
@@ -642,16 +737,16 @@ mod tests {
         )
         .unwrap();
         let continuity = ContinuityEngine::new(store.clone(), ContextConfig::default());
-        let mut a = Agent::new(
-            sid,
-            d.path().into(),
-            Mode::Ask,
-            store.clone(),
-            p,
+        let mut a = Agent::new(AgentRuntime {
+            session_id: sid,
+            workspace: d.path().into(),
+            mode: Mode::Ask,
+            store: store.clone(),
+            provider: p,
             tools,
             continuity,
-            2,
-        );
+            retry_budget: 2,
+        });
         let out = a
             .run("inspect", CancellationToken::new(), Arc::new(|_| {}))
             .await
@@ -698,16 +793,16 @@ mod tests {
             PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default()),
         )
         .unwrap();
-        let mut agent = Agent::new(
-            sid,
-            d.path().into(),
-            Mode::Work,
-            store.clone(),
+        let mut agent = Agent::new(AgentRuntime {
+            session_id: sid,
+            workspace: d.path().into(),
+            mode: Mode::Work,
+            store: store.clone(),
             provider,
             tools,
-            ContinuityEngine::new(store.clone(), ContextConfig::default()),
-            2,
-        );
+            continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+            retry_budget: 2,
+        });
         let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
         agent
             .load_extension("fixture".into(), "python3", &[fixture])

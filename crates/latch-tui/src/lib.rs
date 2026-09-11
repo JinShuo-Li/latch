@@ -106,7 +106,9 @@ impl App {
                     })
                 ) && self.busy
                 {
-                    self.lines.last_mut().unwrap().text.push_str(&t)
+                    if let Some(line) = self.lines.last_mut() {
+                        line.text.push_str(&t);
+                    }
                 } else {
                     self.lines.push(DisplayLine {
                         text: t,

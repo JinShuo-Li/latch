@@ -150,14 +150,15 @@ impl EventStore {
         if query.trim().is_empty() {
             return Ok(vec![]);
         }
+        let query = fts_query(query);
+        if query.is_empty() {
+            return Ok(vec![]);
+        }
         let ids: Vec<String> = {
             let conn = self.conn()?;
             let mut stmt=conn.prepare("SELECT event_id FROM event_search WHERE session_id=?1 AND event_search MATCH ?2 LIMIT ?3")?;
-            stmt.query_map(
-                params![session_id.to_string(), fts_query(query), limit],
-                |r| r.get(0),
-            )?
-            .collect::<Result<_, _>>()?
+            stmt.query_map(params![session_id.to_string(), query, limit], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
         };
         let all = self.events(session_id)?;
         Ok(all
@@ -178,6 +179,26 @@ impl EventStore {
         stmt.query_map([session_id.to_string()], |r| r.get::<_, String>(0))?
             .map(|r| Ok(serde_json::from_str(&r?)?))
             .collect()
+    }
+
+    pub fn set_memory_validity(&self, id: Uuid, validity: latch_protocol::Validity) -> Result<()> {
+        let conn = self.conn()?;
+        let json: String = conn.query_row(
+            "SELECT json FROM memory WHERE id=?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        let mut record: MemoryRecord = serde_json::from_str(&json)?;
+        record.validity = validity.clone();
+        conn.execute(
+            "UPDATE memory SET validity=?2,json=?3 WHERE id=?1",
+            params![
+                id.to_string(),
+                format!("{validity:?}"),
+                serde_json::to_string(&record)?
+            ],
+        )?;
+        Ok(())
     }
 
     pub fn begin_operation(&self, session_id: Uuid, description: &str) -> Result<Uuid> {
@@ -203,19 +224,30 @@ impl EventStore {
         }
         Ok(())
     }
+    pub fn mark_operation_reported(&self, id: Uuid) -> Result<()> {
+        let changed = self.conn()?.execute(
+            "UPDATE operations SET status='interrupted' WHERE id=?1 AND status='running'",
+            [id.to_string()],
+        )?;
+        if changed == 0 {
+            bail!("operation {id} was not running")
+        }
+        Ok(())
+    }
     pub fn interrupted_operations(&self, session_id: Uuid) -> Result<Vec<(Uuid, String)>> {
         let conn = self.conn()?;
-        let mut s = conn.prepare(
+        let mut statement = conn.prepare(
             "SELECT id,description FROM operations WHERE session_id=?1 AND status='running'",
         )?;
-        s.query_map([session_id.to_string()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?
-        .map(|r| {
-            let (id, d) = r?;
-            Ok((Uuid::parse_str(&id)?, d))
-        })
-        .collect()
+        statement
+            .query_map([session_id.to_string()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .map(|row| {
+                let (id, description) = row?;
+                Ok((Uuid::parse_str(&id)?, description))
+            })
+            .collect()
     }
 }
 
@@ -285,5 +317,7 @@ mod tests {
             resumed.interrupted_operations(session).unwrap(),
             vec![(operation, "uncertain edit".into())]
         );
+        resumed.mark_operation_reported(operation).unwrap();
+        assert!(resumed.interrupted_operations(session).unwrap().is_empty());
     }
 }
