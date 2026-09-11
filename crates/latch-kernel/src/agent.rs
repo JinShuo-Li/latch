@@ -126,12 +126,26 @@ impl Agent {
         cancel: CancellationToken,
         sink: AgentEventSink,
     ) -> Result<String> {
-        self.emit(
+        let user_event = self.emit(
             EventPayload::UserMessage {
                 text: user_text.into(),
             },
             &sink,
         )?;
+        if looks_like_constraint(user_text) {
+            self.store.add_memory(&MemoryRecord {
+                id: Uuid::new_v4(),
+                session_id: self.session_id,
+                kind: MemoryKind::UserConstraint,
+                content: user_text.into(),
+                originating_event: user_event.id,
+                created_at: Utc::now(),
+                validity: Validity::Active,
+                confidence: None,
+                dependencies: vec![],
+                supersedes: None,
+            })?;
+        }
         self.extensions
             .observe(
                 "user_message",
@@ -628,6 +642,21 @@ fn parse_evidence_status(value: &str) -> Option<EvidenceStatus> {
         "unavailable" => Some(EvidenceStatus::Unavailable),
         _ => None,
     }
+}
+fn looks_like_constraint(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "must ",
+        "must not",
+        "do not",
+        "don't ",
+        "never ",
+        "required",
+        "constraint",
+        "preserve ",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 fn tool_ok(call: &ToolCall, output: String) -> ToolResult {
     ToolResult {
