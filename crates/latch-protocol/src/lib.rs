@@ -3,7 +3,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use uuid::Uuid;
@@ -57,6 +56,10 @@ impl FromStr for Mode {
 pub enum MemoryKind {
     UserFact,
     UserConstraint,
+    /// A working constraint proposed by the model during the task. It never
+    /// masquerades as a user constraint; only actual user events can produce
+    /// `UserConstraint` provenance.
+    TaskConstraint,
     ObservedFact,
     Decision,
     Hypothesis,
@@ -168,6 +171,25 @@ pub enum EventPayload {
         before: Option<FileVersion>,
         after: FileVersion,
         owner: ChangeOwner,
+        /// Content-addressed artifact (relative to the session artifact store)
+        /// holding the pre-change bytes so ownership and undo survive resume.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        undo_artifact: Option<String>,
+    },
+    /// Records workspace drift observed around a shell execution. Emitted when
+    /// a shell (or validation) command mutated paths outside the guarded edit
+    /// tools. `reversible` states honestly whether Latch captured enough
+    /// pre-change state to restore them.
+    ShellMutationObserved {
+        command: String,
+        reversible: bool,
+        paths: Vec<String>,
+    },
+    /// Tombstone marking that a previously recorded owned change was reverted.
+    /// Ledger reconstruction after resume uses it to drop the undone entry.
+    ChangeReverted {
+        path: String,
+        content_hash: String,
     },
     ExternalFileChangeDetected {
         path: String,
@@ -184,6 +206,16 @@ pub enum EventPayload {
     },
     TaskStateUpdated {
         state: TaskState,
+    },
+    /// The effective session mode changed (for example via `/mode`). Durable so
+    /// `--resume` restores the mode the session actually ended in.
+    ModeChanged {
+        mode: Mode,
+    },
+    /// The kernel recomputed completion and the derived value changed. This is
+    /// the only place completion truth is announced; the model never sets it.
+    CompletionChanged {
+        completion: CompletionState,
     },
     EvidenceCreated {
         evidence: Evidence,
@@ -269,10 +301,15 @@ pub struct TaskState {
     pub rejected_hypotheses: Vec<String>,
     #[serde(default)]
     pub touched_files: Vec<String>,
+    /// Requirements the model declared (or the kernel registered when `validate`
+    /// ran). Whether each requirement currently passes is kernel-owned evidence,
+    /// never a model-writable flag.
     #[serde(default)]
     pub required_validations: Vec<String>,
+    /// The model's implementation claim. Completion itself is derived by the
+    /// kernel from this claim plus current evidence state.
     #[serde(default)]
-    pub validation_status: BTreeMap<String, bool>,
+    pub implementation_done: bool,
     #[serde(default)]
     pub open_questions: Vec<String>,
     #[serde(default)]
@@ -283,13 +320,26 @@ pub struct TaskState {
     pub completion: CompletionState,
 }
 
+/// One evidence observation. Entries are append-only and immutable; the
+/// *current* evidence for a claim is the newest entry for that claim, so a
+/// historical failure never poisons a requirement that now passes. The raw
+/// event log retains every attempt either way.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Evidence {
     pub id: Uuid,
+    /// Semantic requirement or claim the evidence is about, for example
+    /// `"existing unittest passes"`. Claims are matched case-insensitively.
     pub claim: String,
+    /// Kernel-internal provenance: the durable event that produced this
+    /// evidence. Never exposed to the model as an input.
     pub source_event: Uuid,
     pub status: EvidenceStatus,
     pub detail: String,
+    pub created_at: DateTime<Utc>,
+    /// The evidence entry this entry supersedes, when it updates an existing
+    /// claim's current state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -310,6 +360,10 @@ pub struct ContextStats {
     pub reserve_bytes: usize,
     pub durable_events: usize,
     pub episodes: usize,
+    #[serde(default)]
+    pub selected_episodes: usize,
+    #[serde(default)]
+    pub total_bytes: usize,
     pub status: String,
 }
 
@@ -318,6 +372,11 @@ pub struct ContextStats {
 pub enum ChangeOwner {
     PreExisting,
     Latch,
+    /// Mutation produced by a shell or validation command executed inside the
+    /// workspace (for example `cargo fmt` or a generator). Classified honestly
+    /// as tool-originated rather than pretending it pre-existed or was
+    /// externally authored.
+    Shell,
     External,
     Extension(String),
 }
@@ -400,4 +459,181 @@ pub struct RpcMessage {
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<Value>,
+}
+
+/// Run-phase of one tool invocation as shown to the user. A single visual item
+/// progresses from `Running` to `Passed` or `Failed`; the transcript upserts by
+/// `call_id` instead of appending a second row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRunStatus {
+    Running,
+    Passed,
+    Failed,
+}
+
+/// One user-visible transcript element. Durable events map onto these through
+/// [`display_items`], shared by live rendering and resume replay, so both paths
+/// format history identically. Hidden internals (reasoning content, context
+/// statistics, model usage, raw task state) never become display items.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DisplayItem {
+    UserMessage {
+        text: String,
+    },
+    AssistantMessage {
+        text: String,
+    },
+    ToolActivity {
+        call_id: String,
+        verb: String,
+        target: String,
+        detail: String,
+        status: ToolRunStatus,
+    },
+    KernelNotice {
+        text: String,
+    },
+    Error {
+        text: String,
+    },
+}
+
+impl DisplayItem {
+    /// `call_id` when this item is a tool activity row, used to update an
+    /// existing lifecycle row in place.
+    #[must_use]
+    pub fn call_id(&self) -> Option<&str> {
+        match self {
+            Self::ToolActivity { call_id, .. } => Some(call_id),
+            _ => None,
+        }
+    }
+}
+
+fn compact_detail(text: &str, limit: usize) -> String {
+    let first = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    first.chars().take(limit).collect()
+}
+
+/// Converts one durable event into the user-visible transcript items it
+/// implies. This is the single presentation formatter: live rendering and
+/// `--resume` replay both call it, so history and live views always agree.
+/// Internal bookkeeping events map to nothing.
+#[must_use]
+pub fn display_items(event: &Event) -> Vec<DisplayItem> {
+    match &event.payload {
+        EventPayload::UserMessage { text } => vec![DisplayItem::UserMessage { text: text.clone() }],
+        EventPayload::AssistantMessageCompleted { text, .. } => {
+            vec![DisplayItem::AssistantMessage { text: text.clone() }]
+        }
+        EventPayload::ToolRequested { call } => vec![DisplayItem::ToolActivity {
+            call_id: call.id.clone(),
+            verb: call.name.clone(),
+            target: compact_tool_target(&call.arguments),
+            detail: String::new(),
+            status: ToolRunStatus::Running,
+        }],
+        EventPayload::ToolCompleted { result } => vec![DisplayItem::ToolActivity {
+            call_id: result.call_id.clone(),
+            verb: result.name.clone(),
+            target: String::new(),
+            detail: compact_detail(&result.output, 80),
+            status: ToolRunStatus::Passed,
+        }],
+        EventPayload::ToolFailed { result } => vec![DisplayItem::ToolActivity {
+            call_id: result.call_id.clone(),
+            verb: result.name.clone(),
+            target: String::new(),
+            detail: compact_detail(&result.output, 80),
+            status: ToolRunStatus::Failed,
+        }],
+        EventPayload::PermissionDecision { decision, .. } if decision != "Allow" => {
+            // The denial itself surfaces through the failed tool result.
+            vec![]
+        }
+        EventPayload::ModeChanged { mode } => vec![DisplayItem::KernelNotice {
+            text: format!("mode: {mode}"),
+        }],
+        EventPayload::CompletionChanged { completion } => vec![DisplayItem::KernelNotice {
+            text: format!("completion: {completion:?}"),
+        }],
+        EventPayload::ValidationResult {
+            command,
+            passed,
+            detail,
+        } => {
+            // Validation results surface through the validate tool row; keep
+            // the raw event durable but do not double-render it.
+            let _ = (command, passed, detail);
+            vec![]
+        }
+        EventPayload::RegroundRequested { signature } => vec![DisplayItem::KernelNotice {
+            text: format!("re-ground requested after repeated failure of {signature}"),
+        }],
+        EventPayload::ScopeExpansionRequested { reason, .. } => vec![DisplayItem::KernelNotice {
+            text: format!("scope review: {reason}"),
+        }],
+        EventPayload::SessionResumed => vec![DisplayItem::KernelNotice {
+            text: "session resumed".into(),
+        }],
+        EventPayload::OperationInterrupted { description, .. } => {
+            vec![DisplayItem::KernelNotice {
+                text: format!("interrupted operation reported: {description}"),
+            }]
+        }
+        EventPayload::ManualCompact { .. } => vec![DisplayItem::KernelNotice {
+            text: "active context reset; durable history and state retained".into(),
+        }],
+        EventPayload::ShellMutationObserved {
+            command,
+            reversible,
+            paths,
+        } => {
+            if paths.is_empty() && !reversible {
+                vec![DisplayItem::KernelNotice {
+                    text: format!(
+                        "shell mutation detection unavailable for `{command}`; changes are not undoable"
+                    ),
+                }]
+            } else {
+                vec![DisplayItem::KernelNotice {
+                    text: format!(
+                        "shell mutated {} path(s) that Latch cannot undo: {}",
+                        paths.len(),
+                        paths.join(", ")
+                    ),
+                }]
+            }
+        }
+        EventPayload::ChangeReverted { path, .. } => vec![DisplayItem::KernelNotice {
+            text: format!("reverted {path}"),
+        }],
+        // Evidence, task state, file versions, context statistics, provider
+        // bookkeeping, and extension traffic are durable truth but not
+        // user-facing transcript rows.
+        _ => vec![],
+    }
+}
+
+/// Compact human target for a tool row: the path, command, or query argument.
+#[must_use]
+pub fn compact_tool_target(arguments: &Value) -> String {
+    arguments
+        .get("path")
+        .or_else(|| arguments.get("query"))
+        .or_else(|| arguments.get("requirement"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            arguments
+                .get("command")
+                .and_then(Value::as_str)
+                .map(|command| compact_detail(command, 56))
+        })
+        .unwrap_or_default()
 }

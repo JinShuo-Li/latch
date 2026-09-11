@@ -338,7 +338,7 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
         "/mode" => {
             if let Some(value) = parts.next() {
                 let mode = Mode::from_str(value).map_err(anyhow::Error::msg)?;
-                agent.set_mode(mode);
+                agent.set_mode(mode)?;
                 tx.send(Output::Mode(mode)).await?;
             } else { tx.send(Output::Notice(format!("mode: {}", agent.mode()))).await?; }
         }

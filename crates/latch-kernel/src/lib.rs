@@ -6,6 +6,7 @@ pub mod continuity;
 pub mod extension;
 pub mod prompt;
 pub mod provider;
+pub mod session;
 pub mod state;
 pub mod store;
 pub mod tools;

@@ -51,7 +51,7 @@ impl PromptCompiler {
                 "policy.evidence",
                 40,
                 true,
-                "Do not report the task complete until required validation has produced evidence. If validation is unavailable, report IMPLEMENTED, NOT VERIFIED.",
+                "Validation intent is yours; validation truth is the kernel's. To check a requirement, run the validate tool with a semantic requirement name and the command that proves it. The kernel executes the command, records the evidence, and derives completion — you never supply or need internal identifiers. Re-running validate for a requirement that now passes supersedes its earlier failure. Use record_evidence only for pending or unavailable non-command claims; you cannot self-certify passed or failed evidence. Do not report the task complete until required validation has produced passing evidence; if validation is unavailable, the kernel reports IMPLEMENTED, NOT VERIFIED.",
             ),
             fragment(
                 "policy.failure",
