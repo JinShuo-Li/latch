@@ -4,10 +4,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use latch_kernel::{
     Agent, AgentRuntime, AnthropicProvider, Config, ContinuityEngine, EventStore, ModelProvider,
-    OpenAiProvider, PolicyEngine, ToolExecutor, prompt::PromptCompiler,
+    OpenAiProvider, PolicyEngine, ToolExecutor, prompt::PromptCompiler, session,
 };
 use latch_protocol::{EventPayload, Mode, StreamEvent, TaskState};
-use latch_tui::{Input, Output, ToolStatus};
+use latch_tui::{Input, Output, SLASH_COMMANDS};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -22,6 +22,8 @@ use uuid::Uuid;
     about = "A quiet, programmable terminal coding agent"
 )]
 struct Args {
+    /// Continue the latest session for this workspace: visible transcript,
+    /// effective mode, task state, evidence, failures, and change ownership.
     #[arg(long)]
     resume: bool,
     #[arg(long,value_parser=parse_mode)]
@@ -68,12 +70,12 @@ async fn main() -> Result<()> {
     {
         return debug_prompt(&workspace, mode, fragment.as_deref());
     }
-    let mode = args.mode.unwrap_or(config.default_mode);
-    let (mut agent, model) = build_agent(&workspace, &config, mode, args.resume).await?;
+    let (mut agent, model, session) =
+        build_agent(&workspace, &config, args.mode, args.resume).await?;
     if let Some(prompt) = args.prompt {
         return one_shot(&mut agent, &prompt).await;
     }
-    interactive(agent, mode, model).await
+    interactive(agent, model, session).await
 }
 
 fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
@@ -106,18 +108,43 @@ fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// One restored session for the TUI: visible transcript items and prompt
+/// history, both derived from durable events by the shared formatter.
+struct Restored {
+    items: Vec<latch_protocol::DisplayItem>,
+    history: Vec<String>,
+}
+
 async fn build_agent(
     workspace: &Path,
     config: &Config,
-    mode: Mode,
+    cli_mode: Option<Mode>,
     resume: bool,
-) -> Result<(Agent, String)> {
+) -> Result<(Agent, String, Option<Restored>)> {
     let db = config.state_dir.join("latch.sqlite3");
     let store = EventStore::open(&db)?;
+    let mut restored = None;
     let session_id = if resume {
-        store
+        let session = store
             .latest_session(Some(workspace))?
-            .ok_or_else(|| anyhow!("no previous session for {}", workspace.display()))?
+            .ok_or_else(|| anyhow!("no previous session for {}", workspace.display()))?;
+        let events = store.events(session)?;
+        store.append(session, EventPayload::SessionResumed)?;
+        for (id, description) in store.interrupted_operations(session)? {
+            store.append(
+                session,
+                EventPayload::OperationInterrupted {
+                    operation_id: id,
+                    description,
+                },
+            )?;
+            store.mark_operation_reported(id)?;
+        }
+        restored = Some(Restored {
+            items: session::replay_items(&events),
+            history: session::prompt_history(&events),
+        });
+        session
     } else {
         let session = store.create_session(workspace)?;
         let (head, dirty_paths) = observe_git(workspace);
@@ -127,32 +154,29 @@ async fn build_agent(
         )?;
         session
     };
-    if resume {
-        store.append(session_id, EventPayload::SessionResumed)?;
-        for (id, description) in store.interrupted_operations(session_id)? {
-            store.append(
-                session_id,
-                EventPayload::OperationInterrupted {
-                    operation_id: id,
-                    description,
-                },
-            )?;
-            store.mark_operation_reported(id)?;
-        }
-    }
+    let events = store.events(session_id)?;
+    // Mode precedence (both fresh and resumed): explicit CLI --mode > the
+    // session's durable mode history > configured default.
+    let mode = session::resumed_mode(&events, cli_mode, config.default_mode);
     let provider = provider(config, session_id)?;
     let model = provider.model().to_string();
     let policy = PolicyEngine::new(mode, workspace.to_path_buf(), config.permissions.clone());
+    let artifacts = config
+        .state_dir
+        .join("artifacts")
+        .join(session_id.to_string());
     let tools = ToolExecutor::new(
         workspace.to_path_buf(),
-        config
-            .state_dir
-            .join("artifacts")
-            .join(session_id.to_string()),
+        artifacts.clone(),
         store.clone(),
         session_id,
         policy,
     )?;
+    if resume {
+        // Restore durable change ownership before anything can mutate.
+        let count = tools.restore_ownership().await?;
+        tracing::info!("restored {count} owned change records");
+    }
     let continuity = ContinuityEngine::new(store.clone(), config.context.clone());
     let mut agent = Agent::new(AgentRuntime {
         session_id,
@@ -174,29 +198,27 @@ async fn build_agent(
             .await
             .with_context(|| format!("initialize extension {}", extension.name))?;
     }
-    if resume
-        && let Some(state) = store.events(session_id)?.iter().rev().find_map(|e| {
-            if let EventPayload::TaskStateUpdated { state } = &e.payload {
-                Some(state.clone())
-            } else {
-                None
-            }
-        })
-    {
-        agent.restore_state(state);
-    }
     if resume {
-        let evidence = store
-            .events(session_id)?
-            .into_iter()
-            .filter_map(|event| match event.payload {
-                EventPayload::EvidenceCreated { evidence } => Some(evidence),
-                _ => None,
-            })
-            .collect();
-        agent.restore_evidence(evidence);
+        if let Some(state) = events.iter().rev().find_map(|e| match &e.payload {
+            EventPayload::TaskStateUpdated { state } => Some(state.clone()),
+            _ => None,
+        }) {
+            agent.restore_state(state);
+        }
+        agent.restore_evidence(
+            events
+                .iter()
+                .filter_map(|event| match &event.payload {
+                    EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
+                    _ => None,
+                })
+                .collect(),
+        );
+        // Failure supervision reconstructs its streaks so a stalled loop is
+        // not silently forgotten.
+        agent.restore_failures()?;
     }
-    Ok((agent, model))
+    Ok((agent, model, restored))
 }
 
 fn provider(config: &Config, session_id: Uuid) -> Result<Arc<dyn ModelProvider>> {
@@ -245,15 +267,26 @@ async fn one_shot(agent: &mut Agent, prompt: &str) -> Result<()> {
     Ok(())
 }
 
-async fn interactive(mut agent: Agent, mode: Mode, model: String) -> Result<()> {
+async fn interactive(mut agent: Agent, model: String, restored: Option<Restored>) -> Result<()> {
     let (input_tx, mut input_rx) = mpsc::channel(16);
-    let (output_tx, output_rx) = mpsc::channel(256);
-    let tui = tokio::spawn(latch_tui::run(input_tx, output_rx, mode, model.clone()));
+    let (output_tx, output_rx) = mpsc::channel(512);
+    let start_mode = agent.mode();
+    let (replay, history) = restored
+        .map(|r| (r.items, r.history))
+        .unwrap_or_else(|| (Vec::new(), Vec::new()));
+    let tui = tokio::spawn(latch_tui::run(
+        input_tx,
+        output_rx,
+        start_mode,
+        model.clone(),
+        replay,
+        history,
+    ));
     output_tx
         .send(Output::Header {
             model,
             branch: git_branch().unwrap_or_else(|_| "-".into()),
-            continuity: "healthy".into(),
+            continuity: "bounded".into(),
         })
         .await?;
     'session: while let Some(input) = input_rx.recv().await {
@@ -261,47 +294,45 @@ async fn interactive(mut agent: Agent, mode: Mode, model: String) -> Result<()> 
             Input::Quit => break,
             Input::Cancel => {}
             Input::Submit(text) => {
-                if text.starts_with('/') {
+                if text.trim_start().starts_with('/') {
                     handle_command(&mut agent, &text, &output_tx).await?;
                     continue;
                 }
                 let active = CancellationToken::new();
                 let tx = output_tx.clone();
                 let sink = Arc::new(move |event: latch_kernel::agent::AgentOutput| {
-                    let output = match event {
+                    let outputs: Vec<Output> = match event {
                         latch_kernel::agent::AgentOutput::Transient(StreamEvent::TextDelta(t)) => {
-                            Some(Output::AssistantDelta(t))
+                            vec![Output::AssistantDelta(t)]
                         }
-                        latch_kernel::agent::AgentOutput::Durable(e) => match e.payload {
-                            EventPayload::ToolRequested { call } => Some(Output::Tool {
-                                verb: call.name,
-                                target: short_args(&call.arguments),
-                                status: ToolStatus::Running,
-                            }),
-                            _ => None,
-                        },
+                        latch_kernel::agent::AgentOutput::Durable(e) => {
+                            // The streamed assistant item already shows the
+                            // final text; skip the durable duplicate.
+                            if matches!(e.payload, EventPayload::AssistantMessageCompleted { .. }) {
+                                vec![]
+                            } else {
+                                latch_protocol::display_items(&e)
+                                    .into_iter()
+                                    .map(Output::Item)
+                                    .collect()
+                            }
+                        }
                         latch_kernel::agent::AgentOutput::ToolResult(result) => {
-                            Some(Output::Tool {
-                                verb: if result.is_error {
-                                    "fail".into()
-                                } else {
-                                    "done".into()
-                                },
-                                target: format!(
-                                    "{}  {}",
-                                    result.name,
-                                    result.output.lines().next().unwrap_or("")
-                                ),
+                            vec![Output::Item(latch_protocol::DisplayItem::ToolActivity {
+                                call_id: result.call_id,
+                                verb: result.name,
+                                target: String::new(),
+                                detail: first_line(&result.output),
                                 status: if result.is_error {
-                                    ToolStatus::Failed
+                                    latch_protocol::ToolRunStatus::Failed
                                 } else {
-                                    ToolStatus::Passed
+                                    latch_protocol::ToolRunStatus::Passed
                                 },
-                            })
+                            })]
                         }
-                        _ => None,
+                        _ => vec![],
                     };
-                    if let Some(output) = output {
+                    for output in outputs {
                         let _ = tx.try_send(output);
                     }
                 });
@@ -344,40 +375,53 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
         }
         "/context" => {
             let c = agent.context(None)?;
-            tx.send(Output::Notice(format!("continuity:{} | recent {} B | recalled {} B | canonical {} B | code/evidence {} B | reserve {} B | {} events | {} episodes", c.stats.status, c.stats.recent_bytes, c.stats.recalled_bytes, c.stats.canonical_bytes, c.stats.code_evidence_bytes, c.stats.reserve_bytes, c.stats.durable_events, c.stats.episodes))).await?;
+            tx.send(Output::Notice(format!(
+                "ctx {} B (status {}) | recent {} B | recalled {} B | canonical {} B | reserve {} B | {} events | {}/{} episodes",
+                c.stats.total_bytes, c.stats.status, c.stats.recent_bytes, c.stats.recalled_bytes, c.stats.canonical_bytes, c.stats.reserve_bytes, c.stats.durable_events, c.stats.selected_episodes, c.stats.episodes
+            ))).await?;
         }
         "/compact" => { agent.compact()?; tx.send(Output::Notice("active context reset; durable history and state retained".into())).await?; }
         "/diff" => send_tool(agent, "git_diff", tx).await?,
         "/checkpoint" => send_tool(agent, "checkpoint", tx).await?,
         "/undo" => send_tool(agent, "undo", tx).await?,
         "/model" => tx.send(Output::Notice("model changes require config and a new invocation in V0.1; durable sessions remain provider-independent".into())).await?,
-        "/help" => tx.send(Output::Notice("/mode [ask|plan|work]  /model  /context  /diff  /checkpoint  /undo  /compact  /help  /quit".into())).await?,
+        "/help" => {
+            let commands = SLASH_COMMANDS.iter().map(|c| format!("{}  {}", c.name, c.description)).collect::<Vec<_>>().join("\n");
+            tx.send(Output::Notice(format!(
+                "modes: /mode ask|plan|work (WORK mutates; ASK/PLAN are read-only)\n\
+                 scroll: PgUp/PgDn, Home/End, mouse wheel — Ctrl+C cancels a running turn\n\
+                 input: Enter submit · Alt+Enter newline · Ctrl+A/E line start/end · Ctrl+W delete word\n\
+                 history: Up/Down recalls previous prompts\n\
+                 palette: typing / filters commands · Tab/Enter complete · Esc close\n\
+                 commands:\n{commands}"
+            ))).await?;
+        }
         other => tx.send(Output::Notice(format!("unknown command {other}; use /help"))).await?,
     }
     Ok(())
 }
 async fn send_tool(agent: &Agent, name: &str, tx: &mpsc::Sender<Output>) -> Result<()> {
     let r = agent.builtin_tool(name, CancellationToken::new()).await;
-    tx.send(Output::Tool {
+    tx.send(Output::Item(latch_protocol::DisplayItem::ToolActivity {
+        call_id: r.call_id,
         verb: name.into(),
-        target: r.output,
+        target: String::new(),
+        detail: first_line(&r.output),
         status: if r.is_error {
-            ToolStatus::Failed
+            latch_protocol::ToolRunStatus::Failed
         } else {
-            ToolStatus::Passed
+            latch_protocol::ToolRunStatus::Passed
         },
-    })
+    }))
     .await?;
     Ok(())
 }
-fn short_args(v: &serde_json::Value) -> String {
-    v.get("path")
-        .or_else(|| v.get("command"))
-        .or_else(|| v.get("query"))
-        .and_then(serde_json::Value::as_str)
+fn first_line(text: &str) -> String {
+    text.lines()
+        .find(|line| !line.trim().is_empty())
         .unwrap_or("")
         .chars()
-        .take(72)
+        .take(80)
         .collect()
 }
 fn git_branch() -> Result<String> {
@@ -419,4 +463,40 @@ fn observe_git(workspace: &Path) -> (Option<String>, Vec<String>) {
         })
         .unwrap_or_default();
     (head, dirty_paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_lists_every_palette_command() {
+        // Single source of truth: /help and the palette agree.
+        let help_text = SLASH_COMMANDS
+            .iter()
+            .map(|c| c.name)
+            .collect::<Vec<_>>()
+            .join(" ");
+        for required in [
+            "/mode",
+            "/model",
+            "/context",
+            "/diff",
+            "/checkpoint",
+            "/undo",
+            "/compact",
+            "/help",
+            "/quit",
+        ] {
+            assert!(help_text.contains(required), "/help missing {required}");
+        }
+    }
+
+    #[tokio::test]
+    async fn mode_override_via_cli_flag_restores_session_mode() {
+        // exercises the precedence helper used by build_agent indirectly; the
+        // full precedence matrix is covered in latch_kernel::session tests.
+        let mode = session::resumed_mode(&[], Some(Mode::Ask), Mode::Work);
+        assert_eq!(mode, Mode::Ask);
+    }
 }

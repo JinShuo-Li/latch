@@ -12,5 +12,9 @@ latch-protocol = { path = "../latch-protocol" }
 ratatui.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+chrono.workspace = true
+uuid.workspace = true
+
 [lints]
 workspace = true
