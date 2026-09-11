@@ -1978,11 +1978,20 @@ fn wrap_cell(text: &str, width: usize) -> Vec<String> {
     if text.is_empty() || width == 0 {
         return vec![String::new()];
     }
+    // `wrap_points` returns char offsets (the composer stores them that way in
+    // `VisualRow`); convert them to byte offsets before slicing so CJK and
+    // other multi-byte cells never split inside a character.
+    let mut byte_offsets: Vec<usize> = text.char_indices().map(|(byte, _)| byte).collect();
+    byte_offsets.push(text.len());
+    let char_count = byte_offsets.len() - 1;
     let points = composer::wrap_points(text, width);
     let mut rows = Vec::new();
     for (index, start) in points.iter().enumerate() {
-        let end = points.get(index + 1).copied().unwrap_or(text.len());
-        rows.push(text[*start..end].trim_end().to_owned());
+        let end = points.get(index + 1).copied().unwrap_or(char_count);
+        let (Some(&start), Some(&end)) = (byte_offsets.get(*start), byte_offsets.get(end)) else {
+            continue;
+        };
+        rows.push(text[start..end].trim_end().to_owned());
     }
     if rows.is_empty() {
         rows.push(String::new());
@@ -3365,6 +3374,35 @@ mod tests {
             let text = lines_text(std::slice::from_ref(line));
             assert_eq!(display_width(&text), 10);
         }
+    }
+
+    #[test]
+    fn markdown_tables_wrap_cjk_cells_without_splitting_characters() {
+        // A narrow table forces the CJK cells to wrap; the renderer must
+        // convert the composer's char offsets to byte offsets before slicing.
+        let lines = render_markdown_at(
+            "| 模块 | 职责 |\n|---|---|\n| 编辑器 | 可滚动的多行输入视口 |",
+            24,
+        );
+        // Header, rule, then the wrapped body cell spans two rows.
+        assert_eq!(lines.len(), 4, "{}", lines_text(&lines));
+        let rendered = lines_text(&lines);
+        assert!(
+            !rendered
+                .lines()
+                .any(|line| line.contains("可滚动的多行输入视口")),
+            "the wide CJK cell must wrap: {rendered}"
+        );
+        for line in &lines {
+            let text = lines_text(std::slice::from_ref(line));
+            assert!(
+                display_width(&text) <= 24,
+                "line {text:?} exceeds the viewport"
+            );
+            assert!(!text.contains('\u{FFFD}'), "no split characters: {text:?}");
+        }
+        assert!(rendered.contains("可滚"), "{rendered}");
+        assert!(rendered.contains("视口"), "{rendered}");
     }
 
     #[test]
