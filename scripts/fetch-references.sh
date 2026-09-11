@@ -9,6 +9,7 @@ if [[ -e "$destination" ]]; then
   current="$(git -C "$destination" rev-parse HEAD)"
   shallow="$(git -C "$destination" rev-parse --is-shallow-repository)"
   if [[ "$current" == "$revision" && "$shallow" == "true" ]]; then
+    chmod -R a-w "$destination"
     exit 0
   fi
   echo "refusing to replace existing reference checkout: $destination" >&2
@@ -23,3 +24,4 @@ git -C "$destination" checkout --quiet --detach FETCH_HEAD
 
 test "$(git -C "$destination" rev-parse HEAD)" = "$revision"
 test "$(git -C "$destination" rev-parse --is-shallow-repository)" = "true"
+chmod -R a-w "$destination"
