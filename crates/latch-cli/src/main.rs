@@ -445,7 +445,7 @@ async fn interactive(
             }
             Input::Cancel => {}
             Input::Submit(text) => {
-                if text.trim_start().starts_with('/') {
+                if is_slash_command_input(&text) {
                     handle_command(&mut agent, &text, &output_tx).await?;
                     continue;
                 }
@@ -494,6 +494,10 @@ async fn interactive(
     tui.await??;
     agent.shutdown_extensions().await?;
     Ok(outcome)
+}
+
+fn is_slash_command_input(text: &str) -> bool {
+    !text.contains(['\n', '\r']) && text.trim_start().starts_with('/')
 }
 
 async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>) -> Result<()> {
@@ -633,5 +637,13 @@ mod tests {
             Args::try_parse_from(["latch", "--resume", "--latest", "--session", "deadbeef"])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn only_single_line_slash_input_is_a_control_command() {
+        assert!(is_slash_command_input("/help"));
+        assert!(is_slash_command_input("  /mode plan"));
+        assert!(!is_slash_command_input("/help\nthis is prompt content"));
+        assert!(!is_slash_command_input("plain prompt"));
     }
 }

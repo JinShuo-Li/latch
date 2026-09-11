@@ -13,8 +13,8 @@
 use anyhow::Result;
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
-        KeyEventKind, KeyModifiers, MouseEventKind,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -31,7 +31,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use tokio::sync::mpsc;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -159,11 +159,31 @@ fn fuzzy_match(candidate: &str, query: &str) -> bool {
 struct Guard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
+
+fn enter_screen(writer: &mut impl Write) -> io::Result<()> {
+    execute!(
+        writer,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )
+}
+
+fn leave_screen(writer: &mut impl Write) -> io::Result<()> {
+    execute!(
+        writer,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )
+}
+
 impl Guard {
     fn enter() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
+        if let Err(error) = enter_screen(&mut stdout) {
+            leave_screen(&mut stdout).ok();
             disable_raw_mode().ok();
             return Err(error.into());
         }
@@ -172,7 +192,7 @@ impl Guard {
             Err(error) => {
                 disable_raw_mode().ok();
                 let mut stdout = io::stdout();
-                execute!(stdout, DisableMouseCapture, LeaveAlternateScreen).ok();
+                leave_screen(&mut stdout).ok();
                 Err(error.into())
             }
         }
@@ -180,13 +200,8 @@ impl Guard {
 }
 impl Drop for Guard {
     fn drop(&mut self) {
+        leave_screen(self.terminal.backend_mut()).ok();
         disable_raw_mode().ok();
-        execute!(
-            self.terminal.backend_mut(),
-            DisableMouseCapture,
-            LeaveAlternateScreen
-        )
-        .ok();
         self.terminal.show_cursor().ok();
     }
 }
@@ -265,6 +280,37 @@ impl InputEditor {
             .unwrap_or(line.len());
         line.insert(byte, ch);
         self.col += 1;
+    }
+
+    /// Inserts one paste payload without interpreting any embedded newline as
+    /// an input event. CRLF and bare CR are normalized to durable `\n`.
+    pub fn insert_text(&mut self, text: &str) {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        if normalized.is_empty() {
+            return;
+        }
+        let parts = normalized.split('\n').collect::<Vec<_>>();
+        let cursor_byte = char_to_byte(&self.lines[self.row], self.col);
+        let suffix = self.lines[self.row][cursor_byte..].to_owned();
+        self.lines[self.row].truncate(cursor_byte);
+        self.lines[self.row].push_str(parts[0]);
+
+        if parts.len() == 1 {
+            self.lines[self.row].push_str(&suffix);
+            self.col += parts[0].chars().count();
+            return;
+        }
+
+        let insert_at = self.row + 1;
+        for (offset, part) in parts.iter().skip(1).enumerate() {
+            let mut line = (*part).to_owned();
+            if offset + 2 == parts.len() {
+                line.push_str(&suffix);
+            }
+            self.lines.insert(insert_at + offset, line);
+        }
+        self.row += parts.len() - 1;
+        self.col = parts.last().map_or(0, |part| part.chars().count());
     }
     /// Inserts a newline (Alt+Enter): splits the current line at the cursor.
     pub fn newline(&mut self) {
@@ -488,7 +534,10 @@ impl Palette {
     /// prefix: starts with `/` and contains no whitespace yet.
     fn active(&self, input: &InputEditor) -> bool {
         let first = &input.lines[0];
-        !self.dismissed && first.starts_with('/') && !first.contains(char::is_whitespace)
+        !self.dismissed
+            && input.lines.len() == 1
+            && first.starts_with('/')
+            && !first.contains(char::is_whitespace)
     }
     fn clamp(&mut self, len: usize) {
         if len == 0 {
@@ -555,6 +604,13 @@ impl Default for App {
     }
 }
 impl App {
+    fn on_paste(&mut self, text: &str) {
+        self.input.insert_text(text);
+        self.palette.dismissed = false;
+        self.palette
+            .clamp(filter_commands(&self.input.lines[0]).len());
+    }
+
     fn output(&mut self, out: Output) {
         match out {
             Output::AssistantDelta(t) => {
@@ -855,6 +911,7 @@ impl App {
     fn submit_action(&mut self) -> Option<Action> {
         let text = self.input.take_for_submit();
         let command = text.trim();
+        let slash_command = !text.contains(['\n', '\r']) && command.starts_with('/');
         if command.is_empty() {
             return None;
         }
@@ -868,7 +925,7 @@ impl App {
             self.detail = !self.detail;
             return None;
         }
-        if !command.starts_with('/') {
+        if !slash_command {
             self.busy = true;
         }
         Some(Action::Submit(text))
@@ -1645,11 +1702,15 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     };
     let visible: Vec<Line<'_>> = visual
         .into_iter()
+        .enumerate()
         .skip(start_row)
         .take(MAX_INPUT_ROWS)
-        .map(|row| {
+        .map(|(row_index, row)| {
             Line::from(vec![
-                Span::styled("❯ ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    if row_index == 0 { "❯ " } else { "  " },
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::raw(row),
             ])
         })
@@ -1661,13 +1722,8 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     );
     frame.render_widget(input, chunks[3]);
 
-    // The "❯ " prompt occupies two columns; wrapped continuation rows start
-    // flush at the inner edge.
-    let prompt_indent = if cursor_row.saturating_sub(start_row) == 0 {
-        2u16
-    } else {
-        0u16
-    };
+    // The prompt and its continuation indent both occupy two columns.
+    let prompt_indent = 2u16;
     frame.set_cursor_position((
         chunks[3].x + prompt_indent + cursor_col.min(u16::MAX as usize) as u16,
         chunks[3].y + 1 + cursor_row.saturating_sub(start_row).min(MAX_INPUT_ROWS - 1) as u16,
@@ -1712,6 +1768,7 @@ pub async fn run(
                 MouseEventKind::ScrollDown => app.scroll_down(WHEEL_ROWS),
                 _=>{}
             },
+            Some(Event::Paste(text)) => app.on_paste(&text),
             None=>break,
             _=>{}
          }
@@ -2416,5 +2473,119 @@ mod tests {
         assert_eq!(cursor_position(&editor, 20), (0, 2));
         editor.backspace();
         assert_eq!(editor.text(), "e\u{301}");
+    }
+
+    #[test]
+    fn paste_multiline_into_empty_editor() {
+        let mut editor = InputEditor::new();
+        editor.insert_text("hello\nworld");
+        assert_eq!(editor.text(), "hello\nworld");
+        assert_eq!(editor.cursor(), (1, 5));
+    }
+
+    #[test]
+    fn multiline_paste_cursor_is_aligned_with_continuation_indent() {
+        let backend = ratatui::backend::TestBackend::new(20, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::default();
+        app.on_paste("one\ntwo");
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        terminal.backend_mut().assert_cursor_position((5, 9));
+    }
+
+    #[test]
+    fn paste_splits_text_at_the_cursor_and_keeps_suffix() {
+        let mut editor = editor_with("helloworld");
+        for _ in 0..5 {
+            editor.left();
+        }
+        editor.insert_text(" brave\nnew ");
+        assert_eq!(editor.text(), "hello brave\nnew world");
+        assert_eq!(editor.cursor(), (1, 4));
+        editor.insert('!');
+        assert_eq!(editor.text(), "hello brave\nnew !world");
+    }
+
+    #[test]
+    fn paste_normalizes_crlf_and_bare_cr() {
+        let mut editor = InputEditor::new();
+        editor.insert_text("one\r\ntwo\rthree");
+        assert_eq!(editor.text(), "one\ntwo\nthree");
+        assert_eq!(editor.cursor(), (2, 5));
+    }
+
+    #[test]
+    fn paste_preserves_trailing_newline_and_blank_lines() {
+        let mut editor = InputEditor::new();
+        editor.insert_text("hello\n\n\n");
+        assert_eq!(editor.text(), "hello\n\n\n");
+        assert_eq!(editor.lines, vec!["hello", "", "", ""]);
+        assert_eq!(editor.cursor(), (3, 0));
+    }
+
+    #[test]
+    fn paste_preserves_cjk_emoji_and_combining_graphemes() {
+        let mut editor = InputEditor::new();
+        editor.insert_text("你好 👨‍👩‍👧‍👦 e\u{301}");
+        assert_eq!(editor.text(), "你好 👨‍👩‍👧‍👦 e\u{301}");
+        editor.backspace();
+        assert_eq!(
+            editor.text(),
+            "你好 👨‍👩‍👧‍👦 ",
+            "combining sequence is one grapheme"
+        );
+        editor.backspace();
+        editor.backspace();
+        assert_eq!(
+            editor.text(),
+            "你好 ",
+            "emoji family is removed as one grapheme"
+        );
+    }
+
+    #[test]
+    fn paste_never_submits_and_slash_text_waits_for_enter() {
+        let mut app = App::default();
+        app.on_paste("/help");
+        assert_eq!(app.input.text(), "/help");
+        assert!(app.presentation.cells().is_empty());
+        assert!(app.items.is_empty());
+        let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(action, Some(Action::Submit(ref text)) if text == "/help"));
+    }
+
+    #[test]
+    fn multiline_slash_paste_is_one_prompt_and_one_history_entry() {
+        let mut app = App::default();
+        let prompt = "/not-a-command\nsecond paragraph\n\nlast";
+        app.on_paste(prompt);
+        assert!(!app.palette.active(&app.input));
+        assert!(
+            app.items.is_empty(),
+            "paste must not create a transcript item"
+        );
+        let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(action, Some(Action::Submit(ref text)) if text == prompt));
+        assert_eq!(app.input.history, vec![prompt]);
+        assert!(
+            app.on_key(key(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn terminal_screen_commands_toggle_bracketed_paste_symmetrically() {
+        let mut entered = Vec::new();
+        let mut left = Vec::new();
+        enter_screen(&mut entered).unwrap();
+        leave_screen(&mut left).unwrap();
+        let entered = String::from_utf8(entered).unwrap();
+        let left = String::from_utf8(left).unwrap();
+        assert_eq!(entered.matches("\u{1b}[?2004h").count(), 1);
+        assert_eq!(left.matches("\u{1b}[?2004l").count(), 1);
+        assert!(!entered.contains("\u{1b}[?2004l"));
+        assert!(!left.contains("\u{1b}[?2004h"));
     }
 }

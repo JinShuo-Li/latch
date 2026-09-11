@@ -116,7 +116,8 @@ working set while retaining durable history and canonical state.
 - **Input:** Enter submits, Alt+Enter inserts a newline, Left/Right move the
   cursor, Ctrl+A/E jump to line start/end, Ctrl+W deletes a word, Ctrl+U/K
   clear to line start/end. The input area expands (bounded) with visible
-  wrapping.
+  wrapping. Bracketed clipboard paste preserves multiline text, CRLF, Unicode,
+  and blank lines without submitting; Enter remains the only submit action.
 - **History:** Up/Down recall previous prompts; the draft returns past the
   newest entry; recalled entries are never mutated.
 - **Scrollback:** PageUp/PageDown, Home/End, mouse wheel. Auto-follow resumes at
