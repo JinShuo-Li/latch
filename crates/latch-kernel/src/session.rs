@@ -6,7 +6,7 @@
 //! reconstructed from existing user events rather than a second history
 //! database.
 
-use latch_protocol::{DisplayItem, Event, EventPayload, Mode};
+use latch_protocol::{DisplayItem, Event, EventPayload, Mode, PermissionMode, Safety};
 
 /// Resolves the effective startup mode.
 ///
@@ -22,6 +22,34 @@ pub fn resumed_mode(events: &[Event], cli: Option<Mode>, default: Mode) -> Mode 
         })
     })
     .unwrap_or(default)
+}
+
+/// Effective safety profile after resume: the session's last durable change,
+/// falling back to the configured default. Resume never silently broadens or
+/// narrows the policy beyond what the session actually ended with.
+#[must_use]
+pub fn resumed_safety(events: &[Event], default: Safety) -> Safety {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match event.payload {
+            EventPayload::SafetyChanged { safety } => Some(safety),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+/// Effective permission resolver after resume.
+#[must_use]
+pub fn resumed_permissions(events: &[Event], default: PermissionMode) -> PermissionMode {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match event.payload {
+            EventPayload::PermissionsChanged { mode } => Some(mode),
+            _ => None,
+        })
+        .unwrap_or(default)
 }
 
 /// Rebuilds the user-visible transcript from durable events in chronological
@@ -78,6 +106,34 @@ mod tests {
             Mode::Work
         );
         assert_eq!(resumed_mode(&[], None, Mode::Ask), Mode::Ask);
+    }
+
+    #[test]
+    fn safety_and_permissions_resume_from_the_session_history() {
+        let events = vec![
+            event(EventPayload::SafetyChanged {
+                safety: Safety::Strict,
+            }),
+            event(EventPayload::PermissionsChanged {
+                mode: PermissionMode::AutoApprove,
+            }),
+            event(EventPayload::SafetyChanged {
+                safety: Safety::Autonomous,
+            }),
+        ];
+        assert_eq!(
+            resumed_safety(&events, Safety::Standard),
+            Safety::Autonomous
+        );
+        assert_eq!(
+            resumed_permissions(&events, PermissionMode::Human),
+            PermissionMode::AutoApprove
+        );
+        assert_eq!(resumed_safety(&[], Safety::Standard), Safety::Standard);
+        assert_eq!(
+            resumed_permissions(&[], PermissionMode::Human),
+            PermissionMode::Human
+        );
     }
 
     #[test]

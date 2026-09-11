@@ -22,7 +22,9 @@ use crossterm::{
 use futures::StreamExt;
 #[cfg(test)]
 use latch_protocol::DisplayItem;
-use latch_protocol::{Event as DurableEvent, Mode, ToolResult, ToolRunStatus};
+use latch_protocol::{
+    Event as DurableEvent, Mode, PermissionMode, Safety, ToolResult, ToolRunStatus,
+};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -62,6 +64,10 @@ pub enum Input {
         request_id: uuid::Uuid,
         approved: bool,
     },
+    /// A selector choice for the durable safety profile.
+    SetSafety(Safety),
+    /// A selector choice for the durable permission resolver.
+    SetPermissions(PermissionMode),
 }
 #[derive(Debug, Clone)]
 pub enum Output {
@@ -73,6 +79,10 @@ pub enum Output {
     ToolResult(ToolResult),
     Notice(String),
     Mode(Mode),
+    /// Effective safety profile after a `/safety` change or resume.
+    Safety(Safety),
+    /// Effective permission resolver after a `/permissions` change or resume.
+    Permissions(PermissionMode),
     Header {
         model: String,
         /// Friendly provider label, for example `OpenCode Go` or `Anthropic`.
@@ -108,6 +118,14 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/resume",
         description: "Resume another saved session",
+    },
+    SlashCommand {
+        name: "/safety",
+        description: "Show or switch Strict/Standard/Autonomous",
+    },
+    SlashCommand {
+        name: "/permissions",
+        description: "Show or switch the approval resolver",
     },
     SlashCommand {
         name: "/model",
@@ -315,6 +333,12 @@ struct App {
     items: Vec<TranscriptItem>,
     streaming: Option<String>,
     mode: Mode,
+    /// Effective safety profile, restored from durable events on resume.
+    safety: Safety,
+    /// Effective permission resolver, restored from durable events on resume.
+    permissions: PermissionMode,
+    /// An open `/safety` or `/permissions` selector above the composer.
+    selector: Option<PolicySelector>,
     model: String,
     provider: String,
     workspace: String,
@@ -375,6 +399,9 @@ impl Default for App {
             items: Vec::new(),
             streaming: None,
             mode: Mode::default(),
+            safety: Safety::default(),
+            permissions: PermissionMode::default(),
+            selector: None,
             model: String::new(),
             provider: String::new(),
             workspace: String::new(),
@@ -491,6 +518,8 @@ impl App {
                 session.mode = mode;
                 self.sidebar.set_session(session);
             }
+            Output::Safety(safety) => self.safety = safety,
+            Output::Permissions(mode) => self.permissions = mode,
             Output::Header {
                 model,
                 provider,
@@ -691,6 +720,41 @@ impl App {
             && !(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
         {
             return self.on_diff_key(key);
+        }
+        if let Some(selector) = self.selector {
+            let options = selector.kind.options();
+            match key.code {
+                KeyCode::Up => {
+                    let selected = (selector.selected + options.len() - 1) % options.len();
+                    self.selector = Some(PolicySelector {
+                        selected,
+                        ..selector
+                    });
+                    return None;
+                }
+                KeyCode::Down => {
+                    let selected = (selector.selected + 1) % options.len();
+                    self.selector = Some(PolicySelector {
+                        selected,
+                        ..selector
+                    });
+                    return None;
+                }
+                KeyCode::Enter => {
+                    self.selector = None;
+                    return options
+                        .get(selector.selected)
+                        .map(|(_, action)| action.clone());
+                }
+                KeyCode::Esc => {
+                    self.selector = None;
+                    return None;
+                }
+                _ => {
+                    // Any other key closes the selector and continues normally.
+                    self.selector = None;
+                }
+            }
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
@@ -922,6 +986,7 @@ impl App {
     }
 }
 
+#[derive(Debug, Clone)]
 enum Action {
     Submit(String),
     Cancel,
@@ -931,6 +996,69 @@ enum Action {
         request_id: uuid::Uuid,
         approved: bool,
     },
+    SetSafety(Safety),
+    SetPermissions(PermissionMode),
+}
+
+/// Which policy selector is open above the composer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectorKind {
+    Safety,
+    Permissions,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PolicySelector {
+    kind: SelectorKind,
+    selected: usize,
+}
+
+impl SelectorKind {
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Safety => "Safety",
+            Self::Permissions => "Permissions",
+        }
+    }
+
+    fn options(self) -> Vec<(&'static str, Action)> {
+        match self {
+            Self::Safety => vec![
+                ("Strict", Action::SetSafety(Safety::Strict)),
+                ("Standard", Action::SetSafety(Safety::Standard)),
+                ("Autonomous", Action::SetSafety(Safety::Autonomous)),
+            ],
+            Self::Permissions => vec![
+                (
+                    "All approved",
+                    Action::SetPermissions(PermissionMode::AutoApprove),
+                ),
+                (
+                    "Approved by ask",
+                    Action::SetPermissions(PermissionMode::Human),
+                ),
+                (
+                    "Approve for me",
+                    Action::SetPermissions(PermissionMode::AiReview),
+                ),
+            ],
+        }
+    }
+
+    fn current(self, app: &App) -> usize {
+        match self {
+            Self::Safety => match app.safety {
+                Safety::Strict => 0,
+                Safety::Standard => 1,
+                Safety::Autonomous => 2,
+            },
+            Self::Permissions => match app.permissions {
+                PermissionMode::AutoApprove => 0,
+                PermissionMode::Human => 1,
+                PermissionMode::AiReview => 2,
+            },
+        }
+    }
 }
 
 impl App {
@@ -954,6 +1082,20 @@ impl App {
         }
         if command == "/sidebar" {
             self.toggle_sidebar();
+            return None;
+        }
+        if command == "/safety" {
+            self.selector = Some(PolicySelector {
+                kind: SelectorKind::Safety,
+                selected: SelectorKind::Safety.current(self),
+            });
+            return None;
+        }
+        if command == "/permissions" {
+            self.selector = Some(PolicySelector {
+                kind: SelectorKind::Permissions,
+                selected: SelectorKind::Permissions.current(self),
+            });
             return None;
         }
         if !slash_command {
@@ -2238,6 +2380,35 @@ fn hint_spans(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
     spans
 }
 
+/// A restrained selector for `/safety` and `/permissions`, rendered above the
+/// palette slot with the same visual language as the command palette.
+fn draw_policy_selector(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui::layout::Rect) {
+    let Some(selector) = app.selector else {
+        return;
+    };
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let mut rows = vec![Line::styled(
+        format!("  {}", selector.kind.title().to_lowercase()),
+        notice_style(),
+    )];
+    for (index, (label, _)) in selector.kind.options().iter().enumerate() {
+        let selected = index == selector.selected;
+        let style = if selected {
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let marker = if selected { "› " } else { "  " };
+        rows.push(Line::styled(format!("  {marker}{label}"), style));
+    }
+    frame.render_widget(Paragraph::new(rows), area);
+}
+
 fn draw_palette(
     frame: &mut ratatui::Frame<'_>,
     app: &App,
@@ -2424,6 +2595,10 @@ fn composer_meta_line(app: &App, width: usize, sidebar_shown: bool) -> Line<'sta
     if !app.branch.is_empty() && app.branch != "-" {
         fields.push((app.branch.clone(), notice_style()));
     }
+    // Safety and permissions are part of the session state, not decoration;
+    // they drop before model/branch when the terminal is narrow.
+    fields.push((app.safety.short().to_owned(), notice_style()));
+    fields.push((app.permissions.short().to_owned(), notice_style()));
     if app.resumed {
         fields.push(("resumed".to_owned(), notice_style()));
     }
@@ -2668,11 +2843,13 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     } else {
         0
     };
+    let selector_rows = if app.selector.is_some() { 4 } else { 0 };
     let chrome = ComposerChrome::responsive(area.height, content_rows);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),
+            Constraint::Length(selector_rows),
             Constraint::Length(palette_rows),
             Constraint::Length(
                 chrome.spacer + chrome.top + chrome.body + chrome.gap + chrome.meta + chrome.rule,
@@ -2682,10 +2859,11 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         ])
         .split(area);
     let transcript_area = chunks[0];
-    let palette_area = chunks[1];
-    let composer_area = chunks[2];
-    let hints_area = chunks[3];
-    let footer_area = chunks[4];
+    let selector_area = chunks[1];
+    let palette_area = chunks[2];
+    let composer_area = chunks[3];
+    let hints_area = chunks[4];
+    let footer_area = chunks[5];
 
     if overlay_open {
         draw_diff_overlay(frame, app, transcript_area);
@@ -2730,6 +2908,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         }
     }
     draw_permission_modal(frame, app, transcript_area);
+    draw_policy_selector(frame, app, selector_area);
     draw_palette(frame, app, palette_area, &candidates);
     draw_composer(
         frame,
@@ -2783,6 +2962,12 @@ pub async fn run(
                 Some(Action::Quit) => { input_tx.send(Input::Quit).await?; break; }
                 Some(Action::Permission { request_id, approved }) => {
                     input_tx.send(Input::Permission { request_id, approved }).await?;
+                }
+                Some(Action::SetSafety(safety)) => {
+                    input_tx.send(Input::SetSafety(safety)).await?;
+                }
+                Some(Action::SetPermissions(mode)) => {
+                    input_tx.send(Input::SetPermissions(mode)).await?;
                 }
                 None => {}
             },
@@ -3348,9 +3533,19 @@ mod tests {
 
     #[test]
     fn palette_filters_by_prefix() {
-        let mo = filter_commands("/mo");
+        let mo = filter_commands("/mod");
         let names: Vec<&str> = mo.iter().map(|command| command.name).collect();
         assert_eq!(names, vec!["/mode", "/model"]);
+        assert!(
+            filter_commands("/perm")
+                .iter()
+                .any(|command| command.name == "/permissions")
+        );
+        assert!(
+            filter_commands("/safe")
+                .iter()
+                .any(|command| command.name == "/safety")
+        );
         assert!(filter_commands("/mod").iter().any(|c| c.name == "/mode"));
         assert!(filter_commands("/und").iter().any(|c| c.name == "/undo"));
         assert!(filter_commands("/zzz").is_empty());
@@ -3364,7 +3559,7 @@ mod tests {
     #[test]
     fn palette_opens_completes_and_closes() {
         let mut app = App::default();
-        for ch in "/mo".chars() {
+        for ch in "/mod".chars() {
             app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
         }
         assert!(app.palette.active(&app.input));
@@ -3376,6 +3571,7 @@ mod tests {
         app.input.insert('/');
         app.input.insert('m');
         app.input.insert('o');
+        app.input.insert('d');
         assert!(app.palette.active(&app.input));
         app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
         let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
@@ -3962,6 +4158,46 @@ mod tests {
             parent_id: None,
             payload,
         }
+    }
+
+    #[test]
+    fn safety_and_permissions_selectors_change_the_policy() {
+        let mut app = App::default();
+        for ch in "/safety".chars() {
+            app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        // Enter opens the selector instead of submitting a bare command.
+        assert!(
+            app.on_key(key(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none()
+        );
+        assert!(app.selector.is_some());
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+        let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            action,
+            Some(Action::SetSafety(Safety::Autonomous))
+        ));
+        assert!(app.selector.is_none());
+
+        for ch in "/permissions".chars() {
+            app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.selector.is_some());
+        app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.selector.is_none());
+
+        // An explicit argument still travels to the CLI as a command.
+        app.input.set_text("/safety strict");
+        let action = app.submit_action();
+        assert!(matches!(action, Some(Action::Submit(ref text)) if text == "/safety strict"));
+
+        // Chrome state arrives through the same Output path replay uses.
+        app.output(Output::Safety(Safety::Strict));
+        app.output(Output::Permissions(PermissionMode::AiReview));
+        assert_eq!(app.safety, Safety::Strict);
+        assert_eq!(app.permissions, PermissionMode::AiReview);
     }
 
     #[test]

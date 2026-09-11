@@ -326,7 +326,12 @@ async fn build_agent(
     let mode = session::resumed_mode(&events, cli_mode, config.default_mode);
     let provider = provider(config, session_id)?;
     let model = provider.model().to_string();
-    let policy = PolicyEngine::new(mode, workspace.to_path_buf(), config.permissions.clone());
+    let policy = PolicyEngine::with_defaults(
+        mode,
+        workspace.to_path_buf(),
+        config.permissions.clone(),
+        config.safety.level,
+    );
     let artifacts = config
         .state_dir
         .join("artifacts")
@@ -368,6 +373,12 @@ async fn build_agent(
             .with_context(|| format!("initialize extension {}", extension.name))?;
     }
     if resume {
+        // Resume restores the exact policy the session ended in; it never
+        // silently broadens or narrows permissions.
+        agent.restore_policy(
+            session::resumed_safety(&events, config.safety.level),
+            session::resumed_permissions(&events, config.permissions.mode),
+        );
         if let Some(state) = events.iter().rev().find_map(|e| match &e.payload {
             EventPayload::TaskStateUpdated { state } => Some(state.clone()),
             _ => None,
@@ -482,6 +493,11 @@ async fn interactive(
             pricing,
         })
         .await?;
+    // Policy chrome state, restored from durable events on resume.
+    output_tx.send(Output::Safety(agent.safety())).await?;
+    output_tx
+        .send(Output::Permissions(agent.permissions()))
+        .await?;
     let mut outcome = InteractiveOutcome::Exit;
     'session: while let Some(input) = input_rx.recv().await {
         match input {
@@ -496,6 +512,14 @@ async fn interactive(
                 approved,
             } => {
                 broker.resolve(request_id, approved).await;
+            }
+            Input::SetSafety(safety) => {
+                agent.set_safety(safety)?;
+                output_tx.send(Output::Safety(safety)).await?;
+            }
+            Input::SetPermissions(mode) => {
+                agent.set_permissions(mode)?;
+                output_tx.send(Output::Permissions(mode)).await?;
             }
             Input::Submit(text) => {
                 if is_slash_command_input(&text) {
@@ -537,6 +561,7 @@ async fn interactive(
                             Some(Input::Permission { request_id, approved }) => { broker.resolve(request_id, approved).await; }
                             Some(Input::Quit) | None => { active.cancel(); let _ = (&mut running).await; break 'session; }
                             Some(Input::Resume) => { output_tx.send(Output::Notice("cancel the active turn before resuming another session".into())).await?; }
+                            Some(Input::SetSafety(_)) | Some(Input::SetPermissions(_)) => { output_tx.send(Output::Notice("finish or cancel the active turn before changing safety or permissions".into())).await?; }
                             Some(Input::Submit(_)) => output_tx.send(Output::Notice("finish or cancel the active turn before submitting another message".into())).await?,
                         }
                     }
@@ -564,6 +589,32 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                 tx.send(Output::Mode(mode)).await?;
             } else { tx.send(Output::Notice(format!("mode: {}", agent.mode()))).await?; }
         }
+        "/safety" => {
+            if let Some(value) = parts.next() {
+                let safety = latch_protocol::Safety::from_str(value).map_err(anyhow::Error::msg)?;
+                agent.set_safety(safety)?;
+                tx.send(Output::Safety(safety)).await?;
+            } else {
+                tx.send(Output::Notice(format!(
+                    "safety: {} (use /safety to select, or /safety strict|standard|autonomous)",
+                    agent.safety()
+                )))
+                .await?;
+            }
+        }
+        "/permissions" => {
+            if let Some(value) = parts.next() {
+                let mode = latch_protocol::PermissionMode::from_str(value).map_err(anyhow::Error::msg)?;
+                agent.set_permissions(mode)?;
+                tx.send(Output::Permissions(mode)).await?;
+            } else {
+                tx.send(Output::Notice(format!(
+                    "permissions: {} (use /permissions to select, or /permissions auto|human|ai)",
+                    agent.permissions()
+                )))
+                .await?;
+            }
+        }
         "/context" => {
             let c = agent.context(None)?;
             let s = &c.stats;
@@ -583,6 +634,8 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
             let commands = SLASH_COMMANDS.iter().map(|c| format!("{}  {}", c.name, c.description)).collect::<Vec<_>>().join("\n");
             tx.send(Output::Notice(format!(
                 "modes: /mode ask|plan|work (WORK mutates; ASK/PLAN are read-only)\n\
+                 safety: /safety strict|standard|autonomous (ASK/PLAN remain read-only)\n\
+                 permissions: /permissions auto|human|ai (how an Ask is resolved)\n\
                  composer: Enter send · Ctrl+J or Alt+Enter newline · Home/End line · Ctrl+Home/End buffer\n\
                  composer scroll: PgUp/PgDn or mouse wheel when the prompt overflows\n\
                  transcript: Shift+PgUp/PgDn · Shift+Home/End · mouse wheel\n\

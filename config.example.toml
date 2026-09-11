@@ -1,3 +1,7 @@
+# Latch is Linux-first and requires the system `bwrap` (bubblewrap) binary:
+# every shell, exec_start, validation, and git inspection command runs inside
+# the mandatory sandbox. Latch refuses to execute commands unsandboxed.
+
 default_mode = "WORK"
 # state_dir = "/home/you/.local/state/latch"
 
@@ -9,10 +13,21 @@ model = "gpt-5-mini"
 # OpenCode Go (base_url under https://opencode.ai/zen/go) uses the same
 # provider and additionally receives a stable x-opencode-session header.
 
+[safety]
+# Strict | Standard | Autonomous. Safety decides Allow/Ask/Deny; it never
+# changes what the Mode permits.
+level = "standard"
+
 [permissions]
 workspace_write = true
-outside_workspace = "deny"
+# Outside-workspace writes are always classified as Ask first. "deny" is a
+# stricter option that refuses them outright; "ask" lets the resolver decide.
+outside_workspace = "ask"
 shell_timeout_seconds = 120
+# How an Ask is resolved: "human" (real approval prompt), "auto_approve"
+# (record Ask -> resolved automatically), or "ai_review" (separate stateless
+# model review for shell commands).
+mode = "human"
 
 [context]
 # All context budgets are tokens. Bytes remain only for internal file,

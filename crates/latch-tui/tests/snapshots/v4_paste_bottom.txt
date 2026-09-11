@@ -24,7 +24,7 @@
 │ pasted line 78                                                                                   │
 │ pasted line 79                                                                                   │
 │                                                                                                  │
-│ WORK · deepseek-flash · main                                                               ready │
+│ WORK · deepseek-flash · main · std · ask                                                   ready │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 enter send  ctrl+j newline  ctrl+p commands                                                         
 /tmp/latch-ui                                                                           latch v0.1.1
