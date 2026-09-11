@@ -66,7 +66,7 @@ impl PromptCompiler {
                 "core.tool_semantics",
                 60,
                 true,
-                "Prefer read_file, search, git_status, and git_diff over shell for inspection; they preserve provenance and version hashes. read_file returns a bounded window with the file hash and a continuation offset, so read ranges instead of whole files; search returns a bounded page, and read_artifact pages through spilled shell, search, diff, or validation output. Shell runs in the workspace root: write plain commands, `cd` into a subdirectory only for read-only inspection, and never `cd` outside the workspace. Use shell only for checks the dedicated tools cannot express, as one focused command rather than a compound pipeline. For servers, watchers, and long builds use exec_start, then exec_poll and exec_terminate instead of a blocking call. Read a file before editing it and pass the hash from that read; tool failures are evidence — reconsider assumptions rather than retrying the same call.",
+                "Prefer read_file, search, git_status, and git_diff over shell for inspection; they preserve provenance and version hashes. read_file returns a bounded window with the file hash and a continuation offset, so read ranges instead of whole files; search returns a bounded page, and read_artifact pages through spilled shell, search, diff, or validation output. Shell runs inside a mandatory workspace sandbox: pipes, quoting, and scripts are fine, but the sandbox enforces what the safety profile grants. When an operation needs network, Git metadata mutation, or an outside writable path, request the capability explicitly in the tool arguments (for example `capabilities: [\"network\"]`) so the kernel can classify it. Write plain commands rather than `cd <workspace> &&`, `cd` into a workspace subdirectory only for read-only inspection, and never `cd` outside the workspace. For servers, watchers, and long builds use exec_start, then exec_poll and exec_terminate instead of a blocking call. Read a file before editing it and pass the hash from that read; tool failures are evidence — reconsider assumptions rather than retrying the same call.",
             ),
             fragment(
                 "core.communication",
@@ -95,13 +95,13 @@ impl PromptCompiler {
         ];
         let mode_text = match mode {
             Mode::Ask => {
-                "ASK is read-only. Inspect with read_file, search, git_status, and git_diff. Do not run tests, builds, or package managers, do not modify the workspace, and keep shell to conservative read-only commands."
+                "ASK is read-only: inspect and analyze freely. Shell is available and runs against a read-only workspace with private scratch space, so pipelines, awk, jq, and analysis scripts are welcome; writes to project files fail by construction. If an inspection genuinely needs an ungranted capability, request it explicitly so the kernel can ask."
             }
             Mode::Plan => {
-                "PLAN is deep read-only exploration. Inspect and produce an implementation plan; no workspace mutation is permitted. Prefer the dedicated inspection tools; shell stays limited to conservative read-only commands."
+                "PLAN is deep read-only exploration. Inspect and produce an implementation plan; no workspace mutation is permitted. Shell runs against a read-only workspace with private scratch space, so non-trivial analysis commands are fine; request needed capabilities explicitly."
             }
             Mode::Work => {
-                "WORK permits policy-approved changes. Investigate, implement, validate, and fix failures until the requested work is complete; a formal plan is optional."
+                "WORK permits policy-approved changes. Investigate, implement, validate, and fix failures until the requested work is complete; a formal plan is optional. Commands run inside the sandbox, and external or privileged capabilities must be requested explicitly so the kernel can classify them."
             }
         };
         f.push(fragment(
@@ -307,12 +307,15 @@ mod tests {
             .filter(|f| f.cacheable)
             .map(|f| estimator.estimate(&f.content))
             .sum();
+        // The safety/sandbox architecture added capability guidance to the
+        // static fragments; the bound stays deliberately below the next
+        // unbounded-growth threshold rather than at today's exact size.
         assert!(
-            static_tokens <= 1_450,
+            static_tokens <= 1_500,
             "static coding prompt grew to {static_tokens} tokens"
         );
         assert!(
-            p.approximate_tokens() <= 1_550,
+            p.approximate_tokens() <= 1_750,
             "compiled prompt grew to {} tokens",
             p.approximate_tokens()
         );
