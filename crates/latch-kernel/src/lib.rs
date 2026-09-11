@@ -9,6 +9,7 @@ pub mod permissions;
 pub mod progress;
 pub mod prompt;
 pub mod provider;
+pub mod safety;
 pub mod sandbox;
 pub mod session;
 pub mod state;
@@ -25,4 +26,4 @@ pub use provider::{AnthropicProvider, FakeProvider, ModelProvider, OpenAiProvide
 pub use state::{EvidenceLedger, FailureManager, TaskStateManager};
 pub use store::{EventStore, SessionPreviewLine, SessionSummary};
 pub use tokens::{TokenEstimator, TokenProfile};
-pub use tools::{PolicyEngine, ToolExecutor};
+pub use tools::{CapabilityGrant, PolicyEngine, ToolExecutor};

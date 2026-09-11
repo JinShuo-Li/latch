@@ -362,6 +362,9 @@ pub struct PermissionPrompt {
     pub tool: String,
     pub arguments: String,
     pub reason: String,
+    /// Capability names the operation needs, shown so the human sees the
+    /// actual requested boundary rather than only the tool name.
+    pub capabilities: Vec<String>,
 }
 impl Default for App {
     fn default() -> Self {
@@ -442,6 +445,7 @@ impl App {
                         tool,
                         arguments,
                         reason,
+                        capabilities,
                     } => {
                         self.permission = Some(PermissionPrompt {
                             request_id: *request_id,
@@ -451,6 +455,7 @@ impl App {
                                 160,
                             ),
                             reason: reason.clone(),
+                            capabilities: capabilities.clone(),
                         });
                     }
                     latch_protocol::EventPayload::PermissionResolved { request_id, .. }
@@ -1987,8 +1992,8 @@ fn draw_permission_modal(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatu
         return;
     };
     let width = area.width.saturating_sub(4).clamp(24, 84).min(area.width);
-    // Five content rows plus the top and bottom border.
-    let height = 7.min(area.height).max(3);
+    // Six content rows plus the top and bottom border.
+    let height = 8.min(area.height).max(3);
     let rect = ratatui::layout::Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
         y: area.y + area.height.saturating_sub(height) / 2,
@@ -2012,6 +2017,13 @@ fn draw_permission_modal(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatu
             )),
         ]),
         Line::styled(crate::sidebar::fit(&prompt.reason, inner), notice_style()),
+        Line::styled(
+            crate::sidebar::fit(
+                &format!("capability: {}", prompt.capabilities.join(", ")),
+                inner,
+            ),
+            Style::default().fg(Color::Yellow),
+        ),
         Line::from(""),
         Line::styled(
             "[y] approve   [n] deny   [Ctrl+C] cancel",
@@ -3933,11 +3945,13 @@ mod tests {
                 tool: "shell".into(),
                 arguments: serde_json::json!({"command":"sudo make install"}),
                 reason: "outside-workspace write requires explicit approval".into(),
+                capabilities: vec!["external_filesystem_write".into()],
             },
             Some((approved, source)) => latch_protocol::EventPayload::PermissionResolved {
                 request_id,
                 approved,
                 source: source.into(),
+                risk: None,
             },
         };
         latch_protocol::Event {

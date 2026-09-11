@@ -176,13 +176,14 @@ impl SandboxProfile {
         self
     }
 
+    /// Build-artifact writes never make the workspace writable; they only
+    /// enable the private scratch target directory on read-only profiles.
     #[must_use]
     pub fn workspace_writable(&self) -> bool {
         self.capabilities.any(&[
             Capability::WorkspaceSourceWrite,
             Capability::WorkspaceMetadataWrite,
             Capability::GitMetadataWrite,
-            Capability::BuildArtifactWrite,
         ])
     }
 

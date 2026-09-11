@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use latch_protocol::{Mode, ModelPricing};
+use latch_protocol::{Mode, ModelPricing, PermissionMode, Safety};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,8 @@ pub struct Config {
     pub default_mode: Mode,
     #[serde(default = "default_state_dir")]
     pub state_dir: PathBuf,
+    #[serde(default)]
+    pub safety: SafetyConfig,
     #[serde(default)]
     pub permissions: PermissionConfig,
     #[serde(default)]
@@ -47,6 +49,21 @@ pub struct ProviderConfig {
     pub api_key_env: Option<String>,
 }
 
+/// Safety profile defaults. `[safety] level = "strict" | "standard" | "autonomous"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyConfig {
+    #[serde(default)]
+    pub level: Safety,
+}
+
+impl Default for SafetyConfig {
+    fn default() -> Self {
+        Self {
+            level: Safety::Standard,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionConfig {
     #[serde(default = "yes")]
@@ -55,13 +72,18 @@ pub struct PermissionConfig {
     pub outside_workspace: OutsidePolicy,
     #[serde(default = "default_shell_timeout")]
     pub shell_timeout_seconds: u64,
+    /// Permission resolver: `auto_approve`, `human`, or `ai_review`.
+    #[serde(default)]
+    pub mode: PermissionMode,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum OutsidePolicy {
-    #[default]
+    /// Outside-workspace writes are classified but rejected outright. The
+    /// default is `Ask`: external effects always become a kernel Ask first.
     Deny,
+    #[default]
     Ask,
 }
 
@@ -160,8 +182,9 @@ impl Default for PermissionConfig {
     fn default() -> Self {
         Self {
             workspace_write: true,
-            outside_workspace: OutsidePolicy::Deny,
+            outside_workspace: OutsidePolicy::Ask,
             shell_timeout_seconds: default_shell_timeout(),
+            mode: PermissionMode::Human,
         }
     }
 }
@@ -190,6 +213,7 @@ impl Default for Config {
             provider: ProviderConfig::default(),
             default_mode: Mode::Work,
             state_dir: default_state_dir(),
+            safety: SafetyConfig::default(),
             permissions: PermissionConfig::default(),
             context: ContextConfig::default(),
             failure: FailureConfig::default(),

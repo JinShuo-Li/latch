@@ -39,6 +39,108 @@ impl fmt::Display for Mode {
     }
 }
 
+/// How cautious the kernel is when classifying a proposed capability. Mode is
+/// what kind of work is allowed; Safety decides Allow, Ask, or Deny. They are
+/// orthogonal: changing Safety never changes what Mode permits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Safety {
+    Strict,
+    #[default]
+    Standard,
+    Autonomous,
+}
+
+impl Safety {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Strict => "Strict",
+            Self::Standard => "Standard",
+            Self::Autonomous => "Autonomous",
+        }
+    }
+
+    #[must_use]
+    pub const fn short(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Standard => "std",
+            Self::Autonomous => "auto",
+        }
+    }
+}
+
+impl fmt::Display for Safety {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+impl FromStr for Safety {
+    type Err = String;
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "strict" => Ok(Self::Strict),
+            "standard" | "std" => Ok(Self::Standard),
+            "autonomous" | "auto" => Ok(Self::Autonomous),
+            other => Err(format!("unknown safety profile {other:?}")),
+        }
+    }
+}
+
+/// How an `Ask` is resolved. Orthogonal to both Mode and Safety.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    /// Automatically resolve Ask as approved, always recording the normal
+    /// request/resolution provenance. Never overrides Deny.
+    AutoApprove,
+    /// A real human decision through the approval UI.
+    #[default]
+    Human,
+    /// A separate stateless model review of the proposed command.
+    AiReview,
+}
+
+impl PermissionMode {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::AutoApprove => "All approved",
+            Self::Human => "Approved by ask",
+            Self::AiReview => "Approve for me",
+        }
+    }
+
+    #[must_use]
+    pub const fn short(self) -> &'static str {
+        match self {
+            Self::AutoApprove => "auto",
+            Self::Human => "ask",
+            Self::AiReview => "ai",
+        }
+    }
+}
+
+impl fmt::Display for PermissionMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+impl FromStr for PermissionMode {
+    type Err = String;
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "auto" | "all" | "all_approved" | "auto_approve" => Ok(Self::AutoApprove),
+            "ask" | "human" | "approved_by_ask" => Ok(Self::Human),
+            "ai" | "review" | "ai_review" | "approve_for_me" => Ok(Self::AiReview),
+            other => Err(format!("unknown permission mode {other:?}")),
+        }
+    }
+}
+
 impl FromStr for Mode {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -193,12 +295,21 @@ pub enum EventPayload {
         #[serde(default)]
         arguments: Value,
         reason: String,
+        /// Capability names the operation needs, for the approval UI and the
+        /// durable audit trail.
+        #[serde(default)]
+        capabilities: Vec<String>,
     },
     PermissionResolved {
         request_id: Uuid,
         approved: bool,
-        /// `user`, `cancelled`, `non_interactive`, or `resume_expired`.
+        /// `user`, `cancelled`, `non_interactive`, `resume_expired`, `auto`,
+        /// or `ai`.
         source: String,
+        /// AI reviewer risk level (`low`/`medium`/`high`/`critical`) when the
+        /// resolution came from the stateless reviewer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        risk: Option<String>,
     },
     ToolStarted {
         call_id: String,
@@ -271,6 +382,15 @@ pub enum EventPayload {
     /// `--resume` restores the mode the session actually ended in.
     ModeChanged {
         mode: Mode,
+    },
+    /// The effective safety profile changed via `/safety`. Durable so resume
+    /// restores exactly the profile the session ended in.
+    SafetyChanged {
+        safety: Safety,
+    },
+    /// The effective permission resolver changed via `/permissions`.
+    PermissionsChanged {
+        mode: PermissionMode,
     },
     /// The kernel recomputed completion and the derived value changed. This is
     /// the only place completion truth is announced; the model never sets it.
@@ -692,6 +812,9 @@ pub fn display_items(event: &Event) -> Vec<DisplayItem> {
         EventPayload::ModeChanged { mode } => vec![DisplayItem::KernelNotice {
             text: format!("mode: {mode}"),
         }],
+        // Safety and permissions are chrome state, shown in the composer; they
+        // do not belong in the durable transcript.
+        EventPayload::SafetyChanged { .. } | EventPayload::PermissionsChanged { .. } => Vec::new(),
         EventPayload::CompletionChanged { completion } => vec![DisplayItem::KernelNotice {
             text: format!("completion: {completion:?}"),
         }],

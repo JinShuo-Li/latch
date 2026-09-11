@@ -5,17 +5,19 @@ use crate::permissions::PermissionBroker;
 use crate::progress::{DEFAULT_STAGNATION_BUDGET, ProgressSupervisor, StagnationDecision};
 use crate::prompt::PromptCompiler;
 use crate::provider::{ModelProvider, StreamSink};
+use crate::safety::{Classification, Decision as SafetyDecision};
 use crate::state::{
     EvidenceLedger, FailureManager, StateUpdate, TaskStateManager, failure_subject,
 };
 use crate::store::EventStore;
 use crate::tokens::TokenEstimator;
-use crate::tools::{PolicyDecision, ToolExecutor};
+use crate::tools::{CapabilityGrant, ToolExecutor};
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use latch_protocol::{
     CompletionState, Event, EventPayload, EvidenceStatus, MemoryKind, MemoryRecord, Mode,
-    ModelMessage, ModelRequest, StreamEvent, ToolCall, ToolDefinition, ToolResult, Validity,
+    ModelMessage, ModelRequest, PermissionMode, Safety, StreamEvent, ToolCall, ToolDefinition,
+    ToolResult, Validity,
 };
 use serde_json::json;
 use std::cell::Cell;
@@ -157,6 +159,34 @@ impl Agent {
     #[must_use]
     pub const fn mode(&self) -> Mode {
         self.mode
+    }
+    /// Changes the effective safety profile and records it durably so resume
+    /// restores exactly the profile the session ended in.
+    pub fn set_safety(&mut self, safety: Safety) -> Result<()> {
+        self.tools.set_safety(safety);
+        self.store
+            .append(self.session_id, EventPayload::SafetyChanged { safety })?;
+        Ok(())
+    }
+    #[must_use]
+    pub fn safety(&self) -> Safety {
+        self.tools.safety()
+    }
+    /// Changes the effective permission resolver and records it durably.
+    pub fn set_permissions(&mut self, mode: PermissionMode) -> Result<()> {
+        self.tools.set_permissions(mode);
+        self.store
+            .append(self.session_id, EventPayload::PermissionsChanged { mode })?;
+        Ok(())
+    }
+    #[must_use]
+    pub fn permissions(&self) -> PermissionMode {
+        self.tools.permissions()
+    }
+    /// Restores resumed policy settings without appending new events.
+    pub fn restore_policy(&mut self, safety: Safety, permissions: PermissionMode) {
+        self.tools.set_safety(safety);
+        self.tools.set_permissions(permissions);
     }
     #[must_use]
     pub fn state(&self) -> &latch_protocol::TaskState {
@@ -636,28 +666,20 @@ impl Agent {
                     results.push(denied);
                 }
                 Ok(ExtensionGuardDecision::Ask(reason)) => {
-                    if self.ask_permission(&call, &reason, sink, &cancel).await {
-                        permitted.push(call);
-                    } else {
-                        let denied = tool_error(
-                            &call,
-                            format!("permission denied for {}: {reason}", call.name),
-                        );
-                        let _ = self.emit(
-                            EventPayload::PermissionDecision {
-                                tool: call.name.clone(),
-                                decision: "extension_guard_denied".into(),
-                                reason,
-                            },
-                            sink,
-                        );
-                        let _ = self.emit(
-                            EventPayload::ToolFailed {
-                                result: denied.clone(),
-                            },
-                            sink,
-                        );
-                        results.push(denied);
+                    let classification = self.tools.classify_call(&call.name, &call.arguments);
+                    match self
+                        .resolve_ask(&call, &classification, &reason, sink, &cancel)
+                        .await
+                    {
+                        Ok(grant) => {
+                            self.tools.grant_call(&call.id, grant);
+                            permitted.push(call);
+                        }
+                        Err(message) => {
+                            let denied =
+                                self.denied_result(&call, "extension_guard_denied", message, sink);
+                            results.push(denied);
+                        }
                     }
                 }
                 Err(error) => {
@@ -677,24 +699,34 @@ impl Agent {
         // supplies) lets the executor proceed.
         let mut policy_allowed = Vec::with_capacity(permitted.len());
         for call in permitted {
-            match self.tools.policy_decision(&call.name, &call.arguments) {
-                PolicyDecision::Allow => policy_allowed.push(call),
-                PolicyDecision::Deny(reason) => {
+            if self.tools.has_grant(&call.id) {
+                policy_allowed.push(call);
+                continue;
+            }
+            let classification = if self.extensions.owner_for_tool(&call.name).is_some() {
+                crate::safety::extension_classification(self.tools.safety())
+            } else {
+                self.tools.classify_call(&call.name, &call.arguments)
+            };
+            match classification.decision.clone() {
+                SafetyDecision::Allow => policy_allowed.push(call),
+                SafetyDecision::Deny(reason) => {
                     let denied = self.denied_result(&call, "policy_denied", reason, sink);
                     results.push(denied);
                 }
-                PolicyDecision::Ask(reason) => {
-                    if self.ask_permission(&call, &reason, sink, &cancel).await {
-                        self.tools.approve_call(&call.id);
-                        policy_allowed.push(call);
-                    } else {
-                        let denied = self.denied_result(
-                            &call,
-                            "policy_denied",
-                            format!("permission denied: {reason}"),
-                            sink,
-                        );
-                        results.push(denied);
+                SafetyDecision::Ask(reason) => {
+                    match self
+                        .resolve_ask(&call, &classification, &reason, sink, &cancel)
+                        .await
+                    {
+                        Ok(grant) => {
+                            self.tools.grant_call(&call.id, grant);
+                            policy_allowed.push(call);
+                        }
+                        Err(message) => {
+                            let denied = self.denied_result(&call, "policy_denied", message, sink);
+                            results.push(denied);
+                        }
                     }
                 }
             }
@@ -780,17 +812,19 @@ impl Agent {
         results.append(&mut executed);
         results
     }
-    /// Emits a durable approval request and waits for exactly one resolution.
-    /// Non-interactive sessions resolve immediately as an explicit denial so
-    /// `Ask` never becomes an indefinite hang and never silently behaves like
-    /// `Deny` without a record.
-    async fn ask_permission(
+    /// Resolves an `Ask` according to the configured permission resolver.
+    ///
+    /// Every path records the normal durable `PermissionRequested` /
+    /// `PermissionResolved` provenance and returns a call-scoped capability
+    /// grant; none of them can override a hard `Deny`.
+    async fn resolve_ask(
         &mut self,
         call: &ToolCall,
+        classification: &Classification,
         reason: &str,
         sink: &AgentEventSink,
         cancel: &CancellationToken,
-    ) -> bool {
+    ) -> std::result::Result<CapabilityGrant, String> {
         let request_id = Uuid::new_v4();
         if self
             .emit(
@@ -799,23 +833,64 @@ impl Agent {
                     tool: call.name.clone(),
                     arguments: call.arguments.clone(),
                     reason: reason.to_owned(),
+                    capabilities: classification.capabilities.names(),
                 },
                 sink,
             )
             .is_err()
         {
-            return false;
+            return Err("permission request could not be persisted".into());
         }
+        match self.tools.permissions() {
+            PermissionMode::AutoApprove => {
+                // Auto approval records the normal Ask -> Resolved provenance
+                // and still grants only the capabilities this call asked for.
+                self.record_resolution(request_id, true, "auto", None, sink);
+                Ok(grant_for(classification))
+            }
+            PermissionMode::Human => {
+                self.human_resolution(request_id, classification, reason, sink, cancel)
+                    .await
+            }
+            PermissionMode::AiReview => {
+                let Some(command) = call
+                    .arguments
+                    .get("command")
+                    .and_then(serde_json::Value::as_str)
+                else {
+                    // No command to review: use conservative human resolution
+                    // rather than fabricating a bash risk judgment.
+                    return self
+                        .human_resolution(request_id, classification, reason, sink, cancel)
+                        .await;
+                };
+                let (risk, explanation) = self.review_command(command, classification).await;
+                if risk == "low" {
+                    self.record_resolution(request_id, true, "ai", Some(risk), sink);
+                    Ok(grant_for(classification))
+                } else {
+                    self.record_resolution(request_id, false, "ai", Some(risk.clone()), sink);
+                    Err(format!(
+                        "Permission denied: {risk} risk — {explanation}. Choose a narrower, safer command and continue."
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Real human approval through the TUI broker. Non-interactive sessions
+    /// resolve as an explicit denial instead of hanging.
+    async fn human_resolution(
+        &mut self,
+        request_id: Uuid,
+        classification: &Classification,
+        reason: &str,
+        sink: &AgentEventSink,
+        cancel: &CancellationToken,
+    ) -> std::result::Result<CapabilityGrant, String> {
         if !self.interactive_permissions {
-            let _ = self.emit(
-                EventPayload::PermissionResolved {
-                    request_id,
-                    approved: false,
-                    source: "non_interactive".into(),
-                },
-                sink,
-            );
-            return false;
+            self.record_resolution(request_id, false, "non_interactive", None, sink);
+            return Err(format!("permission denied: {reason}"));
         }
         let approved = tokio::select! {
             decision = self.permissions.request(request_id) => decision.unwrap_or(false),
@@ -829,15 +904,61 @@ impl Agent {
         } else {
             "user"
         };
+        self.record_resolution(request_id, approved, source, None, sink);
+        if approved {
+            Ok(grant_for(classification))
+        } else {
+            Err(format!("permission denied: {reason}"))
+        }
+    }
+
+    fn record_resolution(
+        &mut self,
+        request_id: Uuid,
+        approved: bool,
+        source: &str,
+        risk: Option<String>,
+        sink: &AgentEventSink,
+    ) {
         let _ = self.emit(
             EventPayload::PermissionResolved {
                 request_id,
                 approved,
                 source: source.into(),
+                risk,
             },
             sink,
         );
-        approved
+    }
+
+    /// A separate stateless model call: no coding history, no tools, structured
+    /// output only. Malformed or unavailable answers reject conservatively.
+    async fn review_command(
+        &mut self,
+        command: &str,
+        classification: &Classification,
+    ) -> (String, String) {
+        let context = json!({
+            "task": self.state.state().goal,
+            "workspace": self.workspace.display().to_string(),
+            "command": command,
+            "capabilities": classification.capabilities.names(),
+            "requested_because": classification.reason,
+        });
+        let request = ModelRequest {
+            system: REVIEWER_PROMPT.to_owned(),
+            messages: vec![ModelMessage::text("user", context.to_string())],
+            tools: vec![],
+        };
+        let sink: StreamSink = Arc::new(|_| {});
+        match self
+            .provider
+            .stream(request, CancellationToken::new(), sink)
+            .await
+        {
+            Ok(response) => parse_review(&response.text),
+            Err(error) => ("critical".into(), format!("reviewer unavailable ({error})")),
+        }
     }
 
     fn denied_result(
@@ -890,6 +1011,7 @@ impl Agent {
                     request_id,
                     approved: false,
                     source: "resume_expired".into(),
+                    risk: None,
                 },
             )?;
         }
@@ -1115,21 +1237,21 @@ impl Agent {
         };
         // Validation runs commands, so it obeys the same policy as shell. An
         // `Ask` here is a real approval request, not a denial.
-        match self.tools.policy_decision("validate", &call.arguments) {
-            PolicyDecision::Allow => {}
-            PolicyDecision::Deny(reason) => {
+        let classification = self.tools.classify_call("validate", &call.arguments);
+        match classification.decision.clone() {
+            SafetyDecision::Allow => {}
+            SafetyDecision::Deny(reason) => {
                 return self.denied_result(call, "policy_denied", reason, sink);
             }
-            PolicyDecision::Ask(reason) => {
-                if self.ask_permission(call, &reason, sink, &cancel).await {
-                    self.tools.approve_call(&call.id);
-                } else {
-                    return self.denied_result(
-                        call,
-                        "policy_denied",
-                        format!("permission denied: {reason}"),
-                        sink,
-                    );
+            SafetyDecision::Ask(reason) => {
+                match self
+                    .resolve_ask(call, &classification, &reason, sink, &cancel)
+                    .await
+                {
+                    Ok(grant) => self.tools.grant_call(&call.id, grant),
+                    Err(message) => {
+                        return self.denied_result(call, "policy_denied", message, sink);
+                    }
                 }
             }
         }
@@ -1472,6 +1594,46 @@ fn tool_error(call: &ToolCall, output: String) -> ToolResult {
 /// contains the original user prompt. Canonical state carries the actual task,
 /// so this only restores conversational continuity.
 const CONTINUATION_ANCHOR: &str = "Kernel: the original user prompt has scrolled out of the active recent window; the canonical task state above remains authoritative. The transcript below continues the current task — keep working until it is complete or you are blocked on something only the user can resolve.";
+
+/// Strict structured-output reviewer used by the `Approve for me` resolver.
+const REVIEWER_PROMPT: &str = "You are a security reviewer for a sandboxed coding agent. Classify the risk of exactly one proposed shell command. Reply with strict JSON only, no markdown, no commentary: {\"risk\":\"low|medium|high|critical\",\"reason\":\"one sentence\"}. low means routine, local, reversible inspection or build work. medium, high, or critical mean destructive, privileged, secret-touching, remote side effects, or capability escalation.";
+
+/// Parses the reviewer's structured answer. Anything malformed, missing, or
+/// out of range rejects conservatively as `critical`.
+fn parse_review(text: &str) -> (String, String) {
+    let Some(start) = text.find('{') else {
+        return ("critical".into(), "unparseable reviewer response".into());
+    };
+    let Some(end) = text.rfind('}') else {
+        return ("critical".into(), "unparseable reviewer response".into());
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text[start..=end]) else {
+        return ("critical".into(), "unparseable reviewer response".into());
+    };
+    let risk = value
+        .get("risk")
+        .and_then(|risk| risk.as_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let reason = value
+        .get("reason")
+        .and_then(|reason| reason.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if matches!(risk.as_str(), "low" | "medium" | "high" | "critical") && !reason.is_empty() {
+        (risk, reason)
+    } else {
+        ("critical".into(), "unparseable reviewer response".into())
+    }
+}
+
+fn grant_for(classification: &Classification) -> CapabilityGrant {
+    CapabilityGrant {
+        capabilities: classification.capabilities.clone(),
+        external_roots: classification.external_roots.clone(),
+    }
+}
 
 fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMessage> {
     let raw = ctx
@@ -2407,6 +2569,7 @@ mod tests {
                     tool: "shell".into(),
                     arguments: json!({"command":"rm -rf /"}),
                     reason: "test".into(),
+                    capabilities: vec!["privileged_operation".into()],
                 },
             )
             .unwrap();
@@ -2415,7 +2578,7 @@ mod tests {
         let events = store.events(sid).unwrap();
         assert!(events.iter().any(|event| matches!(
             &event.payload,
-            EventPayload::PermissionResolved { request_id: id, approved: false, source } if *id == request_id && source == "resume_expired"
+            EventPayload::PermissionResolved { request_id: id, approved: false, source, .. } if *id == request_id && source == "resume_expired"
         )));
         // Expiring again is a no-op: the request is durably resolved.
         assert_eq!(Agent::expire_pending_permissions(&store, sid).unwrap(), 0);

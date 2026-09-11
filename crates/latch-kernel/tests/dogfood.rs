@@ -1050,9 +1050,13 @@ async fn denied_tool_call_preserves_complete_provider_transaction() {
         .iter()
         .find(|m| m.tool_call_id.as_deref() == Some("denied-shell"))
         .expect("denied result present");
+    // In ASK the command runs inside the sandbox with a read-only workspace,
+    // so the mutation is refused by the OS boundary rather than by bash-string
+    // parsing. Either way it is a structured terminal tool result.
     assert!(
-        denied_tool.content.contains("cannot mutate"),
-        "denial comes back as a structured tool result: {}",
+        denied_tool.content.contains("Read-only file system")
+            || denied_tool.content.contains("cannot mutate"),
+        "mutation comes back as a structured tool result: {}",
         denied_tool.content
     );
 

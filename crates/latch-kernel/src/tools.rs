@@ -1,8 +1,11 @@
-use crate::config::{OutsidePolicy, PermissionConfig};
-use crate::sandbox::{Capability, CapabilitySet, SandboxProfile, SandboxRunner};
+use crate::config::PermissionConfig;
+use crate::safety;
+use crate::sandbox::{CapabilitySet, SandboxProfile, SandboxRunner};
 use crate::store::EventStore;
 use anyhow::{Context, Result, anyhow, bail};
-use latch_protocol::{ChangeOwner, EventPayload, FileVersion, Mode, ToolCall, ToolResult};
+use latch_protocol::{
+    ChangeOwner, EventPayload, FileVersion, Mode, PermissionMode, Safety, ToolCall, ToolResult,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -16,26 +19,66 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+/// Legacy decision mirror kept for existing callers; new code should use
+/// [`crate::safety::Decision`] and the richer classification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecision {
     Allow,
     Deny(String),
     Ask(String),
 }
+
+impl From<safety::Decision> for PolicyDecision {
+    fn from(decision: safety::Decision) -> Self {
+        match decision {
+            safety::Decision::Allow => Self::Allow,
+            safety::Decision::Ask(reason) => Self::Ask(reason),
+            safety::Decision::Deny(reason) => Self::Deny(reason),
+        }
+    }
+}
+
+/// Capabilities a resolver approved for exactly one call. Grants never
+/// override a `Deny`; they only convert the matching `Ask` into an allow with
+/// the narrowest capability set.
+#[derive(Debug, Clone, Default)]
+pub struct CapabilityGrant {
+    pub capabilities: CapabilitySet,
+    pub external_roots: Vec<PathBuf>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PolicyEngine {
     mode: Arc<RwLock<Mode>>,
+    safety: Arc<RwLock<Safety>>,
+    permissions: Arc<RwLock<PermissionMode>>,
     workspace: PathBuf,
     config: PermissionConfig,
 }
+
 impl PolicyEngine {
     #[must_use]
     pub fn new(mode: Mode, workspace: PathBuf, config: PermissionConfig) -> Self {
         Self {
             mode: Arc::new(RwLock::new(mode)),
+            safety: Arc::new(RwLock::new(Safety::Standard)),
+            permissions: Arc::new(RwLock::new(config.mode)),
             workspace,
             config,
         }
+    }
+    /// Constructor used by the CLI, which owns the full configuration and can
+    /// supply the configured default safety profile.
+    #[must_use]
+    pub fn with_defaults(
+        mode: Mode,
+        workspace: PathBuf,
+        config: PermissionConfig,
+        safety: Safety,
+    ) -> Self {
+        let engine = Self::new(mode, workspace, config);
+        engine.set_safety(safety);
+        engine
     }
     pub fn set_mode(&self, mode: Mode) {
         if let Ok(mut current) = self.mode.write() {
@@ -46,61 +89,51 @@ impl PolicyEngine {
     pub fn mode(&self) -> Mode {
         self.mode.read().map_or(Mode::Ask, |mode| *mode)
     }
-    /// Capability profile for one call. Until the safety layer classifies
-    /// capabilities itself, this mirrors the existing mutation/read-only
-    /// distinction so every execution still has an explicit sandbox.
-    #[must_use]
-    pub fn profile_for_call(&self, tool: &str, args: &Value) -> SandboxProfile {
-        let command = args.get("command").and_then(Value::as_str).unwrap_or("");
-        let mutation = matches!(
-            tool,
-            "patch" | "write" | "undo" | "checkpoint" | "exec_start"
-        ) || matches!(tool, "shell" | "validate")
-            && !is_read_only_shell(command, &self.workspace);
-        let mut capabilities = CapabilitySet::new();
-        capabilities.insert(Capability::WorkspaceRead);
-        capabilities.insert(Capability::BuildArtifactWrite);
-        if mutation && self.mode().can_mutate() {
-            capabilities.insert(Capability::WorkspaceSourceWrite);
+    pub fn set_safety(&self, safety: Safety) {
+        if let Ok(mut current) = self.safety.write() {
+            *current = safety;
         }
-        SandboxProfile::new(
-            self.workspace.clone(),
-            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
-            capabilities,
-        )
     }
     #[must_use]
-    pub fn decide(&self, tool: &str, args: &Value) -> PolicyDecision {
-        let command = || args.get("command").and_then(Value::as_str).unwrap_or("");
-        let mutation = matches!(
+    pub fn safety(&self) -> Safety {
+        self.safety
+            .read()
+            .map_or(Safety::Standard, |safety| *safety)
+    }
+    pub fn set_permissions(&self, mode: PermissionMode) {
+        if let Ok(mut current) = self.permissions.write() {
+            *current = mode;
+        }
+    }
+    #[must_use]
+    pub fn permissions(&self) -> PermissionMode {
+        self.permissions
+            .read()
+            .map_or(PermissionMode::Human, |mode| *mode)
+    }
+    /// Classifies one call through the safety layer.
+    #[must_use]
+    pub fn classify(&self, tool: &str, args: &Value) -> safety::Classification {
+        safety::classify(
             tool,
-            "patch" | "write" | "undo" | "checkpoint" | "exec_start"
-        ) || matches!(tool, "shell" | "validate")
-            && !is_read_only_shell(command(), &self.workspace);
-        let mode = self.mode.read().map_or(Mode::Ask, |m| *m);
-        if mutation && !mode.can_mutate() {
-            return PolicyDecision::Deny(format!("{mode} mode cannot mutate the workspace"));
+            args,
+            safety::Context {
+                mode: self.mode(),
+                safety: self.safety(),
+                workspace: &self.workspace,
+                outside: self.config.outside_workspace,
+                workspace_write: self.config.workspace_write,
+            },
+        )
+    }
+    /// Decision only; retained for callers that do not need capabilities.
+    #[must_use]
+    pub fn decide(&self, tool: &str, args: &Value) -> PolicyDecision {
+        match self.classify(tool, args).decision {
+            safety::Decision::Allow => PolicyDecision::Allow,
+            safety::Decision::Ask(reason) => PolicyDecision::Ask(reason),
+            safety::Decision::Deny(reason) => PolicyDecision::Deny(reason),
         }
-        if matches!(tool, "patch" | "write")
-            && let Some(path) = args.get("path").and_then(Value::as_str)
-            && resolve_workspace_path(&self.workspace, path).is_err()
-        {
-            return match self.config.outside_workspace {
-                OutsidePolicy::Deny => PolicyDecision::Deny("path escapes workspace".into()),
-                OutsidePolicy::Ask => {
-                    PolicyDecision::Ask("outside-workspace write requires explicit approval".into())
-                }
-            };
-        }
-        if matches!(tool, "shell" | "validate" | "exec_start") && dangerous_shell(command()) {
-            return PolicyDecision::Deny(
-                "destructive or privileged shell command denied by policy".into(),
-            );
-        }
-        if mutation && !self.config.workspace_write {
-            return PolicyDecision::Deny("workspace writes disabled by configuration".into());
-        }
-        PolicyDecision::Allow
     }
 }
 
@@ -200,8 +233,8 @@ pub struct ToolExecutor {
     read_slots: Arc<Semaphore>,
     restored: Arc<std::sync::atomic::AtomicBool>,
     processes: Arc<Mutex<HashMap<String, ManagedProcess>>>,
-    /// Call ids the interactive layer approved for an `Ask` policy decision.
-    approved: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Single-use capability grants keyed by kernel call id.
+    grants: Arc<std::sync::Mutex<HashMap<String, CapabilityGrant>>>,
     sandbox: Arc<std::sync::RwLock<SandboxState>>,
 }
 /// Outcome of one bounded shell execution.
@@ -257,7 +290,7 @@ impl ToolExecutor {
             read_slots: Arc::new(Semaphore::new(8)),
             restored: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             processes: Arc::new(Mutex::new(HashMap::new())),
-            approved: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            grants: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sandbox: Arc::new(std::sync::RwLock::new(sandbox)),
         })
     }
@@ -291,31 +324,86 @@ impl ToolExecutor {
     /// Capability profile for one call under the current mode and safety
     /// policy, merged with any single-use grant the resolver approved.
     #[must_use]
-    pub fn sandbox_profile(&self, tool: &str, args: &Value) -> SandboxProfile {
-        self.policy.profile_for_call(tool, args)
+    pub fn sandbox_profile(&self, call: &ToolCall) -> SandboxProfile {
+        let classification = self.policy.classify(&call.name, &call.arguments);
+        let mut capabilities = classification.capabilities;
+        let mut external_roots = classification.external_roots;
+        if let Some(grant) = self.grant_for(&call.id) {
+            capabilities.extend(&grant.capabilities);
+            external_roots.extend(grant.external_roots);
+        }
+        SandboxProfile::new(
+            self.workspace.clone(),
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+            capabilities,
+        )
+        .with_external_roots(external_roots)
     }
-    /// Marks a call id as approved by the human approval path so the policy
-    /// `Ask` decision executes once instead of behaving like a denial.
-    pub fn approve_call(&self, call_id: &str) {
-        if let Ok(mut approved) = self.approved.lock() {
-            approved.insert(call_id.to_owned());
+    /// Records the scoped capability grant a resolver approved for one call.
+    /// Grants are single-use and never override a hard deny.
+    pub fn grant_call(&self, call_id: &str, grant: CapabilityGrant) {
+        if let Ok(mut grants) = self.grants.lock() {
+            grants.insert(call_id.to_owned(), grant);
         }
     }
 
-    fn is_call_approved(&self, call_id: &str) -> bool {
-        self.approved
+    #[must_use]
+    pub fn has_grant(&self, call_id: &str) -> bool {
+        self.grants
             .lock()
-            .map(|approved| approved.contains(call_id))
+            .map(|grants| grants.contains_key(call_id))
             .unwrap_or(false)
     }
 
-    fn clear_approval(&self, call_id: &str) {
-        if let Ok(mut approved) = self.approved.lock() {
-            approved.remove(call_id);
+    fn grant_for(&self, call_id: &str) -> Option<CapabilityGrant> {
+        self.grants
+            .lock()
+            .ok()
+            .and_then(|grants| grants.get(call_id).cloned())
+    }
+
+    fn clear_grant(&self, call_id: &str) {
+        if let Ok(mut grants) = self.grants.lock() {
+            grants.remove(call_id);
         }
+    }
+
+    /// True when a grant for this call explicitly allows writing `path`.
+    pub(crate) fn grant_allows_path(&self, call_id: &str, path: &Path) -> bool {
+        let Some(grant) = self.grant_for(call_id) else {
+            return false;
+        };
+        if !grant
+            .capabilities
+            .contains(crate::sandbox::Capability::ExternalFilesystemWrite)
+        {
+            return false;
+        }
+        grant
+            .external_roots
+            .iter()
+            .any(|root| path.starts_with(root))
     }
     pub fn set_mode(&self, mode: Mode) {
         self.policy.set_mode(mode);
+    }
+    pub fn set_safety(&self, safety: Safety) {
+        self.policy.set_safety(safety);
+    }
+    #[must_use]
+    pub fn safety(&self) -> Safety {
+        self.policy.safety()
+    }
+    pub fn set_permissions(&self, mode: PermissionMode) {
+        self.policy.set_permissions(mode);
+    }
+    #[must_use]
+    pub fn permissions(&self) -> PermissionMode {
+        self.policy.permissions()
+    }
+    #[must_use]
+    pub fn classify_call(&self, tool: &str, args: &Value) -> safety::Classification {
+        self.policy.classify(tool, args)
     }
     #[must_use]
     pub fn policy_decision(&self, tool: &str, args: &Value) -> PolicyDecision {
@@ -468,13 +556,15 @@ impl ToolExecutor {
         ]
     }
     pub async fn execute(&self, call: &ToolCall, cancel: CancellationToken) -> ToolResult {
-        let mut decision = self.policy.decide(&call.name, &call.arguments);
-        // A human-approved `Ask` executes exactly once. Approval is keyed by
-        // the kernel call id, which the model never supplies.
-        let approved = self.is_call_approved(&call.id);
-        if approved && matches!(decision, PolicyDecision::Ask(_)) {
-            decision = PolicyDecision::Allow;
-        }
+        let classification = self.policy.classify(&call.name, &call.arguments);
+        // A resolved `Ask` executes exactly once with its scoped grant. A
+        // grant never converts `Deny`: hard deny stays denied.
+        let decision = match classification.decision.clone() {
+            safety::Decision::Ask(_) if self.grant_for(&call.id).is_some() => PolicyDecision::Allow,
+            safety::Decision::Allow => PolicyDecision::Allow,
+            safety::Decision::Ask(reason) => PolicyDecision::Ask(reason),
+            safety::Decision::Deny(reason) => PolicyDecision::Deny(reason),
+        };
         if let Err(error) = self.store.append(
             self.session_id,
             EventPayload::PermissionDecision {
@@ -528,8 +618,8 @@ impl ToolExecutor {
             "exec_start" => self.process_start(call).await,
             "exec_poll" => self.process_poll(call).await,
             "exec_terminate" => self.process_terminate(call).await,
-            "patch" => self.patch(call, approved).await,
-            "write" => self.write(call, approved).await,
+            "patch" => self.patch(call).await,
+            "write" => self.write(call).await,
             "shell" => self.shell(call, cancel).await,
             "git_status" => self.git_status(call).await,
             "git_diff" => self.git_diff(call).await,
@@ -537,8 +627,8 @@ impl ToolExecutor {
             "undo" => self.undo(call).await,
             _ => Err(anyhow!("unknown tool {}", call.name)),
         };
-        // Approval is single-use for exactly this call id.
-        self.clear_approval(&call.id);
+        // The grant is single-use for exactly this call id.
+        self.clear_grant(&call.id);
         let r = match outcome {
             Ok(v) => result(call, v.0, false, v.1),
             Err(e) => result(call, format!("{e:#}"), true, None),
@@ -720,7 +810,7 @@ impl ToolExecutor {
             .unwrap_or("")
             .to_owned();
         let id = format!("proc-{}", Uuid::new_v4());
-        let profile = self.sandbox_profile(&call.name, &call.arguments);
+        let profile = self.sandbox_profile(call);
         let runner = self.sandbox_runner()?;
         let mut child = runner
             .command(&profile, &command)
@@ -887,13 +977,9 @@ impl ToolExecutor {
         }
         Ok(canonical)
     }
-    async fn patch(
-        &self,
-        call: &ToolCall,
-        approved_outside: bool,
-    ) -> Result<(String, Option<String>)> {
+    async fn patch(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
         let _guard = self.mutation_lock.lock().await;
-        let path = self.write_path_arg(call, approved_outside)?;
+        let path = self.write_path_arg(call)?;
         let base = str_arg(call, "base_hash")?;
         let old = str_arg(call, "old")?;
         let new = str_arg(call, "new")?;
@@ -914,13 +1000,9 @@ impl ToolExecutor {
         )
         .await
     }
-    async fn write(
-        &self,
-        call: &ToolCall,
-        approved_outside: bool,
-    ) -> Result<(String, Option<String>)> {
+    async fn write(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
         let _guard = self.mutation_lock.lock().await;
-        let path = self.write_path_arg(call, approved_outside)?;
+        let path = self.write_path_arg(call)?;
         let content = str_arg(call, "content")?.as_bytes().to_vec();
         let before = tokio::fs::read(&path).await.ok();
         match (
@@ -1148,7 +1230,7 @@ impl ToolExecutor {
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("command is required"))?
             .to_owned();
-        let profile = self.sandbox_profile("validate", &call.arguments);
+        let profile = self.sandbox_profile(call);
         self.run_process(&profile, &command, timeout_seconds, cancel)
             .await
     }
@@ -1163,7 +1245,7 @@ impl ToolExecutor {
             .get("timeout_seconds")
             .and_then(Value::as_u64)
             .unwrap_or(self.policy.config.shell_timeout_seconds);
-        let profile = self.sandbox_profile(&call.name, &call.arguments);
+        let profile = self.sandbox_profile(call);
         let output = self.run_process(&profile, command, timeout, cancel).await?;
         if !output.success {
             bail!("{}\n{}", output.status_line, output.text)
@@ -1356,8 +1438,8 @@ impl ToolExecutor {
             );
         }
     }
-    async fn git_status(&self, _: &ToolCall) -> Result<(String, Option<String>)> {
-        let profile = self.sandbox_profile("git_status", &json!({}));
+    async fn git_status(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+        let profile = self.sandbox_profile(call);
         let runner = self.sandbox_runner()?;
         let output = runner
             .command(&profile, "git status --short --branch; git diff --stat")
@@ -1371,8 +1453,8 @@ impl ToolExecutor {
         }
         Ok((String::from_utf8_lossy(&output.stdout).into_owned(), None))
     }
-    async fn git_diff(&self, _: &ToolCall) -> Result<(String, Option<String>)> {
-        let profile = self.sandbox_profile("git_diff", &json!({}));
+    async fn git_diff(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+        let profile = self.sandbox_profile(call);
         let runner = self.sandbox_runner()?;
         let output = runner
             .command(&profile, "git diff --no-ext-diff --")
@@ -1480,17 +1562,21 @@ impl ToolExecutor {
     /// the exact call and approved it, so the write may target an absolute path
     /// outside the workspace. Without approval the normal containment rules
     /// apply and the call never reaches this point.
-    fn write_path_arg(&self, call: &ToolCall, approved_outside: bool) -> Result<PathBuf> {
+    fn write_path_arg(&self, call: &ToolCall) -> Result<PathBuf> {
         let raw = str_arg(call, "path")?;
-        if approved_outside {
-            let candidate = if Path::new(raw).is_absolute() {
-                lexical_normalize(Path::new(raw))
-            } else {
-                lexical_normalize(&self.workspace.join(raw))
-            };
+        let candidate = if Path::new(raw).is_absolute() {
+            lexical_normalize(Path::new(raw))
+        } else {
+            lexical_normalize(&self.workspace.join(raw))
+        };
+        if resolve_workspace_path(&self.workspace, raw).is_ok() {
             return Ok(candidate);
         }
-        resolve_workspace_path(&self.workspace, raw)
+        // Outside the workspace: only a scoped, single-use grant allows it.
+        if self.grant_allows_path(&call.id, &candidate) {
+            return Ok(candidate);
+        }
+        bail!("path escapes workspace and no capability grant covers it")
     }
 }
 
@@ -1835,16 +1921,6 @@ fn is_read_only_command(command: &str) -> bool {
         _ => false,
     }
 }
-fn dangerous_shell(c: &str) -> bool {
-    let l = c.to_ascii_lowercase();
-    let words = l.split_whitespace().collect::<Vec<_>>();
-    l.starts_with("sudo ")
-        || (words.first() == Some(&"rm") && words.iter().any(|word| word.contains('r')))
-        || (words.starts_with(&["git", "push"])
-            && words.iter().any(|word| word.starts_with("--force")))
-        || l.contains("git reset --hard")
-        || l.contains("git clean -f")
-}
 fn git_dirty_hashes(workspace: &Path) -> Result<HashMap<PathBuf, String>> {
     let Some(paths) = git_porcelain(workspace)? else {
         return Ok(HashMap::new());
@@ -1897,7 +1973,7 @@ fn git_show_head(workspace: &Path, path: &Path) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::PermissionConfig;
+    use crate::config::{OutsidePolicy, PermissionConfig};
     use tempfile::tempdir;
     fn setup(mode: Mode) -> (tempfile::TempDir, ToolExecutor) {
         let d = tempdir().unwrap();
@@ -1928,6 +2004,38 @@ mod tests {
             assert!(r.is_error);
         }
     }
+    #[tokio::test]
+    async fn command_execution_is_refused_when_bwrap_is_unavailable() {
+        let (_d, e) = setup(Mode::Work);
+        e.force_sandbox_unavailable(
+            "bwrap (bubblewrap) is required: test refusal; Latch refuses to execute commands unsandboxed",
+        );
+        assert!(!e.sandbox_available());
+        for (tool, args) in [
+            ("shell", json!({"command":"echo hi"})),
+            ("exec_start", json!({"command":"echo hi"})),
+            ("git_status", json!({})),
+        ] {
+            let result = e.execute(&call(tool, args), CancellationToken::new()).await;
+            assert!(result.is_error, "{tool} must be refused");
+            assert!(
+                result.output.contains("bubblewrap"),
+                "{tool}: {}",
+                result.output
+            );
+        }
+        let validate = ToolCall {
+            id: "v".into(),
+            name: "validate".into(),
+            arguments: json!({"requirement":"x","command":"true"}),
+        };
+        let result = e
+            .run_validated_command(&validate, 10, CancellationToken::new())
+            .await
+            .expect_err("validation must be refused");
+        assert!(result.to_string().contains("bubblewrap"), "{result}");
+    }
+
     #[tokio::test]
     async fn work_allows_guarded_edit_and_rejects_stale() {
         let (d, e) = setup(Mode::Work);
@@ -2720,7 +2828,14 @@ mod tests {
         // Without approval the same call is refused by resolution.
         let refused = e.execute(&call, CancellationToken::new()).await;
         assert!(refused.is_error);
-        e.approve_call("write-outside");
+        let classification = e.classify_call(&call.name, &call.arguments);
+        e.grant_call(
+            "write-outside",
+            CapabilityGrant {
+                capabilities: classification.capabilities,
+                external_roots: classification.external_roots,
+            },
+        );
         let ok = e.execute(&call, CancellationToken::new()).await;
         assert!(!ok.is_error, "{}", ok.output);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
