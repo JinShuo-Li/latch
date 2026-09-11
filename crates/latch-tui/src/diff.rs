@@ -349,6 +349,25 @@ pub fn diff_lines(document: &DiffDocument) -> Vec<Line<'static>> {
     out
 }
 
+/// Hunk bodies only, without per-file headers or metadata. Used for compact
+/// inline edit previews where the path is already shown by the transcript.
+#[must_use]
+pub fn diff_body_lines(document: &DiffDocument) -> Vec<Line<'static>> {
+    if !document.parsed {
+        return raw_diff_lines(document);
+    }
+    let mut out = Vec::new();
+    for file in &document.files {
+        for hunk in &file.hunks {
+            out.push(Line::styled(hunk.header.clone(), hunk_style()));
+            for line in &hunk.lines {
+                out.push(render_line(line));
+            }
+        }
+    }
+    out
+}
+
 /// Raw, uncolored rendering used by the inspector's raw toggle and by parse
 /// fallbacks. This is what must remain copyable.
 #[must_use]

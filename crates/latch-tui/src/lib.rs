@@ -1279,6 +1279,10 @@ fn diff_cell_lines(status: CellStatus, document: &DiffDocument) -> Vec<Line<'sta
     lines
 }
 
+/// Inline preview budget across one edit cell. The full diff stays available
+/// through `/diff`; the transcript never floods.
+const MAX_PATCH_PREVIEW_LINES: usize = 14;
+
 fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
     let failed = files.iter().any(|file| file.status == CellStatus::Failed);
     let running = files.iter().any(|file| file.status == CellStatus::Running);
@@ -1302,6 +1306,11 @@ fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
         "Edited"
     };
     let mut lines = Vec::new();
+    let mut remaining = MAX_PATCH_PREVIEW_LINES;
+    let mut omitted = 0usize;
+    // The real unified diff recorded with the change is the only source of
+    // preview lines; counters are never expanded into diff text.
+    let preview_body = |preview: &str| diff::diff_body_lines(&parse_unified_diff(preview));
     if files.len() == 1 {
         let file = &files[0];
         let mut spans = vec![
@@ -1311,6 +1320,20 @@ fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
         ];
         spans.extend(delta_spans(file.additions, file.deletions));
         lines.push(Line::from(spans));
+        if !file.preview.is_empty() {
+            let body = preview_body(&file.preview);
+            if !body.is_empty() {
+                lines.push(Line::from(""));
+            }
+            let take = remaining.min(body.len());
+            lines.extend(
+                body[..take]
+                    .iter()
+                    .cloned()
+                    .map(|line| indent_preview(line, 2)),
+            );
+            omitted += body.len() - take;
+        }
     } else {
         lines.push(Line::from(vec![
             Span::styled(format!("{marker} "), style),
@@ -1328,7 +1351,26 @@ fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
             ];
             spans.extend(delta_spans(file.additions, file.deletions));
             lines.push(Line::from(spans));
+            if file.preview.is_empty() {
+                continue;
+            }
+            let body = preview_body(&file.preview);
+            let take = remaining.min(body.len());
+            lines.extend(
+                body[..take]
+                    .iter()
+                    .cloned()
+                    .map(|line| indent_preview(line, 4)),
+            );
+            remaining -= take;
+            omitted += body.len() - take;
         }
+    }
+    if omitted > 0 {
+        lines.push(Line::styled(
+            format!("  … {omitted} diff lines omitted · /diff for the full diff"),
+            notice_style(),
+        ));
     }
     for file in files
         .iter()
@@ -1340,6 +1382,23 @@ fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
         ));
     }
     lines
+}
+
+/// Indents one inline preview line and subdues unchanged context so additions
+/// and deletions carry the eye.
+fn indent_preview(mut line: Line<'static>, spaces: usize) -> Line<'static> {
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    if text.starts_with(' ') {
+        for span in &mut line.spans {
+            span.style = notice_style();
+        }
+    }
+    line.spans.insert(0, Span::raw(" ".repeat(spaces)));
+    line
 }
 
 /// `+N −N` with independent semantic colors. Zero deltas stay dim so the eye
@@ -3567,6 +3626,7 @@ mod tests {
             status: CellStatus::Passed,
             diagnostic: String::new(),
             raw: String::new(),
+            preview: String::new(),
         }]);
         let spans = &additions_only[0].spans;
         let added = spans
@@ -3593,6 +3653,7 @@ mod tests {
             status: CellStatus::Passed,
             diagnostic: String::new(),
             raw: String::new(),
+            preview: String::new(),
         }]);
         let spans = &deletions_only[0].spans;
         let added = spans
@@ -3605,6 +3666,162 @@ mod tests {
             .find(|span| span.content == "−7")
             .expect("deletion span");
         assert_eq!(removed.style.fg, Some(Color::Red));
+    }
+
+    fn find_span_style(lines: &[Line<'static>], needle: &str) -> Style {
+        for line in lines {
+            for span in &line.spans {
+                if span.content.contains(needle) {
+                    return span.style;
+                }
+            }
+        }
+        panic!("no rendered span contains {needle:?}");
+    }
+
+    fn lines_text(lines: &[Line<'static>]) -> String {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn inline_preview_colors_real_removed_and_added_source_lines() {
+        let preview = "diff --git a/src/calc.rs b/src/calc.rs
+--- a/src/calc.rs
++++ b/src/calc.rs
+@@ -1,4 +1,4 @@
+ pub fn add(a: i32, b: i32) -> i32 {
+     let base = 10;
+-    base + a + b
++    base + a - b
+ }
+";
+        let lines = patch_lines(&[PatchFile {
+            call_id: "p1".into(),
+            path: "src/calc.rs".into(),
+            kind: 'M',
+            additions: 1,
+            deletions: 1,
+            status: CellStatus::Passed,
+            diagnostic: String::new(),
+            raw: String::new(),
+            preview: preview.into(),
+        }]);
+        // The actual source lines carry the colors, not the +N/−N summary.
+        assert_eq!(
+            find_span_style(&lines, "base + a + b").fg,
+            Some(Color::Red),
+            "deleted source line must be red"
+        );
+        assert_eq!(
+            find_span_style(&lines, "base + a - b").fg,
+            Some(Color::Green),
+            "added source line must be green"
+        );
+        assert_eq!(
+            find_span_style(&lines, "pub fn add").fg,
+            Some(Color::DarkGray),
+            "unchanged context is subdued"
+        );
+        let text = lines_text(&lines);
+        assert!(text.contains("-    base + a + b"), "{text}");
+        assert!(text.contains("+    base + a - b"), "{text}");
+        assert!(text.contains("Edited src/calc.rs  +1 −1"), "{text}");
+    }
+
+    #[test]
+    fn inline_preview_of_a_new_file_is_all_additions() {
+        let preview = "diff --git a/tests/calc.rs b/tests/calc.rs
+--- /dev/null
++++ b/tests/calc.rs
+@@ -0,0 +1,2 @@
++#[test]
++fn subtracts() {}
+";
+        let lines = patch_lines(&[PatchFile {
+            call_id: "p2".into(),
+            path: "tests/calc.rs".into(),
+            kind: 'A',
+            additions: 2,
+            deletions: 0,
+            status: CellStatus::Passed,
+            diagnostic: String::new(),
+            raw: String::new(),
+            preview: preview.into(),
+        }]);
+        assert_eq!(find_span_style(&lines, "#[test]").fg, Some(Color::Green));
+        assert!(
+            !lines_text(&lines).contains("\n-"),
+            "{}",
+            lines_text(&lines)
+        );
+    }
+
+    #[test]
+    fn inline_preview_handles_deleted_files_and_unicode_content() {
+        let preview = "diff --git a/旧.rs b/旧.rs
+--- a/旧.rs
++++ /dev/null
+@@ -1,2 +0,0 @@
+-旧值 = 计算();
+-保留
+";
+        let lines = patch_lines(&[PatchFile {
+            call_id: "p4".into(),
+            path: "旧.rs".into(),
+            kind: 'D',
+            additions: 0,
+            deletions: 2,
+            status: CellStatus::Passed,
+            diagnostic: String::new(),
+            raw: String::new(),
+            preview: preview.into(),
+        }]);
+        assert_eq!(
+            find_span_style(&lines, "旧值 = 计算();").fg,
+            Some(Color::Red)
+        );
+        let text = lines_text(&lines);
+        assert!(text.contains("Edited 旧.rs  +0 −2"), "{text}");
+        assert!(!text.contains("\n+"), "{text}");
+    }
+
+    #[test]
+    fn inline_preview_is_bounded_and_points_at_the_full_diff() {
+        let mut preview = String::from(
+            "diff --git a/src/big.rs b/src/big.rs\n--- a/src/big.rs\n+++ b/src/big.rs\n@@ -1,60 +1,60 @@\n",
+        );
+        for index in 0..60 {
+            preview.push_str(&format!("-old line {index}\n+new line {index}\n"));
+        }
+        let lines = patch_lines(&[PatchFile {
+            call_id: "p3".into(),
+            path: "src/big.rs".into(),
+            kind: 'M',
+            additions: 60,
+            deletions: 60,
+            status: CellStatus::Passed,
+            diagnostic: String::new(),
+            raw: String::new(),
+            preview,
+        }]);
+        // Header + blank spacer + at most 14 body lines + the omission note.
+        assert!(lines.len() <= 17, "preview is bounded: {}", lines.len());
+        let text = lines_text(&lines);
+        assert!(text.contains("+new line 0"), "{text}");
+        assert!(!text.contains("+new line 14"), "{text}");
+        assert!(
+            text.contains("diff lines omitted · /diff for the full diff"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -3717,6 +3934,97 @@ mod tests {
         ] {
             app.output(Output::Event(Box::new(presentation_event(payload))));
         }
+    }
+
+    /// A guarded edit and a newly created file, fed through the same
+    /// ToolRequested/FileChanged/ToolResult path the live TUI uses.
+    fn patch_preview_fixture(app: &mut App) {
+        app.output(Output::Event(Box::new(presentation_event(
+            latch_protocol::EventPayload::UserMessage {
+                text: "Fix the calculation.".into(),
+            },
+        ))));
+        app.output(Output::Event(Box::new(presentation_event(
+            latch_protocol::EventPayload::ToolRequested {
+                call: latch_protocol::ToolCall {
+                    id: "p1".into(),
+                    name: "patch".into(),
+                    arguments: serde_json::json!({
+                        "path": "src/calc.rs",
+                        "old": "base + a + b",
+                        "new": "base + a - b",
+                    }),
+                },
+            },
+        ))));
+        app.output(Output::Event(Box::new(presentation_event(
+            latch_protocol::EventPayload::FileChanged {
+                before: None,
+                after: latch_protocol::FileVersion {
+                    path: "src/calc.rs".into(),
+                    content_hash: "h1".into(),
+                    size: 1,
+                },
+                owner: latch_protocol::ChangeOwner::Latch,
+                undo_artifact: None,
+                additions: 1,
+                deletions: 1,
+                preview: "diff --git a/src/calc.rs b/src/calc.rs\n--- a/src/calc.rs\n+++ b/src/calc.rs\n@@ -1,4 +1,4 @@\n pub fn add(a: i32, b: i32) -> i32 {\n     let base = 10;\n-    base + a + b\n+    base + a - b\n }\n".into(),
+                call_id: Some("p1".into()),
+            },
+        ))));
+        app.output(Output::ToolResult(ToolResult {
+            call_id: "p1".into(),
+            name: "patch".into(),
+            output: "updated src/calc.rs @ h1".into(),
+            is_error: false,
+            artifact_id: None,
+        }));
+        app.output(Output::Event(Box::new(presentation_event(
+            latch_protocol::EventPayload::ToolRequested {
+                call: latch_protocol::ToolCall {
+                    id: "p2".into(),
+                    name: "write".into(),
+                    arguments: serde_json::json!({
+                        "path": "tests/calc.rs",
+                        "content": "#[test]\nfn subtracts() {}",
+                    }),
+                },
+            },
+        ))));
+        app.output(Output::Event(Box::new(presentation_event(
+            latch_protocol::EventPayload::FileChanged {
+                before: None,
+                after: latch_protocol::FileVersion {
+                    path: "tests/calc.rs".into(),
+                    content_hash: "h2".into(),
+                    size: 1,
+                },
+                owner: latch_protocol::ChangeOwner::Latch,
+                undo_artifact: None,
+                additions: 2,
+                deletions: 0,
+                preview: "diff --git a/tests/calc.rs b/tests/calc.rs\n--- /dev/null\n+++ b/tests/calc.rs\n@@ -0,0 +1,2 @@\n+#[test]\n+fn subtracts() {}\n".into(),
+                call_id: Some("p2".into()),
+            },
+        ))));
+        app.output(Output::ToolResult(ToolResult {
+            call_id: "p2".into(),
+            name: "write".into(),
+            output: "updated tests/calc.rs @ h2".into(),
+            is_error: false,
+            artifact_id: None,
+        }));
+    }
+
+    #[test]
+    fn snapshot_inline_edit_preview() {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        patch_preview_fixture(&mut app);
+        assert_snapshot(
+            "v4_inline_edit_preview.txt",
+            &render_to_text(&mut app, 100, 24),
+        );
     }
 
     #[test]

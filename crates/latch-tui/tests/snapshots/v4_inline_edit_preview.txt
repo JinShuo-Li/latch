@@ -1,0 +1,24 @@
+› Fix the calculation.                                                                              
+                                                                                                    
+• Edited 2 files                                                                                    
+  └ M src/calc.rs  +1 −1                                                                            
+    @@ -1,4 +1,4 @@                                                                                 
+     pub fn add(a: i32, b: i32) -> i32 {                                                            
+         let base = 10;                                                                             
+    -    base + a + b                                                                               
+    +    base + a - b                                                                               
+     }                                                                                              
+    A tests/calc.rs  +2 −0                                                                          
+    @@ -0,0 +1,2 @@                                                                                 
+    +#[test]                                                                                        
+    +fn subtracts() {}                                                                              
+                                                                                                    
+                                                                                                    
+                                                                                                    
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Ask Latch…                                                                                       │
+│                                                                                                  │
+│ WORK · deepseek-flash · main                                                               ready │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+enter send  ctrl+j newline  ctrl+p commands                                                         
+/tmp/latch-ui                                                                           latch v0.1.1

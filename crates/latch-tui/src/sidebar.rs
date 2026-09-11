@@ -1272,6 +1272,8 @@ mod tests {
             undo_artifact: None,
             additions: 53,
             deletions: 7,
+            preview: String::new(),
+            call_id: None,
         }));
         model.apply_event(&event(EventPayload::FileChanged {
             before: None,
@@ -1284,6 +1286,8 @@ mod tests {
             undo_artifact: None,
             additions: 2,
             deletions: 0,
+            preview: String::new(),
+            call_id: None,
         }));
         model.apply_event(&event(EventPayload::ExternalFileChangeDetected {
             path: "src/lib.rs".into(),
@@ -1321,6 +1325,8 @@ mod tests {
             undo_artifact: None,
             additions: 3,
             deletions: 1,
+            preview: String::new(),
+            call_id: None,
         }));
         model.apply_event(&event(EventPayload::ChangeReverted {
             path: "src/lib.rs".into(),
@@ -1494,6 +1500,8 @@ mod tests {
                 undo_artifact: None,
                 additions: 53,
                 deletions: 7,
+                preview: String::new(),
+                call_id: None,
             },
         );
         push(
@@ -1509,6 +1517,8 @@ mod tests {
                 undo_artifact: None,
                 additions: 2,
                 deletions: 0,
+                preview: String::new(),
+                call_id: None,
             },
         );
         push(

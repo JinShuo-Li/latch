@@ -37,6 +37,9 @@ pub struct PatchFile {
     pub status: CellStatus,
     pub diagnostic: String,
     pub raw: String,
+    /// Bounded unified diff computed by the kernel from the real before/after
+    /// bytes. Empty while the change has not landed yet.
+    pub preview: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +108,16 @@ impl Cell {
             } => format!("validate {requirement}: {command}\n{raw}"),
             Self::Patch { files } => files
                 .iter()
-                .map(|file| format!("{} {}\n{}", file.kind, file.path, file.raw))
+                .map(|file| {
+                    if file.preview.is_empty() {
+                        format!("{} {}\n{}", file.kind, file.path, file.raw)
+                    } else {
+                        format!(
+                            "{} {}\n{}\n{}",
+                            file.kind, file.path, file.raw, file.preview
+                        )
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("\n"),
             Self::Diff { document, .. } => document.raw.clone(),
@@ -164,8 +176,12 @@ impl PresentationModel {
                 owner: ChangeOwner::Latch,
                 additions,
                 deletions,
+                preview,
+                call_id,
                 ..
-            } => self.update_patch_counts(&after.path, *additions, *deletions),
+            } => {
+                self.update_patch_change(after, *additions, *deletions, preview, call_id.as_deref())
+            }
             EventPayload::ExternalFileChangeDetected { path, .. } => self.cells.push(Cell::Error {
                 text: format!("{path} changed since it was inspected; re-reading before editing."),
             }),
@@ -254,6 +270,7 @@ impl PresentationModel {
                 status: CellStatus::Running,
                 diagnostic: String::new(),
                 raw: format!("{} {}", call.name, call.arguments),
+                preview: String::new(),
             };
             if let Some(Cell::Patch { files }) = self.cells.last_mut() {
                 files.push(file);
@@ -420,19 +437,33 @@ impl PresentationModel {
     }
 
     /// Replaces argument-derived edit counts with the kernel ledger's recorded
-    /// deltas, so the transcript edit summary and the sidebar ownership totals
-    /// share one source of truth.
-    fn update_patch_counts(&mut self, path: &str, additions: usize, deletions: usize) {
+    /// deltas and attaches the real unified-diff preview, so the transcript
+    /// edit summary, diff, and the sidebar ownership totals share one source of
+    /// truth. The call id wins over the path when several guarded edits land in
+    /// one batch.
+    fn update_patch_change(
+        &mut self,
+        after: &latch_protocol::FileVersion,
+        additions: usize,
+        deletions: usize,
+        preview: &str,
+        call_id: Option<&str>,
+    ) {
         for cell in self.cells.iter_mut().rev() {
-            if let Cell::Patch { files } = cell
-                && let Some(file) = files
-                    .iter_mut()
-                    .rev()
-                    .find(|file| file.path == path && file.status == CellStatus::Running)
-            {
-                file.additions = additions;
-                file.deletions = deletions;
-                return;
+            if let Cell::Patch { files } = cell {
+                let file = match call_id {
+                    Some(call_id) => files.iter_mut().rev().find(|file| file.call_id == call_id),
+                    None => files
+                        .iter_mut()
+                        .rev()
+                        .find(|file| file.path == after.path && file.status == CellStatus::Running),
+                };
+                if let Some(file) = file {
+                    file.additions = additions;
+                    file.deletions = deletions;
+                    file.preview = preview.to_owned();
+                    return;
+                }
             }
         }
     }
@@ -1170,6 +1201,7 @@ mod tests {
                     status: CellStatus::Passed,
                     diagnostic: String::new(),
                     raw: String::new(),
+                    preview: String::new(),
                 }],
             },
             Cell::Validation {
@@ -1207,6 +1239,8 @@ mod tests {
                 undo_artifact: None,
                 additions: 1,
                 deletions: 1,
+                preview: String::new(),
+                call_id: None,
             }),
             result("p", "patch", "updated src/lib.rs @ h", false),
         ]);
