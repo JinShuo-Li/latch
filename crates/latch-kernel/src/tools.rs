@@ -81,8 +81,6 @@ struct ChangeRecord {
     path: PathBuf,
     before: Option<Vec<u8>>,
     after_hash: String,
-    additions: usize,
-    deletions: usize,
     owner: ChangeOwner,
     /// Session artifact holding the pre-change bytes for resume-safe undo.
     undo_artifact: Option<String>,
@@ -157,6 +155,9 @@ pub struct ToolExecutor {
     session_id: Uuid,
     policy: PolicyEngine,
     observations: Arc<Mutex<HashMap<PathBuf, FileVersion>>>,
+    /// Content hashes Latch itself has written, per path. Drift onto one of
+    /// these is self-authored and must not be mistaken for external change.
+    self_authored: Arc<std::sync::Mutex<HashMap<PathBuf, HashSet<String>>>>,
     ledger: Arc<Mutex<ChangeLedger>>,
     mutation_lock: Arc<Mutex<()>>,
     read_slots: Arc<Semaphore>,
@@ -164,14 +165,6 @@ pub struct ToolExecutor {
     processes: Arc<Mutex<HashMap<String, ManagedProcess>>>,
     /// Call ids the interactive layer approved for an `Ask` policy decision.
     approved: Arc<std::sync::Mutex<HashSet<String>>>,
-}
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ScopeStats {
-    pub mutations: usize,
-    pub files: usize,
-    pub additions: usize,
-    pub deletions: usize,
-    pub dependency_files: usize,
 }
 /// Outcome of one bounded shell execution.
 #[derive(Debug)]
@@ -213,6 +206,7 @@ impl ToolExecutor {
             session_id,
             policy,
             observations: Arc::new(Mutex::new(HashMap::new())),
+            self_authored: Arc::new(std::sync::Mutex::new(HashMap::new())),
             ledger: Arc::new(Mutex::new(ChangeLedger {
                 initial,
                 ..Default::default()
@@ -277,8 +271,6 @@ impl ToolExecutor {
                     after,
                     owner,
                     undo_artifact,
-                    additions,
-                    deletions,
                     ..
                 } if !matches!(owner, ChangeOwner::External) => {
                     let path = self.workspace.join(&after.path);
@@ -286,8 +278,6 @@ impl ToolExecutor {
                         path,
                         before: None,
                         after_hash: after.content_hash.clone(),
-                        additions: *additions,
-                        deletions: *deletions,
                         owner: owner.clone(),
                         undo_artifact: undo_artifact.clone(),
                     };
@@ -300,6 +290,7 @@ impl ToolExecutor {
                     {
                         ledger.externally_changed.insert(record.path.clone());
                     }
+                    self.note_self_authored(&record.path, &after.content_hash);
                     ledger.owned.push(record);
                     restored += 1;
                 }
@@ -318,21 +309,28 @@ impl ToolExecutor {
         }
         Ok(restored)
     }
-    pub async fn scope_stats(&self) -> ScopeStats {
-        let ledger = self.ledger.lock().await;
-        let files = ledger
-            .owned
-            .iter()
-            .map(|change| &change.path)
-            .collect::<HashSet<_>>();
-        ScopeStats {
-            mutations: ledger.owned.len(),
-            files: files.len(),
-            additions: ledger.owned.iter().map(|change| change.additions).sum(),
-            deletions: ledger.owned.iter().map(|change| change.deletions).sum(),
-            dependency_files: files.iter().filter(|path| is_dependency_file(path)).count(),
+    /// Records a content hash Latch itself produced, so later guarded edits
+    /// can recognize their own drift instead of demanding a re-read.
+    fn note_self_authored(&self, path: &Path, content_hash: &str) {
+        if let Ok(mut authored) = self.self_authored.lock() {
+            authored
+                .entry(path.to_path_buf())
+                .or_default()
+                .insert(content_hash.to_owned());
         }
     }
+
+    fn is_self_authored(&self, path: &Path, content_hash: &str) -> bool {
+        self.self_authored
+            .lock()
+            .map(|authored| {
+                authored
+                    .get(path)
+                    .is_some_and(|hashes| hashes.contains(content_hash))
+            })
+            .unwrap_or(false)
+    }
+
     #[must_use]
     pub fn definitions() -> Vec<latch_protocol::ToolDefinition> {
         vec![
@@ -831,8 +829,14 @@ impl ToolExecutor {
             bail!("expected exactly one match, found {occurrences}");
         }
         let updated = text.replacen(old, new, 1).into_bytes();
-        self.commit_change(path, Some(before), updated, ChangeOwner::Latch)
-            .await
+        self.commit_change(
+            path,
+            Some(before),
+            updated,
+            ChangeOwner::Latch,
+            Some(&call.id),
+        )
+        .await
     }
     async fn write(
         &self,
@@ -852,12 +856,15 @@ impl ToolExecutor {
             (None, Some(_)) => bail!("new file must not provide base_hash"),
             (None, None) => {}
         }
-        self.commit_change(path, before, content, ChangeOwner::Latch)
+        self.commit_change(path, before, content, ChangeOwner::Latch, Some(&call.id))
             .await
     }
     async fn ensure_fresh(&self, path: &Path, bytes: &[u8], base: &str) -> Result<()> {
         let actual = hash(bytes);
-        if actual != base {
+        // Drift onto a hash Latch itself wrote is self-authored: the guarded
+        // edit proceeds against current content without a forced re-read.
+        // Genuine external modification still fails below.
+        if actual != base && !self.is_self_authored(path, &actual) {
             self.store.append(
                 self.session_id,
                 EventPayload::ExternalFileChangeDetected {
@@ -881,6 +888,7 @@ impl ToolExecutor {
         before: Option<Vec<u8>>,
         after: Vec<u8>,
         owner: ChangeOwner,
+        call_id: Option<&str>,
     ) -> Result<(String, Option<String>)> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -906,13 +914,22 @@ impl ToolExecutor {
             .lock()
             .await
             .insert(path.clone(), after_version.clone());
+        self.note_self_authored(&path, &after_version.content_hash);
         let (additions, deletions) = line_delta(before.as_deref().unwrap_or_default(), &after);
+        let preview = relative(&self.workspace, &path)
+            .map(|relative_path| {
+                crate::linediff::unified_diff(
+                    &relative_path,
+                    before.as_deref(),
+                    Some(&after),
+                    DIFF_PREVIEW_LINES,
+                )
+            })
+            .unwrap_or_default();
         self.ledger.lock().await.owned.push(ChangeRecord {
             path: path.clone(),
             before,
             after_hash: after_version.content_hash.clone(),
-            additions,
-            deletions,
             owner: owner.clone(),
             undo_artifact: undo_artifact.clone(),
         });
@@ -925,6 +942,8 @@ impl ToolExecutor {
                 undo_artifact,
                 additions,
                 deletions,
+                preview,
+                call_id: call_id.map(str::to_owned),
             },
         )?;
         self.store.finish_operation(operation)?;
@@ -1198,12 +1217,21 @@ impl ToolExecutor {
                 .and_then(|bytes| self.store_undo_artifact(bytes).ok());
             let (additions, deletions) =
                 line_delta(before_bytes.as_deref().unwrap_or_default(), &after_bytes);
+            self.note_self_authored(&path, &after.content_hash);
+            let preview = relative(&self.workspace, &path)
+                .map(|relative_path| {
+                    crate::linediff::unified_diff(
+                        &relative_path,
+                        before_bytes.as_deref(),
+                        Some(&after_bytes),
+                        DIFF_PREVIEW_LINES,
+                    )
+                })
+                .unwrap_or_default();
             self.ledger.lock().await.owned.push(ChangeRecord {
                 path: path.clone(),
                 before: before_bytes,
                 after_hash: after.content_hash.clone(),
-                additions,
-                deletions,
                 owner: ChangeOwner::Shell,
                 undo_artifact: undo_artifact.clone(),
             });
@@ -1216,6 +1244,8 @@ impl ToolExecutor {
                     undo_artifact,
                     additions,
                     deletions,
+                    preview,
+                    call_id: None,
                 },
             );
         }
@@ -1318,6 +1348,10 @@ impl ToolExecutor {
             None => tokio::fs::remove_file(&change.path).await?,
         }
         let relative_path = relative(&self.workspace, &change.path)?;
+        // The bytes restored (or removed) are Latch-authored too.
+        if let Ok(current) = tokio::fs::read(&change.path).await {
+            self.note_self_authored(&change.path, &hash(&current));
+        }
         self.ledger.lock().await.owned.pop();
         // Tombstone so a resumed session never restores the undone entry, plus
         // the durable audit record of the revert itself.
@@ -1536,12 +1570,9 @@ fn hash(bytes: &[u8]) -> String {
 fn line_delta(before: &[u8], after: &[u8]) -> (usize, usize) {
     crate::linediff::line_delta(before, after)
 }
-fn is_dependency_file(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some("Cargo.toml" | "package.json" | "pyproject.toml" | "go.mod")
-    )
-}
+/// Upper bound on the unified-diff preview stored with a change. The full
+/// workspace diff remains available through `git_diff` and `/diff`.
+const DIFF_PREVIEW_LINES: usize = 160;
 /// Conservatively classifies a shell command as read-only.
 ///
 /// Only simple inspection commands and compound commands built exclusively
@@ -1847,6 +1878,105 @@ mod tests {
             "external"
         );
     }
+    #[tokio::test]
+    async fn self_authored_edit_can_be_repaired_without_a_reread() {
+        let (d, e) = setup(Mode::Work);
+        let read = e
+            .execute(
+                &call("read_file", json!({"path":"a.txt"})),
+                CancellationToken::new(),
+            )
+            .await;
+        let base = read
+            .output
+            .lines()
+            .next()
+            .unwrap()
+            .trim_start_matches("hash: ")
+            .to_owned();
+        let first = e
+            .execute(
+                &call(
+                    "patch",
+                    json!({"path":"a.txt","base_hash":base,"old":"old","new":"wrong"}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!first.is_error, "{}", first.output);
+        // The model notices the edit was wrong and repairs it immediately,
+        // still holding the hash from its original read.
+        let repair = e
+            .execute(
+                &call(
+                    "patch",
+                    json!({"path":"a.txt","base_hash":base,"old":"wrong","new":"right"}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            !repair.is_error,
+            "self-authored drift must not look stale: {}",
+            repair.output
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("a.txt")).unwrap(),
+            "right"
+        );
+    }
+
+    #[tokio::test]
+    async fn gitignore_is_an_ordinary_workspace_file() {
+        let (d, e) = setup(Mode::Work);
+        let created = e
+            .execute(
+                &call("write", json!({"path":".gitignore","content":"/target\n"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!created.is_error, "{}", created.output);
+        let read = e
+            .execute(
+                &call("read_file", json!({"path":".gitignore"})),
+                CancellationToken::new(),
+            )
+            .await;
+        let base = read
+            .output
+            .lines()
+            .next()
+            .unwrap()
+            .trim_start_matches("hash: ")
+            .to_owned();
+        let patched = e
+            .execute(
+                &call(
+                    "patch",
+                    json!({"path":".gitignore","base_hash":base,"old":"/target\n","new":"/target\n*.log\n"}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!patched.is_error, "{}", patched.output);
+        // Repair immediately, still holding the original read hash: Latch's own
+        // previous write must not look like external drift for any file.
+        let repaired = e
+            .execute(
+                &call(
+                    "patch",
+                    json!({"path":".gitignore","base_hash":base,"old":"*.log\n","new":"*.log\n.env\n"}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!repaired.is_error, "{}", repaired.output);
+        assert_eq!(
+            std::fs::read_to_string(d.path().join(".gitignore")).unwrap(),
+            "/target\n*.log\n.env\n"
+        );
+    }
+
     #[tokio::test]
     async fn undo_only_own_unchanged_result() {
         let (d, e) = setup(Mode::Work);

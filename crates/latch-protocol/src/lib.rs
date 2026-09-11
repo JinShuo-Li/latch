@@ -227,6 +227,14 @@ pub enum EventPayload {
         additions: usize,
         #[serde(default)]
         deletions: usize,
+        /// Bounded unified-diff preview computed from the real before/after
+        /// bytes at mutation time. Empty for legacy events and shell drift.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        preview: String,
+        /// The guarded tool call that produced this change, so the transcript
+        /// can attribute multi-edit batches precisely.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
     },
     /// Records workspace drift observed around a shell execution. Emitted when
     /// a shell (or validation) command mutated paths outside the guarded edit

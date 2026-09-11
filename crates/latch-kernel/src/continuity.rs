@@ -1218,6 +1218,8 @@ mod tests {
                 undo_artifact: None,
                 additions: 1,
                 deletions: 0,
+                preview: String::new(),
+                call_id: None,
             },
         ));
         events.push(event(
