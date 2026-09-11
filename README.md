@@ -7,8 +7,10 @@ sessions, OpenAI-compatible and Anthropic providers, kernel-owned validation
 evidence, guarded coding tools, a modern Ratatui interface with a slash command
 palette and real input editing, and language-independent process extensions.
 
-Latch is independent software. Pi was studied as a public reference for agent
-and terminal interaction behavior; Latch is not a fork and has no Pi dependency.
+Latch is independent software. Pi and OpenAI Codex were studied as public
+references for agent and terminal interaction behavior; Latch is not a fork and
+has no runtime dependency on either project. Exact shallow reference revisions
+are recorded under `references/`.
 
 ## Build and run
 
@@ -32,11 +34,50 @@ additionally receive a stable `x-opencode-session` header carrying the durable
 session id, so `--resume` keeps the same value.
 
 Run one prompt without the TUI with `latch -p "Explain this repository"`.
-Continue the latest session for the current workspace with `latch --resume`:
-the visible transcript replays, the effective mode restores (override with
-`latch --resume --mode work`), and task state, evidence, failure streaks, and
-change ownership survive. Session metadata lives under `~/.local/state/latch/`
-by default; large output is stored in its `artifacts/` tree.
+Resume with `latch --resume`. One matching workspace session resumes directly;
+several open an interactive newest-first picker with search, workspace/all
+scope, metadata, and a lazily loaded transcript preview. Non-interactive use
+never opens the picker and never guesses:
+
+```sh
+latch --resume --session 550e8400       # exact UUID or unique prefix
+latch --resume --latest                 # deliberate newest workspace session
+latch --resume --session <uuid> -p "continue and verify"
+```
+
+An ambiguous or missing prefix is an error. Selecting a session from another
+workspace clearly changes Latch to that session's persisted workspace. Resume
+restores the visible transcript, effective mode (override with `--mode work`),
+task state, evidence, failure streaks, provider session UUID, continuity, and
+change ownership without re-running historical tools. Session metadata lives
+under `~/.local/state/latch/` by default; large output is stored in its
+`artifacts/` tree.
+
+## Terminal interface
+
+The V3 transcript is a semantic conversation rather than a kernel event log.
+Inspection calls coalesce into an updating exploration cell; commands, edits,
+and validation have dedicated lifecycle cells. Successful routine work stays
+compact, while failures retain a bounded diagnostic:
+
+```text
+› Fix the failing tests without changing the public API.
+
+• Explored
+  └ Read Cargo.toml, src/lib.rs, tests/math.rs
+    Search "average" in src/
+
+• Edited src/lib.rs  +2 −2
+
+✓ Verified
+  └ cargo test · 3 tests passed · 0.42s
+```
+
+Assistant responses render headings, paragraphs, lists, fenced and inline code,
+bold/italic text, links, URLs, and simple Markdown tables. ANSI and progress
+control sequences are normalized. Ctrl+T or `/raw` toggles a copy-friendly
+detailed transcript; `/diff` deliberately shows the complete bounded workspace
+diff (with artifact spill for very large output).
 
 ## Validation is kernel-owned
 
@@ -61,11 +102,14 @@ raw event log. Completion states: `InProgress`, `ImplementedNotVerified`,
 workspace mutation in ASK and PLAN regardless of model instructions; validation
 commands follow the same policy.
 
-Slash commands: `/mode`, `/model`, `/context`, `/diff`, `/checkpoint`, `/undo`,
-`/compact`, `/help`, `/quit`. Typing `/` opens a live-filtered palette
-(Tab/Enter complete, Esc closes). `/compact` resets the active working set while
-retaining raw history, constraints, decisions, evidence, and task state. Normal
-operation never performs traditional automatic compaction.
+Slash commands, in discovery order: `/mode`, `/resume`, `/model`, `/context`,
+`/diff`, `/checkpoint`, `/undo`, `/compact`, `/raw`, `/help`, `/quit`, `/exit`.
+Typing `/` in an empty composer opens a palette above it. Filtering is live and
+fuzzy; Up/Down or Ctrl+P/Ctrl+N moves selection, Tab completes, Enter dispatches,
+and Esc dismisses. `/resume` makes a clean application-level transition through
+the same picker as `latch --resume`. `/quit` and `/exit` are aliases and never
+become model input or durable user messages. `/compact` resets the active
+working set while retaining durable history and canonical state.
 
 ## TUI controls
 
@@ -78,6 +122,10 @@ operation never performs traditional automatic compaction.
 - **Scrollback:** PageUp/PageDown, Home/End, mouse wheel. Auto-follow resumes at
   the bottom; a subtle indicator shows newer content while scrolled up.
 - **Cancel/quit:** Ctrl+C cancels a running turn, or quits when idle.
+- **Detail:** Ctrl+T or `/raw` toggles the detailed, copy-friendly transcript.
+- **Resume picker:** type to search, Up/Down and PageUp/PageDown navigate, Tab
+  toggles current-workspace/all sessions, Enter resumes, Ctrl+F starts fresh,
+  Ctrl+Q exits, and Esc cancels.
 - `/help` prints the current control summary.
 
 ## Extensions
