@@ -78,6 +78,21 @@ bounded snapshots) and marked explicitly non-reversible or undetectable
 otherwise — Latch never pretends a shell mutation pre-existed. Destructive Git
 recovery, automatic commit, and automatic push are absent.
 
+## Transcript plus state
+
+The transcript tells the user what the agent is doing; a responsive sidebar
+tells the user what state the agent is in. Kernel truth remains the source of
+status: working set, canonical task state, kernel-derived completion, evidence,
+normalized usage categories, and change ownership. The UI never infers
+verification or ownership from rendered prose, and never presents unknown
+provider usage as zero. Abnormal states become visually obvious; healthy state
+stays quiet.
+
+Code modification reads at a glance: edit rows carry green `+N` and red `−N`
+independently, and `/diff` opens a typed unified-diff inspector. Only parsed
+unified diffs receive red/green semantics, so compiler output or shell text can
+never be misclassified.
+
 ## Terminal experience
 
 The transcript is typed and dense: user messages, assistant messages rendered

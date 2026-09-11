@@ -106,6 +106,28 @@ Repository instruction precedence is `CLAUDE.md`, `AGENTS.md`, then
 `.latch/instructions.md`; current user input follows them. Kernel invariants
 override project text.
 
+## TUI state surfaces (V3.1)
+
+The transcript explains activity; a responsive right sidebar explains state.
+The sidebar reducer (`latch-tui::sidebar`) consumes the same durable events as
+the semantic transcript, so live and resumed sessions agree: `ContextStats`
+for the bounded working set, `TaskStateUpdated`/`EvidenceCreated` for
+kernel-owned completion, `ModelUsage` for provider-neutral input/output and
+optional cache categories (unknown stays `—`), and
+`FileChanged`/`ChangeReverted`/`ExternalFileChangeDetected`/`ShellMutationObserved`
+for Latch / Shell / Extension / External ownership. Optional user-configured
+`[models.<name>.pricing]` yields a clearly labeled estimated cost; missing
+components stay unavailable. The kernel forwards tool-appended durable events
+to the live sink so live and replay observe identical event order.
+
+Diffs are first-class: `git_diff` completions become a typed
+`DiffDocument` (parser in `latch-tui::diff`) rendered with restrained semantic
+colors. Red/green semantics only ever apply inside a parsed unified diff;
+unparsed input falls back to raw, uncolored lines. `/diff` opens a full-width
+inspector with independent scrolling, temporary sidebar collapse, and a raw
+toggle. A sidebar is shown at ≥110 columns (roughly 24–32%, clamped 28–44),
+toggles with Ctrl+B or `/sidebar`, and collapses cleanly on narrow terminals.
+
 ## Resume
 
 `--resume` is a user-level resume: the visible transcript replays from durable

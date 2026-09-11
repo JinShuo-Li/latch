@@ -79,6 +79,32 @@ control sequences are normalized. Ctrl+T or `/raw` toggles a copy-friendly
 detailed transcript; `/diff` deliberately shows the complete bounded workspace
 diff (with artifact spill for very large output).
 
+## Observability sidebar
+
+On wide terminals the transcript gets a right sidebar: session/model and turn
+count, a bounded **working set** (never "time until context death"), kernel
+canonical task state and completion, provider-neutral usage totals, and change
+ownership. It is responsive: ~32% on very wide screens (clamped 28–44 columns),
+~27% at 130–159, a compact sidebar at 110–129, and hidden below 110 columns.
+`Ctrl+B` or `/sidebar` toggles it; the transcript takes the full width when it
+is hidden. The sidebar is derived only from durable kernel events, so live and
+resumed sessions show the same state. Abnormal states (over-budget context,
+stalled progress, externally modified owned files) are highlighted; healthy
+states stay quiet.
+
+Usage is normalized per provider into input, output, and optional cache
+read/write categories. A category the provider did not report shows `—`, never
+a fabricated zero. Optional per-model pricing in `config.toml` produces a
+clearly labeled **estimated cost**; Latch never fetches or invents prices:
+
+```toml
+[models.deepseek-flash.pricing]
+input_per_million = 0.28
+output_per_million = 0.42
+cache_read_per_million = 0.028
+currency = "USD"
+```
+
 ## Validation is kernel-owned
 
 In WORK, the model asks for validation by intent:
@@ -115,7 +141,8 @@ workspace mutation in ASK and PLAN regardless of model instructions; validation
 commands follow the same policy.
 
 Slash commands, in discovery order: `/mode`, `/resume`, `/model`, `/context`,
-`/diff`, `/checkpoint`, `/undo`, `/compact`, `/raw`, `/help`, `/quit`, `/exit`.
+`/diff`, `/sidebar`, `/checkpoint`, `/undo`, `/compact`, `/raw`, `/help`,
+`/quit`, `/exit`.
 Typing `/` in an empty composer opens a palette above it. Filtering is live and
 fuzzy; Up/Down or Ctrl+P/Ctrl+N moves selection, Tab completes, Enter dispatches,
 and Esc dismisses. `/resume` makes a clean application-level transition through
@@ -135,7 +162,12 @@ working set while retaining durable history and canonical state.
 - **Scrollback:** PageUp/PageDown, Home/End, mouse wheel. Auto-follow resumes at
   the bottom; a subtle indicator shows newer content while scrolled up.
 - **Cancel/quit:** Ctrl+C cancels a running turn, or quits when idle.
+- **Sidebar:** Ctrl+B or `/sidebar` toggles the responsive state sidebar.
 - **Detail:** Ctrl+T or `/raw` toggles the detailed, copy-friendly transcript.
+- **Diff:** `/diff` opens a full-width semantic diff inspector (red deletions,
+  green additions, dim metadata). Scroll with Up/Down, PageUp/PageDown,
+  Home/End; Ctrl+T switches between semantic and raw; Esc closes. The
+  transcript keeps only a compact diff cell so large diffs never flood it.
 - **Resume picker:** type to search, Up/Down and PageUp/PageDown navigate, Tab
   toggles current-workspace/all sessions, Enter resumes, Ctrl+F starts fresh,
   Ctrl+Q exits, and Esc cancels.
