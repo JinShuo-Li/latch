@@ -244,8 +244,8 @@ LATCH_LIVE_TESTS=1 LATCH_LIVE_SCENARIO=small_bug \
   -- --ignored --nocapture
 ```
 
-Scenarios cover a small bug fix, a medium multi-file change, a justified
->10-file refactor, a large source file with a large validation log, validation
+Scenarios cover a small bug fix, a medium multi-file change, a >10-file
+refactor, a large source file with a large validation log, validation
 fail → debug → pass, interrupt + resume, and an explicit >100-model-turn
 long-horizon run. Each writes `target/live-acceptance/<scenario>.json` with
 turns, tool calls, input/output/cache tokens, pre-request estimated context,

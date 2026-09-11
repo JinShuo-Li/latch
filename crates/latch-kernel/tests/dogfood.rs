@@ -1441,3 +1441,88 @@ async fn live_and_replay_transcripts_converge() {
         "live and replay user history converge"
     );
 }
+
+/// A legitimate change spanning more than ten files, more than 500 lines, and
+/// a dependency manifest must proceed without a scope warning, justification
+/// request, or pause.
+#[tokio::test]
+async fn broad_work_proceeds_without_any_scope_review() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().join("sample");
+    std::fs::create_dir(&workspace).unwrap();
+    let db = dir.path().join("state.sqlite3");
+    let store = EventStore::open(&db).unwrap();
+    let session = store.create_session(&workspace).unwrap();
+
+    let mut calls = Vec::new();
+    for index in 0..12 {
+        calls.push(call(
+            &format!("w{index}"),
+            "write",
+            json!({
+                "path": format!("src/file{index}.rs"),
+                "content": format!("pub fn f{index}() -> usize {{ {index} }}\n"),
+            }),
+        ));
+    }
+    calls.push(call(
+        "manifest",
+        "write",
+        json!({"path":"Cargo.toml","content":"[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"}),
+    ));
+    let big: String = (0..600).map(|line| format!("line {line}\n")).collect();
+    calls.push(call(
+        "big",
+        "write",
+        json!({"path":"src/big.rs","content": big}),
+    ));
+    let scripted = vec![
+        response("Applying the broad change.", calls),
+        response("Done.", vec![]),
+    ];
+    let provider = Arc::new(FakeProvider::scripted(scripted));
+    let tools = ToolExecutor::new(
+        workspace.clone(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, workspace.clone(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider,
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 3,
+    });
+    agent
+        .run(
+            "Apply the broad change.",
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+
+    assert!(workspace.join("src/file11.rs").exists());
+    assert!(workspace.join("Cargo.toml").exists());
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("src/big.rs"))
+            .unwrap()
+            .lines()
+            .count(),
+        600
+    );
+    assert!(
+        !store
+            .events(session)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::ScopeExpansionRequested { .. })),
+        "broad but legitimate work must not pause for scope review"
+    );
+}

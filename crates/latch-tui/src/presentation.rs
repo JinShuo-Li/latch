@@ -178,9 +178,8 @@ impl PresentationModel {
             EventPayload::OperationInterrupted { description, .. } => self.push_error(format!(
                 "The previous run ended during {description}; its outcome may be incomplete."
             )),
-            EventPayload::ScopeExpansionRequested { reason, .. } => {
-                self.push_notice(format!("Scope needs attention: {reason}"));
-            }
+            // ScopeExpansionRequested is a legacy, replay-only kernel event;
+            // the restriction it represented has been removed.
             EventPayload::RegroundRequested { .. } => {
                 self.push_notice("Repeated failure; re-inspecting relevant context");
             }

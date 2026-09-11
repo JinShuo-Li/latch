@@ -294,6 +294,8 @@ pub enum EventPayload {
         unchanged: Vec<String>,
         redundant_turns: u32,
     },
+    /// Legacy replay-only event from the removed scope-expansion restriction.
+    /// Never emitted; retained so historical sessions still deserialize.
     ScopeExpansionRequested {
         mutations: usize,
         reason: String,
@@ -733,9 +735,9 @@ pub fn display_items(event: &Event) -> Vec<DisplayItem> {
                 unchanged.len()
             ),
         }],
-        EventPayload::ScopeExpansionRequested { reason, .. } => vec![DisplayItem::KernelNotice {
-            text: format!("scope review: {reason}"),
-        }],
+        // Legacy replay-only scope event; the restriction was removed, so it
+        // contributes nothing to displayed history.
+        EventPayload::ScopeExpansionRequested { .. } => Vec::new(),
         EventPayload::SessionResumed => vec![DisplayItem::KernelNotice {
             text: "session resumed".into(),
         }],

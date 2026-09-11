@@ -63,12 +63,6 @@ impl PromptCompiler {
                 "When re-ground is requested, inspect current reality, name disproven assumptions, and choose a materially different strategy before further mutation.",
             ),
             fragment(
-                "policy.scope",
-                60,
-                true,
-                "Keep changes within the requested scope. Justify substantial growth in files, lines, dependencies, or modules before continuing.",
-            ),
-            fragment(
                 "policy.stale_context",
                 70,
                 true,

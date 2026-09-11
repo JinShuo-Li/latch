@@ -55,7 +55,6 @@ pub struct Agent {
     estimator: TokenEstimator,
     permissions: PermissionBroker,
     interactive_permissions: bool,
-    scope_warned: bool,
     last_completion: Option<CompletionState>,
 }
 pub struct AgentRuntime {
@@ -100,7 +99,6 @@ impl Agent {
             estimator,
             permissions: PermissionBroker::new(),
             interactive_permissions: false,
-            scope_warned: false,
             last_completion: None,
         }
     }
@@ -487,15 +485,6 @@ impl Agent {
             self.forward_appended_events(&sink)?;
             for result in &tool_results {
                 sink(AgentOutput::ToolResult(result.clone()));
-            }
-            let scope = self.tools.scope_stats().await;
-            if !self.scope_warned
-                && (scope.files > 8
-                    || scope.additions + scope.deletions > 500
-                    || scope.dependency_files > 1)
-            {
-                self.emit(EventPayload::ScopeExpansionRequested { mutations: scope.mutations, reason: format!("Scope reached {} files, +{} -{} lines, and {} dependency manifests. Explain why this expansion is required by the user task before continuing.", scope.files, scope.additions, scope.deletions, scope.dependency_files) }, &sink)?;
-                self.scope_warned = true;
             }
             self.supervise_failures(&response.tool_calls, &tool_results, &sink)?;
             self.supervise_progress(&sink)?;
@@ -1507,7 +1496,8 @@ fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMe
                 })
             }
             EventPayload::RegroundRequested { signature } => Some(ModelMessage::text("user", format!("Kernel re-ground required after repeated failure {signature}. Re-read current reality, identify disproven assumptions, and form a materially different strategy before another mutation."))),
-            EventPayload::ScopeExpansionRequested { mutations, reason } => Some(ModelMessage::text("user", format!("Kernel scope review after {mutations} mutations: {reason}"))),
+            // ScopeExpansionRequested is a legacy, replay-only event; it has no
+            // place in the live model conversation.
             _ => None,
         })
         .collect::<Vec<_>>();

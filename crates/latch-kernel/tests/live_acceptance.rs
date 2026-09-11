@@ -365,7 +365,7 @@ async fn live_medium_multi_file_change() {
     assert!(success, "medium multi-file change did not verify");
 }
 
-/// Justified wide refactor: rename a function used across many modules.
+/// Wide refactor: rename a function used across many modules.
 #[tokio::test]
 #[ignore]
 async fn live_wide_refactor() {
@@ -410,7 +410,7 @@ async fn live_wide_refactor() {
     let started = Instant::now();
     let result = run_prompt(
         &mut run,
-        "Rename `helper` to `index_value` in all 12 modules and every call site under src/, keeping behavior identical. This is a justified wide rename; do not change unrelated code. Validate with `cargo test`.",
+        "Rename `helper` to `index_value` in all 12 modules and every call site under src/, keeping behavior identical. Do not change unrelated code. Validate with `cargo test`.",
     )
     .await;
     let metrics = Metrics::from_events(&events(&run), started.elapsed());
