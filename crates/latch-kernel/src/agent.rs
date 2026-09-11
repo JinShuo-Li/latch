@@ -1,5 +1,6 @@
 use crate::continuity::ContinuityEngine;
 use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
+use crate::progress::{DEFAULT_STAGNATION_BUDGET, ProgressSupervisor, StagnationDecision};
 use crate::prompt::PromptCompiler;
 use crate::provider::{ModelProvider, StreamSink};
 use crate::state::{
@@ -14,6 +15,7 @@ use latch_protocol::{
     ModelMessage, ModelRequest, StreamEvent, ToolCall, ToolDefinition, ToolResult, Validity,
 };
 use serde_json::json;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -39,6 +41,9 @@ pub struct Agent {
     evidence: EvidenceLedger,
     extensions: ExtensionRegistry,
     failures: FailureManager,
+    progress: ProgressSupervisor,
+    progress_watermark: usize,
+    suppressed_calls: HashSet<String>,
     max_model_retries: u32,
     scope_warned: bool,
     last_completion: Option<CompletionState>,
@@ -56,6 +61,8 @@ pub struct AgentRuntime {
 impl Agent {
     #[must_use]
     pub fn new(runtime: AgentRuntime) -> Self {
+        let progress =
+            ProgressSupervisor::new(DEFAULT_STAGNATION_BUDGET, runtime.workspace.clone());
         Self {
             session_id: runtime.session_id,
             workspace: runtime.workspace,
@@ -68,10 +75,18 @@ impl Agent {
             evidence: EvidenceLedger::default(),
             extensions: ExtensionRegistry::new(),
             failures: FailureManager::new(runtime.retry_budget),
+            progress,
+            progress_watermark: 0,
+            suppressed_calls: HashSet::new(),
             max_model_retries: 2,
             scope_warned: false,
             last_completion: None,
         }
+    }
+    /// Configures how many consecutive redundant inspection turns are
+    /// tolerated before the kernel re-grounds the model.
+    pub fn set_stagnation_budget(&mut self, budget: u32) {
+        self.progress.set_budget(budget);
     }
     /// Changes the effective mode and records it durably so `--resume`
     /// restores the mode the session actually transitioned to.
@@ -97,6 +112,10 @@ impl Agent {
     #[must_use]
     pub fn failure_lineages(&self) -> Vec<(String, u32)> {
         self.failures.active_lineages()
+    }
+    #[must_use]
+    pub fn progress(&self) -> &ProgressSupervisor {
+        &self.progress
     }
     pub fn restore_state(&mut self, state: latch_protocol::TaskState) {
         self.last_completion = Some(state.completion.clone());
@@ -139,6 +158,16 @@ impl Agent {
                 .iter()
                 .map(|(subject, failed, output)| (subject.as_str(), *failed, output.as_str())),
         );
+        Ok(())
+    }
+    /// Rebuilds progress/stagnation supervision from the durable event log so
+    /// `--resume` does not immediately forget an active inspection loop. The
+    /// watermark advances past everything already consumed.
+    pub fn restore_progress(&mut self) -> Result<()> {
+        let events = self.store.events(self.session_id)?;
+        self.progress.reset();
+        self.progress.replay(&events);
+        self.progress_watermark = events.len();
         Ok(())
     }
     pub fn context(&self, query: Option<&str>) -> Result<crate::continuity::MaterializedContext> {
@@ -204,6 +233,9 @@ impl Agent {
         cancel: CancellationToken,
         sink: AgentEventSink,
     ) -> Result<String> {
+        // Everything appended from here on is fed to the supervisor in order,
+        // exactly as a later replay would process it.
+        self.progress_watermark = self.store.events(self.session_id)?.len();
         let user_event = self.emit(
             EventPayload::UserMessage {
                 text: user_text.into(),
@@ -244,6 +276,11 @@ impl Agent {
                 &sink,
             )?;
         }
+        // A new user turn is meaningful progress: re-observing anything is
+        // legitimate again, and the stagnation bookkeeping restarts. The user
+        // events are consumed through the same path replay uses so live and
+        // resumed supervision stay identical.
+        self.observe_progress_events()?;
         let mut final_text = String::new();
         let mut turns = 0u32;
         loop {
@@ -259,7 +296,12 @@ impl Agent {
                 },
                 &sink,
             )?;
-            let messages = context_messages(&ctx);
+            let mut messages = context_messages(&ctx);
+            // Kernel-owned re-ground: while stagnation supervision is active,
+            // the model receives the explicit list of unchanged observations.
+            if let Some(instruction) = self.progress.reground_instruction() {
+                messages.push(ModelMessage::text("user", instruction));
+            }
             let extension_context = self.extensions.context().await?;
             let request = ModelRequest {
                 system: format!(
@@ -344,8 +386,46 @@ impl Agent {
                 self.scope_warned = true;
             }
             self.supervise_failures(&response.tool_calls, &tool_results, &sink)?;
+            self.supervise_progress(&sink)?;
         }
         Ok(final_text)
+    }
+    /// Feeds every durable event appended since the watermark to the progress
+    /// supervisor and advances the watermark. Live supervision and replay
+    /// consume the same event stream in the same order.
+    fn observe_progress_events(&mut self) -> Result<()> {
+        let events = self.store.events(self.session_id)?;
+        if self.progress_watermark > events.len() {
+            self.progress_watermark = 0;
+        }
+        for event in &events[self.progress_watermark..] {
+            self.progress.observe_event(event);
+        }
+        self.progress_watermark = events.len();
+        Ok(())
+    }
+    /// Deterministic inspection-loop supervision. Every durable event produced
+    /// since the last turn is fed to the supervisor, the turn is settled, and a
+    /// crossed stagnation budget injects a kernel-owned re-ground instruction
+    /// on the next request.
+    fn supervise_progress(&mut self, sink: &AgentEventSink) -> Result<()> {
+        self.observe_progress_events()?;
+        match self.progress.finish_turn() {
+            Some(StagnationDecision::Reground {
+                unchanged,
+                redundant_turns,
+            }) => {
+                self.emit(
+                    EventPayload::ProgressStagnation {
+                        unchanged,
+                        redundant_turns,
+                    },
+                    sink,
+                )?;
+            }
+            None => {}
+        }
+        Ok(())
     }
     /// Failure supervision keyed by validation lineage: failed attempts
     /// escalate their own subject toward re-ground, and only a passing
@@ -363,8 +443,9 @@ impl Agent {
                 continue;
             };
             // Validations supervise themselves inside execute_validate so the
-            // model path and the kernel path cannot double count.
-            if call.name == "validate" {
+            // model path and the kernel path cannot double count. Kernel-
+            // suppressed redundant observations are not tool failures.
+            if call.name == "validate" || self.suppressed_calls.contains(&result.call_id) {
                 continue;
             }
             let subject = failure_subject(&call.name, &call.arguments);
@@ -464,6 +545,37 @@ impl Agent {
                     results.push(failed);
                 }
             }
+        }
+        // Deterministic suppression: after the model ignored an explicit
+        // re-ground, repeated observations of unchanged reality are rejected
+        // with a synthetic terminal result instead of spending a tool cycle.
+        // The lifecycle invariant still holds: every ToolRequested(call_id)
+        // gets exactly one terminal result.
+        self.suppressed_calls.clear();
+        if self.progress.regrounded() {
+            let mut allowed = Vec::with_capacity(permitted.len());
+            for call in permitted {
+                match self.progress.suppression_reason(&call) {
+                    Some(label) => {
+                        let suppressed = tool_error(
+                            &call,
+                            format!(
+                                "Kernel suppressed redundant observation `{label}`: its result is unchanged since the last observation in this progress epoch. Use the existing result, act on it, or state the concrete blocker."
+                            ),
+                        );
+                        self.suppressed_calls.insert(call.id.clone());
+                        let _ = self.emit(
+                            EventPayload::ToolFailed {
+                                result: suppressed.clone(),
+                            },
+                            sink,
+                        );
+                        results.push(suppressed);
+                    }
+                    None => allowed.push(call),
+                }
+            }
+            permitted = allowed;
         }
         let mut executed = if permitted.iter().all(|c| {
             matches!(
@@ -1053,6 +1165,11 @@ fn tool_error(call: &ToolCall, output: String) -> ToolResult {
         artifact_id: None,
     }
 }
+/// Deterministic provider-valid anchor used when the recent window no longer
+/// contains the original user prompt. Canonical state carries the actual task,
+/// so this only restores conversational continuity.
+const CONTINUATION_ANCHOR: &str = "Kernel: the original user prompt has scrolled out of the active recent window; the canonical task state above remains authoritative. The transcript below continues the current task.";
+
 fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMessage> {
     let raw = ctx
         .recent
@@ -1086,10 +1203,18 @@ fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMe
         .collect::<Vec<_>>();
     let sanitized = sanitize_tool_history(raw);
     let mut normalized: Vec<ModelMessage> = Vec::new();
-    for message in sanitized
-        .into_iter()
-        .skip_while(|message| message.role != "user")
+    // Once the original user prompt ages out of the recent byte budget, the
+    // window legitimately begins mid-task. Providers still need the first
+    // non-system message to be a user turn, so anchor the window with a
+    // deterministic kernel continuation note. Never drop the transcript: doing
+    // so gives the model amnesia and restarts inspection loops.
+    if sanitized
+        .first()
+        .is_some_and(|message| message.role != "user")
     {
+        normalized.push(ModelMessage::text("user", CONTINUATION_ANCHOR));
+    }
+    for message in sanitized {
         if let Some(previous) = normalized.last_mut()
             && previous.role == message.role
             && previous.tool_calls.is_empty()
@@ -1632,5 +1757,88 @@ mod tests {
             2,
             "both results kept"
         );
+    }
+
+    #[test]
+    fn context_messages_anchor_mid_task_windows_instead_of_dropping_them() {
+        fn event(sequence: u64, payload: EventPayload) -> Event {
+            Event {
+                id: Uuid::new_v4(),
+                session_id: Uuid::nil(),
+                sequence,
+                timestamp: Utc::now(),
+                parent_id: None,
+                payload,
+            }
+        }
+        let assistant = event(
+            2,
+            EventPayload::AssistantMessageCompleted {
+                text: "checking".into(),
+                tool_calls: vec![ToolCall {
+                    id: "a".into(),
+                    name: "read_file".into(),
+                    arguments: json!({"path":"a"}),
+                }],
+                reasoning_content: None,
+            },
+        );
+        let tool = event(
+            3,
+            EventPayload::ToolCompleted {
+                result: ToolResult {
+                    call_id: "a".into(),
+                    name: "read_file".into(),
+                    output: "hash: x\ncontents".into(),
+                    is_error: false,
+                    artifact_id: None,
+                },
+            },
+        );
+        let base = crate::continuity::MaterializedContext {
+            system: "system".into(),
+            canonical: String::new(),
+            recalled: String::new(),
+            recent: vec![assistant.clone(), tool.clone()],
+            bridge: crate::continuity::ConversationBridge::default(),
+            episodes: vec![],
+            stats: latch_protocol::ContextStats::default(),
+        };
+        // The user prompt already scrolled out of the window: the transcript is
+        // preserved behind a deterministic kernel continuation anchor.
+        let messages = context_messages(&base);
+        assert_eq!(messages.first().map(|m| m.role.as_str()), Some("user"));
+        assert!(
+            messages[0]
+                .content
+                .contains("scrolled out of the active recent window")
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.role == "assistant" && !m.tool_calls.is_empty())
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some("a"))
+        );
+        // A window that still holds the user prompt is replayed verbatim.
+        let with_user = crate::continuity::MaterializedContext {
+            recent: vec![
+                event(
+                    1,
+                    EventPayload::UserMessage {
+                        text: "do it".into(),
+                    },
+                ),
+                assistant,
+                tool,
+            ],
+            ..base
+        };
+        let messages = context_messages(&with_user);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content, "do it");
     }
 }

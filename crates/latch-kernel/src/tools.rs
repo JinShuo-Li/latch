@@ -1079,7 +1079,7 @@ fn is_dependency_file(path: &Path) -> bool {
 /// may never escape through `..`, an absolute path, or a symlink. This
 /// deliberately keeps read-only classification stricter than the shell's
 /// actual grammar so ASK/PLAN can never be used to mutate the workspace.
-fn is_read_only_shell(command: &str, workspace: &Path) -> bool {
+pub(crate) fn is_read_only_shell(command: &str, workspace: &Path) -> bool {
     let command = command.trim();
     if command.is_empty() || command.contains("||") {
         return false;

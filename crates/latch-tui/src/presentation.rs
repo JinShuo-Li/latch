@@ -168,6 +168,10 @@ impl PresentationModel {
             EventPayload::RegroundRequested { .. } => {
                 self.push_notice("Repeated failure; re-inspecting relevant context");
             }
+            EventPayload::ProgressStagnation { unchanged, .. } => self.push_notice(format!(
+                "Inspection stagnation; re-grounding the model ({} unchanged observation(s))",
+                unchanged.len()
+            )),
             EventPayload::ManualCompact { .. } => {
                 self.push_notice("Active context reset; durable history retained");
             }
@@ -401,26 +405,105 @@ fn exploration_label(call: &ToolCall) -> Option<String> {
     }
 }
 
+/// Semantic label for a shell inspection. Compound commands are split into
+/// simple segments first; segments whose meaning is not obvious are never
+/// guessed. A command this reducer cannot represent returns `None`, and the
+/// caller falls back to the generic `Ran <command>` presentation.
 fn shell_exploration_label(command: &str) -> Option<String> {
-    let words = command.split_whitespace().collect::<Vec<_>>();
+    let mut labels = Vec::new();
+    for segment in split_shell_segments(command)? {
+        let label = shell_segment_label(segment)?;
+        if labels.last() != Some(&label) {
+            labels.push(label);
+        }
+    }
+    let joined = labels.join(" · ");
+    (!joined.is_empty() && joined.chars().count() <= 160).then_some(joined)
+}
+
+/// Splits a compound command on `&&`, `;`, and `|`. Any other shell feature
+/// that could expand, substitute, redirect, background, quote, or nest makes
+/// the whole command unrepresentable, so presentation falls back to generic.
+fn split_shell_segments(command: &str) -> Option<Vec<&str>> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_and = trimmed.replace("&&", " ");
+    if without_and.chars().any(|ch| {
+        matches!(
+            ch,
+            '$' | '`'
+                | '<'
+                | '>'
+                | '&'
+                | '('
+                | ')'
+                | '\\'
+                | '\n'
+                | '\r'
+                | '"'
+                | '\''
+                | '*'
+                | '?'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '~'
+                | '!'
+        )
+    }) {
+        return None;
+    }
+    let mut segments = Vec::new();
+    let bytes = trimmed.as_bytes();
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        let separator = match bytes[index] {
+            b'&' if bytes.get(index + 1) == Some(&b'&') => 2,
+            b'|' | b';' => 1,
+            _ => {
+                index += 1;
+                continue;
+            }
+        };
+        let segment = trimmed[start..index].trim();
+        if segment.is_empty() {
+            return None;
+        }
+        segments.push(segment);
+        index += separator;
+        start = index;
+    }
+    let segment = trimmed[start..].trim();
+    if segment.is_empty() {
+        return None;
+    }
+    segments.push(segment);
+    (segments.len() <= 6).then_some(segments)
+}
+
+fn shell_segment_label(segment: &str) -> Option<String> {
+    let words = segment.split_whitespace().collect::<Vec<_>>();
     let executable = words.first()?.rsplit('/').next()?;
     match executable {
         "ls" => {
-            let targets = words
-                .iter()
-                .skip(1)
-                .filter(|word| !word.starts_with('-'))
-                .copied()
-                .collect::<Vec<_>>();
+            let targets = targets(&words[1..]);
             Some(if targets.is_empty() {
                 "List workspace".into()
             } else {
-                format!("List {}", targets.join(", "))
+                format!("List {targets}")
             })
         }
         "find" => Some(format!(
             "List {}",
-            words.get(1).copied().unwrap_or("workspace")
+            words
+                .get(1)
+                .filter(|word| !word.starts_with('-'))
+                .copied()
+                .unwrap_or("workspace")
         )),
         "rg" | "grep" => {
             let query = words
@@ -445,6 +528,7 @@ fn shell_exploration_label(command: &str) -> Option<String> {
                 .unwrap_or("input");
             Some(format!("Read {target}"))
         }
+        "pwd" => Some("Show working directory".into()),
         "git" => match words.get(1).copied() {
             Some("status") => Some("Inspect git status".into()),
             Some("diff") => Some("Inspect workspace diff".into()),
@@ -453,6 +537,19 @@ fn shell_exploration_label(command: &str) -> Option<String> {
         },
         _ => None,
     }
+}
+
+fn targets(words: &[&str]) -> String {
+    let mut targets = words
+        .iter()
+        .filter(|word| !word.starts_with('-'))
+        .copied()
+        .collect::<Vec<_>>();
+    if targets.len() > 4 {
+        targets.truncate(4);
+        targets.push("…");
+    }
+    targets.join(", ")
 }
 
 fn string_arg<'a>(arguments: &'a Value, key: &str) -> Option<&'a str> {
@@ -698,6 +795,67 @@ mod tests {
         assert!(rendered.contains("List src"));
         assert!(rendered.contains("Search normalize"));
         assert!(!rendered.contains("Running ls"));
+    }
+
+    #[test]
+    fn compound_shell_inspection_never_renders_raw_separators() {
+        let model = PresentationModel::from_events(&[
+            request(
+                "a",
+                "shell",
+                json!({"command":"ls -la && cat Cargo.toml && ls src"}),
+            ),
+            request(
+                "b",
+                "shell",
+                json!({"command":"git status && ls -R src && cat Cargo.toml"}),
+            ),
+            request(
+                "c",
+                "shell",
+                json!({"command":"git log --oneline -5 | head"}),
+            ),
+            request("d", "shell", json!({"command":"echo hi && ls"})),
+            result("a", "shell", "exit 0\nsrc", false),
+            result("b", "shell", "exit 0\nsrc", false),
+            result("c", "shell", "exit 0\ndeadbeef init", false),
+            result("d", "shell", "exit 0\nhi\nsrc", false),
+        ]);
+        let rendered = super::super::render_cells_plain(model.cells(), false);
+        assert!(rendered.contains("List workspace · Read Cargo.toml · List src"));
+        assert!(rendered.contains("Inspect git status · List src · Read Cargo.toml"));
+        assert!(rendered.contains("Inspect git history · Read input"));
+        // Unrecognized compound commands fall back to the generic Ran row.
+        assert!(rendered.contains("Ran echo hi && ls"));
+        for nonsense in ["List &&", "&&,", "cat, Cargo.toml", "ls, src", "List ,"] {
+            assert!(
+                !rendered.contains(nonsense),
+                "raw command fragments leaked into the transcript: {nonsense}\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_segment_labels_are_conservative() {
+        assert_eq!(
+            shell_exploration_label("ls -la && cat Cargo.toml && ls src").as_deref(),
+            Some("List workspace · Read Cargo.toml · List src")
+        );
+        assert_eq!(
+            shell_exploration_label("ls -la; ls -la").as_deref(),
+            Some("List workspace")
+        );
+        assert_eq!(
+            shell_exploration_label("git status && git diff").as_deref(),
+            Some("Inspect git status · Inspect workspace diff")
+        );
+        // Expansion, redirects, quotes, and unrecognized commands fall back.
+        assert_eq!(shell_exploration_label("echo $HOME"), None);
+        assert_eq!(shell_exploration_label("git diff > out.patch"), None);
+        assert_eq!(shell_exploration_label("cargo test"), None);
+        assert_eq!(shell_exploration_label("ls && cargo test"), None);
+        assert_eq!(shell_exploration_label("cd src && rg foo ."), None);
+        assert_eq!(shell_exploration_label("rg foo || true"), None);
     }
 
     #[test]

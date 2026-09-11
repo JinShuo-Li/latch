@@ -23,6 +23,7 @@ flowchart LR
     G --> W[Workspace / processes]
     G --> L[Durable change ledger]
     K --> F[Failure supervision]
+    K --> PS[Progress supervision]
     X[stdio extensions] <--> K
 ```
 
@@ -59,6 +60,18 @@ shell command). Successful inspection tools never reset it; the lineage's own
 validation passing resolves it, and a materially different failure signature
 restarts the count. Streaks replay from durable events, so `--resume` does not
 forget a stalled loop. At the configured budget the kernel requests re-ground.
+
+Progress supervision is separate and deterministic: every read_file, search,
+git_status, git_diff, and conservative read-only shell observation is keyed by
+canonical subject plus result digest, scoped to a progress epoch. Workspace
+mutations (Latch, shell, or detected external), new validation/evidence,
+meaningful task-state changes, mode switches, and new user turns advance the
+epoch, so legitimate re-reads after real change are never confused with
+redundancy. Consecutive turns that only repeat unchanged observations cross the
+stagnation budget, at which point the kernel injects a re-ground instruction
+listing exactly what is already known; repeats after that are suppressed with a
+synthetic terminal result instead of spending a tool cycle. Supervision state
+replays from durable events, so live and `--resume` behavior are identical.
 
 Important lifecycle transitions append to SQLite. Streaming token deltas are
 transient. Operations are marked running before execution and complete
@@ -100,5 +113,8 @@ events through the same formatter the live TUI uses (no reasoning, context
 statistics, model usage, or raw task state), the effective mode resolves as
 CLI `--mode` > the session's durable mode history > config default, prompt
 history is rebuilt from user events, and task state, evidence, failure
-streaks, and change ownership are restored without re-executing anything or
-appending duplicate durable events.
+streaks, progress supervision, and change ownership are restored without
+re-executing anything or appending duplicate durable events. When the original
+user prompt rotates out of the recent byte budget, the transcript is anchored
+with a deterministic kernel continuation message rather than dropped, so a
+mid-task window never gives the model amnesia.

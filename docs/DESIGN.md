@@ -41,6 +41,20 @@ the strategy moved. At the retry budget the kernel requests re-ground: inspect
 reality, name disproven assumptions, change strategy. Supervision state
 replays from raw events so resume keeps a stalled loop visible.
 
+## Progress and stagnation
+
+Successful inspections are supervised too. The kernel keys every read, search,
+git status/diff, and conservative read-only shell observation by canonical
+subject and result digest inside a progress epoch. Real change advances the
+epoch: workspace mutations, detected external edits, validation and evidence,
+meaningful task-state updates, mode switches, and new user turns. Repeating an
+unchanged observation once is allowed; consecutive redundant turns cross the
+stagnation budget and the kernel re-grounds the model with the explicit list of
+already-known observations, then suppresses further repeats deterministically.
+Epoch and streak state replay from raw events, so resume keeps an active
+inspection loop visible, and the 32-turn limit remains only a last-resort
+circuit breaker.
+
 ## Memory epistemics
 
 Memory distinguishes user facts and constraints, task constraints, observations,

@@ -95,6 +95,18 @@ failed and now passes supersedes the failure; historical attempts stay in the
 raw event log. Completion states: `InProgress`, `ImplementedNotVerified`,
 `Verified`, `Blocked` (a required validation could not run).
 
+## Inspection loops are bounded
+
+The kernel also supervises inspection. Reads, searches, git status/diff, and
+conservative read-only shell observations are tracked by subject and result
+digest per progress epoch. Mutations, external edits, validation evidence,
+meaningful task-state changes, and new user turns advance the epoch, so
+re-reading after real change is always allowed. Only consecutive turns that
+repeat unchanged observations trigger a kernel-owned re-ground instruction that
+lists what is already known; repeats after that are suppressed cleanly instead
+of burning tool cycles, and the 32-turn limit remains a last-resort breaker
+(`failure.stagnation_budget`, default 2).
+
 ## Modes and commands
 
 `ASK` is read-only question answering. `PLAN` permits deep read-only exploration.

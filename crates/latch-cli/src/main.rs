@@ -324,6 +324,7 @@ async fn build_agent(
         continuity,
         retry_budget: config.failure.retry_budget,
     });
+    agent.set_stagnation_budget(config.failure.stagnation_budget);
     for extension in config
         .extensions
         .iter()
@@ -351,8 +352,10 @@ async fn build_agent(
                 .collect(),
         );
         // Failure supervision reconstructs its streaks so a stalled loop is
-        // not silently forgotten.
+        // not silently forgotten, and progress supervision reconstructs an
+        // active inspection loop.
         agent.restore_failures()?;
+        agent.restore_progress()?;
     }
     Ok((agent, model, restored))
 }

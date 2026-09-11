@@ -21,6 +21,9 @@ reserve_bytes = 16000
 
 [failure]
 retry_budget = 3
+# Consecutive redundant inspection turns tolerated before the kernel
+# re-grounds the model with the already-known unchanged observations.
+stagnation_budget = 2
 
 # [[extensions]]
 # name = "example"

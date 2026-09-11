@@ -63,6 +63,10 @@ pub struct ContextConfig {
 pub struct FailureConfig {
     #[serde(default = "default_retry")]
     pub retry_budget: u32,
+    /// Consecutive model turns that only repeat unchanged inspections are
+    /// tolerated before the kernel re-grounds the model.
+    #[serde(default = "default_stagnation")]
+    pub stagnation_budget: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +96,9 @@ fn default_reserve() -> usize {
 }
 fn default_retry() -> u32 {
     3
+}
+fn default_stagnation() -> u32 {
+    crate::progress::DEFAULT_STAGNATION_BUDGET
 }
 fn default_shell_timeout() -> u64 {
     120
@@ -138,6 +145,7 @@ impl Default for FailureConfig {
     fn default() -> Self {
         Self {
             retry_budget: default_retry(),
+            stagnation_budget: default_stagnation(),
         }
     }
 }

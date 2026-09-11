@@ -232,6 +232,16 @@ pub enum EventPayload {
     RegroundRequested {
         signature: String,
     },
+    /// Kernel-owned progress stagnation: consecutive model turns repeated
+    /// observations whose results have not changed in the current progress
+    /// epoch. `unchanged` lists the semantic labels of those observations so
+    /// the next request can explicitly tell the model not to inspect them
+    /// again. Further repeats after this event are suppressed with a synthetic
+    /// terminal tool result rather than executed.
+    ProgressStagnation {
+        unchanged: Vec<String>,
+        redundant_turns: u32,
+    },
     ScopeExpansionRequested {
         mutations: usize,
         reason: String,
@@ -574,6 +584,15 @@ pub fn display_items(event: &Event) -> Vec<DisplayItem> {
         }
         EventPayload::RegroundRequested { signature } => vec![DisplayItem::KernelNotice {
             text: format!("re-ground requested after repeated failure of {signature}"),
+        }],
+        EventPayload::ProgressStagnation {
+            unchanged,
+            redundant_turns,
+        } => vec![DisplayItem::KernelNotice {
+            text: format!(
+                "inspection stagnation: {} observation(s) unchanged across {redundant_turns} redundant turn(s); re-ground requested",
+                unchanged.len()
+            ),
         }],
         EventPayload::ScopeExpansionRequested { reason, .. } => vec![DisplayItem::KernelNotice {
             text: format!("scope review: {reason}"),
