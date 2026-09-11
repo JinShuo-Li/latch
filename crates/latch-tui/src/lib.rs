@@ -261,6 +261,9 @@ impl TranscriptItem {
 struct Palette {
     selected: usize,
     dismissed: bool,
+    /// Opened with Ctrl+P rather than by typing `/`, so it shows commands for
+    /// any single-line input until the user edits, closes, or runs one.
+    forced: bool,
 }
 
 impl Palette {
@@ -268,16 +271,20 @@ impl Palette {
         Self {
             selected: 0,
             dismissed: false,
+            forced: false,
         }
     }
     /// The palette is active while the input's first line is a bare command
-    /// prefix: starts with `/` and contains no whitespace yet.
+    /// prefix (starts with `/`, no whitespace yet) or was opened explicitly.
     fn active(&self, input: &Composer) -> bool {
+        if self.dismissed || input.line_count() != 1 {
+            return false;
+        }
+        if self.forced {
+            return true;
+        }
         let first = input.first_line();
-        !self.dismissed
-            && input.line_count() == 1
-            && first.starts_with('/')
-            && !first.contains(char::is_whitespace)
+        first.starts_with('/') && !first.contains(char::is_whitespace)
     }
     fn clamp(&mut self, len: usize) {
         if len == 0 {
@@ -397,6 +404,7 @@ impl App {
     fn on_paste(&mut self, text: &str) {
         self.input.insert_text(text);
         self.palette.dismissed = false;
+        self.palette.forced = false;
         self.palette
             .clamp(filter_commands(self.input.first_line()).len());
     }
@@ -725,14 +733,30 @@ impl App {
                     self.toggle_sidebar();
                     None
                 }
-                KeyCode::Char('p') if self.palette.active(&self.input) => {
-                    let len = filter_commands(self.input.first_line()).len();
-                    self.palette.previous(len);
+                KeyCode::Char('p') => {
+                    if self.palette.active(&self.input) {
+                        let len = filter_commands(self.input.first_line()).len();
+                        self.palette.previous(len);
+                    } else if self.input.line_count() == 1 {
+                        // Ctrl+P opens the command palette for the current
+                        // single line; Esc restores it untouched.
+                        self.palette.forced = true;
+                        self.palette.dismissed = false;
+                        self.palette.selected = 0;
+                    }
                     None
                 }
                 KeyCode::Char('n') if self.palette.active(&self.input) => {
                     let len = filter_commands(self.input.first_line()).len();
                     self.palette.next(len);
+                    None
+                }
+                // Ctrl+J is a literal line feed, so unlike Alt+Enter it reaches
+                // every terminal (Windows Terminal reserves Alt+Enter for
+                // fullscreen). Ctrl+Enter only arrives where the terminal can
+                // report modified keys.
+                KeyCode::Char('j') | KeyCode::Enter => {
+                    self.input.newline();
                     None
                 }
                 _ => None,
@@ -746,6 +770,10 @@ impl App {
         // full scrollback navigation survives the composer owning plain keys.
         if key.modifiers.contains(KeyModifiers::SHIFT) {
             match key.code {
+                KeyCode::Enter => {
+                    self.input.newline();
+                    return None;
+                }
                 KeyCode::Home => {
                     self.scroll_home();
                     return None;
@@ -773,11 +801,15 @@ impl App {
         };
         match key.code {
             KeyCode::Enter if palette_active => {
-                if let Some(name) = self.palette.completion(&candidates) {
-                    self.input.set_text(name);
-                    self.submit_action()
-                } else {
-                    None
+                self.palette.forced = false;
+                match self.palette.completion(&candidates) {
+                    Some(name) => {
+                        self.input.set_text(name);
+                        self.submit_action()
+                    }
+                    // An explicit palette with no matching command still sends
+                    // what the user typed instead of swallowing Enter.
+                    None => self.submit_action(),
                 }
             }
             KeyCode::Tab if palette_active => {
@@ -787,6 +819,7 @@ impl App {
             KeyCode::Esc if palette_active => {
                 self.palette.selected = 0;
                 self.palette.dismissed = true;
+                self.palette.forced = false;
                 None
             }
             KeyCode::Up if palette_active => {
@@ -897,6 +930,7 @@ enum Action {
 
 impl App {
     fn submit_action(&mut self) -> Option<Action> {
+        self.palette.forced = false;
         let text = self.input.take_for_submit();
         let command = text.trim();
         let slash_command = !text.contains(['\n', '\r']) && command.starts_with('/');
@@ -932,6 +966,7 @@ impl App {
             self.input.insert(' ');
             self.palette.selected = 0;
             self.palette.dismissed = false;
+            self.palette.forced = false;
         }
     }
 }
@@ -1962,7 +1997,7 @@ fn draw_composer_hints(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui:
     } else {
         &[
             ("enter", "send"),
-            ("alt+enter", "newline"),
+            ("ctrl+j", "newline"),
             ("ctrl+p", "commands"),
         ]
     };
@@ -2912,6 +2947,40 @@ mod tests {
         }
         app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.input.text(), "/co", "escape keeps the text");
+    }
+
+    #[test]
+    fn ctrl_p_opens_the_palette_and_ctrl_j_inserts_a_newline() {
+        let mut app = App::default();
+        // Ctrl+P opens the command list even without a leading slash.
+        app.on_key(key(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert!(app.palette.active(&app.input));
+        assert!(app.input.is_empty());
+        // Typing filters it, and Enter dispatches the completion.
+        for ch in "q".chars() {
+            app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(action, Some(Action::Quit)));
+        assert!(!app.palette.active(&app.input));
+
+        // Escape closes an explicit palette without touching the text.
+        let mut app = App::default();
+        app.on_key(key(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.palette.active(&app.input));
+        assert!(
+            app.on_key(key(KeyCode::Backspace, KeyModifiers::NONE))
+                .is_none()
+        );
+        assert!(!app.palette.active(&app.input), "escape is not undone");
+
+        // Ctrl+J is a literal newline everywhere, unlike Alt+Enter which some
+        // terminals reserve for themselves.
+        let mut app = App::default();
+        app.on_key(key(KeyCode::Char('j'), KeyModifiers::CONTROL));
+        assert_eq!(app.input.text(), "\n");
+        assert!(!app.palette.active(&app.input));
     }
 
     #[test]

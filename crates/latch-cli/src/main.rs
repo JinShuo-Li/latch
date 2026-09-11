@@ -583,7 +583,7 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
             let commands = SLASH_COMMANDS.iter().map(|c| format!("{}  {}", c.name, c.description)).collect::<Vec<_>>().join("\n");
             tx.send(Output::Notice(format!(
                 "modes: /mode ask|plan|work (WORK mutates; ASK/PLAN are read-only)\n\
-                 composer: Enter send · Alt+Enter newline · Home/End line · Ctrl+Home/End buffer\n\
+                 composer: Enter send · Ctrl+J or Alt+Enter newline · Home/End line · Ctrl+Home/End buffer\n\
                  composer scroll: PgUp/PgDn or mouse wheel when the prompt overflows\n\
                  transcript: Shift+PgUp/PgDn · Shift+Home/End · mouse wheel\n\
                  input: Ctrl+A/E line start/end · Ctrl+W delete word · Ctrl+U/K delete to line edges\n\

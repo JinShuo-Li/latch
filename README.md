@@ -187,22 +187,25 @@ commands follow the same policy.
 Slash commands, in discovery order: `/mode`, `/resume`, `/model`, `/context`,
 `/diff`, `/sidebar`, `/checkpoint`, `/undo`, `/compact`, `/raw`, `/help`,
 `/quit`, `/exit`.
-Typing `/` in an empty composer opens a palette above it. Filtering is live and
-fuzzy; Up/Down or Ctrl+P/Ctrl+N moves selection, Tab completes, Enter dispatches,
-and Esc dismisses. `/resume` makes a clean application-level transition through
+Typing `/` in an empty composer opens a palette above it; Ctrl+P opens the same
+palette for any single-line composer without typing a slash. Filtering is live
+and fuzzy; Up/Down or Ctrl+P/Ctrl+N moves selection, Tab completes, Enter
+dispatches, and Esc dismisses while keeping the typed text. `/resume` makes a clean application-level transition through
 the same picker as `latch --resume`. `/quit` and `/exit` are aliases and never
 become model input or durable user messages. `/compact` resets the active
 working set while retaining durable history and canonical state.
 
 ## TUI controls
 
-- **Composer:** Enter submits, Alt+Enter inserts a newline, Left/Right move the
-  cursor, Home/End jump within the current line, Ctrl+Home/End jump to the
-  start/end of the whole prompt, Ctrl+A/E also move to line edges, Ctrl+W
-  deletes a word, Ctrl+U/K delete to line start/end. Bracketed clipboard paste
-  preserves multiline text, CRLF, Unicode, and blank lines without submitting;
-  Enter remains the only submit action. The editor wraps Unicode correctly and
-  never truncates the buffer.
+- **Composer:** Enter submits, Ctrl+J or Alt+Enter inserts a newline (Ctrl+J is
+  a literal line feed and reaches every terminal; some, like Windows Terminal,
+  reserve Alt+Enter for fullscreen), Left/Right move the cursor, Home/End jump
+  within the current line, Ctrl+Home/End jump to the start/end of the whole
+  prompt, Ctrl+A/E also move to line edges, Ctrl+W deletes a word, Ctrl+U/K
+  delete to line start/end. Bracketed clipboard paste preserves multiline text,
+  CRLF, Unicode, and blank lines without submitting; Enter remains the only
+  submit action. The editor wraps Unicode correctly and never truncates the
+  buffer.
 - **Composer scrolling:** when the prompt overflows the visible editor,
   PageUp/PageDown move through it, as does the mouse wheel over the composer.
   Somewhere-hidden content is marked with `↑`/`↓`/`↕`; the cursor stays visible

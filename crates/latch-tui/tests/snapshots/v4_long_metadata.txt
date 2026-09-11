@@ -16,5 +16,5 @@
 │                                                                                                                                                              │
 │ WORK · a-very-long-model-name-that-keeps-going-and-going-flash · main                                                                                  ready │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-enter send  alt+enter newline  ctrl+p commands                                                                                                                  
+enter send  ctrl+j newline  ctrl+p commands                                                                                                                     
 /home/someone/very/deeply/nested/workspace/path/that/is/long                                                                                        latch v0.1.1
