@@ -44,16 +44,29 @@ replays from raw events so resume keeps a stalled loop visible.
 ## Progress and stagnation
 
 Successful inspections are supervised too. The kernel keys every read, search,
-git status/diff, and conservative read-only shell observation by canonical
-subject and result digest inside a progress epoch. Real change advances the
-epoch: workspace mutations, detected external edits, validation and evidence,
-meaningful task-state updates, mode switches, and new user turns. Repeating an
-unchanged observation once is allowed; consecutive redundant turns cross the
-stagnation budget and the kernel re-grounds the model with the explicit list of
-already-known observations, then suppresses further repeats deterministically.
-Epoch and streak state replay from raw events, so resume keeps an active
-inspection loop visible, and the 32-turn limit remains only a last-resort
-circuit breaker.
+artifact read, git status/diff, and conservative read-only shell observation by
+canonical subject (including range arguments) and result digest inside a
+progress epoch. Real change advances the epoch: workspace mutations, detected
+external edits, validation and evidence, meaningful task-state updates, mode
+switches, and new user turns. Repeating an unchanged observation once is
+allowed; consecutive redundant turns cross the stagnation budget and the kernel
+re-grounds the model with the explicit list of already-known observations, then
+suppresses further repeats deterministically. Epoch and streak state replay
+from raw events, so resume keeps an active inspection loop visible. There is no
+turn ceiling: `failure.max_model_turns` is an optional, off-by-default circuit
+breaker, and progress is bounded by real behavior, not task length.
+
+## Context, reads, and approvals
+
+Context is budgeted in tokens with a conservative estimator; every pre-request
+number is visibly approximate and provider usage is authoritative afterward.
+Tools are bounded by design rather than by small product ceilings: file reads
+and artifact reads return continuation windows, searches return paged matches,
+and long-running commands become managed processes with `exec_start` /
+`exec_poll` / `exec_terminate`. `Ask` policy decisions pause for a real human
+decision through the TUI; approval is single-use and keyed by kernel call ids
+the model never sees, so consent cannot be fabricated. Outside-workspace writes
+execute only after approval; dangerous shell commands remain denied.
 
 ## Memory epistemics
 
@@ -89,9 +102,10 @@ provider usage as zero. Abnormal states become visually obvious; healthy state
 stays quiet.
 
 Code modification reads at a glance: edit rows carry green `+N` and red `−N`
-independently, and `/diff` opens a typed unified-diff inspector. Only parsed
-unified diffs receive red/green semantics, so compiler output or shell text can
-never be misclassified.
+independently, and `/diff` opens a typed unified-diff inspector. Counts come
+from a real Myers line diff over the kernel change ledger, so moved blocks and
+duplicate lines are not misreported. Only parsed unified diffs receive red/green
+semantics, so compiler output or shell text can never be misclassified.
 
 ## Terminal experience
 

@@ -25,27 +25,40 @@ and no vector database.
 
 ## Bounded materialization
 
-The materialized context obeys a hard invariant:
+Context budgets are tokens, not bytes. Bytes remain only for internal file,
+artifact, log, and I/O limits.
 
-    system + canonical + recent + recalled + episode index
-        <= active_bytes - reserve_bytes
+Latch estimates tokens with a conservative, provider/model-aware estimator.
+ASCII text is priced at roughly four characters per token, punctuation at two,
+and wide non-ASCII characters (CJK, full-width forms, emoji) at two for
+OpenAI/Anthropic profiles and one for CJK-optimized models. Every user-visible
+number is approximate (`≈`) until the provider reports real usage; provider
+usage is authoritative.
 
-Components are allocated in explicit priority order:
+The complete request obeys a hard invariant:
+
+    instructions + state + recent + recall + tools + extension
+        <= context_window_tokens - reserve_tokens
+
+The context window defaults to 256k tokens and is overridable per model with
+`[models.<name>] context_window_tokens`; `reserve_tokens` covers the model's
+output plus safety. Components are allocated in explicit priority order:
 
 1. hard system/kernel instructions (the compiled prompt);
-2. required reserve, preserved up front;
-3. canonical core — goal, constraints, decisions, required validations,
+2. canonical core — goal, constraints, decisions, required validations,
    current evidence, active failure lineages (memory lines drop
    lowest-priority first: notes before hypotheses before decisions);
-4. protocol-safe recent verbatim transcript (tool transactions stay atomic —
+3. protocol-safe recent verbatim transcript (tool transactions stay atomic —
    an assistant tool-call turn and all of its results are selected as one
-   unit, never split at a budget boundary);
-5. targeted recalled original events;
-6. the scored episode index, capped at 16 entries.
+   unit, never split at a budget boundary) within `recent_tokens`;
+4. targeted recalled original events;
+5. the scored episode index, capped at 16 entries;
+6. tool schemas and extension context, reserved by the agent before the
+   continuity engine allocates its own sections.
 
-If the system prompt alone exceeds the budget the status reports `over_budget`
-honestly; everything else stays bounded. `/context` reports bytes by category,
-reserve, event and episode counts, selected episodes, total bytes, and status.
+Recalled originals and the episode index are estimated once as one block, so
+recalled material is never double counted. `/context` reports the token
+breakdown, reserve, headroom, event and episode counts, and status.
 
 ## Episodes
 
@@ -73,6 +86,7 @@ The stress tests insert an early constraint, decision, rejected hypothesis, and
 exact diagnostic, then push thousands of events through the session. They
 verify canonical survival of constraints and decisions, rejection state
 preserved (a rejected hypothesis never renders as active memory), exact raw
-recall of an early diagnostic, recent verbatim text, the bounded-bytes
-invariant under thousands of durable events, a bounded episode index, no
-automatic compact, and full raw event retention.
+recall of an early diagnostic, recent verbatim text, the bounded-token
+invariant under thousands of durable events, exact component sums (no double
+counting), a bounded episode index, no automatic compact, and full raw event
+retention.

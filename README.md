@@ -82,15 +82,25 @@ diff (with artifact spill for very large output).
 ## Observability sidebar
 
 On wide terminals the transcript gets a right sidebar: session/model and turn
-count, a bounded **working set** (never "time until context death"), kernel
-canonical task state and completion, provider-neutral usage totals, and change
-ownership. It is responsive: ~32% on very wide screens (clamped 28–44 columns),
-~27% at 130–159, a compact sidebar at 110–129, and hidden below 110 columns.
-`Ctrl+B` or `/sidebar` toggles it; the transcript takes the full width when it
-is hidden. The sidebar is derived only from durable kernel events, so live and
-resumed sessions show the same state. Abnormal states (over-budget context,
-stalled progress, externally modified owned files) are highlighted; healthy
-states stay quiet.
+count, a token-native **working set** estimate against the model context window
+(never "time until context death"), kernel canonical task state and completion,
+provider-neutral usage totals, and change ownership. It is responsive: ~32% on
+very wide screens (clamped 28–44 columns), ~27% at 130–159, a compact sidebar
+at 110–129, and hidden below 110 columns. `Ctrl+B` or `/sidebar` toggles it;
+the transcript takes the full width when it is hidden. The sidebar is derived
+only from durable kernel events, so live and resumed sessions show the same
+state. Abnormal states (over-budget context, stalled progress, externally
+modified owned files) are highlighted; healthy states stay quiet.
+
+Context budgets and every user-visible context number are tokens, estimated
+conservatively per provider/model; bytes remain only for internal file,
+artifact, log, and I/O limits. The context window defaults to 256k tokens and
+is overridable per model:
+
+```toml
+[models.deepseek-flash]
+context_window_tokens = 262144
+```
 
 Usage is normalized per provider into input, output, and optional cache
 read/write categories. A category the provider did not report shows `—`, never
@@ -121,17 +131,40 @@ failed and now passes supersedes the failure; historical attempts stay in the
 raw event log. Completion states: `InProgress`, `ImplementedNotVerified`,
 `Verified`, `Blocked` (a required validation could not run).
 
+## Bounded reads, artifacts, and long processes
+
+`read_file` returns a bounded line window (default 2000 lines) with
+`offset`/`limit`/`tail` and an explicit continuation offset; large files are
+never injected whole. `search` returns a bounded result page with a total count
+and offset continuation. Output spilled by truncated shell, search, diff, or
+validation results carries an artifact id that `read_artifact` can page through
+by range. Long-running development commands use `exec_start`, `exec_poll`, and
+`exec_terminate` instead of blocking shell calls; process lifecycle is durable,
+and a resumed session reports honestly when a child did not survive restart.
+
 ## Inspection loops are bounded
 
 The kernel also supervises inspection. Reads, searches, git status/diff, and
 conservative read-only shell observations are tracked by subject and result
-digest per progress epoch. Mutations, external edits, validation evidence,
-meaningful task-state changes, and new user turns advance the epoch, so
-re-reading after real change is always allowed. Only consecutive turns that
+digest per progress epoch; range arguments are part of the identity, so reading
+a different window is new information. Mutations, external edits, validation
+evidence, meaningful task-state changes, and new user turns advance the epoch,
+so re-reading after real change is always allowed. Only consecutive turns that
 repeat unchanged observations trigger a kernel-owned re-ground instruction that
 lists what is already known; repeats after that are suppressed cleanly instead
-of burning tool cycles, and the 32-turn limit remains a last-resort breaker
-(`failure.stagnation_budget`, default 2).
+of burning tool cycles. Long productive tasks are never killed by turn count:
+the old 32-turn ceiling is gone, and `failure.max_model_turns` is an optional,
+off-by-default circuit breaker (`failure.stagnation_budget`, default 2).
+
+## Human approval for `Ask`
+
+When policy asks for approval (for example an outside-workspace write with
+`outside_workspace = "ask"`), the kernel emits a durable approval request and
+pauses. The TUI shows a centered prompt: `y`/Enter approves, `n`/Esc denies,
+Ctrl+C cancels. Approval is single-use and keyed to a kernel call id the model
+never sees, so the model cannot fabricate consent. Non-interactive sessions
+record an explicit denial instead of hanging, and resume marks requests that
+were pending at exit as expired. Dangerous shell commands remain denied.
 
 ## Modes and commands
 
@@ -162,6 +195,8 @@ working set while retaining durable history and canonical state.
 - **Scrollback:** PageUp/PageDown, Home/End, mouse wheel. Auto-follow resumes at
   the bottom; a subtle indicator shows newer content while scrolled up.
 - **Cancel/quit:** Ctrl+C cancels a running turn, or quits when idle.
+- **Permission:** when a tool needs approval, `y` approves and `n`/Esc denies;
+  Ctrl+C cancels the turn.
 - **Sidebar:** Ctrl+B or `/sidebar` toggles the responsive state sidebar.
 - **Detail:** Ctrl+T or `/raw` toggles the detailed, copy-friendly transcript.
 - **Diff:** `/diff` opens a full-width semantic diff inspector (red deletions,
@@ -172,6 +207,28 @@ working set while retaining durable history and canonical state.
   toggles current-workspace/all sessions, Enter resumes, Ctrl+F starts fresh,
   Ctrl+Q exits, and Esc cancels.
 - `/help` prints the current control summary.
+
+## Acceptance testing
+
+Kernel invariants run offline under `cargo test` with the scripted provider. A
+separate opt-in harness calls the configured provider for real and is ignored
+by default:
+
+```sh
+LATCH_LIVE_TESTS=1 cargo test -p latch-kernel --test live_acceptance \
+  -- --ignored --nocapture
+# one scenario:
+LATCH_LIVE_TESTS=1 LATCH_LIVE_SCENARIO=small_bug \
+  cargo test -p latch-kernel --test live_acceptance live_small_bug_fix \
+  -- --ignored --nocapture
+```
+
+Scenarios cover a small bug fix, a medium multi-file change, a justified
+>10-file refactor, a large source file with a large validation log, validation
+fail → debug → pass, interrupt + resume, and an explicit >100-model-turn
+long-horizon run. Each writes `target/live-acceptance/<scenario>.json` with
+turns, tool calls, input/output/cache tokens, pre-request estimated context,
+provider-reported usage, validation outcomes, completion, and elapsed time.
 
 ## Extensions
 

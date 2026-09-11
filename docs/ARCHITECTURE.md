@@ -3,7 +3,7 @@
 | Crate | Responsibility |
 |---|---|
 | `latch-protocol` | Events, task/memory/evidence records, provider and extension types, shared display formatting |
-| `latch-kernel` | Store, continuity, prompts, policy, tools, providers, extensions, validation/evidence, failure supervision, loop, session resume |
+| `latch-kernel` | Store, continuity, prompts, policy, tools, providers, extensions, validation/evidence, failure and progress supervision, permissions, token estimation, loop, session resume |
 | `latch-tui` | Typed transcript, slash palette, input editor, prompt history, semantic rendering |
 | `latch-cli` | Configuration, resume orchestration, provider setup, slash-command coordination |
 
@@ -24,6 +24,8 @@ flowchart LR
     G --> L[Durable change ledger]
     K --> F[Failure supervision]
     K --> PS[Progress supervision]
+    K --> PB[Permission broker]
+    PB --> U
     X[stdio extensions] <--> K
 ```
 
@@ -62,16 +64,21 @@ restarts the count. Streaks replay from durable events, so `--resume` does not
 forget a stalled loop. At the configured budget the kernel requests re-ground.
 
 Progress supervision is separate and deterministic: every read_file, search,
-git_status, git_diff, and conservative read-only shell observation is keyed by
-canonical subject plus result digest, scoped to a progress epoch. Workspace
-mutations (Latch, shell, or detected external), new validation/evidence,
-meaningful task-state changes, mode switches, and new user turns advance the
-epoch, so legitimate re-reads after real change are never confused with
-redundancy. Consecutive turns that only repeat unchanged observations cross the
-stagnation budget, at which point the kernel injects a re-ground instruction
-listing exactly what is already known; repeats after that are suppressed with a
-synthetic terminal result instead of spending a tool cycle. Supervision state
-replays from durable events, so live and `--resume` behavior are identical.
+read_artifact, git_status, git_diff, and conservative read-only shell
+observation is keyed by canonical subject (including range arguments) plus
+result digest, scoped to a progress epoch. Workspace mutations (Latch, shell,
+or detected external), new validation/evidence, meaningful task-state changes,
+mode switches, and new user turns advance the epoch, so legitimate re-reads
+after real change are never confused with redundancy. Consecutive turns that
+only repeat unchanged observations cross the stagnation budget, at which point
+the kernel injects a re-ground instruction listing exactly what is already
+known; repeats after that are suppressed with a synthetic terminal result
+instead of spending a tool cycle. Supervision state replays from durable
+events, so live and `--resume` behavior are identical.
+
+There is no fixed model-turn ceiling. `failure.max_model_turns` is an optional,
+off-by-default circuit breaker for operators; long productive tasks are
+governed by the stagnation and failure supervisors, not by count.
 
 Important lifecycle transitions append to SQLite. Streaming token deltas are
 transient. Operations are marked running before execution and complete
@@ -80,6 +87,33 @@ afterward; resume surfaces an unfinished record as uncertain.
 Read-only batches execute concurrently. A mutation lock serializes edits,
 writes, checkpoints, and undo. Shell and validation processes use bounded
 timeout, cancellation, captured status, and artifact spill for large output.
+Managed `exec_*` processes are owned by the kernel, buffered in memory, spilled
+to artifacts past a cap, and durably closed with `ProcessExited`; a resumed
+session reports honestly that children did not survive the restart.
+
+## Context budgeting
+
+Context is token-native. `latch-kernel::tokens::TokenEstimator` is a
+conservative, provider/model-aware estimator (ASCII ~4 chars/token,
+punctuation ~2, wide CJK/emoji characters priced explicitly); all pre-request
+numbers are estimates, and provider-reported usage is authoritative after a
+request. `ContextStats` records instructions, canonical state, recent
+transcript, recall, tool schemas, and extension context, plus the model's
+context window, reserve, and headroom. The context window defaults to 256k
+tokens and is overridable per model (`[models.<name>] context_window_tokens`).
+The continuity engine receives a `MaterializeBudget` that already subtracts
+tool/extension costs, and the agent recomputes totals from the exact
+components, so recalled material is counted once.
+
+## Human approval
+
+`PolicyEngine` can return `Ask`. The agent routes it through
+`PermissionBroker`: a durable `PermissionRequested` event is appended, the turn
+pauses, and exactly one human resolution from the TUI resolves it.
+Approvals are single-use, keyed by kernel call id (never model-supplied), and
+approved outside-workspace writes execute under the normal guarded-write path.
+Non-interactive sessions record `non_interactive` denials; resume marks
+unresolved requests `resume_expired`.
 
 ## Change ledger and shell drift
 
