@@ -26,6 +26,12 @@ Invocation uses `tool.execute` with `{name, arguments}`. Shutdown is a `shutdown
 request followed by `exit`. Observe, transform, and guard remain separate; there
 is no universal hook.
 
-V0.1 declarations are a trusted cooperative auditing contract. An extension has
-its operating-system user's authority. Latch does not claim seccomp, namespaces,
-Landlock, WASM, or other syscall isolation. Configure only trusted executables.
+Extension declarations remain a cooperative auditing contract, but v0.2.0
+changes the process boundary: Latch starts the extension host inside the same
+mandatory Bubblewrap sandbox as every other command, with a read-only
+workspace, masked home credentials and sockets, and network access for protocol
+work. The host cannot write project files or read masked host secrets. What is
+still cooperative is the extension's own tool behavior: Latch does not classify
+individual extension tool arguments as separate capabilities, and there is no
+seccomp, Landlock, or WASM isolation inside the host. Configure only trusted
+executables.

@@ -58,6 +58,38 @@ from raw events, so resume keeps an active inspection loop visible. There is no
 turn ceiling: `failure.max_model_turns` is an optional, off-by-default circuit
 breaker, and progress is bounded by real behavior, not task length.
 
+## Mode, Safety, and Permissions
+
+Mode, Safety, and Permissions are deliberately separate, because conflating them
+makes the wrong thing adjustable. Mode is the shape of the work: ASK and PLAN
+may inspect but never mutate; WORK may change the workspace according to Safety.
+Safety is the risk posture: Strict asks before workspace writes, Standard treats
+ordinary source edits as work, Autonomous removes that friction while still
+classifying network and external effects. Permissions is how uncertainty is
+resolved: a human decision, a recorded automatic approval, or a separate
+stateless model review of the exact command. The kernel applies them in order;
+none can widen what a previous stage refused.
+
+The invariant that keeps provenance honest is that external effects are never
+silently allowed. Writing outside the workspace, mutating `.git`, using the
+network, or touching a remote system always becomes a kernel `Ask` first —
+even when Safety is Autonomous and Permissions is All approved. Auto-approval
+is a resolver, not a bypass: it records the same durable request/resolution
+pair and issues a single-use capability grant for exactly that call. Hard deny
+(privileged or system-destructive operations) sits outside all three controls
+and can never be approved.
+
+Enforcement is the OS sandbox, not bash-string parsing. `bwrap` is mandatory:
+the host root is read-only, the workspace is mounted explicitly, `.git` is
+protected unless Git metadata mutation was granted, home credentials and host
+sockets are masked, and PID/IPC/UTS/network namespaces isolate the process.
+Approval never means "rerun outside the sandbox"; it adds the narrowest
+capability to a new sandbox for that call. The threat model is honest: this
+strongly contains ordinary mistakes, prompt injection, accidental host access,
+and unauthorized network use; it does not claim protection against kernel
+exploits, resource exhaustion, or damage inside roots the user explicitly
+granted.
+
 ## Context, reads, and approvals
 
 Context is budgeted in tokens with a conservative estimator; every pre-request

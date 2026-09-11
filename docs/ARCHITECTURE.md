@@ -42,7 +42,7 @@ is never mixed into them. The compiled prompt is intentionally bounded and
 covered by tests that pin the fragment order, forbid obsolete policy text, keep
 Latch-specific tool/runtime guidance, and cap its size.
 
-## The V0.1.1 shift: models express validation intent, the kernel owns truth
+## The validation shift: models express intent, the kernel owns truth
 
 The model names what must hold — `validate {"requirement": "existing unittest
 passes", "command": "python3 -B -m unittest test_calc -v"}` — and the kernel
@@ -118,15 +118,55 @@ The continuity engine receives a `MaterializeBudget` that already subtracts
 tool/extension costs, and the agent recomputes totals from the exact
 components, so recalled material is counted once.
 
-## Human approval
+## Mode, Safety, Permissions, and the capability sandbox
 
-`PolicyEngine` can return `Ask`. The agent routes it through
-`PermissionBroker`: a durable `PermissionRequested` event is appended, the turn
-pauses, and exactly one human resolution from the TUI resolves it.
-Approvals are single-use, keyed by kernel call id (never model-supplied), and
-approved outside-workspace writes execute under the normal guarded-write path.
+Three orthogonal controls compose into one pipeline:
+
+1. **Mode** (`ASK`/`PLAN`/`WORK`) gates whether mutation is eligible at all.
+2. **Safety** (`Strict`/`Standard`/`Autonomous`) maps the classified
+   capabilities of a call to `Allow`/`Ask`/`Deny`.
+3. **Permissions** (`AutoApprove`/`Human`/`AiReview`) resolves an `Ask` through
+   a durable request/resolution pair and a single-use `CapabilityGrant` keyed
+   by kernel call id — never model-supplied.
+
+`safety::classify` owns capability classification: workspace read/source/
+metadata writes, Git metadata, external filesystem writes, network, remote side
+effects, privileged and destructive operations, extension execution, and
+unknown capabilities. External writes, Git metadata mutation, network, and
+remote side effects always classify as `Ask` first, even under Autonomous +
+All approved; hard deny (privileged/system-destructive) is independent of both
+profile and resolver and cannot be granted. Explicit capability requests
+(`capabilities: ["network"]`) are parsed from tool arguments; unknown names
+become `UnknownCapability` -> `Ask`.
+
+`AiReview` is a separate stateless provider call with no conversation history
+and no tools. It receives a short task summary, workspace, the exact command,
+the requested capability, and the escalation reason, and must answer strict
+JSON `{risk, reason}`. `low` approves; `medium`/`high`/`critical` reject with
+the one-sentence reason returned to the coding model; unparseable output
+rejects conservatively. Non-command asks use human resolution rather than
+fabricating a bash judgment.
+
+### Mandatory Bubblewrap sandbox
+
+`SandboxRunner` is the only way any command starts. The startup probe verifies
+`bwrap`, unprivileged user namespaces, bind mounts, and the required namespace
+set; failure is stored as an actionable refusal and shell/exec/validation/git
+inspection all fail rather than running unsandboxed. A `SandboxProfile` binds
+the host root read-only, mounts the workspace explicitly (read-only for
+inspection; writable with `.git` remounted read-only unless `GitMetadataWrite`
+was granted), adds call-scoped external writable roots, provides private tmpfs
+`/tmp` and `/run`, masks home credentials, clears the environment, and isolates
+user/PID/IPC/UTS namespaces plus network (re-shared only when the profile
+grants it). Kernel-internal bookkeeping (`git status`, drift snapshots) also
+runs through the sandbox for model-visible calls; host-side drift bookkeeping
+uses fixed read-only Git commands. Extension hosts start through the same
+sandbox with a read-only workspace and network; their individual tool arguments
+remain a cooperative boundary, documented rather than overclaimed.
+
 Non-interactive sessions record `non_interactive` denials; resume marks
-unresolved requests `resume_expired`.
+unresolved requests `resume_expired`, and `SafetyChanged`/`PermissionsChanged`
+events restore the exact policy the session ended with.
 
 ## Change ledger and shell drift
 

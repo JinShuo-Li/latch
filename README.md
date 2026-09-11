@@ -1,11 +1,13 @@
 # Latch
 
 Latch is a quiet, programmable terminal coding agent built around explicit state,
-evidence, controlled execution, and continuous long-session memory. V0.1.1 is a
+evidence, controlled execution, and continuous long-session memory. V0.2.0 is a
 Linux-first Rust implementation with a native streamed tool loop, durable SQLite
 sessions, OpenAI-compatible and Anthropic providers, kernel-owned validation
-evidence, guarded coding tools, a modern Ratatui interface with a slash command
-palette and real input editing, and language-independent process extensions.
+evidence, guarded coding tools, three orthogonal Mode/Safety/Permissions
+controls behind a mandatory Bubblewrap sandbox, a modern Ratatui interface with
+a slash command palette and real input editing, and language-independent process
+extensions.
 
 Latch is independent software. Pi and OpenAI Codex were studied as public
 references for agent and terminal interaction behavior; Latch is not a fork and
@@ -29,7 +31,7 @@ For Anthropic, copy `config.example.toml` to
 and export `ANTHROPIC_API_KEY`. OpenAI-compatible servers can set `base_url` and
 the environment variable named by `api_key_env`. Credentials are read from the
 environment, never stored in a session or logged. Provider requests identify as
-`latch/0.1.1`; OpenCode Go endpoints (`base_url` under `https://opencode.ai/zen/go`)
+`latch/0.2.0`; OpenCode Go endpoints (`base_url` under `https://opencode.ai/zen/go`)
 additionally receive a stable `x-opencode-session` header carrying the durable
 session id, so `--resume` keeps the same value.
 
@@ -190,14 +192,66 @@ never sees, so the model cannot fabricate consent. Non-interactive sessions
 record an explicit denial instead of hanging, and resume marks requests that
 were pending at exit as expired. Dangerous shell commands remain denied.
 
-## Modes and commands
+## Safety, permissions, and the sandbox
 
-`ASK` is read-only question answering. `PLAN` permits deep read-only exploration.
-`WORK` permits policy-approved edits and developer commands. Kernel policy denies
-workspace mutation in ASK and PLAN regardless of model instructions; validation
-commands follow the same policy.
+Mode, Safety, and Permissions are three orthogonal controls:
 
-Slash commands, in discovery order: `/mode`, `/resume`, `/model`, `/context`,
+- **Mode** decides what kind of work is allowed: `ASK` and `PLAN` are read-only,
+  `WORK` may mutate according to Safety.
+- **Safety** (`/safety`: Strict, Standard, Autonomous) classifies each proposed
+  capability as Allow, Ask, or Deny. Strict asks before workspace writes,
+  Standard allows ordinary source edits, Autonomous also pre-grants network.
+- **Permissions** (`/permissions`: All approved, Approved by ask, Approve for
+  me) decides how an Ask is resolved.
+
+The decision flow for every operation is:
+
+```text
+proposed operation
+  -> mode eligibility
+  -> safety classification (capability classes)
+  -> Allow / Ask / Deny
+  -> permission resolver for Ask
+  -> single-use scoped capability grant
+  -> mandatory Bubblewrap sandbox
+  -> execution
+```
+
+External filesystem writes, Git metadata mutation, network access, and remote
+side effects always become a kernel `Ask` first — even in Autonomous mode with
+All approved. Auto-approval records the normal `PermissionRequested` /
+`PermissionResolved` provenance; it never bypasses classification and never
+disables the sandbox. Hard-denied operations (privileged, system-destructive)
+stay denied regardless of resolver.
+
+Latch is Linux-first and **requires the system `bwrap` (bubblewrap) binary**.
+Every shell, `exec_start`, validation, and inspection command runs inside the
+sandbox; Latch refuses to execute commands unsandboxed rather than falling back.
+The sandbox binds the host root read-only, gives the workspace an explicit
+read-only or writable mount (`.git` stays read-only unless Git metadata mutation
+was granted), provides private `/tmp` and scratch build output, masks `~/.ssh`,
+GPG/cloud/registry credentials, and `/run` sockets, and isolates user, PID,
+IPC, UTS, and network namespaces. `Approve for me` reviews shell commands with a
+separate stateless model call that returns strict JSON (`low` approves;
+`medium`/`high`/`critical` reject with one actionable sentence); non-command
+asks fall back to human approval.
+
+Threat model: the sandbox strongly contains ordinary coding-agent mistakes,
+prompt injection, unintended host filesystem access, unauthorized network
+access, and process interference. It is not a defense against kernel exploits,
+all resource-exhaustion attacks, damage inside explicitly granted writable
+roots, or capabilities deliberately exposed to a profile.
+
+`ASK` is read-only question answering, but inspection is not artificially
+restricted: pipelines, `awk`, `jq`, Python analysis, `cargo metadata`, `cargo
+tree`, `cargo check`, and `cargo test --no-run` are welcome inside the
+read-only sandbox, with build output redirected to private scratch. `PLAN`
+permits deep read-only exploration. `WORK` permits policy-approved edits and
+developer commands. Kernel policy denies workspace mutation in ASK and PLAN
+regardless of model instructions.
+
+Slash commands, in discovery order: `/mode`, `/safety`, `/permissions`,
+`/resume`, `/model`, `/context`,
 `/diff`, `/sidebar`, `/checkpoint`, `/undo`, `/compact`, `/raw`, `/help`,
 `/quit`, `/exit`.
 Typing `/` in an empty composer opens a palette above it; Ctrl+P opens the same
@@ -229,8 +283,14 @@ working set while retaining durable history and canonical state.
   wheel outside the composer. Auto-follow resumes at the bottom; a subtle hint
   shows when newer content is below.
 - **Cancel/quit:** Ctrl+C cancels a running turn, or quits when idle.
-- **Permission:** when a tool needs approval, `y` approves and `n`/Esc denies;
-  Ctrl+C cancels the turn.
+- **Permission:** when a tool needs approval, the modal shows the operation,
+  the requested capability class, the reason, and the target; `y` approves and
+  `n`/Esc denies; Ctrl+C cancels the turn. Approval is single-use and grants
+  only the requested capability for that call.
+- **Safety/permissions:** `/safety` and `/permissions` open restrained
+  selectors above the composer; the effective short labels are shown in the
+  composer metadata (for example `WORK · deepseek-flash · main · std · ask`)
+  and both settings are restored exactly on resume.
 - **Sidebar:** Ctrl+B or `/sidebar` toggles the responsive state sidebar.
 - **Detail:** Ctrl+T or `/raw` toggles the detailed, copy-friendly transcript.
 - **Diff:** `/diff` opens a full-width semantic diff inspector (red deletions,
@@ -268,9 +328,10 @@ provider-reported usage, validation outcomes, completion, and elapsed time.
 
 Extensions are explicitly configured executables speaking JSON-RPC 2.0 over
 LSP-style framed stdio. See [docs/PROTOCOL.md](docs/PROTOCOL.md), the minimal
-TypeScript SDK under `sdk/typescript`, and `extensions/example-ts`. V0.1 treats
-extension permission declarations as a cooperative audit contract; it does not
-provide syscall isolation.
+TypeScript SDK under `sdk/typescript`, and `extensions/example-ts`. V0.2.0 runs
+the extension host inside the mandatory sandbox (read-only workspace, masked
+home, network for protocol work); extension tool arguments remain a cooperative
+audit contract, and no syscall isolation is claimed inside the host.
 
 Build and probe the reference extension with:
 
@@ -281,5 +342,5 @@ cargo run -p latch-kernel --example extension_probe -- \
   extensions/example-ts/dist/index.js
 ```
 
-Latch V0.1 supports Linux terminals only. It has no daemon, browser automation,
+Latch v0.2.0 supports Linux terminals only and requires the system `bwrap` binary. It has no daemon, browser automation,
 remote execution, MCP, IDE integration, automatic commits, or automatic pushes.
