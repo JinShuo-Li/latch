@@ -8,8 +8,6 @@ use super::*;
 const REVIEWER_PROMPT: &str = "You are a security reviewer for a sandboxed coding agent. Classify the risk of exactly one proposed shell command. Reply with strict JSON only, no markdown, no commentary: {\"risk\":\"low|medium|high|critical\",\"reason\":\"one sentence\"}. low means routine, local, reversible inspection or build work. medium, high, or critical mean destructive, privileged, secret-touching, remote side effects, or capability escalation.";
 
 impl Agent {
-    /// Strict structured-output reviewer used by the `Approve for me` resolver.
-
     /// Expires approval requests that were pending when a session ended.
     /// Resuming cannot continue a tool call that no longer exists, so each
     /// unresolved request is durably marked, not silently forgotten.

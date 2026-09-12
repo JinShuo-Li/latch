@@ -240,7 +240,6 @@ impl Agent {
 
 /// Compact human-readable task state for tool results, replacing raw JSON so
 /// the model sees a readable summary without internal identifiers.
-
 pub(super) fn summarize_state(state: &latch_protocol::TaskState) -> String {
     let mut lines = vec![format!("goal: {}", state.goal)];
     if !state.constraints.is_empty() {

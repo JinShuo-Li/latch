@@ -44,8 +44,6 @@ fn agent_tool_definitions() -> Vec<ToolDefinition> {
     tools
 }
 
-/// Deterministic provider-valid anchor used when the recent window no longer
-
 /// Canonical serialization of one provider-facing request. Consecutive
 /// requests in an epoch differ only by appended messages, so byte-prefix
 /// comparison measures the reusable provider cache prefix.
