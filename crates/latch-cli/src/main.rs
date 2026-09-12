@@ -239,7 +239,7 @@ async fn pick_session(workspace: &Path, config: &Config) -> Result<ResumeChoice>
 }
 
 fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
-    let p = PromptCompiler::compile(mode, &TaskState::default(), workspace)?;
+    let p = PromptCompiler::compile(mode, workspace)?;
     let estimator = latch_kernel::TokenEstimator::generic();
     if let Some(id) = id {
         let f = p

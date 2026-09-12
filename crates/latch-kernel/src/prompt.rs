@@ -1,5 +1,5 @@
 use anyhow::Result;
-use latch_protocol::{Mode, TaskState};
+use latch_protocol::Mode;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -30,7 +30,7 @@ impl CompiledPrompt {
 
 pub struct PromptCompiler;
 impl PromptCompiler {
-    pub fn compile(mode: Mode, state: &TaskState, workspace: &Path) -> Result<CompiledPrompt> {
+    pub fn compile(mode: Mode, workspace: &Path) -> Result<CompiledPrompt> {
         let mut f = vec![
             fragment(
                 "core.identity",
@@ -114,17 +114,8 @@ A new user message received mid-task overrides earlier decisions and the current
         ));
         // Per-session context follows the stable coding-agent behavior above.
         f.push(fragment(
-            "task.state",
-            120,
-            false,
-            &format!(
-                "Current canonical task state:\n{}",
-                serde_json::to_string_pretty(state)?
-            ),
-        ));
-        f.push(fragment(
             "environment.workspace",
-            130,
+            120,
             false,
             &format!("Workspace: {}", workspace.display()),
         ));
@@ -174,7 +165,7 @@ mod tests {
 
     fn work_prompt() -> (tempfile::TempDir, CompiledPrompt) {
         let d = tempfile::tempdir().unwrap();
-        let p = PromptCompiler::compile(Mode::Work, &TaskState::default(), d.path()).unwrap();
+        let p = PromptCompiler::compile(Mode::Work, d.path()).unwrap();
         (d, p)
     }
 
@@ -182,7 +173,7 @@ mod tests {
     fn assembles_fragments_in_order() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("AGENTS.md"), "rule").unwrap();
-        let p = PromptCompiler::compile(Mode::Plan, &TaskState::default(), d.path()).unwrap();
+        let p = PromptCompiler::compile(Mode::Plan, d.path()).unwrap();
         assert!(p.text.contains("PLAN is deep read-only") && p.text.contains("rule"));
         assert!(
             p.fragments
@@ -209,7 +200,6 @@ mod tests {
                 "policy.stale_context",
                 "policy.failure",
                 "mode.work",
-                "task.state",
                 "environment.workspace",
             ]
         );
@@ -277,7 +267,10 @@ mod tests {
     #[test]
     fn stable_behavior_precedes_per_session_context() {
         let (_d, p) = work_prompt();
-        let dynamic = ["task.state", "environment.workspace"];
+        // Canonical task state is no longer part of the compiled prompt; it is
+        // rendered once by the continuity engine after the stable prefix.
+        assert!(p.fragment("task.state").is_none());
+        let dynamic = ["environment.workspace"];
         let lowest_static = p
             .fragments
             .iter()
@@ -297,6 +290,16 @@ mod tests {
             );
             assert!(!fragment.cacheable);
         }
+    }
+
+    #[test]
+    fn compiled_prompt_is_deterministic_and_ignores_task_state() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("AGENTS.md"), "rule").unwrap();
+        let first = PromptCompiler::compile(Mode::Work, d.path()).unwrap();
+        let second = PromptCompiler::compile(Mode::Work, d.path()).unwrap();
+        assert_eq!(first.text, second.text, "stable prefix is byte-identical");
+        assert!(!first.text.contains("Current canonical task state"));
     }
 
     #[test]
@@ -321,6 +324,6 @@ mod tests {
             "compiled prompt grew to {} tokens",
             p.approximate_tokens()
         );
-        assert_eq!(p.fragments.len(), 13);
+        assert_eq!(p.fragments.len(), 12);
     }
 }

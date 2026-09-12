@@ -604,7 +604,15 @@ pub fn anthropic_request(request: &ModelRequest, model: &str) -> Value {
             }
         }
     }
-    json!({"model":model,"max_tokens":8192,"system":request.system,"messages":messages,"tools":request.tools.iter().map(|t|json!({"name":t.name,"description":t.description,"input_schema":t.input_schema})).collect::<Vec<_>>(),"stream":true})
+    // The compiled system prefix is stable per session, so the adapter marks it
+    // as an ephemeral cache breakpoint. This is a provider-specific control and
+    // stays at the adapter boundary.
+    let system = json!([{
+        "type": "text",
+        "text": request.system,
+        "cache_control": {"type": "ephemeral"},
+    }]);
+    json!({"model":model,"max_tokens":8192,"system":system,"messages":messages,"tools":request.tools.iter().map(|t|json!({"name":t.name,"description":t.description,"input_schema":t.input_schema})).collect::<Vec<_>>(),"stream":true})
 }
 
 #[derive(Default)]
@@ -668,7 +676,8 @@ mod tests {
         assert_eq!(o["messages"][0]["role"], "system");
         assert_eq!(o["tools"][0]["function"]["name"], "read");
         let a = anthropic_request(&r, "m");
-        assert_eq!(a["system"], "s");
+        assert_eq!(a["system"][0]["text"], "s");
+        assert_eq!(a["system"][0]["cache_control"]["type"], "ephemeral");
         assert_eq!(a["tools"][0]["name"], "read");
     }
 

@@ -314,7 +314,7 @@ impl Agent {
         Ok(())
     }
     pub fn context(&self, query: Option<&str>) -> Result<crate::continuity::MaterializedContext> {
-        let prompt = PromptCompiler::compile(self.mode, self.state.state(), &self.workspace)?;
+        let prompt = PromptCompiler::compile(self.mode, &self.workspace)?;
         // `/context` has no extension context to include, but tool schemas are
         // part of every real request, so reserve for them here too.
         let reserved = self.estimator.estimate_tools(&self.tool_definitions());
@@ -517,7 +517,7 @@ impl Agent {
                 query,
                 &self.evidence,
                 &self.failures,
-                PromptCompiler::compile(self.mode, self.state.state(), &self.workspace)?.text,
+                PromptCompiler::compile(self.mode, &self.workspace)?.text,
                 &budget,
             )?;
             let mut stats = ctx.stats.clone();
@@ -3449,6 +3449,28 @@ mod tests {
             })
             .collect();
         assert_eq!(recent_users, vec!["start", "persist this steer"]);
+    }
+
+    #[test]
+    fn canonical_task_state_is_rendered_once() {
+        let d = tempdir().unwrap();
+        let (_store, _sid, mut agent) = policy_agent(&d, PermissionConfig::default(), vec![]);
+        agent.state.update(crate::state::StateUpdate {
+            goal: Some("unique goal text".into()),
+            add_decisions: vec!["unique decision text".into()],
+            ..Default::default()
+        });
+        let context = agent.context(None).unwrap();
+        // The compiled stable prefix must not duplicate canonical state; it is
+        // rendered exactly once by the continuity engine's dynamic block.
+        assert!(!context.system.contains("unique goal text"));
+        assert!(!context.system.contains("Current canonical task state"));
+        assert_eq!(
+            context.canonical.matches("unique goal text").count(),
+            1,
+            "{}",
+            context.canonical
+        );
     }
 
     #[tokio::test]
