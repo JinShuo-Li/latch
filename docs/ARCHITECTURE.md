@@ -47,17 +47,39 @@ Latch-specific tool/runtime guidance, and cap its size.
 There is one agent loop and one conversation. While a run is in flight the
 interactive layer keeps a `SteeringQueue` handle: submitted text is pushed
 there in FIFO order and the TUI shows a single `steering queued` notice. The
-loop drains the queue only at safe model boundaries — after every prior tool
-transaction has a terminal result and before the next `ModelRequest` is
-constructed — and records each message as a normal durable `UserMessage` with
-the same constraint-memory and extension-observation provenance as an ordinary
-prompt. Injected turns therefore appear in the volatile/append-only portion of
-the current context epoch, resume and replay identically, and can never be
-placed between an assistant tool call and its results. A queued message also
-prevents an early stop: if the model answers with plain text while steering is
-pending, the loop runs another turn so the instruction is actually seen.
-Cancellation stays separate: Ctrl+C cancels the run, while steering never
-touches the in-flight request, tool, or managed process.
+queue is an atomic run-closing handshake. A run opens it at start; when the
+model answers with plain text the loop atomically closes the queue and takes
+everything accepted before that instant. If anything was accepted, the run
+stays open and must consume it with another turn before it may exit; if
+nothing was pending the run closes for good. A submission that loses the race
+is rejected with a deterministic `Closed` outcome, is never enqueued, and the
+interactive layer surfaces it as a new request instead of leaving it for a
+later run. Aborted runs (Ctrl+C or a provider error) drop accepted-but-
+unconsumed steers rather than leaking them; Ctrl+C semantics are unchanged.
+
+The loop drains accepted messages only at safe model boundaries — after every
+prior tool transaction has a terminal result and before the next
+`ModelRequest` is constructed — and records each message as a normal durable
+`UserMessage` with the same constraint-memory and extension-observation
+provenance as an ordinary prompt. Injected turns therefore appear in the
+volatile/append-only portion of the current context epoch, resume and replay
+identically, and can never be placed between an assistant tool call and its
+results. Newly drained steers become the retrieval query for the next
+materialization (an ordered combination when several arrive together), so a
+direction change can pull older session material into the volatile kernel
+context tail; ordinary continuation turns keep no query and do not trigger
+surprise recall.
+
+A steer can also arrive while the model is executing an assistant turn that
+proposed several sequential side-effecting calls. The in-flight call finishes
+normally, but any not-yet-started side-effecting call is not blindly executed:
+it receives a synthetic terminal result (`superseded by newer user steering`)
+and the model re-plans under the newer instruction. Classification reuses the
+safety capability set — only calls that the kernel already classifies as
+pure workspace reads are allowed to proceed — and read-only calls that were
+already started concurrently may finish. Every tool call still has exactly one
+terminal result, and cancellation stays separate: Ctrl+C cancels the run,
+while steering never touches the in-flight request, tool, or managed process.
 
 ## The validation shift: models express intent, the kernel owns truth
 

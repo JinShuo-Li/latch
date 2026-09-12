@@ -289,8 +289,12 @@ working set while retaining durable history and canonical state.
   messages in order at the next safe model boundary — never inside an
   unresolved tool transaction — so the in-flight model request, tool, or
   managed process is never interrupted. Injected turns are durable user
-  messages with normal provenance and override earlier plan decisions. Ctrl+C
-  remains the only cancellation.
+  messages with normal provenance, override earlier plan decisions, and drive
+  retrieval of older material into the volatile context tail. A steer that
+  races the end of the run is either consumed by that run or handed back and
+  sent as a new request; it is never left queued. Remaining not-yet-started
+  side-effecting calls from the old plan are superseded with a terminal result
+  so the model re-plans. Ctrl+C remains the only cancellation.
 - **Composer scrolling:** when the prompt overflows the visible editor,
   PageUp/PageDown move through it, as does the mouse wheel over the composer.
   Somewhere-hidden content is marked with `↑`/`↓`/`↕`; the cursor stays visible

@@ -126,6 +126,19 @@ impl CapabilitySet {
         self.0.is_empty()
     }
 
+    /// True when the set is non-empty and every capability only observes the
+    /// workspace. An empty set is not read-only: kernel bookkeeping tools
+    /// (`task_update`, `record_evidence`, `complete`) mutate durable session
+    /// state without needing an OS capability.
+    #[must_use]
+    pub fn is_read_only(&self) -> bool {
+        !self.0.is_empty()
+            && self
+                .0
+                .iter()
+                .all(|capability| matches!(capability, Capability::WorkspaceRead))
+    }
+
     #[must_use]
     pub fn names(&self) -> Vec<String> {
         self.0
@@ -481,6 +494,25 @@ mod tests {
         let mut capabilities = CapabilitySet::new();
         capabilities.insert(Capability::WorkspaceRead);
         SandboxProfile::new(workspace.to_path_buf(), home.to_path_buf(), capabilities)
+    }
+
+    #[test]
+    fn read_only_classification_is_conservative() {
+        let mut read = CapabilitySet::new();
+        read.insert(Capability::WorkspaceRead);
+        assert!(read.is_read_only());
+
+        // Kernel bookkeeping has no OS capability but mutates session state.
+        assert!(!CapabilitySet::new().is_read_only());
+
+        let mut write = CapabilitySet::new();
+        write.insert(Capability::WorkspaceRead);
+        write.insert(Capability::WorkspaceSourceWrite);
+        assert!(!write.is_read_only());
+
+        let mut network = CapabilitySet::new();
+        network.insert(Capability::NetworkAccess);
+        assert!(!network.is_read_only());
     }
 
     #[tokio::test]

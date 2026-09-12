@@ -29,13 +29,38 @@ use uuid::Uuid;
 
 pub type AgentEventSink = Arc<dyn Fn(AgentOutput) + Send + Sync>;
 
+/// Outcome of submitting a live steering message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub enum SteeringSubmission {
+    /// The running agent accepted the message and will consume it before it
+    /// exits. The run cannot close without either consuming it or returning it
+    /// to the caller.
+    Accepted,
+    /// The run already closed. The message was not queued, so it cannot leak
+    /// into a later run; the caller owns it and must surface it.
+    Closed,
+}
+
+#[derive(Debug, Default)]
+struct SteeringState {
+    pending: std::collections::VecDeque<String>,
+    closed: bool,
+}
+
 /// Live user steering: messages typed while a task is running. The TUI/CLI
 /// pushes; the single agent loop drains at safe model boundaries and records
 /// each message durably as a normal user turn. Ordering is FIFO and messages
 /// are never inserted into an unresolved assistant/tool transaction.
+///
+/// The queue is an atomic run-closing handshake. A run [`open`](Self::open)s
+/// it while it can still consume, and closing it is atomic with acceptance:
+/// any submission that linearizes before the close is returned to the run
+/// (which must consume it before exiting), and any submission after the close
+/// is rejected instead of waiting for a later run.
 #[derive(Debug, Clone, Default)]
 pub struct SteeringQueue {
-    pending: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    state: Arc<std::sync::Mutex<SteeringState>>,
 }
 
 impl SteeringQueue {
@@ -44,33 +69,81 @@ impl SteeringQueue {
         Self::default()
     }
 
-    pub fn push(&self, text: impl Into<String>) {
-        if let Ok(mut pending) = self.pending.lock() {
-            pending.push_back(text.into());
+    /// Submits a steering message. The result is the deterministic
+    /// accept/reject outcome; a rejected message is never enqueued.
+    pub fn push(&self, text: impl Into<String>) -> SteeringSubmission {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.closed {
+            SteeringSubmission::Closed
+        } else {
+            state.pending.push_back(text.into());
+            SteeringSubmission::Accepted
         }
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.pending
+        self.state
             .lock()
-            .map(|pending| pending.is_empty())
+            .map(|state| state.pending.is_empty())
             .unwrap_or(true)
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.pending
+        self.state
             .lock()
-            .map(|pending| pending.len())
+            .map(|state| state.pending.len())
             .unwrap_or(0)
     }
 
     fn drain(&self) -> Vec<String> {
-        self.pending
+        self.state
             .lock()
-            .map(|mut pending| pending.drain(..).collect())
+            .map(|mut state| state.pending.drain(..).collect())
             .unwrap_or_default()
+    }
+
+    /// Atomically closes the queue and takes everything accepted before the
+    /// close. When nothing is pending the queue stays closed (the run may
+    /// exit). When messages were accepted the queue stays open and returns
+    /// them, because the current run must consume them before it may close.
+    fn close_and_drain(&self) -> Vec<String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.pending.is_empty() {
+            state.closed = true;
+            Vec::new()
+        } else {
+            state.pending.drain(..).collect()
+        }
+    }
+
+    /// Marks the run open for acceptance. Called once at the start of `run`.
+    fn open(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed = false;
+    }
+
+    /// Closes the run to further acceptance. Any still-pending message was
+    /// accepted by a run that is aborting (cancel or error); it is dropped
+    /// rather than leaked into a later run. Ctrl+C therefore keeps its
+    /// existing semantics: the active run stops and queued steers do not
+    /// silently survive it.
+    fn close(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.closed = true;
+        state.pending.clear();
     }
 }
 #[derive(Debug, Clone)]
@@ -95,7 +168,10 @@ pub struct Agent {
     progress: ProgressSupervisor,
     progress_watermark: usize,
     forward_watermark: Cell<usize>,
-    suppressed_calls: HashSet<String>,
+    /// Call ids whose terminal result was produced by the kernel rather than
+    /// by model failure (progress suppression or steering supersession).
+    /// Failure supervision must not count them against the model.
+    kernel_resolved_calls: HashSet<String>,
     max_model_retries: u32,
     max_model_turns: Option<u32>,
     context_window_tokens: usize,
@@ -145,7 +221,7 @@ impl Agent {
             progress,
             progress_watermark: 0,
             forward_watermark: Cell::new(0),
-            suppressed_calls: HashSet::new(),
+            kernel_resolved_calls: HashSet::new(),
             max_model_retries: 2,
             max_model_turns: None,
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -448,7 +524,40 @@ impl Agent {
         Ok(())
     }
 
+    /// Records newly drained steering messages in submission order. Each one
+    /// stays a distinct durable `UserMessage`; the supervisors then observe the
+    /// new user turns exactly like an ordinary prompt.
+    async fn record_steers(&mut self, texts: &[String], sink: &AgentEventSink) -> Result<()> {
+        if texts.is_empty() {
+            return Ok(());
+        }
+        for text in texts {
+            self.record_user_message(text, sink).await?;
+        }
+        self.observe_progress_events()
+    }
+
+    /// Runs one task turn to completion, consuming accepted live steering at
+    /// safe model boundaries. The queue is opened for the whole run and closed
+    /// atomically when the run makes its exit decision, so a submission always
+    /// has one deterministic outcome: accepted-and-consumed or rejected.
     pub async fn run(
+        &mut self,
+        user_text: &str,
+        cancel: CancellationToken,
+        sink: AgentEventSink,
+    ) -> Result<String> {
+        self.steering.open();
+        let result = self.run_loop(user_text, cancel, sink).await;
+        // Normal exits already atomically closed the queue at the final
+        // answer. Aborted runs (cancel or error) close here, dropping any
+        // accepted-but-unconsumed steer instead of leaking it into the next
+        // run.
+        self.steering.close();
+        result
+    }
+
+    async fn run_loop(
         &mut self,
         user_text: &str,
         cancel: CancellationToken,
@@ -479,6 +588,10 @@ impl Agent {
         self.observe_progress_events()?;
         let mut final_text = String::new();
         let mut turns = 0u32;
+        // Retrieval query for the next request. A newly injected steer is the
+        // authority for what older material is relevant; ordinary continuation
+        // turns leave this empty so they never trigger surprise recall.
+        let mut steer_query: Option<String> = None;
         loop {
             turns += 1;
             // The ultimate circuit breaker is opt-in and off by default: a
@@ -498,14 +611,13 @@ impl Agent {
             // the order it was submitted.
             let queued = self.steering.drain();
             if !queued.is_empty() {
-                for text in queued {
-                    self.record_user_message(&text, &sink).await?;
-                }
-                // A user turn is meaningful progress for the supervisors, just
-                // like an ordinary new prompt.
-                self.observe_progress_events()?;
+                self.record_steers(&queued, &sink).await?;
+                steer_query = Some(queued.join("\n"));
             }
-            let query = if turns == 1 { Some(user_text) } else { None };
+            let query = steer_query
+                .take()
+                .or_else(|| (turns == 1).then(|| user_text.to_owned()));
+
             // Budget the complete request: tool schemas and extension context
             // are part of every call, so they are reserved before the
             // continuity engine allocates its own sections.
@@ -518,7 +630,7 @@ impl Agent {
             let ctx = self.continuity.materialize(
                 self.session_id,
                 self.state.state(),
-                query,
+                query.as_deref(),
                 &self.evidence,
                 &self.failures,
                 PromptCompiler::compile(self.mode, &self.workspace)?.text,
@@ -631,12 +743,16 @@ impl Agent {
                 self.emit(EventPayload::ModelUsage { usage }, &sink)?;
             }
             if response.tool_calls.is_empty() {
-                // A steering message submitted while the model was streaming
-                // its final answer still gets a turn; otherwise a task could
-                // absorb a new instruction without ever seeing it.
-                if self.steering.is_empty() {
+                // Atomic run-closing handshake. A steering message submitted
+                // while the model was streaming its final answer must either be
+                // consumed by this run or rejected; it can never be left in the
+                // queue for a later run.
+                let late = self.steering.close_and_drain();
+                if late.is_empty() {
                     break;
                 }
+                self.record_steers(&late, &sink).await?;
+                steer_query = Some(late.join("\n"));
                 continue;
             }
             for call in &response.tool_calls {
@@ -710,7 +826,7 @@ impl Agent {
             // Validations supervise themselves inside execute_validate so the
             // model path and the kernel path cannot double count. Kernel-
             // suppressed redundant observations are not tool failures.
-            if call.name == "validate" || self.suppressed_calls.contains(&result.call_id) {
+            if call.name == "validate" || self.kernel_resolved_calls.contains(&result.call_id) {
                 continue;
             }
             let subject = failure_subject(&call.name, &call.arguments);
@@ -871,7 +987,7 @@ impl Agent {
         // with a synthetic terminal result instead of spending a tool cycle.
         // The lifecycle invariant still holds: every ToolRequested(call_id)
         // gets exactly one terminal result.
-        self.suppressed_calls.clear();
+        self.kernel_resolved_calls.clear();
         if self.progress.regrounded() {
             let mut allowed = Vec::with_capacity(permitted.len());
             for call in permitted {
@@ -883,7 +999,7 @@ impl Agent {
                                 "Kernel suppressed redundant observation `{label}`: its result is unchanged since the last observation in this progress epoch. Use the existing result, act on it, or state the concrete blocker."
                             ),
                         );
-                        self.suppressed_calls.insert(call.id.clone());
+                        self.kernel_resolved_calls.insert(call.id.clone());
                         let _ = self.emit(
                             EventPayload::ToolFailed {
                                 result: suppressed.clone(),
@@ -928,6 +1044,16 @@ impl Agent {
         } else {
             let mut batch = Vec::new();
             for call in permitted {
+                // A steer accepted while an earlier call was in flight makes
+                // the remaining not-yet-started mutations stale. The in-flight
+                // call finishes normally; every later side-effecting call gets
+                // a structurally valid synthetic terminal result and the model
+                // re-plans under the newer instruction. Read-only calls are
+                // harmless and still run.
+                if !self.steering.is_empty() && self.call_is_side_effecting(&call) {
+                    batch.push(self.superseded_result(&call, sink));
+                    continue;
+                }
                 if matches!(
                     call.name.as_str(),
                     "task_update" | "record_evidence" | "complete"
@@ -1063,6 +1189,36 @@ impl Agent {
             },
             sink,
         );
+    }
+
+    /// True when executing this call could change durable or external state.
+    /// Uses the same safety classification as policy and never a second
+    /// argument parser. Only the workspace-reading capability set is
+    /// considered safe to run after newer steering arrived; kernel bookkeeping
+    /// has no OS capability but still mutates durable session state, so it
+    /// counts as side-effecting, and extension tools are conservatively
+    /// treated as side-effecting because the kernel does not inspect them.
+    fn call_is_side_effecting(&self, call: &ToolCall) -> bool {
+        if self.extensions.owner_for_tool(&call.name).is_some() {
+            return true;
+        }
+        let classification = self.tools.classify_call(&call.name, &call.arguments);
+        !classification.capabilities.is_read_only()
+    }
+
+    /// Terminal result for a mutation the kernel refused to start after newer
+    /// steering arrived. Structurally identical to any other tool failure, so
+    /// every `ToolRequested` still has exactly one terminal result.
+    fn superseded_result(&mut self, call: &ToolCall, sink: &AgentEventSink) -> ToolResult {
+        let superseded = tool_error(call, "superseded by newer user steering".into());
+        self.kernel_resolved_calls.insert(call.id.clone());
+        let _ = self.emit(
+            EventPayload::ToolFailed {
+                result: superseded.clone(),
+            },
+            sink,
+        );
+        superseded
     }
 
     /// A separate stateless model call: no coding history, no tools, structured
@@ -3114,7 +3270,7 @@ mod tests {
             if index == self.inject_on_request {
                 let steering = self.steering.read().unwrap().clone();
                 for text in &self.injections {
-                    steering.push(text.clone());
+                    let _ = steering.push(text.clone());
                 }
             }
             let response = self
@@ -3146,6 +3302,26 @@ mod tests {
                 name: name.into(),
                 arguments,
             }],
+            stop_reason: "tool_calls".into(),
+            usage: None,
+            reasoning_content: None,
+        }
+    }
+
+    fn multi_tool_response(
+        text: &str,
+        calls: Vec<(&str, &str, serde_json::Value)>,
+    ) -> ModelResponse {
+        ModelResponse {
+            text: text.into(),
+            tool_calls: calls
+                .into_iter()
+                .map(|(id, name, arguments)| ToolCall {
+                    id: id.into(),
+                    name: name.into(),
+                    arguments,
+                })
+                .collect(),
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
@@ -3348,7 +3524,7 @@ mod tests {
         let steering = agent.steering_handle();
         let inject = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-            steering.push("stop after this tool".to_owned());
+            let _ = steering.push("stop after this tool".to_owned());
         });
         agent
             .run("start", CancellationToken::new(), Arc::new(|_| {}))
@@ -3413,15 +3589,37 @@ mod tests {
         );
         let events = store.events(sid).unwrap();
         assert_eq!(user_turns(&events), vec!["start", "not done yet"]);
+        // A steer accepted while the run was closing is consumed exactly once
+        // and cannot remain in the queue after the run returns.
+        assert!(
+            agent.steering_handle().is_empty(),
+            "an accepted steer is consumed before exit"
+        );
+        let recorded = events
+            .iter()
+            .filter(|event| {
+                matches!(&event.payload, EventPayload::UserMessage { text } if text == "not done yet")
+            })
+            .count();
+        assert_eq!(recorded, 1, "the accepted steer is recorded exactly once");
     }
 
     #[tokio::test]
-    async fn injected_constraints_override_stale_decisions_on_the_next_turn() {
+    async fn injected_constraints_override_stale_decisions_end_to_end() {
         let d = tempdir().unwrap();
-        let (_store, _sid, mut agent, provider) = steering_agent(
+        let (store, sid, mut agent, provider) = steering_agent(
             &d,
             vec![
                 tool_response("checking", "c1", "read_file", json!({"path":"a"})),
+                tool_response(
+                    "updating",
+                    "u1",
+                    "task_update",
+                    json!({
+                        "supersede_decisions": ["use plan A"],
+                        "add_decisions": ["use plan B"]
+                    }),
+                ),
                 ModelResponse {
                     text: "adapted".into(),
                     tool_calls: vec![],
@@ -3442,17 +3640,45 @@ mod tests {
             .await
             .unwrap();
 
-        let requests = provider.requests.lock().unwrap().clone();
-        // The new user turn is the authority: it is present in the next request
-        // after the tool transaction, and the prompt tells the model that new
-        // user messages override earlier decisions and state.
-        assert!(requests[1].system.contains("overrides earlier decisions"));
-        let last_user = requests[1]
-            .messages
+        // The model received the steer, issued the superseding task_update, and
+        // the stale canonical decision is actually gone.
+        assert_eq!(agent.state.state().decisions, vec!["use plan B".to_owned()]);
+        let events = store.events(sid).unwrap();
+        let latest_state = events
             .iter()
-            .rfind(|message| message.role == "user")
-            .expect("user turn");
-        assert!(last_user.content.contains("use plan B"), "{last_user:?}");
+            .rev()
+            .find_map(|event| match &event.payload {
+                EventPayload::TaskStateUpdated { state } => Some(state.clone()),
+                _ => None,
+            })
+            .expect("task state update");
+        assert!(!latest_state.decisions.contains(&"use plan A".to_owned()));
+        assert!(latest_state.decisions.contains(&"use plan B".to_owned()));
+
+        let requests = provider.requests.lock().unwrap().clone();
+        assert!(requests[1].system.contains("overrides earlier decisions"));
+        assert_eq!(requests.len(), 3, "the steer earned a re-plan turn");
+        // The next request's volatile kernel context carries the new decision
+        // and no longer the superseded one; the stable prefix is untouched.
+        // Durable memory and the bridge still quote the user's own wording.
+        let kernel_context = requests[2].messages.last().expect("kernel context");
+        let canonical_json = kernel_context
+            .content
+            .split("CANONICAL TASK STATE")
+            .nth(1)
+            .and_then(|rest| rest.split("\n\n").next())
+            .expect("canonical state json");
+        let canonical: serde_json::Value = serde_json::from_str(canonical_json.trim()).unwrap();
+        let decisions = canonical["decisions"].as_array().unwrap();
+        assert!(
+            decisions.iter().any(|decision| decision == "use plan B"),
+            "{canonical}"
+        );
+        assert!(
+            !decisions.iter().any(|decision| decision == "use plan A"),
+            "{canonical}"
+        );
+        assert_eq!(requests[0].system, requests[2].system);
     }
 
     #[tokio::test]
@@ -3564,6 +3790,380 @@ mod tests {
                 .iter()
                 .all(|request| request.system.starts_with(&compiled))
         );
+        // A normal continuation turn does not trigger retrieval: only the
+        // first user turn supplies a query.
+        let events = store.events(sid).unwrap();
+        let recalls = events
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::ContextMemoryRecalled { .. }))
+            .count();
+        assert_eq!(recalls, 1, "continuation turns must not recall");
+    }
+
+    #[test]
+    fn steering_acceptance_and_closing_are_atomic() {
+        let queue = SteeringQueue::new();
+        assert_eq!(queue.push("first"), SteeringSubmission::Accepted);
+        // Closing with an accepted message keeps the run open and hands the
+        // message back for consumption.
+        assert_eq!(queue.close_and_drain(), vec!["first".to_owned()]);
+        assert_eq!(queue.push("second"), SteeringSubmission::Accepted);
+        assert_eq!(queue.close_and_drain(), vec!["second".to_owned()]);
+        // Closing with nothing pending latches the queue closed.
+        assert!(queue.close_and_drain().is_empty());
+        assert_eq!(queue.push("late"), SteeringSubmission::Closed);
+        assert!(queue.is_empty(), "a rejected steer is never enqueued");
+        // A later run opens the queue and does not see the rejected message.
+        queue.open();
+        assert_eq!(queue.push("next"), SteeringSubmission::Accepted);
+        assert_eq!(queue.drain(), vec!["next".to_owned()]);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn aborted_runs_drop_accepted_steers_instead_of_leaking_them() {
+        let queue = SteeringQueue::new();
+        assert_eq!(queue.push("in flight"), SteeringSubmission::Accepted);
+        queue.close();
+        assert!(queue.is_empty());
+        queue.open();
+        assert!(
+            queue.is_empty(),
+            "an accepted steer cannot survive an aborted run"
+        );
+    }
+
+    #[test]
+    fn concurrent_push_and_close_have_one_deterministic_outcome() {
+        use std::sync::Barrier;
+        for _ in 0..200 {
+            let queue = SteeringQueue::new();
+            let pusher = queue.clone();
+            let barrier = Arc::new(Barrier::new(2));
+            let peer = barrier.clone();
+            let handle = std::thread::spawn(move || {
+                peer.wait();
+                pusher.push("race")
+            });
+            barrier.wait();
+            let drained = queue.close_and_drain();
+            match handle.join().unwrap() {
+                SteeringSubmission::Accepted => {
+                    // The run saw the submission and must consume it.
+                    assert_eq!(drained, vec!["race".to_owned()]);
+                }
+                SteeringSubmission::Closed => {
+                    // The close linearized first; nothing is left behind.
+                    assert!(drained.is_empty());
+                    assert!(queue.is_empty());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rejected_late_steer_never_leaks_into_the_next_run() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, provider) = steering_agent(
+            &d,
+            vec![
+                ModelResponse {
+                    text: "finished".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+                ModelResponse {
+                    text: "second turn".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec![],
+            0,
+        );
+        agent
+            .run("first", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let steering = agent.steering_handle();
+        assert_eq!(steering.push("too late"), SteeringSubmission::Closed);
+        agent
+            .run("second", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let requests = provider.requests.lock().unwrap().clone();
+        assert_eq!(
+            requests.len(),
+            2,
+            "the rejected steer created no extra turn"
+        );
+        assert!(
+            requests[1]
+                .messages
+                .iter()
+                .all(|message| !message.content.contains("too late")),
+            "a rejected steer must never appear in a later run"
+        );
+        let events = store.events(sid).unwrap();
+        assert_eq!(user_turns(&events), vec!["first", "second"]);
+    }
+
+    #[tokio::test]
+    async fn a_steer_retrieves_older_material_into_the_volatile_tail() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, provider) = steering_agent(
+            &d,
+            vec![
+                tool_response("checking", "c1", "read_file", json!({"path":"a"})),
+                ModelResponse {
+                    text: "adapted".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec!["what did we decide about the nebula protocol?".into()],
+            1,
+        );
+        store
+            .append(
+                sid,
+                EventPayload::AssistantMessageCompleted {
+                    text: "Earlier step: the nebula protocol uses ordered batching.".into(),
+                    tool_calls: vec![],
+                    reasoning_content: None,
+                },
+            )
+            .unwrap();
+
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let events = store.events(sid).unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.payload,
+                EventPayload::ContextMemoryRecalled { query, .. } if query.contains("nebula")
+            )),
+            "the steer must drive the retrieval query"
+        );
+        let stats: Vec<_> = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::ContextMaterialized { stats } => Some(stats.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(stats.len() >= 2);
+        assert!(stats[1].recall_tokens > 0, "{:?}", stats[1]);
+        let requests = provider.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].system, requests[1].system,
+            "retrieval must not disturb the stable cache prefix"
+        );
+        let tail = requests[1].messages.last().expect("kernel context");
+        assert!(tail.content.contains("nebula protocol"), "{tail:?}");
+        assert!(
+            !requests[1].system.contains("nebula protocol"),
+            "retrieved material belongs in the volatile tail"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_steer_between_sequential_mutations_supersedes_the_stale_tail() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, _provider) = steering_agent(
+            &d,
+            vec![
+                multi_tool_response(
+                    "working",
+                    vec![
+                        ("m1", "shell", json!({"command":"sleep 0.5 && echo first"})),
+                        ("m2", "shell", json!({"command":"printf stale > stale.txt"})),
+                    ],
+                ),
+                ModelResponse {
+                    text: "re-planned".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec![],
+            0,
+        );
+        let steering = agent.steering_handle();
+        let inject = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let _ = steering.push("stop; switch to the other approach".to_owned());
+        });
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        inject.await.unwrap();
+
+        assert!(
+            !d.path().join("stale.txt").exists(),
+            "the stale mutation must not execute"
+        );
+        let events = store.events(sid).unwrap();
+        // The in-flight call finished normally.
+        let first: Vec<ToolResult> = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::ToolCompleted { result } if result.call_id == "m1" => {
+                    Some(result.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(first.len(), 1, "the in-flight call has one terminal result");
+        assert!(!first[0].is_error, "{:?}", first[0]);
+        // Every not-yet-started mutation still gets exactly one terminal result.
+        let second: Vec<ToolResult> = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result }
+                    if result.call_id == "m2" =>
+                {
+                    Some(result.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(second.len(), 1, "exactly one terminal result for m2");
+        assert!(second[0].is_error);
+        assert!(
+            second[0]
+                .output
+                .contains("superseded by newer user steering"),
+            "{}",
+            second[0].output
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::FailureAttempt { .. })),
+            "a kernel supersession is not a model failure"
+        );
+        assert_eq!(
+            user_turns(&events),
+            vec!["start", "stop; switch to the other approach"]
+        );
+        let superseded_index = events
+            .iter()
+            .position(|event| {
+                matches!(&event.payload, EventPayload::ToolFailed { result } if result.call_id == "m2")
+            })
+            .unwrap();
+        let steer_index = events
+            .iter()
+            .position(|event| {
+                matches!(&event.payload, EventPayload::UserMessage { text } if text.contains("switch"))
+            })
+            .unwrap();
+        assert!(
+            superseded_index < steer_index,
+            "the terminal result precedes the injected steer"
+        );
+
+        // Replayed continuity sees the complete transaction and every user
+        // turn, exactly like the live run.
+        let continuity = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        let budget = continuity.default_budget(128_000, 0);
+        let ctx = continuity
+            .materialize(
+                sid,
+                &Default::default(),
+                None,
+                &Default::default(),
+                &FailureManager::new(3),
+                "system".into(),
+                &budget,
+            )
+            .unwrap();
+        let recent_users: Vec<String> = ctx
+            .recent
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::UserMessage { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            recent_users,
+            vec!["start", "stop; switch to the other approach"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_steer_does_not_supersede_started_read_only_calls() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, provider) = steering_agent(
+            &d,
+            vec![
+                multi_tool_response(
+                    "reading",
+                    vec![
+                        ("r1", "read_file", json!({"path":"a"})),
+                        ("r2", "read_file", json!({"path":"b"})),
+                    ],
+                ),
+                ModelResponse {
+                    text: "adapted".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec!["one more thought".into()],
+            1,
+        );
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let events = store.events(sid).unwrap();
+        for (call_id, content) in [("r1", "alpha"), ("r2", "beta")] {
+            let terminal: Vec<ToolResult> = events
+                .iter()
+                .filter_map(|event| match &event.payload {
+                    EventPayload::ToolCompleted { result }
+                    | EventPayload::ToolFailed { result }
+                        if result.call_id == call_id =>
+                    {
+                        Some(result.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(terminal.len(), 1, "one terminal result for {call_id}");
+            assert!(!terminal[0].is_error, "{terminal:?}");
+            assert!(terminal[0].output.contains(content), "{terminal:?}");
+        }
+        assert!(
+            !events.iter().any(|event| matches!(
+                &event.payload,
+                EventPayload::ToolFailed { result } if result.output.contains("superseded")
+            )),
+            "read-only calls are never superseded"
+        );
+        let requests = provider.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2, "the steer still got its turn");
     }
 
     #[test]

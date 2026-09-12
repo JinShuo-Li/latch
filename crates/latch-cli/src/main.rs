@@ -4,7 +4,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use latch_kernel::{
     Agent, AgentRuntime, AnthropicProvider, Config, ContinuityEngine, EventStore, ModelProvider,
-    OpenAiProvider, PolicyEngine, ToolExecutor, prompt::PromptCompiler, session,
+    OpenAiProvider, PolicyEngine, ToolExecutor, agent::SteeringSubmission, prompt::PromptCompiler,
+    session,
 };
 use latch_protocol::{EventPayload, Mode, ModelPricing, StreamEvent};
 use latch_tui::{Input, Output, SLASH_COMMANDS};
@@ -500,7 +501,18 @@ async fn interactive(
         .send(Output::Permissions(agent.permissions()))
         .await?;
     let mut outcome = InteractiveOutcome::Exit;
-    'session: while let Some(input) = input_rx.recv().await {
+    // A steer that races the end of a run is handed back by the kernel. It is
+    // surfaced as the next ordinary request instead of lingering in a queue
+    // that no run will consume.
+    let mut carry: Option<String> = None;
+    'session: loop {
+        let input = match carry.take() {
+            Some(text) => Input::Submit(text),
+            None => match input_rx.recv().await {
+                Some(input) => input,
+                None => break,
+            },
+        };
         match input {
             Input::Quit => break,
             Input::Resume => {
@@ -567,11 +579,20 @@ async fn interactive(
                                 if is_slash_command_input(&text) {
                                     output_tx.send(Output::Notice("finish or cancel the active turn before running commands".into())).await?;
                                 } else {
-                                    // Live steering: queue for the next safe
-                                    // model boundary without touching the
-                                    // running request, tool, or process.
-                                    steering.push(text);
-                                    output_tx.send(Output::Notice("steering queued".into())).await?;
+                                    // Live steering: the kernel accepts it for
+                                    // the current run or rejects it once the
+                                    // run has closed. A rejected message is
+                                    // immediately re-sent as a new request so
+                                    // no user input is silently dropped.
+                                    match steering.push(text.clone()) {
+                                        SteeringSubmission::Accepted => {
+                                            output_tx.send(Output::Notice("steering queued".into())).await?;
+                                        }
+                                        SteeringSubmission::Closed => {
+                                            output_tx.send(Output::Notice("run finished; sending as a new request".into())).await?;
+                                            carry = Some(text);
+                                        }
+                                    }
                                 }
                             }
                         }

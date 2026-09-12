@@ -181,7 +181,7 @@ impl ContinuityEngine {
             .rev()
             .find(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
             .map(|event| event.sequence);
-        let recalled_events = query
+        let mut recalled_events = query
             .map(|q| -> Result<Vec<Event>> {
                 let events = self
                     .recall(session_id, q)?
@@ -190,7 +190,6 @@ impl ContinuityEngine {
                         current_user_sequence.is_none_or(|sequence| event.sequence < sequence)
                     })
                     .collect::<Vec<_>>();
-                self.record_recall(session_id, q, &memories, &events)?;
                 Ok(events)
             })
             .transpose()?
@@ -243,6 +242,15 @@ impl ContinuityEngine {
             .map(|event| estimator.estimate(&render_event(event)))
             .sum::<usize>();
         used = used.saturating_add(recent_tokens);
+
+        // Recall only contributes material older than the current epoch's
+        // retained transcript, so a steer can retrieve older originals without
+        // duplicating turns that are already present.
+        let recent_ids: HashSet<Uuid> = recent.iter().map(|event| event.id).collect();
+        recalled_events.retain(|event| !recent_ids.contains(&event.id));
+        if let Some(query) = query {
+            self.record_recall(session_id, query, &memories, &recalled_events)?;
+        }
 
         // 4. Recalled originals, then the episode index, sharing the remaining
         //    recall budget. The combined block is estimated exactly once so
