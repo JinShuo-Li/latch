@@ -116,7 +116,7 @@ pub async fn run_session_picker(
     workspace: &Path,
     load_preview: Arc<dyn Fn(Uuid) -> Vec<SessionPreviewLine> + Send + Sync>,
 ) -> Result<PickerSelection> {
-    let mut guard = super::Guard::enter()?;
+    let mut guard = super::runtime::Guard::enter()?;
     let mut picker = Picker::new(sessions, workspace);
     let mut events = EventStream::new();
     loop {
