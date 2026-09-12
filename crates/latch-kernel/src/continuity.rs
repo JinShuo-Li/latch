@@ -84,6 +84,10 @@ pub struct ContinuityEngine {
 }
 impl ContinuityEngine {
     #[must_use]
+    pub fn config(&self) -> &ContextConfig {
+        &self.config
+    }
+    #[must_use]
     pub fn new(store: EventStore, config: ContextConfig) -> Self {
         Self {
             store,
@@ -505,7 +509,7 @@ impl ContinuityEngine {
             let current_user_sequence = recent
                 .iter()
                 .rev()
-                .find(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
+                .find(|event| event_user_text(&event.payload).is_some())
                 .map(|event| event.sequence);
             let recent_ids: HashSet<Uuid> = recent.iter().map(|event| event.id).collect();
             let recalled = self
@@ -771,11 +775,13 @@ fn is_model_visible_event(payload: &EventPayload) -> bool {
     matches!(
         payload,
         EventPayload::UserMessage { .. }
+            | EventPayload::AgentMessageReceived { .. }
             | EventPayload::AssistantMessageCompleted { .. }
             | EventPayload::ToolCompleted { .. }
             | EventPayload::ToolFailed { .. }
             | EventPayload::RegroundRequested { .. }
             | EventPayload::KernelContext { .. }
+            | EventPayload::AgentNotificationDelivered { .. }
     )
 }
 
@@ -1088,7 +1094,7 @@ struct EpisodeBuilder {
 
 impl EpisodeBuilder {
     fn push(&mut self, event: &Event) {
-        let is_user = matches!(event.payload, EventPayload::UserMessage { .. });
+        let is_user = event_user_text(&event.payload).is_some();
         if self
             .open
             .as_ref()
@@ -1106,7 +1112,7 @@ impl EpisodeBuilder {
             markers: Vec::new(),
         });
         if open.topic.is_none()
-            && let EventPayload::UserMessage { text } = &event.payload
+            && let Some(text) = event_user_text(&event.payload)
         {
             open.topic = Some(text.chars().take(100).collect());
         }
@@ -1233,10 +1239,7 @@ fn conversation_bridge(state: &TaskState, events: &[Event]) -> ConversationBridg
     let current_user_intent = events
         .iter()
         .rev()
-        .find_map(|event| match &event.payload {
-            EventPayload::UserMessage { text } => Some(text.clone()),
-            _ => None,
-        })
+        .find_map(|event| event_user_text(&event.payload).map(str::to_owned))
         .unwrap_or_default();
     let lower = current_user_intent.to_ascii_lowercase();
     let unresolved_references = ["this", "that", "second approach", "continue"]
@@ -1250,6 +1253,14 @@ fn conversation_bridge(state: &TaskState, events: &[Event]) -> ConversationBridg
         unresolved_references,
         recent_decisions: state.decisions.iter().rev().take(4).cloned().collect(),
         ongoing_action: state.next_actions.first().cloned(),
+    }
+}
+
+fn event_user_text(payload: &EventPayload) -> Option<&str> {
+    match payload {
+        EventPayload::UserMessage { text } => Some(text),
+        EventPayload::AgentMessageReceived { message } => Some(&message.text),
+        _ => None,
     }
 }
 
@@ -1399,6 +1410,7 @@ fn render_recalled(
 fn render_event(e: &Event) -> String {
     match &e.payload {
         EventPayload::UserMessage { text } => format!("user: {text}"),
+        EventPayload::AgentMessageReceived { message } => format!("user: {}", message.text),
         EventPayload::AssistantMessageCompleted {
             text,
             tool_calls,
@@ -1417,6 +1429,10 @@ fn render_event(e: &Event) -> String {
             }
             rendered
         }
+        EventPayload::AgentNotificationDelivered { report } => format!(
+            "kernel child report {} {:?}: {}",
+            report.task_name, report.status, report.summary
+        ),
         _ => format!(
             "event {} #{}: {}",
             e.id,

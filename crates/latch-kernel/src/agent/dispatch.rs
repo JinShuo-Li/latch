@@ -177,11 +177,15 @@ impl Agent {
                 // a structurally valid synthetic terminal result and the model
                 // re-plans under the newer instruction. Read-only calls are
                 // harmless and still run.
-                if !self.steering.is_empty() && self.call_is_side_effecting(&call) {
+                if (!self.steering.is_empty() || self.child_mailbox.has_follow_up())
+                    && self.call_is_side_effecting(&call)
+                {
                     batch.push(self.superseded_result(&call, sink)?);
                     continue;
                 }
-                if matches!(
+                if super::agent_controls::is_agent_control(&call.name) {
+                    batch.push(self.execute_agent_control(&call, &cancel, sink).await?);
+                } else if matches!(
                     call.name.as_str(),
                     "task_update" | "record_evidence" | "complete"
                 ) {

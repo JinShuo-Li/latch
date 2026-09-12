@@ -1,3 +1,4 @@
+use crate::agents::{AgentSupervisor, ChildMailbox, WorkerSettings};
 use crate::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS};
 use crate::continuity::{ContinuityEngine, MaterializeBudget};
 use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
@@ -15,19 +16,20 @@ use crate::tools::{CapabilityGrant, ToolExecutor};
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use latch_protocol::{
-    CompletionState, Event, EventPayload, EvidenceStatus, MemoryKind, MemoryRecord, Mode,
-    ModelMessage, ModelRequest, PermissionMode, Safety, StreamEvent, ToolCall, ToolDefinition,
-    ToolResult, Validity,
+    AgentEvidenceRef, AgentIdentity, AgentReport, AgentStatus, CompletionState, Event,
+    EventPayload, EvidenceStatus, MemoryKind, MemoryRecord, Mode, ModelMessage, ModelRequest,
+    PermissionMode, Safety, StreamEvent, ToolCall, ToolDefinition, ToolResult, Validity,
 };
 use request::{common_prefix_bytes, context_messages, request_signature};
 use serde_json::json;
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+mod agent_controls;
 mod dispatch;
 mod kernel_tools;
 mod permissions;
@@ -64,7 +66,7 @@ pub struct Agent {
     /// supervisor; per-turn supervision only reads strictly newer events.
     progress_watermark: u64,
     /// Sequence cursor of the last event already forwarded to the live sink.
-    forward_watermark: Cell<u64>,
+    forward_watermark: AtomicU64,
     /// Call ids whose terminal result was produced by the kernel rather than
     /// by model failure (progress suppression or steering supersession).
     /// Failure supervision must not count them against the model.
@@ -77,11 +79,17 @@ pub struct Agent {
     /// Messages queued while the loop is running; drained only at safe model
     /// boundaries.
     steering: SteeringQueue,
+    /// Parent-to-child messages, drained only at safe model boundaries.
+    child_mailbox: ChildMailbox,
     /// Canonical serialization of the previous provider-facing request, used to
     /// measure the exact reusable common prefix.
     last_request_signature: Option<String>,
     interactive_permissions: bool,
     last_completion: Option<CompletionState>,
+    /// Present only on the root agent. Child workers are independently owned
+    /// by this supervisor and cannot control or recursively spawn agents.
+    supervisor: Option<AgentSupervisor>,
+    agent_depth: u8,
 }
 pub struct AgentRuntime {
     pub session_id: Uuid,
@@ -96,6 +104,34 @@ pub struct AgentRuntime {
 impl Agent {
     #[must_use]
     pub fn new(runtime: AgentRuntime) -> Self {
+        let settings = WorkerSettings {
+            context: runtime.continuity.config().clone(),
+            context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+            retry_budget: runtime.retry_budget,
+            stagnation_budget: DEFAULT_STAGNATION_BUDGET,
+            max_model_turns: None,
+        };
+        let supervisor = AgentSupervisor::new(
+            runtime.session_id,
+            runtime.workspace.clone(),
+            runtime.store.clone(),
+            runtime.provider.clone(),
+            runtime.tools.clone(),
+            settings,
+        )
+        .expect("reconstruct durable agent graph");
+        Self::new_inner(runtime, Some(supervisor), 0)
+    }
+
+    pub(crate) fn new_child(runtime: AgentRuntime, depth: u8) -> Self {
+        Self::new_inner(runtime, None, depth)
+    }
+
+    fn new_inner(
+        runtime: AgentRuntime,
+        supervisor: Option<AgentSupervisor>,
+        agent_depth: u8,
+    ) -> Self {
         let estimator = TokenEstimator::for_model(runtime.provider.model());
         let mut continuity = runtime.continuity;
         // The request estimator and the continuity budget must agree on the
@@ -117,7 +153,7 @@ impl Agent {
             failures: FailureManager::new(runtime.retry_budget),
             progress,
             progress_watermark: 0,
-            forward_watermark: Cell::new(0),
+            forward_watermark: AtomicU64::new(0),
             kernel_resolved_calls: HashSet::new(),
             max_model_retries: 2,
             max_model_turns: None,
@@ -125,9 +161,12 @@ impl Agent {
             estimator,
             permissions: PermissionBroker::new(),
             steering: SteeringQueue::new(),
+            child_mailbox: ChildMailbox::default(),
             last_request_signature: None,
             interactive_permissions: false,
             last_completion: None,
+            supervisor,
+            agent_depth,
         }
     }
     /// Enables the interactive human approval path. Non-interactive sessions
@@ -147,6 +186,10 @@ impl Agent {
     pub fn steering_handle(&self) -> SteeringQueue {
         self.steering.clone()
     }
+    #[must_use]
+    pub(crate) fn child_mailbox_handle(&self) -> ChildMailbox {
+        self.child_mailbox.clone()
+    }
     /// Resolves a pending approval. Returns false when the request is unknown
     /// or already resolved, so a stale or forged id can never approve twice.
     pub async fn resolve_permission(&self, request_id: Uuid, approved: bool) -> bool {
@@ -156,18 +199,30 @@ impl Agent {
     /// tolerated before the kernel re-grounds the model.
     pub fn set_stagnation_budget(&mut self, budget: u32) {
         self.progress.set_budget(budget);
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.update_settings(|settings| settings.stagnation_budget = budget);
+        }
     }
     /// Sets the ultimate model-turn circuit breaker. `None` keeps long,
     /// productive tasks unlimited; the stagnation and failure supervisors
     /// remain the primary loop controls.
     pub fn set_max_model_turns(&mut self, max_model_turns: Option<u32>) {
         self.max_model_turns = max_model_turns;
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.update_settings(|settings| settings.max_model_turns = max_model_turns);
+        }
     }
     /// Installs the token-native context configuration and the resolved model
     /// context window.
     pub fn set_context_budget(&mut self, context: ContextConfig, window_tokens: usize) {
-        self.continuity.set_config(context);
+        self.continuity.set_config(context.clone());
         self.context_window_tokens = window_tokens.max(1);
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.update_settings(|settings| {
+                settings.context = context;
+                settings.context_window_tokens = window_tokens.max(1);
+            });
+        }
     }
     #[must_use]
     pub const fn estimator(&self) -> &TokenEstimator {
@@ -277,7 +332,59 @@ impl Agent {
             .await
     }
     pub async fn shutdown_extensions(&mut self) -> Result<()> {
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.close_all().await?;
+        }
         self.extensions.shutdown_all().await
+    }
+
+    #[must_use]
+    pub fn agent_supervisor(&self) -> Option<AgentSupervisor> {
+        self.supervisor.clone()
+    }
+
+    pub(crate) fn agent_report(
+        &self,
+        identity: &AgentIdentity,
+        status: AgentStatus,
+        summary: String,
+    ) -> AgentReport {
+        let mut claims = Vec::<String>::new();
+        let evidence = self
+            .evidence
+            .entries()
+            .iter()
+            .filter(|entry| {
+                if claims
+                    .iter()
+                    .any(|claim| crate::state::same_text(claim, &entry.claim))
+                {
+                    false
+                } else {
+                    claims.push(entry.claim.clone());
+                    true
+                }
+            })
+            .filter_map(|entry| self.evidence.current(&entry.claim))
+            .map(|entry| AgentEvidenceRef {
+                claim: entry.claim.clone(),
+                status: entry.status.clone(),
+                detail: entry.detail.clone(),
+            })
+            .collect();
+        let state = self.state.state();
+        AgentReport {
+            report_id: Uuid::new_v4(),
+            agent_id: identity.agent_id,
+            task_name: identity.task_name.clone(),
+            status,
+            completion: state.completion.clone(),
+            summary: compact_agent_summary(&summary),
+            findings: state.decisions.clone(),
+            touched_files: state.touched_files.clone(),
+            evidence,
+            unresolved_questions: state.open_questions.clone(),
+        }
     }
     /// Runs a kernel-owned builtin tool without forwarding appended events.
     /// Callers that render live state should prefer
@@ -381,6 +488,36 @@ impl Agent {
         self.observe_progress_events()
     }
 
+    async fn record_agent_messages(
+        &mut self,
+        messages: &[latch_protocol::AgentMessage],
+        sink: &AgentEventSink,
+    ) -> Result<()> {
+        for message in messages {
+            let event = self.emit(
+                EventPayload::AgentMessageReceived {
+                    message: message.clone(),
+                },
+                sink,
+            )?;
+            if looks_like_constraint(&message.text) {
+                self.store.add_memory(&MemoryRecord {
+                    id: Uuid::new_v4(),
+                    session_id: self.session_id,
+                    kind: MemoryKind::UserConstraint,
+                    content: message.text.clone(),
+                    originating_event: event.id,
+                    created_at: Utc::now(),
+                    validity: Validity::Active,
+                    confidence: None,
+                    dependencies: vec![],
+                    supersedes: None,
+                })?;
+            }
+        }
+        self.observe_progress_events()
+    }
+
     /// Runs one task turn to completion, consuming accepted live steering at
     /// safe model boundaries. The queue is opened for the whole run and closed
     /// atomically when the run makes its exit decision, so a submission always
@@ -411,11 +548,23 @@ impl Agent {
         // live sink in order, exactly as a later replay would process it.
         let start = self.store.last_sequence(self.session_id)?;
         self.progress_watermark = start;
-        self.forward_watermark.set(start);
-        self.record_user_message(user_text, &sink).await?;
+        self.forward_watermark.store(start, Ordering::Relaxed);
+        let initial_agent_messages = self.child_mailbox.drain();
+        let effective_user_text = if initial_agent_messages.is_empty() {
+            self.record_user_message(user_text, &sink).await?;
+            user_text.to_owned()
+        } else {
+            self.record_agent_messages(&initial_agent_messages, &sink)
+                .await?;
+            initial_agent_messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
         if self.state.state().goal.is_empty() {
             self.state.update(crate::state::StateUpdate {
-                goal: Some(user_text.into()),
+                goal: Some(effective_user_text.clone()),
                 ..Default::default()
             });
             self.emit(
@@ -458,9 +607,21 @@ impl Agent {
                 self.record_steers(&queued, &sink).await?;
                 steer_query = Some(queued.join("\n"));
             }
+            let agent_messages = self.child_mailbox.drain();
+            if !agent_messages.is_empty() {
+                self.record_agent_messages(&agent_messages, &sink).await?;
+                steer_query = Some(
+                    agent_messages
+                        .iter()
+                        .map(|message| message.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+            }
+            self.deliver_agent_notifications(&sink)?;
             let query = steer_query
                 .take()
-                .or_else(|| (turns == 1).then(|| user_text.to_owned()));
+                .or_else(|| (turns == 1).then(|| effective_user_text.clone()));
 
             // Budget the complete request: tool schemas and extension context
             // are part of every call, so they are reserved before the
@@ -576,11 +737,25 @@ impl Agent {
                 // consumed by this run or rejected; it can never be left in the
                 // queue for a later run.
                 let late = self.steering.close_and_drain();
-                if late.is_empty() {
+                let agent_messages = self.child_mailbox.drain();
+                if !agent_messages.is_empty() {
+                    self.record_agent_messages(&agent_messages, &sink).await?;
+                    steer_query = Some(
+                        agent_messages
+                            .iter()
+                            .map(|message| message.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    );
+                }
+                let notifications = self.deliver_agent_notifications(&sink)?;
+                if late.is_empty() && agent_messages.is_empty() && notifications == 0 {
                     break;
                 }
-                self.record_steers(&late, &sink).await?;
-                steer_query = Some(late.join("\n"));
+                if !late.is_empty() {
+                    self.record_steers(&late, &sink).await?;
+                    steer_query = Some(late.join("\n"));
+                }
                 continue;
             }
             for call in &response.tool_calls {
@@ -644,7 +819,8 @@ impl Agent {
         self.forward_appended_events(sink)?;
         let event = self.store.append(self.session_id, payload)?;
         sink(AgentOutput::Durable(Box::new(event.clone())));
-        self.forward_watermark.set(event.sequence);
+        self.forward_watermark
+            .store(event.sequence, Ordering::Relaxed);
         Ok(event)
     }
     /// Forwards durable events appended since the watermark to the live sink.
@@ -652,11 +828,11 @@ impl Agent {
     /// never pass through [`Self::emit`], such as `FileChanged` or
     /// `ExternalFileChangeDetected`.
     fn forward_appended_events(&self, sink: &AgentEventSink) -> Result<()> {
-        let watermark = self.forward_watermark.get();
+        let watermark = self.forward_watermark.load(Ordering::Relaxed);
         let last = self.store.last_sequence(self.session_id)?;
         if last <= watermark {
             if last < watermark {
-                self.forward_watermark.set(last);
+                self.forward_watermark.store(last, Ordering::Relaxed);
             }
             return Ok(());
         }
@@ -664,7 +840,7 @@ impl Agent {
         for event in &events {
             sink(AgentOutput::Durable(Box::new(event.clone())));
         }
-        self.forward_watermark.set(last);
+        self.forward_watermark.store(last, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -683,6 +859,20 @@ fn looks_like_constraint(text: &str) -> bool {
     ]
     .iter()
     .any(|marker| lower.contains(marker))
+}
+
+fn compact_agent_summary(text: &str) -> String {
+    const LIMIT: usize = 2_000;
+    let text = text.trim();
+    if text.chars().count() <= LIMIT {
+        return text.to_owned();
+    }
+    let mut summary = text
+        .chars()
+        .take(LIMIT.saturating_sub(1))
+        .collect::<String>();
+    summary.push('…');
+    summary
 }
 #[cfg(test)]
 mod tests;

@@ -17,7 +17,7 @@ impl Agent {
             .default_budget(self.context_window_tokens, reserved_tokens)
     }
 
-    pub(super) fn tool_definitions(&self) -> Vec<ToolDefinition> {
+    pub(crate) fn tool_definitions(&self) -> Vec<ToolDefinition> {
         let mut tools = agent_tool_definitions();
         tools.extend(
             self.extensions
@@ -40,6 +40,13 @@ fn agent_tool_definitions() -> Vec<ToolDefinition> {
         ToolDefinition{name:"task_update".into(),description:"Propose an update to canonical task state. Constraints you add are TaskConstraints (working rules you propose), not user constraints. Use supersede fields to replace outdated decisions/constraints and resolve_questions to close answered questions.".into(),input_schema:json!({"type":"object","properties":{"goal":{"type":["string","null"]},"add_constraints":{"type":"array","items":{"type":"string"}},"supersede_constraints":{"type":"array","items":{"type":"string"}},"add_decisions":{"type":"array","items":{"type":"string"}},"supersede_decisions":{"type":"array","items":{"type":"string"}},"add_hypotheses":{"type":"array","items":{"type":"string"}},"reject_hypotheses":{"type":"array","items":{"type":"string"}},"touched_files":{"type":"array","items":{"type":"string"}},"required_validations":{"type":"array","items":{"type":"string"},"description":"Requirements that must hold; their pass state is kernel evidence, not settable here"},"open_questions":{"type":["array","null"],"items":{"type":"string"}},"resolve_questions":{"type":"array","items":{"type":"string"}},"next_actions":{"type":["array","null"],"items":{"type":"string"}},"completion_criteria":{"type":"array","items":{"type":"string"}}}})},
         ToolDefinition{name:"record_evidence".into(),description:"Record an observation for a non-command claim. Only pending and unavailable statuses are accepted; passed/failed evidence is kernel-owned and comes from the validate tool.".into(),input_schema:json!({"type":"object","required":["claim","status","detail"],"properties":{"claim":{"type":"string"},"status":{"enum":["pending","unavailable"]},"detail":{"type":"string"}}})},
         ToolDefinition{name:"complete".into(),description:"State that implementation work is done. The kernel derives completion (Verified / ImplementedNotVerified / Blocked / InProgress) from this claim plus current validation evidence.".into(),input_schema:json!({"type":"object","required":["implementation_done"],"properties":{"implementation_done":{"type":"boolean"}}})}
+        ,ToolDefinition{name:"spawn_agent".into(),description:"Spawn an asynchronous child Latch session with fresh context for a bounded delegated task. Returns immediately with its agent id and status.".into(),input_schema:json!({"type":"object","required":["task_name","message"],"properties":{"task_name":{"type":"string"},"message":{"type":"string"},"agent_type":{"type":"string"}}})}
+        ,ToolDefinition{name:"send_agent_message".into(),description:"Queue information for an existing child without necessarily starting a new turn.".into(),input_schema:json!({"type":"object","required":["agent_id","message"],"properties":{"agent_id":{"type":"string"},"message":{"type":"string"}}})}
+        ,ToolDefinition{name:"continue_agent".into(),description:"Send follow-up work to a child. Starts a new turn when idle, or delivers at the running child's next safe boundary.".into(),input_schema:json!({"type":"object","required":["agent_id","message"],"properties":{"agent_id":{"type":"string"},"message":{"type":"string"}}})}
+        ,ToolDefinition{name:"wait_agents".into(),description:"Wait for final states or updates from selected children, or from any child when agent_ids is omitted. Returns their current statuses; completed reports are delivered separately as kernel notifications at the next model boundary. A timeout returns the current statuses.".into(),input_schema:json!({"type":"object","properties":{"agent_ids":{"type":"array","items":{"type":"string"}},"timeout_ms":{"type":"integer","minimum":0,"maximum":300000}}})}
+        ,ToolDefinition{name:"list_agents".into(),description:"List durable child identities and current lifecycle statuses.".into(),input_schema:json!({"type":"object","properties":{}})}
+        ,ToolDefinition{name:"interrupt_agent".into(),description:"Cancel a child's current turn while keeping the child reusable.".into(),input_schema:json!({"type":"object","required":["agent_id"],"properties":{"agent_id":{"type":"string"}}})}
+        ,ToolDefinition{name:"close_agent".into(),description:"Cleanly shut down a child agent. Closed children cannot be reused.".into(),input_schema:json!({"type":"object","required":["agent_id"],"properties":{"agent_id":{"type":"string"}}})}
     ]);
     tools
 }
@@ -87,6 +94,9 @@ pub(super) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
         .iter()
         .filter_map(|e| match &e.payload {
             EventPayload::UserMessage { text } => Some(ModelMessage::text("user", text.clone())),
+            EventPayload::AgentMessageReceived { message } => {
+                Some(ModelMessage::text("user", message.text.clone()))
+            }
             EventPayload::AssistantMessageCompleted {
                 text,
                 tool_calls,
@@ -113,6 +123,21 @@ pub(super) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
             EventPayload::KernelContext { content, .. } => {
                 Some(ModelMessage::text("user", content.clone()))
             }
+            EventPayload::AgentNotificationDelivered { report } => Some(ModelMessage::text(
+                "user",
+                format!(
+                    "Kernel child-agent report from `{}` (agent {}, status {:?}, task completion {:?}):\nsummary: {}\nfindings: {}\ntouched files: {}\nvalidation references (child-only; not root evidence): {}\nunresolved questions: {}",
+                    report.task_name,
+                    report.agent_id,
+                    report.status,
+                    report.completion,
+                    report.summary,
+                    report.findings.join("; "),
+                    report.touched_files.join(", "),
+                    report.evidence.iter().map(|item| format!("{} [{:?}] {}", item.claim, item.status, item.detail)).collect::<Vec<_>>().join("; "),
+                    report.unresolved_questions.join("; "),
+                ),
+            )),
             // ScopeExpansionRequested is a legacy, replay-only event; it has no
             // place in the live model conversation.
             _ => None,

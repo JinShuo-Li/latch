@@ -170,7 +170,7 @@ impl ProgressSupervisor {
             EventPayload::ToolFailed { result } => {
                 self.pending_calls.remove(&result.call_id);
             }
-            EventPayload::UserMessage { .. } => {
+            EventPayload::UserMessage { .. } | EventPayload::AgentMessageReceived { .. } => {
                 // Progress ends the current turn: settle it before reality
                 // moves so live scanning and full replay count identically.
                 self.finish_turn();

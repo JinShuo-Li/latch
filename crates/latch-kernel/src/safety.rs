@@ -112,7 +112,8 @@ pub fn classify(tool: &str, args: &Value, context: Context<'_>) -> Classificatio
     match tool {
         // Kernel-owned bookkeeping tools never touch the OS; they are always
         // available in every mode and safety profile.
-        "task_update" | "record_evidence" | "complete" => {
+        "task_update" | "record_evidence" | "complete" | "spawn_agent" | "send_agent_message"
+        | "continue_agent" | "wait_agents" | "list_agents" | "interrupt_agent" | "close_agent" => {
             Classification::allow(CapabilitySet::new(), format!("{tool} (kernel state)"))
         }
         "read_file" | "search" | "read_artifact" | "git_status" | "git_diff" | "exec_poll"
