@@ -213,6 +213,19 @@ impl PresentationModel {
             EventPayload::ShellMutationObserved { paths, .. } if !paths.is_empty() => {
                 self.push_notice(format!("Command changed {}", paths.join(", ")));
             }
+            // The only child-agent event that exists in root history: the
+            // compact semantic report delivered at a safe model boundary. It
+            // renders as one quiet line; the child transcript stays in its own
+            // session.
+            EventPayload::AgentNotificationDelivered { report } => {
+                let summary = report.summary.lines().next().unwrap_or_default();
+                self.push_notice(format!(
+                    "Child agent `{}` {}: {}",
+                    report.task_name,
+                    agent_status_label(&report.status),
+                    summary
+                ));
+            }
             _ => {}
         }
     }
@@ -830,6 +843,17 @@ fn validation_summary(detail: &str) -> String {
     clean_validation_detail(detail)
 }
 
+fn agent_status_label(status: &latch_protocol::AgentStatus) -> &'static str {
+    match status {
+        latch_protocol::AgentStatus::Starting => "starting",
+        latch_protocol::AgentStatus::Running => "running",
+        latch_protocol::AgentStatus::Completed => "completed",
+        latch_protocol::AgentStatus::Interrupted => "interrupted",
+        latch_protocol::AgentStatus::Failed => "failed",
+        latch_protocol::AgentStatus::Closed => "closed",
+    }
+}
+
 fn clean_validation_detail(detail: &str) -> String {
     let first = detail.lines().next().unwrap_or(detail).trim();
     if let Some((status_duration, summary)) = first.split_once(": ")
@@ -848,7 +872,7 @@ fn clean_validation_detail(detail: &str) -> String {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use latch_protocol::{FileVersion, Mode};
+    use latch_protocol::{CompletionState, FileVersion, Mode};
     use serde_json::json;
     use uuid::Uuid;
 
@@ -1338,6 +1362,32 @@ mod tests {
         assert_eq!(
             super::super::render_cells_plain(&cells, false).trim_end(),
             include_str!("../tests/snapshots/v3_narrow.txt").trim_end()
+        );
+    }
+
+    #[test]
+    fn delivered_child_report_renders_one_quiet_line() {
+        let mut model = PresentationModel::default();
+        model.apply_event(&event(EventPayload::AgentNotificationDelivered {
+            report: latch_protocol::AgentReport {
+                report_id: Uuid::new_v4(),
+                agent_id: Uuid::new_v4(),
+                task_name: "audit-locks".into(),
+                status: latch_protocol::AgentStatus::Completed,
+                completion: CompletionState::InProgress,
+                summary: "Found two unsynchronized locks.\nDetails omitted".into(),
+                findings: vec![],
+                touched_files: vec!["src/locks.rs".into()],
+                evidence: vec![],
+                unresolved_questions: vec![],
+            },
+        }));
+        let [Cell::Notice { text }] = model.cells() else {
+            panic!("expected exactly one notice cell");
+        };
+        assert_eq!(
+            text,
+            "Child agent `audit-locks` completed: Found two unsynchronized locks."
         );
     }
 }
