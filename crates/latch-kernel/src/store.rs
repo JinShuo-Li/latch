@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use latch_protocol::{CompletionState, Event, EventPayload, MemoryRecord, Mode};
+use latch_protocol::{AgentIdentity, CompletionState, Event, EventPayload, MemoryRecord, Mode};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -38,6 +38,14 @@ pub struct SessionSummary {
 pub struct SessionPreviewLine {
     pub speaker: &'static str,
     pub text: String,
+}
+
+pub struct AgentSessionSpec {
+    pub root_session_id: Uuid,
+    pub parent_session_id: Uuid,
+    pub task_name: String,
+    pub agent_type: Option<String>,
+    pub depth: u8,
 }
 
 impl EventStore {
@@ -80,6 +88,7 @@ impl EventStore {
             CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, workspace TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS events(session_id TEXT NOT NULL, sequence INTEGER NOT NULL, id TEXT NOT NULL UNIQUE, parent_id TEXT, timestamp TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(session_id, sequence));
             CREATE INDEX IF NOT EXISTS events_kind ON events(session_id, kind);
+            CREATE INDEX IF NOT EXISTS events_kind_global ON events(kind, session_id, sequence);
             CREATE INDEX IF NOT EXISTS sessions_workspace_updated ON sessions(workspace, updated_at DESC);
             CREATE INDEX IF NOT EXISTS sessions_updated ON sessions(updated_at DESC);
             CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, originating_event TEXT NOT NULL, created_at TEXT NOT NULL, validity TEXT NOT NULL, json TEXT NOT NULL);
@@ -99,18 +108,77 @@ impl EventStore {
         Ok(id)
     }
 
+    /// Creates a child session and its first durable topology event in one
+    /// transaction. A reported child can therefore never exist without its
+    /// parent/root relationship, and a failed edge write cannot orphan a
+    /// resumable session.
+    pub fn create_agent_session(
+        &self,
+        workspace: &Path,
+        spec: AgentSessionSpec,
+        delegation_brief: String,
+    ) -> Result<AgentIdentity> {
+        let identity = AgentIdentity {
+            agent_id: Uuid::new_v4(),
+            root_session_id: spec.root_session_id,
+            parent_session_id: spec.parent_session_id,
+            task_name: spec.task_name,
+            agent_type: spec.agent_type,
+            depth: spec.depth,
+        };
+        let now = Utc::now();
+        let payload = EventPayload::AgentSpawned {
+            identity: identity.clone(),
+            delegation_brief,
+        };
+        let event_id = Uuid::new_v4();
+        let kind = event_kind(&payload)?;
+        let json = serde_json::to_string(&payload)?;
+        let searchable = searchable_text(&payload)?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO sessions(id,workspace,created_at,updated_at) VALUES(?1,?2,?3,?3)",
+            params![
+                identity.agent_id.to_string(),
+                workspace.to_string_lossy(),
+                now.to_rfc3339()
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO events(session_id,sequence,id,parent_id,timestamp,kind,payload) VALUES(?1,1,?2,NULL,?3,?4,?5)",
+            params![
+                identity.agent_id.to_string(),
+                event_id.to_string(),
+                now.to_rfc3339(),
+                kind,
+                json
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO event_search(session_id,event_id,text) VALUES(?1,?2,?3)",
+            params![
+                identity.agent_id.to_string(),
+                event_id.to_string(),
+                searchable
+            ],
+        )?;
+        tx.commit()?;
+        Ok(identity)
+    }
+
     pub fn latest_session(&self, workspace: Option<&Path>) -> Result<Option<Uuid>> {
         let conn = self.conn()?;
         let value: Option<String> = if let Some(path) = workspace {
             conn.query_row(
-                "SELECT id FROM sessions WHERE workspace=?1 ORDER BY updated_at DESC LIMIT 1",
+                "SELECT s.id FROM sessions s WHERE workspace=?1 AND NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id=s.id AND e.kind='agent_spawned') ORDER BY updated_at DESC LIMIT 1",
                 [path.to_string_lossy().as_ref()],
                 |r| r.get(0),
             )
             .optional()?
         } else {
             conn.query_row(
-                "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1",
+                "SELECT s.id FROM sessions s WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id=s.id AND e.kind='agent_spawned') ORDER BY updated_at DESC LIMIT 1",
                 [],
                 |r| r.get(0),
             )
@@ -131,7 +199,9 @@ impl EventStore {
             (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id),
             (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='user_message' ORDER BY sequence ASC LIMIT 1),
             (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='completion_changed' ORDER BY sequence DESC LIMIT 1)
-            FROM sessions s WHERE (?1 IS NULL OR s.workspace=?1) ORDER BY s.updated_at DESC,s.id ASC";
+            FROM sessions s WHERE (?1 IS NULL OR s.workspace=?1)
+            AND NOT EXISTS (SELECT 1 FROM events child WHERE child.session_id=s.id AND child.kind='agent_spawned')
+            ORDER BY s.updated_at DESC,s.id ASC";
         let workspace = workspace.map(|path| path.to_string_lossy().into_owned());
         let mut statement = conn.prepare(sql)?;
         let rows = statement.query_map([workspace.as_deref()], |row| {
@@ -320,6 +390,55 @@ impl EventStore {
             "SELECT sequence,id,parent_id,timestamp,payload FROM events WHERE session_id=?1 ORDER BY sequence",
             &[&session_id.to_string()],
         )
+    }
+
+    /// Reads only topology/lifecycle events for children belonging to a root.
+    /// The event log remains authoritative; this is an indexed replay query,
+    /// not a second graph database.
+    pub fn agent_events(&self, root_session_id: Uuid) -> Result<Vec<Event>> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT e.session_id,e.sequence,e.id,e.parent_id,e.timestamp,e.payload
+             FROM events e
+             WHERE e.kind IN ('agent_spawned','agent_message_queued','agent_message_received',
+                'agent_status_changed','agent_report_created','agent_interrupt_requested',
+                'agent_interrupted','agent_close_requested','agent_closed')
+             ORDER BY e.session_id,e.sequence",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?;
+        let mut events = Vec::new();
+        let mut children = std::collections::HashSet::new();
+        for row in rows {
+            let (session, sequence, id, parent, timestamp, payload) = row?;
+            let payload: EventPayload = serde_json::from_str(&payload)?;
+            if let EventPayload::AgentSpawned { identity, .. } = &payload
+                && identity.root_session_id == root_session_id
+            {
+                children.insert(identity.agent_id);
+            }
+            let session_id = Uuid::parse_str(&session)?;
+            events.push(Event {
+                id: Uuid::parse_str(&id)?,
+                session_id,
+                sequence,
+                timestamp: timestamp.parse()?,
+                parent_id: parent.map(|value| Uuid::parse_str(&value)).transpose()?,
+                payload,
+            });
+        }
+        Ok(events
+            .into_iter()
+            .filter(|event| children.contains(&event.session_id))
+            .collect())
     }
 
     /// Highest sequence currently stored for the session (0 when empty). This is
@@ -516,6 +635,14 @@ impl EventStore {
                     EventPayload::ContextMemoryRecalled { .. }
                         | EventPayload::ContextMaterialized { .. }
                         | EventPayload::KernelContext { .. }
+                        | EventPayload::AgentSpawned { .. }
+                        | EventPayload::AgentMessageQueued { .. }
+                        | EventPayload::AgentStatusChanged { .. }
+                        | EventPayload::AgentReportCreated { .. }
+                        | EventPayload::AgentInterruptRequested
+                        | EventPayload::AgentInterrupted { .. }
+                        | EventPayload::AgentCloseRequested
+                        | EventPayload::AgentClosed
                 )
             })
             .collect())
