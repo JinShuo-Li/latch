@@ -637,6 +637,28 @@ impl SidebarModel {
                 },
             ));
         }
+        if detail && context.request_tokens > 0 {
+            let cacheable =
+                context.common_prefix_tokens.saturating_mul(100) / context.request_tokens.max(1);
+            lines.push(Line::from(vec![
+                Span::styled("Cacheable   ", dim()),
+                Span::raw(format!(
+                    "≈{cacheable}% · {} tok shared",
+                    format_tokens(context.common_prefix_tokens as u64)
+                )),
+            ]));
+            if let Some(last) = &self.last_usage
+                && let Some(read) = last.cache_read_tokens
+                && context.common_prefix_tokens > 0
+            {
+                let efficiency =
+                    (read.saturating_mul(100) / context.common_prefix_tokens as u64).min(100);
+                lines.push(Line::from(vec![
+                    Span::styled("Provider    ", dim()),
+                    Span::raw(format!("≈{efficiency}% cache hit")),
+                ]));
+            }
+        }
         if detail {
             for (label, value) in [
                 ("Recent", context.recent_tokens),
@@ -1142,6 +1164,7 @@ mod tests {
             selected_episodes: 4,
             estimated: true,
             status: "bounded".into(),
+            ..ContextStats::default()
         }
     }
 

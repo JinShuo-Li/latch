@@ -276,4 +276,33 @@ mod tests {
         assert_eq!(estimator.estimate_messages(&[]), 0);
         assert_eq!(estimator.estimate_tools(&[]), 0);
     }
+
+    #[test]
+    fn estimate_messages_counts_reasoning_and_tool_arguments() {
+        let estimator = TokenEstimator::generic();
+        let plain = vec![ModelMessage {
+            role: "assistant".into(),
+            content: "thinking".into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+            reasoning_content: None,
+        }];
+        let rich = vec![ModelMessage {
+            role: "assistant".into(),
+            content: "thinking".into(),
+            tool_calls: vec![latch_protocol::ToolCall {
+                id: "c1".into(),
+                name: "write".into(),
+                arguments: json!({"path":"src/lib.rs","content":"a".repeat(4000)}),
+            }],
+            tool_call_id: None,
+            reasoning_content: Some("deep reasoning ".repeat(200)),
+        }];
+        let plain_tokens = estimator.estimate_messages(&plain);
+        let rich_tokens = estimator.estimate_messages(&rich);
+        assert!(
+            rich_tokens > plain_tokens + 1_000,
+            "tool arguments and replayed reasoning must be priced: {plain_tokens} vs {rich_tokens}"
+        );
+    }
 }

@@ -104,6 +104,9 @@ pub struct Agent {
     /// Messages queued while the loop is running; drained only at safe model
     /// boundaries.
     steering: SteeringQueue,
+    /// Canonical serialization of the previous provider-facing request, used to
+    /// measure the exact reusable common prefix.
+    last_request_signature: Option<String>,
     interactive_permissions: bool,
     last_completion: Option<CompletionState>,
 }
@@ -149,6 +152,7 @@ impl Agent {
             estimator,
             permissions: PermissionBroker::new(),
             steering: SteeringQueue::new(),
+            last_request_signature: None,
             interactive_permissions: false,
             last_completion: None,
         }
@@ -524,12 +528,6 @@ impl Agent {
             stats.tools_tokens = tools_tokens;
             stats.extension_tokens = extension_tokens;
             stats.recompute();
-            self.emit(
-                EventPayload::ContextMaterialized {
-                    stats: stats.clone(),
-                },
-                &sink,
-            )?;
             let mut messages = context_messages(&ctx);
             // Kernel-owned re-ground: while stagnation supervision is active,
             // the model receives the explicit list of unchanged observations.
@@ -550,6 +548,30 @@ impl Agent {
                     .await?,
             )
             .context("extension returned invalid model_request transform")?;
+            // Diagnostics for the exact provider-facing shape: the real request
+            // size (including tool calls, arguments, and replayed reasoning) and
+            // the exact prefix shared with the previous request, which is what a
+            // provider prompt cache can reuse.
+            let signature = request_signature(&request);
+            stats.request_tokens = self
+                .estimator
+                .estimate(&request.system)
+                .saturating_add(self.estimator.estimate_messages(&request.messages))
+                .saturating_add(self.estimator.estimate_tools(&request.tools));
+            stats.common_prefix_tokens = match &self.last_request_signature {
+                Some(previous) => {
+                    let shared = common_prefix_bytes(previous, &signature);
+                    self.estimator.estimate(&signature[..shared])
+                }
+                None => 0,
+            };
+            self.last_request_signature = Some(signature);
+            self.emit(
+                EventPayload::ContextMaterialized {
+                    stats: stats.clone(),
+                },
+                &sink,
+            )?;
             self.emit(
                 EventPayload::ModelRequestStarted {
                     provider: self.provider.name().into(),
@@ -1732,6 +1754,30 @@ fn grant_for(classification: &Classification) -> CapabilityGrant {
         capabilities: classification.capabilities.clone(),
         external_roots: classification.external_roots.clone(),
     }
+}
+
+/// Canonical serialization of one provider-facing request. Consecutive
+/// requests in an epoch differ only by appended messages, so byte-prefix
+/// comparison measures the reusable provider cache prefix.
+fn request_signature(request: &ModelRequest) -> String {
+    // Tools are stable per session and precede the messages in the
+    // provider-facing request, so they belong inside the reusable prefix.
+    let mut signature = String::with_capacity(request.system.len() + 4096);
+    signature.push_str(&request.system);
+    signature.push('\u{1e}');
+    signature.push_str(&serde_json::to_string(&request.tools).unwrap_or_default());
+    for message in &request.messages {
+        signature.push('\u{1f}');
+        signature.push_str(&serde_json::to_string(message).unwrap_or_default());
+    }
+    signature
+}
+
+fn common_prefix_bytes(a: &str, b: &str) -> usize {
+    a.bytes()
+        .zip(b.bytes())
+        .take_while(|(left, right)| left == right)
+        .count()
 }
 
 fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMessage> {
@@ -3449,6 +3495,62 @@ mod tests {
             })
             .collect();
         assert_eq!(recent_users, vec!["start", "persist this steer"]);
+    }
+
+    #[tokio::test]
+    async fn request_prefix_is_append_only_and_cacheable_within_an_epoch() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, provider) = steering_agent(
+            &d,
+            vec![
+                tool_response("checking", "c1", "read_file", json!({"path":"a"})),
+                ModelResponse {
+                    text: "done".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec![],
+            0,
+        );
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        let stats: Vec<latch_protocol::ContextStats> = store
+            .events(sid)
+            .unwrap()
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::ContextMaterialized { stats } => Some(stats.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(stats.len() >= 2, "one request per turn");
+        assert!(stats[1].request_tokens > 0);
+        assert!(stats[1].common_prefix_tokens > 0);
+        let requests = provider.requests.lock().unwrap().clone();
+        let cacheability = stats[1].common_prefix_tokens as f64 / stats[1].request_tokens as f64;
+        assert!(
+            cacheability > 0.5,
+            "append-only requests share a large prefix: {cacheability}"
+        );
+
+        // The compiled stable prefix is byte-identical across ordinary turns,
+        // and it is the head of every request's system block.
+        let compiled = PromptCompiler::compile(Mode::Work, d.path()).unwrap().text;
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].system, requests[1].system,
+            "no canonical change between the two turns"
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.system.starts_with(&compiled))
+        );
     }
 
     #[test]

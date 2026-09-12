@@ -6,7 +6,7 @@ use latch_kernel::{
     Agent, AgentRuntime, AnthropicProvider, Config, ContinuityEngine, EventStore, ModelProvider,
     OpenAiProvider, PolicyEngine, ToolExecutor, prompt::PromptCompiler, session,
 };
-use latch_protocol::{EventPayload, Mode, ModelPricing, StreamEvent, TaskState};
+use latch_protocol::{EventPayload, Mode, ModelPricing, StreamEvent};
 use latch_tui::{Input, Output, SLASH_COMMANDS};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};

@@ -173,9 +173,23 @@ impl ContinuityEngine {
         let active_start = self.active_start(session_id)?;
         let all_events = self.store.events(session_id)?;
         let active_events = &all_events[active_start.min(all_events.len())..];
+        // The current user turn is already in the recent transcript; recalling
+        // it as "original material" would duplicate it and make the dynamic
+        // system block differ between the first and later requests of an epoch.
+        let current_user_sequence = active_events
+            .iter()
+            .rev()
+            .find(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
+            .map(|event| event.sequence);
         let recalled_events = query
             .map(|q| -> Result<Vec<Event>> {
-                let events = self.recall(session_id, q)?;
+                let events = self
+                    .recall(session_id, q)?
+                    .into_iter()
+                    .filter(|event| {
+                        current_user_sequence.is_none_or(|sequence| event.sequence < sequence)
+                    })
+                    .collect::<Vec<_>>();
                 self.record_recall(session_id, q, &memories, &events)?;
                 Ok(events)
             })
@@ -252,6 +266,8 @@ impl ContinuityEngine {
             tools_tokens: 0,
             extension_tokens: 0,
             total_tokens: 0,
+            request_tokens: 0,
+            common_prefix_tokens: 0,
             budget_tokens: budget.request_tokens,
             window_tokens: budget.window_tokens,
             reserve_tokens: budget.reserve_tokens,
@@ -728,26 +744,30 @@ fn render_recalled(
     (text, selected)
 }
 
+/// Approximates one event's provider-facing text. Assistant turns include the
+/// replayed reasoning content and each tool call's full arguments, because the
+/// provider bills and caches them; omitting them undercounted real requests.
 fn render_event(e: &Event) -> String {
     match &e.payload {
         EventPayload::UserMessage { text } => format!("user: {text}"),
         EventPayload::AssistantMessageCompleted {
-            text, tool_calls, ..
-        } => format!(
-            "assistant: {text}{}",
-            if tool_calls.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    " [tool calls: {}]",
-                    tool_calls
-                        .iter()
-                        .map(|c| c.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+            text,
+            tool_calls,
+            reasoning_content,
+        } => {
+            let mut rendered = format!("assistant: {text}");
+            if let Some(reasoning) = reasoning_content {
+                rendered.push_str("\nreasoning: ");
+                rendered.push_str(reasoning);
             }
-        ),
+            for call in tool_calls {
+                rendered.push_str(&format!(
+                    "\ncall {} {} {}",
+                    call.id, call.name, call.arguments
+                ));
+            }
+            rendered
+        }
         _ => format!(
             "event {} #{}: {}",
             e.id,
@@ -1043,6 +1063,31 @@ mod tests {
             parent_id: None,
             payload,
         }
+    }
+
+    #[test]
+    fn render_event_prices_reasoning_and_tool_arguments() {
+        let session = Uuid::new_v4();
+        let event = event(
+            session,
+            1,
+            EventPayload::AssistantMessageCompleted {
+                text: "thinking".into(),
+                tool_calls: vec![latch_protocol::ToolCall {
+                    id: "c1".into(),
+                    name: "write".into(),
+                    arguments: serde_json::json!({"path":"src/lib.rs","content":"x".repeat(2000)}),
+                }],
+                reasoning_content: Some("because ".repeat(100)),
+            },
+        );
+        let rendered = render_event(&event);
+        assert!(rendered.contains("reasoning:"), "{rendered}");
+        assert!(rendered.contains("call c1 write"), "{rendered}");
+        assert!(
+            rendered.contains(&"x".repeat(100)),
+            "tool arguments are included in the recent-context estimate"
+        );
     }
 
     #[test]
