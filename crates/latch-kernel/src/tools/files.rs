@@ -63,6 +63,9 @@ impl ToolExecutor {
         Ok((out, None))
     }
     pub(super) async fn search(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+        if let Some(message) = self.search_runtime_error() {
+            bail!("{message}");
+        }
         let _permit = self.read_slots.acquire().await?;
         let q = str_arg(call, "query")?;
         let target = call

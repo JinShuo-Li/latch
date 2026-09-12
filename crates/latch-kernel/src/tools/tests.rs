@@ -575,6 +575,26 @@ async fn resumed_executor(
 }
 
 #[tokio::test]
+async fn search_without_ripgrep_reports_an_actionable_error() {
+    let (_d, e) = setup(Mode::Work);
+    e.force_search_unavailable(
+        "ripgrep (`rg`) is required by the search tool but was not found on PATH (unit test)",
+    );
+    let result = e
+        .execute(
+            &call("search", json!({"query":"old"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(result.is_error);
+    assert!(
+        result.output.contains("ripgrep"),
+        "missing runtime dependency must name the tool: {}",
+        result.output
+    );
+}
+
+#[tokio::test]
 async fn resumed_shell_change_without_captured_bytes_refuses_undo() {
     let d = tempdir().unwrap();
     let path = d.path().join("kept.txt");

@@ -60,7 +60,32 @@ pub struct ToolExecutor {
     /// Single-use capability grants keyed by kernel call id.
     grants: Arc<std::sync::Mutex<HashMap<String, CapabilityGrant>>>,
     sandbox: Arc<std::sync::RwLock<SandboxState>>,
+    /// Probed once at startup. `Some(message)` means the optional `rg` runtime
+    /// dependency is unavailable, so `search` fails with that message instead
+    /// of a bare `No such file or directory`.
+    search_runtime: Arc<std::sync::RwLock<Option<String>>>,
 }
+/// Probes the optional `rg` runtime dependency once at startup. Returns the
+/// actionable refusal message when ripgrep is missing or unusable.
+fn probe_search_runtime() -> Option<String> {
+    match std::process::Command::new("rg")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => None,
+        Ok(status) => Some(format!(
+            "ripgrep (`rg`) is required by the search tool, but `rg --version` failed with {status}"
+        )),
+        Err(error) => Some(format!(
+            "ripgrep (`rg`) is required by the search tool but was not found on PATH ({error}); \
+             install ripgrep and restart Latch"
+        )),
+    }
+}
+
 /// Outcome of one bounded shell execution.
 #[derive(Debug)]
 pub struct ProcessOutput {
@@ -98,6 +123,10 @@ impl ToolExecutor {
             Ok(runner) => SandboxState::Ready(runner),
             Err(error) => SandboxState::Unavailable(format!("{error:#}")),
         };
+        let search_runtime = probe_search_runtime();
+        if let Some(message) = &search_runtime {
+            tracing::warn!("{message}");
+        }
         Ok(Self {
             workspace,
             artifacts,
@@ -113,7 +142,22 @@ impl ToolExecutor {
             processes: Arc::new(Mutex::new(HashMap::new())),
             grants: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sandbox: Arc::new(std::sync::RwLock::new(sandbox)),
+            search_runtime: Arc::new(std::sync::RwLock::new(search_runtime)),
         })
+    }
+    /// Actionable message when the `rg` runtime dependency is unavailable;
+    /// `None` means the search tool can run.
+    pub fn search_runtime_error(&self) -> Option<String> {
+        self.search_runtime
+            .read()
+            .map(|message| message.clone())
+            .unwrap_or_else(|_| Some("search runtime state poisoned".into()))
+    }
+    #[cfg(test)]
+    pub(crate) fn force_search_unavailable(&self, message: &str) {
+        if let Ok(mut state) = self.search_runtime.write() {
+            *state = Some(message.to_owned());
+        }
     }
     /// Extension hosts run through the same sandbox: read-only workspace,
     /// network for protocol work, masked home. Their own tool semantics remain

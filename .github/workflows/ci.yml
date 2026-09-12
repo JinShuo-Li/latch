@@ -16,10 +16,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install bubblewrap (Latch requires the sandbox)
+      - name: Install runtime dependencies (bubblewrap, ripgrep)
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap ripgrep
           # Ubuntu 24.04 restricts unprivileged user namespaces by default.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Format
