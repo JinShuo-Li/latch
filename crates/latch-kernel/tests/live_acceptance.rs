@@ -110,6 +110,7 @@ impl Metrics {
                         Usage {
                             input_tokens,
                             output_tokens,
+                            cache_miss_tokens: _,
                             cache_read_tokens,
                             cache_write_tokens,
                         },

@@ -221,15 +221,36 @@ pub struct ToolResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Usage {
+    /// Total prompt tokens as reported by the provider. For OpenAI/DeepSeek
+    /// style usage this includes cache-read tokens; for Anthropic it is the
+    /// uncached portion, with cache reads and writes reported separately.
     pub input_tokens: u64,
     pub output_tokens: u64,
-    /// Provider-reported cache-read tokens. `None` means the provider did not
-    /// report the category at all, which is distinct from a reported zero.
+    /// Provider-reported cache-read (hit) tokens. `None` means the provider did
+    /// not report the category at all, which is distinct from a reported zero.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_read_tokens: Option<u64>,
     /// Provider-reported cache-write tokens. `None` means unreported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<u64>,
+    /// Provider-reported cache-miss (uncached) input tokens, normalized by the
+    /// adapter. `None` means the provider did not report it; it can then be
+    /// derived when the cache-read category is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_miss_tokens: Option<u64>,
+}
+
+impl Usage {
+    /// Uncached input tokens when known: the explicit miss count, or the total
+    /// input minus the known cache-read count. `None` stays unknown rather than
+    /// guessing.
+    #[must_use]
+    pub fn uncached_input_tokens(&self) -> Option<u64> {
+        self.cache_miss_tokens.or_else(|| {
+            self.cache_read_tokens
+                .map(|read| self.input_tokens.saturating_sub(read))
+        })
+    }
 }
 
 /// Optional user-configured per-model pricing, expressed per million tokens.

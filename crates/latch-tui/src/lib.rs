@@ -4545,6 +4545,7 @@ mod tests {
                     output_tokens: 0,
                     cache_read_tokens: None,
                     cache_write_tokens: None,
+                    cache_miss_tokens: None,
                 },
             },
         })));

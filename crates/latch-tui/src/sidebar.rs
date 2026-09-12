@@ -36,12 +36,16 @@ pub struct UsageTotals {
     pub output: Option<u64>,
     pub cache_read: Option<u64>,
     pub cache_write: Option<u64>,
+    /// Normalized uncached input (miss). Explicit when the provider reported
+    /// it; otherwise derived from input minus a known cache-read count.
+    pub cache_miss: Option<u64>,
     /// True when at least one observed request omitted the category, so the
     /// accumulated value is a lower bound rather than a complete total.
     pub input_partial: bool,
     pub output_partial: bool,
     pub cache_read_partial: bool,
     pub cache_write_partial: bool,
+    pub cache_miss_partial: bool,
 }
 
 impl UsageTotals {
@@ -66,6 +70,17 @@ impl UsageTotals {
             &mut self.cache_write_partial,
             usage.cache_write_tokens,
         );
+        accumulate(
+            &mut self.cache_miss,
+            &mut self.cache_miss_partial,
+            usage.uncached_input_tokens(),
+        );
+        if usage.cache_miss_tokens.is_none() && usage.cache_read_tokens.is_none() {
+            // The provider reported no cache accounting: input is billed as
+            // uncached, which is the safe direction, but the estimate is
+            // incomplete and must say so.
+            self.cache_miss_partial = true;
+        }
     }
 
     #[must_use]
@@ -74,6 +89,17 @@ impl UsageTotals {
             && self.output.unwrap_or(0) == 0
             && self.cache_read.is_none()
             && self.cache_write.is_none()
+    }
+
+    /// Uncached input used for cost: the accumulated miss when known,
+    /// otherwise the full input (which is already correct when the provider
+    /// reports no cache categories).
+    #[must_use]
+    pub fn billed_input(&self) -> (Option<u64>, bool) {
+        match (self.cache_miss, self.input) {
+            (Some(miss), _) => (Some(miss), self.cache_miss_partial),
+            (None, input) => (input, self.input_partial || self.cache_miss_partial),
+        }
     }
 }
 
@@ -355,11 +381,12 @@ impl SidebarModel {
     #[must_use]
     pub fn estimated_cost(&self) -> Option<CostEstimate> {
         let pricing = self.session.pricing.as_ref()?;
+        let (billed_input, billed_input_partial) = self.usage.billed_input();
         let categories: [(Option<u64>, Option<f64>, bool); 4] = [
             (
-                self.usage.input,
+                billed_input,
                 pricing.input_per_million,
-                self.usage.input_partial,
+                billed_input_partial,
             ),
             (
                 self.usage.output,
@@ -659,6 +686,26 @@ impl SidebarModel {
                 ),
                 dim(),
             ));
+            if let Some(read) = last.cache_read_tokens
+                && last.input_tokens > 0
+            {
+                let miss = last
+                    .uncached_input_tokens()
+                    .unwrap_or(last.input_tokens.saturating_sub(read));
+                let hit_pct = read.saturating_mul(100) / last.input_tokens;
+                lines.push(Line::styled(
+                    fit(
+                        &format!(
+                            "Cache       {}% hit · {} hit · {} miss",
+                            hit_pct,
+                            format_tokens(read),
+                            format_tokens(miss)
+                        ),
+                        width,
+                    ),
+                    dim(),
+                ));
+            }
         }
         if detail || show_bar {
             lines.push(Line::styled(
@@ -1152,6 +1199,7 @@ mod tests {
                 output_tokens: 20,
                 cache_read_tokens: Some(1_000),
                 cache_write_tokens: None,
+                cache_miss_tokens: None,
             },
         }));
         model.apply_event(&event(EventPayload::ModelUsage {
@@ -1160,6 +1208,7 @@ mod tests {
                 output_tokens: 30,
                 cache_read_tokens: Some(2_000),
                 cache_write_tokens: None,
+                cache_miss_tokens: None,
             },
         }));
         assert_eq!(model.usage().input, Some(400));
@@ -1181,6 +1230,7 @@ mod tests {
                 output_tokens: 1,
                 cache_read_tokens: None,
                 cache_write_tokens: None,
+                cache_miss_tokens: None,
             },
         }));
         model.apply_event(&event(EventPayload::ModelUsage {
@@ -1189,6 +1239,7 @@ mod tests {
                 output_tokens: 1,
                 cache_read_tokens: Some(5),
                 cache_write_tokens: None,
+                cache_miss_tokens: None,
             },
         }));
         assert_eq!(model.usage().cache_read, Some(5));
@@ -1205,6 +1256,7 @@ mod tests {
                 output_tokens: 500_000,
                 cache_read_tokens: None,
                 cache_write_tokens: None,
+                cache_miss_tokens: None,
             },
         }));
         assert!(model.estimated_cost().is_none(), "no pricing configured");
@@ -1223,13 +1275,98 @@ mod tests {
                 output_tokens: 500_000,
                 cache_read_tokens: Some(100_000),
                 cache_write_tokens: None,
+                cache_miss_tokens: None,
             },
         }));
         let cost = model.estimated_cost().expect("cost");
-        assert!((cost.amount - (0.28 + 0.21 + 0.0028)).abs() < 1e-9);
+        // 900k uncached input at 0.28 + 100k cache read at 0.028 + 500k output
+        // at 0.42. The cached tokens are billed once, at the cache-read price.
+        assert!((cost.amount - (0.9 * 0.28 + 0.21 + 0.1 * 0.028)).abs() < 1e-9);
         assert!(!cost.partial);
         assert!(render(&model, 40, 60).contains("est. cost"));
-        assert!(render(&model, 40, 60).contains("$0.49"));
+        assert!(render(&model, 40, 60).contains("$0.46"));
+    }
+
+    #[test]
+    fn cached_input_is_not_double_charged() {
+        let mut priced = session();
+        priced.pricing = Some(Pricing {
+            input_per_million: Some(1.0),
+            output_per_million: Some(1.0),
+            cache_read_per_million: Some(0.1),
+            cache_write_per_million: None,
+            currency: "USD".into(),
+        });
+        let mut model = SidebarModel::new(priced);
+        model.apply_event(&event(EventPayload::ModelUsage {
+            usage: Usage {
+                input_tokens: 1_000,
+                output_tokens: 0,
+                cache_read_tokens: Some(600),
+                cache_write_tokens: None,
+                cache_miss_tokens: None,
+            },
+        }));
+        let cost = model.estimated_cost().expect("cost");
+        // 400 miss at 1.0 + 600 read at 0.1 = 460 tokens-worth of cost.
+        assert!(
+            (cost.amount - 460.0 / 1_000_000.0).abs() < 1e-12,
+            "{cost:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_cache_miss_is_used_verbatim() {
+        let mut priced = session();
+        priced.pricing = Some(Pricing {
+            input_per_million: Some(1.0),
+            output_per_million: Some(1.0),
+            cache_read_per_million: Some(0.1),
+            cache_write_per_million: None,
+            currency: "USD".into(),
+        });
+        let mut model = SidebarModel::new(priced);
+        model.apply_event(&event(EventPayload::ModelUsage {
+            usage: Usage {
+                input_tokens: 1_000,
+                output_tokens: 0,
+                cache_read_tokens: Some(600),
+                cache_write_tokens: None,
+                // The adapter normalized a provider-reported miss that is not
+                // simply input minus read; the explicit value wins.
+                cache_miss_tokens: Some(350),
+            },
+        }));
+        let cost = model.estimated_cost().expect("cost");
+        assert!(
+            (cost.amount - (350.0 + 60.0) / 1_000_000.0).abs() < 1e-12,
+            "{cost:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_cache_categories_bill_the_full_input() {
+        let mut priced = session();
+        priced.pricing = Some(Pricing {
+            input_per_million: Some(1.0),
+            output_per_million: Some(1.0),
+            cache_read_per_million: Some(0.1),
+            cache_write_per_million: None,
+            currency: "USD".into(),
+        });
+        let mut model = SidebarModel::new(priced);
+        model.apply_event(&event(EventPayload::ModelUsage {
+            usage: Usage {
+                input_tokens: 1_000,
+                output_tokens: 0,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                cache_miss_tokens: None,
+            },
+        }));
+        let cost = model.estimated_cost().expect("cost");
+        assert!((cost.amount - 1_000.0 / 1_000_000.0).abs() < 1e-12);
+        assert!(cost.partial, "unreported cache accounting is incomplete");
     }
 
     #[test]
@@ -1249,6 +1386,7 @@ mod tests {
                 output_tokens: 500,
                 cache_read_tokens: None,
                 cache_write_tokens: None,
+                cache_miss_tokens: None,
             },
         }));
         assert!(model.estimated_cost().is_none());
@@ -1349,6 +1487,7 @@ mod tests {
                     output_tokens: 3,
                     cache_read_tokens: Some(4),
                     cache_write_tokens: None,
+                    cache_miss_tokens: None,
                 },
             }),
             event(EventPayload::TaskStateUpdated {
@@ -1477,6 +1616,7 @@ mod tests {
                     output_tokens: 31_400,
                     cache_read_tokens: Some(286_100),
                     cache_write_tokens: None,
+                    cache_miss_tokens: None,
                 },
             },
         );

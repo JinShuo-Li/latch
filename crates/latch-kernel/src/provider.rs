@@ -16,6 +16,32 @@ const OPENCODE_GO_BASE: &str = "https://opencode.ai/zen/go";
 const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
 pub type StreamSink = Arc<dyn Fn(StreamEvent) + Send + Sync>;
+/// Parses OpenAI/DeepSeek-compatible usage. Cache categories are optional: an
+/// absent field stays `None` (unknown), never a fabricated zero. `input_tokens`
+/// remains the provider's total prompt count; the miss count is taken from
+/// `prompt_cache_miss_tokens` when present and otherwise derived from
+/// total minus cache-read.
+#[must_use]
+pub fn openai_usage(usage: &Value) -> Option<Usage> {
+    let input = usage.get("prompt_tokens").and_then(Value::as_u64)?;
+    let output = usage.get("completion_tokens").and_then(Value::as_u64)?;
+    let cache_read = usage
+        .pointer("/prompt_tokens_details/cached_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(Value::as_u64));
+    let cache_miss = usage
+        .get("prompt_cache_miss_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| cache_read.map(|read| input.saturating_sub(read)));
+    Some(Usage {
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: None,
+        cache_miss_tokens: cache_miss,
+    })
+}
+
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
     fn name(&self) -> &str;
@@ -144,27 +170,8 @@ impl ModelProvider for OpenAiProvider {
                 if let Some(error) = v.get("error") {
                     bail!("OpenAI-compatible stream error: {error}");
                 }
-                if let Some(u) = v.get("usage")
-                    && let (Some(input), Some(output)) = (
-                        u.get("prompt_tokens").and_then(Value::as_u64),
-                        u.get("completion_tokens").and_then(Value::as_u64),
-                    )
-                {
-                    // Cache categories are optional: an absent field stays
-                    // `None` (unknown), never a fabricated zero. OpenAI-style
-                    // providers report cached prompt tokens under
-                    // `prompt_tokens_details.cached_tokens`; some compatible
-                    // servers use `prompt_cache_hit_tokens`.
-                    let cache_read = u
-                        .pointer("/prompt_tokens_details/cached_tokens")
-                        .and_then(Value::as_u64)
-                        .or_else(|| u.get("prompt_cache_hit_tokens").and_then(Value::as_u64));
-                    usage = Some(Usage {
-                        input_tokens: input,
-                        output_tokens: output,
-                        cache_read_tokens: cache_read,
-                        cache_write_tokens: None,
-                    });
+                if let Some(u) = v.get("usage") {
+                    usage = openai_usage(u);
                 }
                 let Some(choice) = v
                     .get("choices")
@@ -277,6 +284,7 @@ impl ModelProvider for AnthropicProvider {
             output_tokens: 0,
             cache_read_tokens: None,
             cache_write_tokens: None,
+            cache_miss_tokens: None,
         };
         loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
@@ -300,6 +308,10 @@ impl ModelProvider for AnthropicProvider {
                         usage.cache_write_tokens = v
                             .pointer("/message/usage/cache_creation_input_tokens")
                             .and_then(Value::as_u64);
+                        // Anthropic's `input_tokens` is already the uncached
+                        // portion; keep it explicit so cost never subtracts the
+                        // cache-read category from it.
+                        usage.cache_miss_tokens = Some(usage.input_tokens);
                     }
                     Some("content_block_start") => {
                         if v.pointer("/content_block/type").and_then(Value::as_str)
@@ -881,5 +893,45 @@ mod tests {
         ] {
             assert!(!is_opencode_go_endpoint(url), "should not match {url}");
         }
+    }
+
+    #[test]
+    fn openai_usage_distinguishes_hit_miss_and_unknown() {
+        // DeepSeek-style explicit hit/miss.
+        let usage = openai_usage(&json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_cache_hit_tokens": 600,
+            "prompt_cache_miss_tokens": 400,
+        }))
+        .unwrap();
+        assert_eq!(usage.input_tokens, 1000);
+        assert_eq!(usage.cache_read_tokens, Some(600));
+        assert_eq!(usage.cache_miss_tokens, Some(400));
+        assert_eq!(usage.uncached_input_tokens(), Some(400));
+
+        // OpenAI-style nested cached tokens: miss is derived from the total.
+        let usage = openai_usage(&json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_tokens_details": {"cached_tokens": 600},
+        }))
+        .unwrap();
+        assert_eq!(usage.cache_read_tokens, Some(600));
+        assert_eq!(usage.cache_miss_tokens, Some(400));
+
+        // No cache accounting at all: the categories stay unknown instead of
+        // being fabricated as zero.
+        let usage = openai_usage(&json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+        }))
+        .unwrap();
+        assert_eq!(usage.cache_read_tokens, None);
+        assert_eq!(usage.cache_miss_tokens, None);
+        assert_eq!(usage.uncached_input_tokens(), None);
+
+        // Missing required fields means no usage at all.
+        assert!(openai_usage(&json!({"prompt_tokens": 10})).is_none());
     }
 }

@@ -12,6 +12,7 @@ Tools+ext   2.4k tok
 Reserve     12.2k tok
 Headroom    195.7k tok
 Reported    last request 428.6k tok
+Cache       66% hit · 286.1k hit · 142.5k…
 503 events · 11 episodes
 
 TASK
@@ -25,7 +26,7 @@ in          428.6k
 out         31.4k
 cache read  286.1k
 cache write —
-est. cost   $0.14
+est. cost   $0.06
 
 CHANGES
 Latch      1 file  +53 −7
