@@ -177,6 +177,32 @@ impl EvidenceLedger {
     pub fn new(entries: Vec<Evidence>) -> Self {
         Self { entries }
     }
+    /// Builds a new evidence observation for a claim without recording it, so
+    /// a caller can persist it durably before mutating live state.
+    #[must_use]
+    pub fn build(
+        &self,
+        claim: impl Into<String>,
+        source_event: Uuid,
+        status: EvidenceStatus,
+        detail: impl Into<String>,
+    ) -> Evidence {
+        let claim = claim.into();
+        let supersedes = self.current(&claim).map(|e| e.id);
+        Evidence {
+            id: Uuid::new_v4(),
+            claim,
+            source_event,
+            status,
+            detail: detail.into(),
+            created_at: chrono::Utc::now(),
+            supersedes,
+        }
+    }
+    /// Records a previously built observation.
+    pub fn push(&mut self, evidence: Evidence) {
+        self.entries.push(evidence);
+    }
     /// Records a new evidence observation for a claim, superseding the current
     /// entry for that claim when one exists.
     pub fn add(
@@ -186,19 +212,9 @@ impl EvidenceLedger {
         status: EvidenceStatus,
         detail: impl Into<String>,
     ) -> Evidence {
-        let claim = claim.into();
-        let supersedes = self.current(&claim).map(|e| e.id);
-        let e = Evidence {
-            id: Uuid::new_v4(),
-            claim,
-            source_event,
-            status,
-            detail: detail.into(),
-            created_at: chrono::Utc::now(),
-            supersedes,
-        };
-        self.entries.push(e.clone());
-        e
+        let evidence = self.build(claim, source_event, status, detail);
+        self.entries.push(evidence.clone());
+        evidence
     }
     #[must_use]
     pub fn entries(&self) -> &[Evidence] {
@@ -581,5 +597,13 @@ mod tests {
             failure_subject("read_file", &serde_json::json!({})),
             "read_file"
         );
+    }
+    #[test]
+    fn pending_evidence_does_not_mutate_the_ledger_until_pushed() {
+        let mut ledger = EvidenceLedger::default();
+        let evidence = ledger.build("claim", Uuid::new_v4(), EvidenceStatus::Pending, "observed");
+        assert!(ledger.current("claim").is_none(), "build is not a mutation");
+        ledger.push(evidence);
+        assert!(ledger.current("claim").is_some(), "push records it");
     }
 }

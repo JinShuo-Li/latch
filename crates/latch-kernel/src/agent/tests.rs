@@ -2202,3 +2202,65 @@ async fn watermark_cursors_deliver_each_new_event_once() {
     agent.observe_progress_events().unwrap();
     assert_eq!(agent.progress_watermark, 3);
 }
+
+#[tokio::test]
+async fn persistence_failures_abort_instead_of_claiming_success() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent, _provider) = steering_agent(
+        &d,
+        vec![ModelResponse {
+            text: "unused".into(),
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: None,
+        }],
+        vec![],
+        0,
+    );
+    let sink: AgentEventSink = Arc::new(|_| {});
+    store.fail_appends(true);
+
+    // A run whose very first durable write fails must return an error, never a
+    // silent best-effort success.
+    let error = agent
+        .run("start", CancellationToken::new(), sink.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("injected event-store append failure"),
+        "{error:#}"
+    );
+
+    // Kernel-owned task state is not applied live when its durable transition
+    // cannot be committed.
+    let call = ToolCall {
+        id: "k1".into(),
+        name: "task_update".into(),
+        arguments: json!({"goal": "durable goal"}),
+    };
+    assert!(agent.execute_kernel_tool(&call, &sink).is_err());
+    assert!(
+        agent.state.state().goal.is_empty(),
+        "canonical state must not advance on a failed durable write"
+    );
+
+    // Permission resolutions cannot be granted without durable provenance.
+    assert!(
+        agent
+            .record_resolution(Uuid::new_v4(), true, "user", None, &sink)
+            .is_err()
+    );
+
+    // Disabling the fault lets the same operations commit again.
+    store.fail_appends(false);
+    assert!(
+        agent
+            .record_resolution(Uuid::new_v4(), true, "user", None, &sink)
+            .is_ok()
+    );
+    assert!(agent.execute_kernel_tool(&call, &sink).is_ok());
+    let _ = sid;
+}

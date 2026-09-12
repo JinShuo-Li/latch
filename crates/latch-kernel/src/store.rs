@@ -9,6 +9,10 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct EventStore {
     connection: Arc<Mutex<Connection>>,
+    /// Test-only fault injection: when set, every append fails so tests can
+    /// assert that a persistence failure is not silently downgraded.
+    #[cfg(test)]
+    fail_appends: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Lightweight row for session discovery. Transcript bodies are intentionally
@@ -40,6 +44,8 @@ impl EventStore {
         let connection = Connection::open(path)?;
         let store = Self {
             connection: Arc::new(Mutex::new(connection)),
+            #[cfg(test)]
+            fail_appends: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         store.migrate()?;
         Ok(store)
@@ -48,6 +54,8 @@ impl EventStore {
     pub fn open_memory() -> Result<Self> {
         let store = Self {
             connection: Arc::new(Mutex::new(Connection::open_in_memory()?)),
+            #[cfg(test)]
+            fail_appends: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         store.migrate()?;
         Ok(store)
@@ -227,7 +235,18 @@ impl EventStore {
         Ok(lines)
     }
 
+    /// Test-only fault injection: every append fails until disabled.
+    #[cfg(test)]
+    pub(crate) fn fail_appends(&self, fail: bool) {
+        self.fail_appends
+            .store(fail, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn append(&self, session_id: Uuid, payload: EventPayload) -> Result<Event> {
+        #[cfg(test)]
+        if self.fail_appends.load(std::sync::atomic::Ordering::Relaxed) {
+            anyhow::bail!("injected event-store append failure");
+        }
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         let sequence: u64 = tx.query_row(

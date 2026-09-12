@@ -9,7 +9,7 @@ impl Agent {
         calls: Vec<ToolCall>,
         cancel: CancellationToken,
         sink: &AgentEventSink,
-    ) -> Vec<ToolResult> {
+    ) -> Result<Vec<ToolResult>> {
         let mut permitted = Vec::new();
         let mut results = Vec::new();
         for call in calls {
@@ -24,20 +24,20 @@ impl Agent {
                 Ok(ExtensionGuardDecision::Allow) => permitted.push(call),
                 Ok(ExtensionGuardDecision::Deny(reason)) => {
                     let denied = tool_error(&call, reason.clone());
-                    let _ = self.emit(
+                    self.emit(
                         EventPayload::PermissionDecision {
                             tool: call.name.clone(),
                             decision: "extension_guard_denied".into(),
                             reason,
                         },
                         sink,
-                    );
-                    let _ = self.emit(
+                    )?;
+                    self.emit(
                         EventPayload::ToolFailed {
                             result: denied.clone(),
                         },
                         sink,
-                    );
+                    )?;
                     results.push(denied);
                 }
                 Ok(ExtensionGuardDecision::Ask(reason)) => {
@@ -52,19 +52,19 @@ impl Agent {
                         }
                         Err(message) => {
                             let denied =
-                                self.denied_result(&call, "extension_guard_denied", message, sink);
+                                self.denied_result(&call, "extension_guard_denied", message, sink)?;
                             results.push(denied);
                         }
                     }
                 }
                 Err(error) => {
                     let failed = tool_error(&call, format!("extension guard failed: {error}"));
-                    let _ = self.emit(
+                    self.emit(
                         EventPayload::ToolFailed {
                             result: failed.clone(),
                         },
                         sink,
-                    );
+                    )?;
                     results.push(failed);
                 }
             }
@@ -86,7 +86,7 @@ impl Agent {
             match classification.decision.clone() {
                 SafetyDecision::Allow => policy_allowed.push(call),
                 SafetyDecision::Deny(reason) => {
-                    let denied = self.denied_result(&call, "policy_denied", reason, sink);
+                    let denied = self.denied_result(&call, "policy_denied", reason, sink)?;
                     results.push(denied);
                 }
                 SafetyDecision::Ask(reason) => {
@@ -99,7 +99,8 @@ impl Agent {
                             policy_allowed.push(call);
                         }
                         Err(message) => {
-                            let denied = self.denied_result(&call, "policy_denied", message, sink);
+                            let denied =
+                                self.denied_result(&call, "policy_denied", message, sink)?;
                             results.push(denied);
                         }
                     }
@@ -125,12 +126,12 @@ impl Agent {
                             ),
                         );
                         self.kernel_resolved_calls.insert(call.id.clone());
-                        let _ = self.emit(
+                        self.emit(
                             EventPayload::ToolFailed {
                                 result: suppressed.clone(),
                             },
                             sink,
-                        );
+                        )?;
                         results.push(suppressed);
                     }
                     None => allowed.push(call),
@@ -176,18 +177,18 @@ impl Agent {
                 // re-plans under the newer instruction. Read-only calls are
                 // harmless and still run.
                 if !self.steering.is_empty() && self.call_is_side_effecting(&call) {
-                    batch.push(self.superseded_result(&call, sink));
+                    batch.push(self.superseded_result(&call, sink)?);
                     continue;
                 }
                 if matches!(
                     call.name.as_str(),
                     "task_update" | "record_evidence" | "complete"
                 ) {
-                    batch.push(self.execute_kernel_tool(&call, sink));
+                    batch.push(self.execute_kernel_tool(&call, sink)?);
                 } else if call.name == "validate" {
-                    batch.push(self.execute_validate(&call, cancel.clone(), sink).await);
+                    batch.push(self.execute_validate(&call, cancel.clone(), sink).await?);
                 } else if let Some(owner) = self.extensions.owner_for_tool(&call.name) {
-                    batch.push(self.execute_extension_tool(&owner, &call, sink).await);
+                    batch.push(self.execute_extension_tool(&owner, &call, sink).await?);
                 } else {
                     batch.push(self.tools.execute(&call, cancel.clone()).await);
                 }
@@ -195,7 +196,7 @@ impl Agent {
             batch
         };
         results.append(&mut executed);
-        results
+        Ok(results)
     }
 
     pub(super) async fn execute_extension_tool(
@@ -203,22 +204,26 @@ impl Agent {
         owner: &str,
         call: &ToolCall,
         sink: &AgentEventSink,
-    ) -> ToolResult {
-        if let Err(error) = self.emit(
+    ) -> Result<ToolResult> {
+        self.emit(
             EventPayload::ToolStarted {
                 call_id: call.id.clone(),
                 tool: call.name.clone(),
             },
             sink,
-        ) {
-            return tool_error(call, error.to_string());
-        }
+        )?;
         let result = match self
             .extensions
             .execute(owner, &call.name, call.arguments.clone())
             .await
         {
-            Ok(value) => tool_ok(call, serde_json::to_string(&value).unwrap_or_default()),
+            Ok(value) => match serde_json::to_string(&value) {
+                Ok(output) => tool_ok(call, output),
+                Err(error) => tool_error(
+                    call,
+                    format!("extension result could not be serialized: {error}"),
+                ),
+            },
             Err(error) => tool_error(call, error.to_string()),
         };
         let payload = if result.is_error {
@@ -230,8 +235,8 @@ impl Agent {
                 result: result.clone(),
             }
         };
-        let _ = self.emit(payload, sink);
-        result
+        self.emit(payload, sink)?;
+        Ok(result)
     }
 
     /// True when executing this call could change durable or external state.
@@ -252,16 +257,16 @@ impl Agent {
     /// Terminal result for a mutation the kernel refused to start after newer
     /// steering arrived. Structurally identical to any other tool failure, so
     /// every `ToolRequested` still has exactly one terminal result.
-    fn superseded_result(&mut self, call: &ToolCall, sink: &AgentEventSink) -> ToolResult {
+    fn superseded_result(&mut self, call: &ToolCall, sink: &AgentEventSink) -> Result<ToolResult> {
         let superseded = tool_error(call, "superseded by newer user steering".into());
         self.kernel_resolved_calls.insert(call.id.clone());
-        let _ = self.emit(
+        self.emit(
             EventPayload::ToolFailed {
                 result: superseded.clone(),
             },
             sink,
-        );
-        superseded
+        )?;
+        Ok(superseded)
     }
 }
 

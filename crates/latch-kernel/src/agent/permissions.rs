@@ -80,7 +80,7 @@ impl Agent {
             PermissionMode::AutoApprove => {
                 // Auto approval records the normal Ask -> Resolved provenance
                 // and still grants only the capabilities this call asked for.
-                self.record_resolution(request_id, true, "auto", None, sink);
+                self.record_resolution(request_id, true, "auto", None, sink)?;
                 Ok(grant_for(classification))
             }
             PermissionMode::Human => {
@@ -101,10 +101,10 @@ impl Agent {
                 };
                 let (risk, explanation) = self.review_command(command, classification).await;
                 if risk == "low" {
-                    self.record_resolution(request_id, true, "ai", Some(risk), sink);
+                    self.record_resolution(request_id, true, "ai", Some(risk), sink)?;
                     Ok(grant_for(classification))
                 } else {
-                    self.record_resolution(request_id, false, "ai", Some(risk.clone()), sink);
+                    self.record_resolution(request_id, false, "ai", Some(risk.clone()), sink)?;
                     Err(format!(
                         "Permission denied: {risk} risk — {explanation}. Choose a narrower, safer command and continue."
                     ))
@@ -124,7 +124,7 @@ impl Agent {
         cancel: &CancellationToken,
     ) -> std::result::Result<CapabilityGrant, String> {
         if !self.interactive_permissions {
-            self.record_resolution(request_id, false, "non_interactive", None, sink);
+            self.record_resolution(request_id, false, "non_interactive", None, sink)?;
             return Err(format!("permission denied: {reason}"));
         }
         let approved = tokio::select! {
@@ -139,7 +139,7 @@ impl Agent {
         } else {
             "user"
         };
-        self.record_resolution(request_id, approved, source, None, sink);
+        self.record_resolution(request_id, approved, source, None, sink)?;
         if approved {
             Ok(grant_for(classification))
         } else {
@@ -147,15 +147,18 @@ impl Agent {
         }
     }
 
-    fn record_resolution(
+    pub(super) fn record_resolution(
         &mut self,
         request_id: Uuid,
         approved: bool,
         source: &str,
         risk: Option<String>,
         sink: &AgentEventSink,
-    ) {
-        let _ = self.emit(
+    ) -> std::result::Result<(), String> {
+        // An approval that cannot be persisted must never authorize execution:
+        // resume would otherwise see an unresolved request while the granted
+        // call actually ran.
+        self.emit(
             EventPayload::PermissionResolved {
                 request_id,
                 approved,
@@ -163,7 +166,9 @@ impl Agent {
                 risk,
             },
             sink,
-        );
+        )
+        .map(|_| ())
+        .map_err(|error| format!("permission resolution could not be persisted: {error}"))
     }
 
     /// A separate stateless model call: no coding history, no tools, structured
@@ -202,23 +207,23 @@ impl Agent {
         decision: &str,
         reason: String,
         sink: &AgentEventSink,
-    ) -> ToolResult {
+    ) -> Result<ToolResult> {
         let denied = tool_error(call, reason.clone());
-        let _ = self.emit(
+        self.emit(
             EventPayload::PermissionDecision {
                 tool: call.name.clone(),
                 decision: decision.into(),
                 reason,
             },
             sink,
-        );
-        let _ = self.emit(
+        )?;
+        self.emit(
             EventPayload::ToolFailed {
                 result: denied.clone(),
             },
             sink,
-        );
-        denied
+        )?;
+        Ok(denied)
     }
 }
 

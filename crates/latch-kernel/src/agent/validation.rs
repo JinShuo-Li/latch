@@ -14,16 +14,14 @@ impl Agent {
         call: &ToolCall,
         cancel: CancellationToken,
         sink: &AgentEventSink,
-    ) -> ToolResult {
-        if let Err(error) = self.emit(
+    ) -> Result<ToolResult> {
+        self.emit(
             EventPayload::ToolStarted {
                 call_id: call.id.clone(),
                 tool: call.name.clone(),
             },
             sink,
-        ) {
-            return tool_error(call, error.to_string());
-        }
+        )?;
         let requirement = call
             .arguments
             .get("requirement")
@@ -35,7 +33,10 @@ impl Agent {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
         let (Some(requirement), Some(command)) = (requirement, command) else {
-            return tool_error(call, "requirement and command are required".into());
+            return Ok(tool_error(
+                call,
+                "requirement and command are required".into(),
+            ));
         };
         // Validation runs commands, so it obeys the same policy as shell. An
         // `Ask` here is a real approval request, not a denial.
@@ -70,13 +71,13 @@ impl Agent {
             Ok(output) => output,
             Err(error) => {
                 let failed = tool_error(call, format!("{error:#}"));
-                let _ = self.emit(
+                self.emit(
                     EventPayload::ToolFailed {
                         result: failed.clone(),
                     },
                     sink,
-                );
-                return failed;
+                )?;
+                return Ok(failed);
             }
         };
         let passed = output.success;
@@ -87,17 +88,14 @@ impl Agent {
             output.first_line()
         );
         // 1. Durable ValidationResult…
-        let validation_event = match self.emit(
+        let validation_event = self.emit(
             EventPayload::ValidationResult {
                 command: command.clone(),
                 passed,
                 detail: detail.clone(),
             },
             sink,
-        ) {
-            Ok(event) => event,
-            Err(error) => return tool_error(call, error.to_string()),
-        };
+        )?;
         // 2. …linked automatically to evidence for the named requirement.
         let status = if passed {
             EvidenceStatus::Passed
@@ -106,21 +104,25 @@ impl Agent {
         };
         let evidence = self
             .evidence
-            .add(&requirement, validation_event.id, status, detail);
-        if let Err(error) = self.emit(EventPayload::EvidenceCreated { evidence }, sink) {
-            return tool_error(call, error.to_string());
-        }
+            .build(&requirement, validation_event.id, status, detail);
+        // Persist before mutating the live ledger; see kernel_tools.
+        self.emit(
+            EventPayload::EvidenceCreated {
+                evidence: evidence.clone(),
+            },
+            sink,
+        )?;
+        self.evidence.push(evidence);
         // 3. Kernel bookkeeping: the validated requirement becomes required
         //    and completion is derived.
         self.state.require_validation(&requirement);
-        self.sync_completion(sink).ok();
+        self.sync_completion(sink)?;
         self.emit(
             EventPayload::TaskStateUpdated {
                 state: self.state.state().clone(),
             },
             sink,
-        )
-        .ok();
+        )?;
         let completion = self.state.state().completion.clone();
         let verdict = if passed { "PASSED" } else { "FAILED" };
         let artifact_note = output
@@ -153,20 +155,20 @@ impl Agent {
             self.failures.resolve(&requirement);
         } else {
             let decision = self.failures.record(&requirement, &result.output);
-            let _ = self.emit(
+            self.emit(
                 EventPayload::FailureAttempt {
                     signature: decision.signature,
                     count: decision.count,
                 },
                 sink,
-            );
+            )?;
             if decision.reground {
-                let _ = self.emit(
+                self.emit(
                     EventPayload::RegroundRequested {
                         signature: requirement.clone(),
                     },
                     sink,
-                );
+                )?;
             }
         }
         let payload = if result.is_error {
@@ -178,7 +180,7 @@ impl Agent {
                 result: result.clone(),
             }
         };
-        let _ = self.emit(payload, sink);
-        result
+        self.emit(payload, sink)?;
+        Ok(result)
     }
 }

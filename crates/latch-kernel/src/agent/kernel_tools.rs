@@ -9,17 +9,14 @@ impl Agent {
         &mut self,
         call: &ToolCall,
         sink: &AgentEventSink,
-    ) -> ToolResult {
-        let started = match self.emit(
+    ) -> Result<ToolResult> {
+        let started = self.emit(
             EventPayload::ToolStarted {
                 call_id: call.id.clone(),
                 tool: call.name.clone(),
             },
             sink,
-        ) {
-            Ok(event) => event,
-            Err(error) => return tool_error(call, error.to_string()),
-        };
+        )?;
         let result = match call.name.as_str() {
             "task_update" => match serde_json::from_value::<StateUpdate>(call.arguments.clone()) {
                 Ok(update) => {
@@ -60,21 +57,25 @@ impl Agent {
                             // Unavailable observations about non-command claims.
                             let evidence =
                                 self.evidence
-                                    .add(claim, started.id, status, detail);
-                            if let Err(error) =
-                                self.emit(EventPayload::EvidenceCreated { evidence }, sink)
-                            {
-                                tool_error(call, error.to_string())
-                            } else {
-                                self.sync_completion(sink).ok();
-                                tool_ok(
-                                    call,
-                                    format!(
-                                        "evidence recorded for `{claim}`; completion: {:?}",
-                                        self.state.state().completion
-                                    ),
-                                )
-                            }
+                                    .build(claim, started.id, status, detail);
+                            // Persist before mutating the live ledger so a
+                            // failed write can never leave phantom evidence
+                            // that resume cannot reconstruct.
+                            self.emit(
+                                EventPayload::EvidenceCreated {
+                                    evidence: evidence.clone(),
+                                },
+                                sink,
+                            )?;
+                            self.evidence.push(evidence);
+                            self.sync_completion(sink)?;
+                            tool_ok(
+                                call,
+                                format!(
+                                    "evidence recorded for `{claim}`; completion: {:?}",
+                                    self.state.state().completion
+                                ),
+                            )
                         }
                         (Some(_), _, None) => tool_error(
                             call,
@@ -90,7 +91,7 @@ impl Agent {
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
                 self.state.set_implementation_done(implemented);
-                self.sync_completion(sink).ok();
+                self.sync_completion(sink)?;
                 tool_ok(
                     call,
                     format!(
@@ -103,12 +104,12 @@ impl Agent {
             _ => tool_error(call, "unknown kernel tool".into()),
         };
         if call.name == "task_update" || call.name == "complete" {
-            let _ = self.emit(
+            self.emit(
                 EventPayload::TaskStateUpdated {
                     state: self.state.state().clone(),
                 },
                 sink,
-            );
+            )?;
         }
         let payload = if result.is_error {
             EventPayload::ToolFailed {
@@ -119,8 +120,8 @@ impl Agent {
                 result: result.clone(),
             }
         };
-        let _ = self.emit(payload, sink);
-        result
+        self.emit(payload, sink)?;
+        Ok(result)
     }
 
     /// Emits a `CompletionChanged` event whenever the kernel-derived completion
@@ -130,13 +131,15 @@ impl Agent {
         self.state.recompute_completion(&self.evidence);
         let derived = self.state.state().completion.clone();
         if self.last_completion.as_ref() != Some(&derived) {
-            self.last_completion = Some(derived.clone());
+            // Only remember the new completion after the durable announcement
+            // commits; a failed write must not mask a later retry.
             self.emit(
                 EventPayload::CompletionChanged {
-                    completion: derived,
+                    completion: derived.clone(),
                 },
                 sink,
             )?;
+            self.last_completion = Some(derived);
         }
         Ok(())
     }

@@ -326,7 +326,7 @@ impl Agent {
             arguments: json!({"requirement": requirement, "command": command}),
         };
         let sink: AgentEventSink = Arc::new(|_| {});
-        Ok(self.execute_validate(&call, cancel, &sink).await)
+        self.execute_validate(&call, cancel, &sink).await
     }
     /// Records one user turn with normal provenance. Used for the initial
     /// prompt and for every live-steering message, so injected turns are
@@ -605,7 +605,7 @@ impl Agent {
                 self.emit(EventPayload::ToolRequested { call: call.clone() }, &sink)?;
             }
             let calls = response.tool_calls.clone();
-            let tool_results = self.execute_batch(calls, cancel.clone(), &sink).await;
+            let tool_results = self.execute_batch(calls, cancel.clone(), &sink).await?;
             // Publish tool-appended durable events before the display results,
             // keeping live consumers in exact durable order.
             self.forward_appended_events(&sink)?;
