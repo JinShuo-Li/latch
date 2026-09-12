@@ -338,6 +338,10 @@ pub struct FailureDecision {
 pub fn normalize_failure(subject: &str, output: &str) -> String {
     let normalized = output
         .lines()
+        // Timings are appended after the deterministic failure body. They must
+        // never make an unchanged failure look like a different one, which
+        // would reset the re-ground streak.
+        .filter(|line| !line.trim_start().starts_with("(elapsed"))
         .take(8)
         .map(|l| {
             l.chars()
@@ -581,6 +585,30 @@ mod tests {
             f.record("python3 -m unittest test_calc", "FAIL: test_two")
                 .reground
         );
+    }
+
+    #[test]
+    fn failure_signatures_ignore_elapsed_timing() {
+        let first = normalize_failure(
+            "tests pass",
+            "FAILED requirement `tests pass`: false\nexit code #\n(elapsed 1.2ms)\n",
+        );
+        let second = normalize_failure(
+            "tests pass",
+            "FAILED requirement `tests pass`: false\nexit code #\n(elapsed 620.4ms)\n",
+        );
+        assert_eq!(first, second, "timing must not change a failure signature");
+
+        let mut manager = FailureManager::new(3);
+        manager.record(
+            "tests pass",
+            "FAILED requirement `tests pass`: false\nexit code #\n(elapsed 1.2ms)",
+        );
+        let decision = manager.record(
+            "tests pass",
+            "FAILED requirement `tests pass`: false\nexit code #\n(elapsed 99.9ms)",
+        );
+        assert_eq!(decision.count, 2, "the streak survives timing changes");
     }
 
     #[test]
