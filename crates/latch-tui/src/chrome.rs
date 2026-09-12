@@ -77,10 +77,6 @@ impl ComposerChrome {
     }
 }
 
-pub(super) fn yellow() -> Style {
-    crate::theme::palette().attention()
-}
-
 pub(super) fn focused_accent() -> Style {
     crate::theme::palette().accent()
 }
@@ -91,13 +87,12 @@ pub(super) fn muted_style() -> Style {
     crate::theme::palette().muted()
 }
 
-/// Idle composer status. Active work is reported by the transient status row
-/// directly above the composer, so the meta line stays quiet while running.
+/// Idle composer status. Every non-idle state is reported by the transient
+/// status row directly above the composer, so the meta line never duplicates
+/// it.
 pub(super) fn composer_status(app: &App) -> Option<(String, Style)> {
-    if app.permission.is_some() || app.busy {
+    if app.permission.is_some() || app.busy || app.interrupted {
         None
-    } else if app.interrupted {
-        Some(("interrupted".into(), yellow()))
     } else {
         Some(("ready".into(), muted_style()))
     }
@@ -153,10 +148,21 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
     }
 
     let label = label?;
+    // Waiting states are attention (yellow where the theme allows); ordinary
+    // work stays quiet with an accent marker.
+    let attention = matches!(label.as_str(), "Waiting for approval" | "Interrupted");
+    let (marker_style, label_style) = if attention {
+        (palette.attention(), palette.attention())
+    } else {
+        (
+            palette.accent(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )
+    };
     let mut spans = vec![
         Span::raw("  "),
-        Span::styled("• ", palette.accent()),
-        Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled("• ", marker_style),
+        Span::styled(label, label_style),
     ];
     if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
         spans.push(Span::styled(" · ", notice_style()));
