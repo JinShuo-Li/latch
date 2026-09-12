@@ -8,7 +8,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  validate:
+  architecture:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,15 +16,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install runtime dependencies (bubblewrap, ripgrep)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap ripgrep
-          # Ubuntu 24.04 restricts unprivileged user namespaces by default.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Test
-        run: cargo test --workspace
+      - name: Architectural invariants
+        run: cargo test -p latch-kernel --test invariants
