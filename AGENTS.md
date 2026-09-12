@@ -24,7 +24,22 @@ the `latch` TUI (`cargo install --path crates/latch-cli` installs it).
 
 ## Commands
 
-Exact gates CI runs; run all three before committing:
+CI is a small, stable architectural philosophy gate, not the full validation
+suite. CI runs exactly:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test -p latch-kernel --test invariants
+```
+
+`crates/latch-kernel/tests/invariants.rs` is the deliberately selected fast,
+deterministic invariant tier (no `bwrap`, `rg`, `python3`, network, timing, or
+large histories). Keep it small and trustworthy; do not grow CI into a coverage
+contest.
+
+For significant changes, run the full local validation plus relevant
+cache/long-session tests before committing; passing CI alone is not sufficient:
 
 ```sh
 cargo fmt --all -- --check
@@ -36,6 +51,8 @@ cargo test --workspace
 - One integration file: `cargo test -p latch-kernel --test dogfood`
 - `cargo test --workspace` is the slow one (~30s): sandbox/command tests spawn
   `bwrap`, and `search` tests need `rg`.
+- Cache/long-session stress (run locally, normally not in CI):
+  `cargo test -p latch-kernel --lib continuity -- --nocapture`.
 - Live-model acceptance is opt-in and ignored:
   `LATCH_LIVE_TESTS=1 cargo test -p latch-kernel --test live_acceptance -- --ignored --nocapture`
   (`LATCH_LIVE_SCENARIO=<name>` filters; reports land in `target/live-acceptance/`).
@@ -49,6 +66,32 @@ Runtime prerequisites are mandatory, not optional: system `bwrap` (all command
 execution is sandboxed; there is no unsandboxed fallback) and `rg` (the `search`
 tool; it must fail with an actionable message, never bare ENOENT). State lives in
 `~/.local/state/latch/`; config example is `config.example.toml`.
+
+## Testing philosophy
+
+> Memory decides what the model needs to know. Cache decides how cheaply we can
+> send it.
+
+> CI protects what Latch must never stop being. Local tests verify that the
+> current implementation actually works.
+
+Three tiers:
+
+- **CI (architectural invariants):** durable history is the source of truth,
+  cache epochs are not memory boundaries, canonical state stays authoritative,
+  no hidden destructive compaction, resume equivalence, kernel-owned
+  validation/evidence, safety/sandbox rules, steering/tool protocol
+  correctness, append-only cache-epoch behavior, deterministic serialization.
+- **Local (`cargo test --workspace`):** detailed correctness, providers,
+  sandbox/command execution, snapshots, extensions. Expected before significant
+  commits.
+- **Stress (local, ignored/opt-in by convention):** long-session, large-history,
+  scaling, and extreme behavior. Normally stays out of CI.
+
+Do not move tests between tiers merely to make CI green. Keep expensive, flaky,
+network-dependent, timing-sensitive, large-history, provider, benchmark, and
+stress tests out of CI. Passing CI alone is insufficient for substantial
+changes. Cache locality must never override long-horizon correctness.
 
 ## Architecture map
 
@@ -65,12 +108,15 @@ invariant). TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome
 runtime}.rs` and existing siblings.
 
 Memory/cache invariants (do not violate):
+- Memory decides what the model needs to know. Cache decides how cheaply we can
+  send it. Cache epochs are performance boundaries, not memory boundaries, and
+  cache locality must never override long-horizon correctness.
 - The raw event log is the source of truth and is never deleted or lossily
   summarized; canonical task state is authoritative; archival episodes and FTS
   recall stay independently available.
-- Cache epochs are performance boundaries, not memory boundaries. Provider-visible
-  history is append-only within an epoch; kernel context is durable `KernelContext`
-  snapshot/delta events, and rotation is hysteretic, whole-unit, and replayable.
+- Provider-visible history is append-only within an epoch; kernel context is
+  durable `KernelContext` snapshot/delta events, and rotation is hysteretic,
+  whole-unit, and replayable.
 - Transitions that must survive resume fail closed: a live state change must not
   be reported successful before its durable event commits.
 
