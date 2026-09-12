@@ -638,8 +638,11 @@ impl SidebarModel {
             ));
         }
         if detail && context.request_tokens > 0 {
-            let cacheable =
-                context.common_prefix_tokens.saturating_mul(100) / context.request_tokens.max(1);
+            // The prefix and the request are estimated from slightly different
+            // shapes, so clamp the display to a fully-reusable prefix.
+            let cacheable = (context.common_prefix_tokens.saturating_mul(100)
+                / context.request_tokens.max(1))
+            .min(100);
             lines.push(Line::from(vec![
                 Span::styled("Cacheable   ", dim()),
                 Span::raw(format!(
