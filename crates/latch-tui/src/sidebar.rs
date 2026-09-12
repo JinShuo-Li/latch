@@ -644,13 +644,12 @@ impl SidebarModel {
             // authoritative measurement. The prefix and the request are
             // estimated from slightly different shapes, so clamp the display to
             // a fully-reusable prefix.
-            let cacheable = (context.common_prefix_tokens.saturating_mul(100)
-                / context.request_tokens.max(1))
-            .min(100);
+            let cacheable =
+                architecture_cacheability(context.common_prefix_tokens, context.request_tokens);
             lines.push(Line::from(vec![
-                Span::styled("Cache est.  ", dim()),
+                Span::styled("Arch prefix ", dim()),
                 Span::raw(format!(
-                    "≈{cacheable}% · {} tok shared",
+                    "≈{cacheable}% est. · {} tok shared",
                     format_tokens(context.common_prefix_tokens as u64)
                 )),
             ]));
@@ -658,11 +657,13 @@ impl SidebarModel {
                 && let Some(read) = last.cache_read_tokens
                 && context.common_prefix_tokens > 0
             {
-                let efficiency =
-                    (read.saturating_mul(100) / context.common_prefix_tokens as u64).min(100);
+                // How much of Latch's theoretically reusable prefix the
+                // provider actually reused. This is not a hit rate; provider
+                // tokenizer and wire framing can differ from the estimate.
+                let utilization = provider_prefix_utilization(read, context.common_prefix_tokens);
                 lines.push(Line::from(vec![
-                    Span::styled("Provider    ", dim()),
-                    Span::raw(format!("≈{efficiency}% cache hit")),
+                    Span::styled("Prefix use  ", dim()),
+                    Span::raw(format!("≈{utilization}% of shared prefix reused")),
                 ]));
             }
         }
@@ -688,6 +689,37 @@ impl SidebarModel {
                         width.saturating_sub(12),
                     )),
                 ]));
+            }
+            if context.cache_epoch > 0 || context.cache_epoch_tokens > 0 {
+                lines.push(Line::from(vec![
+                    Span::styled("Epoch       ", dim()),
+                    Span::raw(fit(
+                        &format!(
+                            "gen {} · {} turns · ≈{} tok",
+                            context.cache_epoch,
+                            context.cache_epoch_turns,
+                            format_tokens(context.cache_epoch_tokens as u64)
+                        ),
+                        width.saturating_sub(12),
+                    )),
+                ]));
+                if !context.cache_rotation_reason.is_empty() {
+                    let reason = match context.cache_rotation_reason.as_str() {
+                        "working budget high-water mark reached" => "high-water",
+                        other => other,
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled("Rotated     ", dim()),
+                        Span::raw(fit(
+                            &format!(
+                                "{} (retained ≈{} tok)",
+                                reason,
+                                format_tokens(context.cache_rotation_retained_tokens as u64)
+                            ),
+                            width.saturating_sub(12),
+                        )),
+                    ]));
+                }
             }
             lines.push(Line::from(vec![
                 Span::styled("Reserve     ", dim()),
@@ -716,16 +748,16 @@ impl SidebarModel {
                 dim(),
             ));
             if let Some(read) = last.cache_read_tokens
-                && last.input_tokens > 0
+                && let Some(miss) = last.uncached_input_tokens()
+                && let Some(hit_pct) = measured_cache_hit_rate(read, miss)
             {
-                let miss = last
-                    .uncached_input_tokens()
-                    .unwrap_or(last.input_tokens.saturating_sub(read));
-                let hit_pct = read.saturating_mul(100) / last.input_tokens;
+                // Provider-reported actual hit rate, normalized over reported
+                // hit and miss categories. Unknown categories stay unknown and
+                // the line is simply not shown.
                 lines.push(Line::styled(
                     fit(
                         &format!(
-                            "Cache       {}% hit · {} hit · {} miss",
+                            "Measured    {}% cache hit · {} hit · {} miss",
                             hit_pct,
                             format_tokens(read),
                             format_tokens(miss)
@@ -1123,6 +1155,44 @@ fn wrap_words(text: &str, width: usize, max_lines: usize) -> Vec<String> {
     }
     lines.truncate(max_lines);
     lines
+}
+
+/// Estimated architecture cacheability: the share of Latch's own canonical
+/// request serialization that is an exact reusable prefix. This is an
+/// architecture diagnostic, not a provider tokenizer measurement.
+#[must_use]
+pub(crate) fn architecture_cacheability(common_prefix_tokens: usize, request_tokens: usize) -> u64 {
+    let raw = common_prefix_tokens.saturating_mul(100) / request_tokens.max(1);
+    raw.min(100) as u64
+}
+
+/// Provider prefix utilization: how much of Latch's estimated reusable prefix
+/// the provider actually read. Clamped because the two sides are estimated
+/// from slightly different shapes.
+#[must_use]
+pub(crate) fn provider_prefix_utilization(
+    cache_read_tokens: u64,
+    common_prefix_tokens: usize,
+) -> u64 {
+    if common_prefix_tokens == 0 {
+        return 0;
+    }
+    (cache_read_tokens.saturating_mul(100) / common_prefix_tokens as u64).min(100)
+}
+
+/// Measured provider cache hit rate over the provider's own reported hit/miss
+/// input categories. `None` means a category is unknown and must not be
+/// fabricated.
+#[must_use]
+pub(crate) fn measured_cache_hit_rate(
+    cache_hit_tokens: u64,
+    cache_miss_tokens: u64,
+) -> Option<u64> {
+    let total = cache_hit_tokens.saturating_add(cache_miss_tokens);
+    if total == 0 {
+        return None;
+    }
+    Some(cache_hit_tokens.saturating_mul(100) / total)
 }
 
 #[cfg(test)]
@@ -1730,5 +1800,22 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+    #[test]
+    fn cache_metric_formulas_are_distinct_and_honest() {
+        // Architecture cacheability: estimated share of the request that is an
+        // exact reusable prefix, clamped at 100.
+        assert_eq!(architecture_cacheability(7_500, 10_000), 75);
+        assert_eq!(architecture_cacheability(20_000, 10_000), 100);
+        assert_eq!(architecture_cacheability(4, 0), 100);
+        // Provider prefix utilization: how much of the estimated prefix the
+        // provider actually read; no prefix means nothing to reuse.
+        assert_eq!(provider_prefix_utilization(6_000, 7_500), 80);
+        assert_eq!(provider_prefix_utilization(1_000, 0), 0);
+        // Measured hit rate: provider hit / (hit + miss); unknown categories
+        // stay unknown and are never fabricated as zero.
+        assert_eq!(measured_cache_hit_rate(286_100, 142_500), Some(66));
+        assert_eq!(measured_cache_hit_rate(0, 10), Some(0));
+        assert_eq!(measured_cache_hit_rate(0, 0), None);
     }
 }

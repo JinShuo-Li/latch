@@ -12,7 +12,7 @@ Tools+ext   2.4k tok
 Reserve     12.2k tok
 Headroom    195.7k tok
 Reported    last request 428.6k tok
-Cache       66% hit · 286.1k hit · 142.5k…
+Measured    66% cache hit · 286.1k hit · …
 503 events · 11 episodes
 
 TASK
