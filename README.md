@@ -118,6 +118,15 @@ only from durable kernel events, so live and resumed sessions show the same
 state. Abnormal states (over-budget context, stalled progress, externally
 modified owned files) are highlighted; healthy states stay quiet.
 
+Context telemetry distinguishes the estimated request size from the byte-exact
+reusable prefix: the sidebar shows cacheability (shared prefix / request) and,
+once the provider reports usage, cache efficiency (cache reads / shared
+prefix). Usage keeps cache hit, miss, and total input distinct, so cost never
+double-charges cached tokens. The recent transcript is append-only within a
+context epoch; when it reaches its budget, one non-destructive rollover starts
+a new epoch from durable state instead of evicting a little every turn, and
+rolled-over events remain searchable.
+
 Context budgets and every user-visible context number are tokens, estimated
 conservatively per provider/model; bytes remain only for internal file,
 artifact, log, and I/O limits. The context window defaults to 256k tokens and
@@ -159,8 +168,9 @@ raw event log. Completion states: `InProgress`, `ImplementedNotVerified`,
 
 ## Bounded reads, artifacts, and long processes
 
-`read_file` returns a bounded line window (default 2000 lines) with
-`offset`/`limit`/`tail` and an explicit continuation offset; large files are
+`read_file` returns a bounded line window (default 400 lines, additionally
+capped at roughly 8000 estimated tokens with whole-line trimming) and supports
+`offset`/`limit`/`tail` with an explicit continuation offset; large files are
 never injected whole. `search` returns a bounded result page with a total count
 and offset continuation. Output spilled by truncated shell, search, diff, or
 validation results carries an artifact id that `read_artifact` can page through

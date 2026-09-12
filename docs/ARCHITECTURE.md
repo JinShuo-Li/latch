@@ -135,6 +135,51 @@ The continuity engine receives a `MaterializeBudget` that already subtracts
 tool/extension costs, and the agent recomputes totals from the exact
 components, so recalled material is counted once.
 
+Recent estimation prices the provider-facing shape: tool-call arguments and
+replayed `reasoning_content` are included, kernel bookkeeping events are not.
+`ContextStats.request_tokens` is measured on the exact assembled request
+(system, messages, tool schemas) after any extension transform, and
+`ContextStats.common_prefix_tokens` is the byte-exact prefix shared with the
+previous request. Their ratio is `architecture_cacheability`;
+`provider_cache_efficiency = cache_read_tokens / common_prefix_tokens` is
+shown once provider usage is known. Provider-reported usage stays
+authoritative.
+
+### Prompt cache layout
+
+The compiled system prompt is session-stable by construction: core
+instructions, policy, mode, workspace identity, and repository instructions,
+with canonical task state rendered once by continuity after that prefix. Tool
+schemas are stable and serialized before the messages. The request signature
+is `system + tools + messages`, so within an epoch each turn extends the
+previous request rather than rewriting it. Recalled material and extension
+context follow the canonical block; the Anthropic adapter marks the system
+block as an ephemeral cache breakpoint (an adapter-only control), while
+OpenAI-compatible endpoints rely on automatic prefix caching.
+
+### Append-only context epochs
+
+The recent transcript is append-only within an epoch. When an epoch reaches
+`recent_tokens`, one deterministic rollover drops whole old conversation units
+until the newest tail fits within half the budget and records a durable
+`ContextEpochStarted { from_sequence }` boundary. Rollover never splits a
+tool transaction, never deletes raw events, and `active_start` reconstructs
+the exact epoch from the durable sequence on resume; `/compact` remains an
+explicit, separate reset. Rolled-over material stays retrievable through
+recall and the episode index built from all pre-epoch events.
+
+## Usage and cost
+
+`Usage` keeps provider-reported categories distinct: total input, output,
+cache read, cache write, and a normalized cache miss, each optional with
+`None` meaning unreported. OpenAI/DeepSeek-style usage includes cache hits in
+`prompt_tokens`, so the adapter records the explicit miss or derives
+total-minus-hit; Anthropic reports uncached input directly as the miss. Cost
+bills uncached input at the normal input price plus cache reads and writes at
+their own prices, so cached tokens are never double-charged. Unknown
+categories stay unknown rather than being guessed, and an estimate that
+depended on an unreported category is marked partial.
+
 ## Mode, Safety, Permissions, and the capability sandbox
 
 Three orthogonal controls compose into one pipeline:
