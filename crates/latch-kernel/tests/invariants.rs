@@ -58,6 +58,9 @@ fn call(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
 struct RecordingProvider {
     requests: Mutex<Vec<ModelRequest>>,
     responses: Mutex<VecDeque<ModelResponse>>,
+    /// Separate script handed to child sessions via `for_session`, so root and
+    /// child turns never race one shared response queue.
+    child_responses: Option<Vec<ModelResponse>>,
 }
 
 impl RecordingProvider {
@@ -65,6 +68,14 @@ impl RecordingProvider {
         Self {
             requests: Mutex::new(Vec::new()),
             responses: Mutex::new(responses.into()),
+            child_responses: None,
+        }
+    }
+
+    fn with_children(responses: Vec<ModelResponse>, child_responses: Vec<ModelResponse>) -> Self {
+        Self {
+            child_responses: Some(child_responses),
+            ..Self::new(responses)
         }
     }
 
@@ -80,6 +91,11 @@ impl ModelProvider for RecordingProvider {
     }
     fn model(&self) -> &str {
         "deepseek-invariants"
+    }
+    fn for_session(&self, _session_id: uuid::Uuid) -> Option<Arc<dyn ModelProvider>> {
+        self.child_responses
+            .as_ref()
+            .map(|script| Arc::new(Self::new(script.clone())) as Arc<dyn ModelProvider>)
     }
     async fn stream(
         &self,
@@ -854,4 +870,152 @@ fn cache_accounting_stays_provider_authoritative() {
         architecture_cacheability, measured_hit_rate as usize,
         "architecture diagnostics and provider measurements are not one number"
     );
+}
+
+/// Child agents are independent durable sessions. Whatever a child claims or
+/// proves stays in its own session: the root receives one compact semantic
+/// report at a safe model boundary, never the child's evidence, completion,
+/// or transcript, and the provider-visible tool schema stays fixed across the
+/// whole agent lifecycle.
+#[tokio::test]
+async fn child_agent_sessions_never_become_root_truth() {
+    let dir = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(dir.path()).unwrap();
+    let provider = Arc::new(RecordingProvider::with_children(
+        vec![
+            response(
+                "",
+                vec![call(
+                    "spawn-1",
+                    "spawn_agent",
+                    json!({"task_name":"isolation","message":"delegate a bounded check"}),
+                )],
+            ),
+            response(
+                "",
+                vec![call("wait-1", "wait_agents", json!({"timeout_ms": 2_000}))],
+            ),
+            response("root done", vec![]),
+        ],
+        vec![
+            response(
+                "",
+                vec![
+                    call(
+                        "child-observe",
+                        "record_evidence",
+                        json!({"claim":"child check","status":"pending","detail":"child-only"}),
+                    ),
+                    call(
+                        "child-complete",
+                        "complete",
+                        json!({"implementation_done": true}),
+                    ),
+                ],
+            ),
+            response("child done", vec![]),
+        ],
+    ));
+    let tools = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    agent.set_context_budget(
+        ContextConfig::default(),
+        latch_kernel::config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+    );
+    agent
+        .run(
+            "delegate a check",
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+
+    let root_events = store.events(session).unwrap();
+    // The notification is the only graph event in root history and it never
+    // splits a tool transaction.
+    let notifications = root_events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.payload,
+                EventPayload::AgentNotificationDelivered { .. }
+            )
+        })
+        .count();
+    assert_eq!(notifications, 1, "exactly one delivered report");
+    assert_tool_transactions_atomic(&root_events);
+    // Child evidence and completion live only in the child session; the root
+    // ledger and completion are untouched by the child's claims.
+    assert!(
+        agent.evidence().entries().is_empty(),
+        "child evidence must never enter the root ledger"
+    );
+    assert_eq!(agent.state().completion, CompletionState::InProgress);
+    assert!(
+        !root_events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::EvidenceCreated { .. }))
+    );
+    let child_id = root_events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ToolCompleted { result } if result.call_id == "spawn-1" => {
+                serde_json::from_str::<serde_json::Value>(&result.output)
+                    .ok()
+                    .and_then(|value| value.get("agent_id")?.as_str().map(str::to_owned))
+            }
+            _ => None,
+        })
+        .expect("spawn result carries the child id")
+        .parse::<uuid::Uuid>()
+        .unwrap();
+    let child_events = store.events(child_id).unwrap();
+    assert!(child_events
+        .iter()
+        .any(|event| matches!(&event.payload, EventPayload::EvidenceCreated { evidence } if evidence.claim == "child check")));
+    assert!(
+        child_events
+            .first()
+            .is_some_and(|event| matches!(event.payload, EventPayload::AgentSpawned { .. }))
+    );
+    // The provider-visible schema is identical before and after the whole
+    // spawn → report lifecycle.
+    let requests = provider.requests();
+    assert!(requests.len() >= 2);
+    assert_eq!(
+        serde_json::to_string(&requests[0].tools).unwrap(),
+        serde_json::to_string(&requests[requests.len() - 1].tools).unwrap(),
+        "agent lifecycle changes must not alter tool definitions"
+    );
+    // The durable graph replays to the same topology the supervisor holds.
+    let agent_events = store.agent_events(session).unwrap();
+    assert!(agent_events.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::AgentSpawned { identity, .. } if identity.agent_id == child_id
+    )));
+    let listed = agent
+        .agent_supervisor()
+        .expect("root owns a supervisor")
+        .list_agents();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].agent_id, child_id);
+    assert_eq!(listed[0].status, latch_protocol::AgentStatus::Completed);
 }
