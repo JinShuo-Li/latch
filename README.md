@@ -335,8 +335,19 @@ working set while retaining durable history and canonical state.
 
 ## Acceptance testing
 
-Kernel invariants run offline under `cargo test` with the scripted provider. A
-separate opt-in harness calls the configured provider for real and is ignored
+Testing is tiered on purpose. CI is a small architectural gate — `cargo fmt`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`, and the
+fast, deterministic invariant tier in
+`crates/latch-kernel/tests/invariants.rs` (durable history is the source of
+truth, cache epochs are not memory boundaries, canonical state stays
+authoritative, no hidden destructive compaction, resume equivalence,
+kernel-owned validation/evidence, safety hard-deny, steering protocol
+correctness, deterministic provider serialization). Detailed correctness and
+sandbox/command execution run locally with `cargo test --workspace`, and
+long-session stress tests stay local by convention; passing CI alone is not
+sufficient for a substantial change.
+
+A separate opt-in harness calls the configured provider for real and is ignored
 by default:
 
 ```sh

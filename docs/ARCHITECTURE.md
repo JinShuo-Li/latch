@@ -238,8 +238,9 @@ paths: `last_sequence` for watermarks, `events_after`/`events_before`/
 `events_of_kinds` for targeted replay (approvals, failed tool lineages, change
 ownership, process starts), and `latest_event_of_kinds` for compact
 boundaries. `search_events` retrieves FTS-matched rows directly instead of
-loading and filtering the whole transcript, preserving the original FTS limit
-order before the bookkeeping-kind exclusion.
+loading and filtering the whole transcript, preserving the bounded FTS
+selection order (insertion order) before the bookkeeping-kind exclusion, so the
+same durable log always yields the same recall material.
 
 Live supervision keeps sequence cursors, so each turn feeds only newly
 appended events to the progress supervisor and the live sink. Equivalence and
@@ -406,3 +407,28 @@ re-executing anything or appending duplicate durable events. When the original
 user prompt rotates out of the recent byte budget, the transcript is anchored
 with a deterministic kernel continuation message rather than dropped, so a
 mid-task window never gives the model amnesia.
+
+## Testing and CI
+
+Testing follows two principles. **Memory decides what the model needs to know;
+cache decides how cheaply we can send it** — correctness and long-horizon
+continuity outrank cache locality. **CI protects what Latch must never stop
+being. Local tests verify that the current implementation actually works.**
+
+CI is a small, stable architectural gate: `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`, and the
+deliberately selected invariant tier in
+`crates/latch-kernel/tests/invariants.rs`. That tier is fast and deterministic
+by construction — no `bwrap`, `rg`, `python3`, network, timing, or large
+histories — and pins durable history as the source of truth, append-only cache
+epochs that are not memory boundaries, canonical-state authority, the absence
+of hidden destructive compaction, resume equivalence, kernel-owned
+validation/evidence, safety hard-deny, steering protocol correctness,
+deterministic provider serialization, and cache-accounting semantics.
+
+Detailed correctness (providers, sandbox/command execution, snapshots,
+extensions) runs locally with `cargo test --workspace`, and long-session /
+large-history stress tests (`cargo test -p latch-kernel --lib continuity --
+--nocapture`) stay out of CI by convention. Tests are not moved between tiers
+merely to make CI green, and passing CI alone is not sufficient for a
+substantial change.

@@ -153,3 +153,10 @@ recall of an early diagnostic, recent verbatim text, the bounded-token
 invariant under thousands of durable events, exact component sums (no double
 counting), a bounded episode index, no automatic compact, and full raw event
 retention.
+
+Stress tests are local by convention and stay out of CI. CI runs only the
+small, fast architectural invariant tier in
+`crates/latch-kernel/tests/invariants.rs`: durable history ownership, append-only
+cache epochs, canonical authority, resume equivalence, kernel-owned evidence,
+safety hard-deny, steering protocol correctness, deterministic serialization,
+and cache-accounting semantics.
