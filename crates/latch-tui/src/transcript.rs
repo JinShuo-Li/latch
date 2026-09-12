@@ -1,30 +1,39 @@
 //! Transcript cell rendering: assistant text, tool activity, validation,
 //! exploration, diffs, and patch previews.
+//!
+//! Two visual families share the transcript. User-authored messages sit on a
+//! neutral full-width band with a `› ` gutter, so they are recognizable at a
+//! glance and while scrolling. Model output stays on the terminal's own
+//! background with a faint `• ` gutter and clean Markdown. Tool lifecycle rows
+//! remain ambient: markers and structure carry meaning, color stays semantic.
 
 use super::markdown::{MARKDOWN_DEFAULT_WIDTH, render_markdown_at};
 use super::*;
 
+/// Left gutter reserved for user (`› `) and assistant (`• `) message rows.
+const MESSAGE_GUTTER: usize = 2;
+
 /// Builds the transcript as Ratatui lines with the item's own styling,
 /// splitting embedded newlines so the wrapper and the scroll calculation agree
-/// on the visual row layout.
+/// on the visual row layout. `band` controls user-message surface padding; the
+/// plain export path disables it so copied text stays clean.
 pub(super) fn transcript_lines(
     cells: &[Cell],
     streaming: Option<&str>,
     detail: bool,
     width: usize,
+    band: bool,
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for cell in cells {
-        for line in cell_lines(cell, detail, width) {
+        for line in cell_lines(cell, detail, width, band) {
             out.push(line);
         }
         out.push(Line::from(""));
     }
     if let Some(text) = streaming {
-        out.extend(
-            text.lines()
-                .map(|line| Line::styled(line.to_owned(), assistant_style())),
-        );
+        let body = render_markdown_at(text, width.saturating_sub(MESSAGE_GUTTER).max(1));
+        out.extend(prefix_message_lines(body));
     }
     while out.last().is_some_and(|line| {
         line.spans.is_empty() || line.spans.iter().all(|span| span.content.is_empty())
@@ -34,7 +43,12 @@ pub(super) fn transcript_lines(
     out
 }
 
-pub(super) fn cell_lines(cell: &Cell, detail: bool, width: usize) -> Vec<Line<'static>> {
+pub(super) fn cell_lines(
+    cell: &Cell,
+    detail: bool,
+    width: usize,
+    band: bool,
+) -> Vec<Line<'static>> {
     if detail {
         return cell
             .raw_text()
@@ -43,20 +57,11 @@ pub(super) fn cell_lines(cell: &Cell, detail: bool, width: usize) -> Vec<Line<'s
             .collect();
     }
     match cell {
-        Cell::User { text } => text
-            .split('\n')
-            .enumerate()
-            .map(|(index, segment)| {
-                let prefix = if index == 0 { "› " } else { "  " };
-                Line::styled(
-                    format!("{prefix}{segment}"),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                )
-            })
-            .collect(),
-        Cell::Assistant { text } => render_markdown_at(text, width),
+        Cell::User { text } => user_lines(text, width, band),
+        Cell::Assistant { text } => {
+            let body = render_markdown_at(text, width.saturating_sub(MESSAGE_GUTTER).max(1));
+            prefix_message_lines(body)
+        }
         Cell::Exploration { operations } => exploration_lines(operations),
         Cell::Command {
             command,
@@ -105,10 +110,11 @@ pub(super) fn cell_lines(cell: &Cell, detail: bool, width: usize) -> Vec<Line<'s
 }
 
 pub(super) fn status_marker(status: CellStatus) -> (&'static str, Style) {
+    let palette = crate::theme::palette();
     match status {
-        CellStatus::Running => ("•", Style::default().fg(Color::Cyan)),
-        CellStatus::Passed => ("✓", Style::default().fg(Color::Green)),
-        CellStatus::Failed => ("✗", Style::default().fg(Color::Red)),
+        CellStatus::Running => ("•", palette.accent()),
+        CellStatus::Passed => ("✓", palette.success()),
+        CellStatus::Failed => ("✗", palette.failure()),
     }
 }
 
@@ -119,8 +125,9 @@ pub(super) fn activity_lines(
     summary: &str,
     output: &str,
 ) -> Vec<Line<'static>> {
+    let palette = crate::theme::palette();
     let (marker, marker_style) = if status == CellStatus::Passed && title == "Ran" {
-        ("•", Style::default().fg(Color::Cyan))
+        ("•", palette.accent())
     } else {
         status_marker(status)
     };
@@ -142,10 +149,82 @@ pub(super) fn activity_lines(
         lines.extend(
             output
                 .lines()
-                .map(|line| Line::styled(format!("    {line}"), Style::default().fg(Color::Red))),
+                .map(|line| Line::styled(format!("    {line}"), palette.failure())),
         );
     }
     lines
+}
+
+/// Wraps one user-authored message into a full-width neutral band. Every
+/// visual row keeps the surface, including soft-wrapped continuations, because
+/// the rows are wrapped and padded here rather than left to the paragraph
+/// wrapper. `band = false` emits the same gutter and text with no padding for
+/// copy-friendly export.
+pub(super) fn user_lines(text: &str, width: usize, band: bool) -> Vec<Line<'static>> {
+    let palette = crate::theme::palette();
+    let style = palette.user_message();
+    let content_width = width.saturating_sub(MESSAGE_GUTTER).max(1);
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    if band {
+        rows.push(Line::styled(" ".repeat(width.max(1)), style));
+    }
+    let mut first = true;
+    for logical in text.split('\n') {
+        for visual in wrap_message_row(logical, content_width) {
+            let gutter = if first { "› " } else { "  " };
+            first = false;
+            let mut spans = vec![Span::styled(
+                gutter.to_owned(),
+                notice_style().add_modifier(Modifier::BOLD),
+            )];
+            spans.push(Span::styled(visual, Style::default()));
+            let used: usize = spans.iter().map(|span| display_width(&span.content)).sum();
+            if band && used < width {
+                spans.push(Span::raw(" ".repeat(width - used)));
+            }
+            rows.push(Line::from(spans).style(style));
+        }
+    }
+    if band {
+        rows.push(Line::styled(" ".repeat(width.max(1)), style));
+    }
+    rows
+}
+
+/// One logical line split into display-width-bounded visual rows, preserving
+/// every character. Whitespace-only tails are kept because the band must cover
+/// the full width anyway.
+fn wrap_message_row(line: &str, width: usize) -> Vec<String> {
+    if line.is_empty() {
+        return vec![String::new()];
+    }
+    let chars: Vec<char> = line.chars().collect();
+    let points = composer::wrap_points(line, width);
+    let mut rows = Vec::new();
+    for (index, start) in points.iter().enumerate() {
+        let end = points.get(index + 1).copied().unwrap_or(chars.len());
+        rows.push(chars[*start..end].iter().collect());
+    }
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows
+}
+
+/// Prefixes rendered message lines with the assistant `• ` gutter. The first
+/// row carries the bullet; continuations align under it.
+pub(super) fn prefix_message_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let gutter = notice_style().add_modifier(Modifier::BOLD);
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let prefix = if index == 0 { "• " } else { "  " };
+            let mut spans = vec![Span::styled(prefix.to_owned(), gutter)];
+            spans.extend(line.spans);
+            Line::from(spans)
+        })
+        .collect()
 }
 
 pub(super) fn validation_lines(
@@ -191,7 +270,7 @@ pub(super) fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line
         CellStatus::Passed
     };
     let (marker, style) = if status == CellStatus::Passed {
-        ("•", Style::default().fg(Color::Cyan))
+        ("•", crate::theme::palette().accent())
     } else {
         status_marker(status)
     };
@@ -241,7 +320,7 @@ pub(super) fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line
     {
         lines.push(Line::styled(
             format!("    {} — {}", operation.label, operation.diagnostic),
-            Style::default().fg(Color::Red),
+            crate::theme::palette().failure(),
         ));
     }
     lines
@@ -250,8 +329,9 @@ pub(super) fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line
 /// One transcript cell for a first-class diff. Bounded so a large model-issued
 /// diff never floods the transcript; `/diff` opens the full inspector.
 pub(super) fn diff_cell_lines(status: CellStatus, document: &DiffDocument) -> Vec<Line<'static>> {
+    let palette = crate::theme::palette();
     let (marker, marker_style) = if status == CellStatus::Passed {
-        ("•", Style::default().fg(Color::Cyan))
+        ("•", palette.accent())
     } else {
         status_marker(status)
     };
@@ -283,7 +363,7 @@ pub(super) fn diff_cell_lines(status: CellStatus, document: &DiffDocument) -> Ve
     summary.push(Span::styled(
         format!("+{additions}"),
         if additions > 0 {
-            Style::default().fg(Color::Green)
+            palette.diff_add()
         } else {
             notice_style()
         },
@@ -292,7 +372,7 @@ pub(super) fn diff_cell_lines(status: CellStatus, document: &DiffDocument) -> Ve
     summary.push(Span::styled(
         format!("−{deletions}"),
         if deletions > 0 {
-            Style::default().fg(Color::Red)
+            palette.diff_del()
         } else {
             notice_style()
         },
@@ -313,7 +393,7 @@ pub(super) fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
         CellStatus::Passed
     };
     let (marker, style) = if status == CellStatus::Passed {
-        ("•", Style::default().fg(Color::Cyan))
+        ("•", crate::theme::palette().accent())
     } else {
         status_marker(status)
     };
@@ -397,7 +477,7 @@ pub(super) fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
     {
         lines.push(Line::styled(
             format!("    {}", file.diagnostic),
-            Style::default().fg(Color::Red),
+            crate::theme::palette().failure(),
         ));
     }
     lines
@@ -423,11 +503,12 @@ pub(super) fn indent_preview(mut line: Line<'static>, spaces: usize) -> Line<'st
 /// `+N −N` with independent semantic colors. Zero deltas stay dim so the eye
 /// lands on the direction that actually changed.
 pub(super) fn delta_spans(additions: usize, deletions: usize) -> Vec<Span<'static>> {
+    let palette = crate::theme::palette();
     vec![
         Span::styled(
             format!("+{additions}"),
             if additions > 0 {
-                Style::default().fg(Color::Green)
+                palette.success()
             } else {
                 notice_style()
             },
@@ -436,7 +517,7 @@ pub(super) fn delta_spans(additions: usize, deletions: usize) -> Vec<Span<'stati
         Span::styled(
             format!("−{deletions}"),
             if deletions > 0 {
-                Style::default().fg(Color::Red)
+                palette.failure()
             } else {
                 notice_style()
             },
@@ -444,12 +525,15 @@ pub(super) fn delta_spans(additions: usize, deletions: usize) -> Vec<Span<'stati
     ]
 }
 
+/// Assistant output stays on the terminal's own background; Markdown supplies
+/// all the hierarchy, so no foreground override is applied.
 pub(super) fn assistant_style() -> Style {
-    Style::default().fg(Color::White)
+    Style::default()
 }
 
+/// Faint structural text: notices, metadata, gutters, context lines.
 pub(super) fn notice_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+    crate::theme::palette().faint()
 }
 
 #[cfg(test)]
@@ -475,9 +559,15 @@ pub(super) fn semantic_visual_height(
     if width == 0 {
         return 0;
     }
-    Paragraph::new(transcript_lines(cells, streaming, detail, width as usize))
-        .wrap(Wrap { trim: false })
-        .line_count(width)
+    Paragraph::new(transcript_lines(
+        cells,
+        streaming,
+        detail,
+        width as usize,
+        true,
+    ))
+    .wrap(Wrap { trim: false })
+    .line_count(width)
 }
 
 #[cfg(test)]
@@ -509,13 +599,14 @@ pub(super) fn visual_height(items: &[TranscriptItem], width: u16) -> usize {
 }
 
 /// Inline preview budget across one edit cell. The full diff stays available
-/// through `/diff`; the transcript never floods.
-pub(super) const MAX_PATCH_PREVIEW_LINES: usize = 14;
+/// through `/diff`; the transcript never floods. Compact by default so an edit
+/// reads as a structured change rather than a wall of red and green.
+pub(super) const MAX_PATCH_PREVIEW_LINES: usize = 10;
 
 /// Copy-friendly rendering used by tests and transcript export paths.
 #[must_use]
 pub fn render_cells_plain(cells: &[Cell], detail: bool) -> String {
-    transcript_lines(cells, None, detail, MARKDOWN_DEFAULT_WIDTH)
+    transcript_lines(cells, None, detail, MARKDOWN_DEFAULT_WIDTH, false)
         .into_iter()
         .map(|line| {
             line.spans

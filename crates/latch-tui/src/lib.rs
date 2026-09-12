@@ -52,6 +52,7 @@ pub use sidebar::{Pricing, SidebarModel, SidebarSession};
 mod chrome;
 mod markdown;
 mod runtime;
+mod theme;
 mod transcript;
 
 pub use runtime::run;

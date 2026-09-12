@@ -5,7 +5,7 @@
 //! Markdown, or arbitrary shell text can never be misclassified as additions
 //! or deletions. `--- a/file` / `+++ b/file` are headers, not source lines.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,19 +305,19 @@ fn normalize_path(raw: &str) -> Option<String> {
 }
 
 fn addition_style() -> Style {
-    Style::default().fg(Color::Green)
+    crate::theme::palette().diff_add()
 }
 fn deletion_style() -> Style {
-    Style::default().fg(Color::Red)
+    crate::theme::palette().diff_del()
 }
 fn hunk_style() -> Style {
-    Style::default().fg(Color::Cyan)
+    crate::theme::palette().diff_hunk()
 }
 fn meta_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+    crate::theme::palette().diff_meta()
 }
 fn header_style() -> Style {
-    Style::default().add_modifier(Modifier::BOLD)
+    crate::theme::palette().diff_file()
 }
 
 /// Full semantic rendering of a parsed document. Unparsed input is rendered as
@@ -402,7 +402,7 @@ fn render_line(line: &DiffLine) -> Line<'static> {
     let (prefix, style) = match line.kind {
         DiffLineKind::Addition => ("+", addition_style()),
         DiffLineKind::Deletion => ("-", deletion_style()),
-        DiffLineKind::Context => (" ", Style::default()),
+        DiffLineKind::Context => (" ", crate::theme::palette().diff_context()),
         DiffLineKind::Hunk => ("", hunk_style()),
         DiffLineKind::Header => ("", header_style()),
         DiffLineKind::Meta => ("", meta_style()),
@@ -418,6 +418,7 @@ fn render_line(line: &DiffLine) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Color;
 
     const SAMPLE: &str = "\
 diff --git a/src/lib.rs b/src/lib.rs
@@ -507,7 +508,23 @@ index 1111111..2222222 100644
                     .any(|span| span.content.starts_with("index "))
             })
             .expect("meta line");
-        assert_eq!(style_fg(meta, "index"), Some(Color::DarkGray));
+        assert_eq!(style_fg(meta, "index"), None, "meta keeps the default fg");
+        assert!(
+            meta.style.add_modifier.contains(Modifier::DIM),
+            "meta is dim"
+        );
+    }
+
+    #[test]
+    fn changed_lines_carry_restrained_background_tints() {
+        use crate::theme::{ColorLevel, Palette, ThemeKind};
+        let palette = Palette::new(ThemeKind::Dark, ColorLevel::TrueColor);
+        assert_eq!(palette.diff_add().bg, Some(Color::Rgb(22, 46, 30)));
+        assert_eq!(palette.diff_del().bg, Some(Color::Rgb(54, 28, 26)));
+        // ANSI-16 terminals drop the tint instead of guessing.
+        let basic = Palette::new(ThemeKind::Dark, ColorLevel::Ansi16);
+        assert_eq!(basic.diff_add().bg, None);
+        assert_eq!(basic.diff_add().fg, Some(Color::Green));
     }
 
     #[test]

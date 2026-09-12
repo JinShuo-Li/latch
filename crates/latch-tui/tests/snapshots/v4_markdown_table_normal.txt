@@ -1,10 +1,10 @@
-Here is the plan:                                                                                   
+• Here is the plan:                                                                                 
                                                                                                     
-Step                       Owner    Status                                                          
-──────────────────────────────────────────                                                          
-Inspect the failing tests  Latch      done                                                          
-Patch the parser           Latch    active                                                          
-Verify with cargo test     Kernel  pending                                                          
+  Step                       Owner    Status                                                        
+  ──────────────────────────────────────────                                                        
+  Inspect the failing tests  Latch      done                                                        
+  Patch the parser           Latch    active                                                        
+  Verify with cargo test     Kernel  pending                                                        
                                                                                                     
                                                                                                     
                                                                                                     

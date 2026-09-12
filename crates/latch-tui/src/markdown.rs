@@ -33,7 +33,7 @@ pub(super) fn render_markdown_at(text: &str, width: usize) -> Vec<Line<'static>>
         if in_code {
             out.push(Line::styled(
                 format!("  │ {trimmed}"),
-                Style::default().fg(Color::Cyan),
+                crate::theme::palette().accent_plain(),
             ));
             index += 1;
             continue;
@@ -45,13 +45,10 @@ pub(super) fn render_markdown_at(text: &str, width: usize) -> Vec<Line<'static>>
             let heading = rest.trim_start_matches('#').trim_start();
             let style = if level <= 2 {
                 Style::default()
-                    .fg(Color::White)
                     .add_modifier(Modifier::BOLD)
                     .add_modifier(Modifier::UNDERLINED)
             } else {
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().add_modifier(Modifier::BOLD)
             };
             out.push(Line::styled(heading.to_owned(), style));
             index += 1;
@@ -60,7 +57,7 @@ pub(super) fn render_markdown_at(text: &str, width: usize) -> Vec<Line<'static>>
         if let Some(rest) = body.strip_prefix("- ").or_else(|| body.strip_prefix("* ")) {
             let mut spans = vec![Span::styled(
                 format!("{}• ", " ".repeat(indent)),
-                Style::default().fg(Color::DarkGray),
+                notice_style(),
             )];
             spans.extend(inline_spans(rest, assistant_style()));
             out.push(Line::from(spans));
@@ -74,7 +71,7 @@ pub(super) fn render_markdown_at(text: &str, width: usize) -> Vec<Line<'static>>
             let (marker, rest) = body.split_once(". ").expect("checked above");
             let mut spans = vec![Span::styled(
                 format!("{}{marker}.", " ".repeat(indent)),
-                Style::default().fg(Color::DarkGray),
+                notice_style(),
             )];
             spans.push(Span::raw(" "));
             spans.extend(inline_spans(rest, assistant_style()));
@@ -392,7 +389,7 @@ pub(super) fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
         {
             flush(&mut plain, &mut spans);
             let code: String = chars[index + 1..index + 1 + close].iter().collect();
-            spans.push(Span::styled(code, Style::default().fg(Color::Cyan)));
+            spans.push(Span::styled(code, crate::theme::palette().accent_plain()));
             index += close + 2;
             continue;
         }
@@ -421,7 +418,7 @@ pub(super) fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
                 spans.push(Span::styled(label, base.add_modifier(Modifier::UNDERLINED)));
                 spans.push(Span::styled(
                     format!(" ({url})"),
-                    Style::default().fg(Color::Cyan),
+                    crate::theme::palette().accent_plain(),
                 ));
                 index = url_end + 1;
                 continue;
@@ -455,8 +452,8 @@ pub(super) fn push_plain_spans(text: &str, base: Style, spans: &mut Vec<Span<'st
             .map_or(rest.len(), |offset| start + offset);
         spans.push(Span::styled(
             rest[start..end].to_owned(),
-            Style::default()
-                .fg(Color::Cyan)
+            crate::theme::palette()
+                .accent_plain()
                 .add_modifier(Modifier::UNDERLINED),
         ));
         rest = &rest[end..];

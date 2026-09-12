@@ -6,7 +6,7 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
 use futures::StreamExt;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -234,11 +234,8 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
                 Style::default().bold(),
             )),
             Line::from(vec![
-                Span::styled(format!(" {scope}"), Style::default().fg(Color::Cyan)),
-                Span::styled(
-                    format!("  ·  {query}"),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!(" {scope}"), crate::theme::palette().accent_plain()),
+                Span::styled(format!("  ·  {query}"), crate::theme::palette().faint()),
             ]),
         ]),
         sections[0],
@@ -253,16 +250,14 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
     if filtered.is_empty() {
         rows.push(Line::styled(
             " No matching sessions",
-            Style::default().fg(Color::DarkGray),
+            crate::theme::palette().faint(),
         ));
     }
     for (offset, session) in filtered.iter().skip(start).take(visible_rows).enumerate() {
         let selected = start + offset == picker.selected;
         let marker = if selected { "›" } else { " " };
         let style = if selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            crate::theme::palette().selected()
         } else {
             Style::default()
         };
@@ -282,7 +277,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
                 &session.id.to_string()[..8],
                 session.event_count
             ),
-            Style::default().fg(Color::DarkGray),
+            crate::theme::palette().faint(),
         ));
         rows.push(Line::styled(
             format!(
@@ -292,7 +287,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
             if selected {
                 Style::default()
             } else {
-                Style::default().fg(Color::DarkGray)
+                crate::theme::palette().faint()
             },
         ));
     }
@@ -304,7 +299,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
             Line::from(vec![
                 Span::styled(
                     format!("{}: ", line.speaker),
-                    Style::default().fg(Color::Cyan),
+                    crate::theme::palette().accent_plain(),
                 ),
                 Span::raw(truncate_width(
                     &line.text,
@@ -318,14 +313,14 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
             Block::default()
                 .borders(Borders::TOP)
                 .title(" Preview ")
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(crate::theme::palette().faint()),
         ),
         sections[2],
     );
     frame.render_widget(
         Paragraph::new(Line::styled(
             " ↑↓ select  Enter resume  Tab workspace/all  Ctrl+F fresh  Ctrl+Q exit  Esc cancel",
-            Style::default().fg(Color::DarkGray),
+            crate::theme::palette().faint(),
         )),
         sections[3],
     );

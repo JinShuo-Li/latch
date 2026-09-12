@@ -78,17 +78,17 @@ impl ComposerChrome {
 }
 
 pub(super) fn yellow() -> Style {
-    Style::default().fg(Color::Yellow)
+    crate::theme::palette().attention()
 }
 
 pub(super) fn focused_accent() -> Style {
-    Style::default().fg(Color::Cyan)
+    crate::theme::palette().accent()
 }
 
-/// Readable secondary text for composer chrome (metadata, footer). `DarkGray`
-/// is nearly invisible on dark themes, so chrome text steps up to `Gray`.
+/// Readable secondary text for composer chrome (metadata, footer). Theme-aware
+/// so it stays legible on both dark and light terminals.
 pub(super) fn muted_style() -> Style {
-    Style::default().fg(Color::Gray)
+    crate::theme::palette().muted()
 }
 
 /// Composer status word and color, derived from real run state.
@@ -139,10 +139,7 @@ pub(super) fn draw_policy_selector(
     for (index, (label, _)) in selector.kind.options().iter().enumerate() {
         let selected = index == selector.selected;
         let style = if selected {
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD)
+            crate::theme::palette().selected()
         } else {
             Style::default()
         };
@@ -174,16 +171,14 @@ pub(super) fn draw_palette(
         .enumerate()
     {
         let selected = window_start + index == app.palette.selected;
+        let selected_style = crate::theme::palette().selected();
         let name_style = if selected {
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD)
+            selected_style
         } else {
             Style::default()
         };
         let description_style = if selected {
-            Style::default().fg(Color::White).bg(Color::DarkGray)
+            selected_style
         } else {
             notice_style()
         };
@@ -567,14 +562,9 @@ pub(super) fn draw_diff_overlay(
             .expect("draw_diff_overlay requires an open document");
         let additions = document.added_lines();
         let deletions = document.removed_lines();
+        let palette = crate::theme::palette();
         let mut title = vec![
-            Span::styled(
-                " diff ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(" diff ", palette.accent()),
             Span::raw(" "),
             Span::styled(
                 format!(
@@ -588,7 +578,7 @@ pub(super) fn draw_diff_overlay(
             Span::styled(
                 format!("+{additions}"),
                 if additions > 0 {
-                    Style::default().fg(Color::Green)
+                    palette.success()
                 } else {
                     notice_style()
                 },
@@ -597,7 +587,7 @@ pub(super) fn draw_diff_overlay(
             Span::styled(
                 format!("−{deletions}"),
                 if deletions > 0 {
-                    Style::default().fg(Color::Red)
+                    palette.failure()
                 } else {
                     notice_style()
                 },
@@ -703,6 +693,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
                 app.streaming.as_deref(),
                 app.detail,
                 viewport.width as usize,
+                true,
             ))
             .wrap(Wrap { trim: false })
             .scroll((offset, 0));

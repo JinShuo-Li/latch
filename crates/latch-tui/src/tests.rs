@@ -331,7 +331,7 @@ fn markdown_tables_align_columns_and_hide_separators() {
     );
     // The rule after the header is dim and bold header cells stay bold.
     assert_eq!(lines[0].spans[0].style.add_modifier, Modifier::BOLD);
-    assert_eq!(lines[1].style.fg, Some(Color::DarkGray));
+    assert!(lines[1].style.add_modifier.contains(Modifier::DIM));
 }
 
 #[test]
@@ -1401,9 +1401,10 @@ fn inline_preview_colors_real_removed_and_added_source_lines() {
         Some(Color::Green),
         "added source line must be green"
     );
-    assert_eq!(
-        find_span_style(&lines, "pub fn add").fg,
-        Some(Color::DarkGray),
+    assert!(
+        find_span_style(&lines, "pub fn add")
+            .add_modifier
+            .contains(Modifier::DIM),
         "unchanged context is subdued"
     );
     let text = lines_text(&lines);
@@ -1537,6 +1538,107 @@ fn header_pricing_reaches_the_sidebar() {
 }
 
 // ---- V4 composer and layout redesign ----
+
+#[test]
+fn user_messages_render_on_a_neutral_band_with_a_gutter() {
+    let palette = crate::theme::palette();
+    let lines = cell_lines(
+        &Cell::User {
+            text: "fix the parser".into(),
+        },
+        false,
+        40,
+        true,
+    );
+    // Top pad, one content row, bottom pad.
+    assert_eq!(lines.len(), 3);
+    let band = palette.user_message().bg;
+    assert!(band.is_some(), "user band is painted on rich terminals");
+    for line in &lines {
+        assert_eq!(line.style.bg, band, "every user row keeps the band");
+    }
+    let first: String = lines[1]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(first.starts_with("› "), "{first:?}");
+    assert!(first.contains("fix the parser"));
+    // The band reaches the full transcript width.
+    let width: usize = lines[1]
+        .spans
+        .iter()
+        .map(|span| display_width(&span.content))
+        .sum();
+    assert_eq!(width, 40, "band padding covers the row");
+}
+
+#[test]
+fn wrapped_user_messages_keep_the_band_on_every_visual_row() {
+    let text = "word ".repeat(30);
+    let lines = cell_lines(&Cell::User { text }, false, 24, true);
+    let band = crate::theme::palette().user_message().bg;
+    assert!(lines.len() > 4, "long text wraps into several rows");
+    for line in &lines {
+        assert_eq!(line.style.bg, band);
+        let width: usize = line
+            .spans
+            .iter()
+            .map(|span| display_width(&span.content))
+            .sum();
+        assert!(width <= 24, "row fits the viewport: {width}");
+        if line.spans.len() > 1 {
+            assert_eq!(width, 24, "content rows are padded to the full width");
+        }
+    }
+    // Only the first content row carries the `›` gutter.
+    let text_rows = &lines[1..lines.len() - 1];
+    assert!(text_rows[0].spans[0].content == "› ");
+    assert!(
+        text_rows[1..]
+            .iter()
+            .all(|line| line.spans[0].content == "  ")
+    );
+}
+
+#[test]
+fn plain_export_keeps_user_and_assistant_text_clean() {
+    let cells = vec![
+        Cell::User {
+            text: "hello".into(),
+        },
+        Cell::Assistant {
+            text: "world".into(),
+        },
+    ];
+    let plain = render_cells_plain(&cells, false);
+    assert!(plain.contains("› hello"), "{plain}");
+    assert!(plain.contains("• world"), "{plain}");
+    assert!(
+        plain.lines().all(|line| !line.ends_with(' ')),
+        "the copy-friendly export never pads the band: {plain:?}"
+    );
+}
+
+#[test]
+fn assistant_messages_stay_on_the_terminal_background() {
+    let lines = cell_lines(
+        &Cell::Assistant {
+            text: "hello **world**".into(),
+        },
+        false,
+        40,
+        true,
+    );
+    assert!(lines[0].spans[0].content == "• ");
+    assert!(lines[0].spans[0].style.bg.is_none());
+    for span in lines.iter().flat_map(|line| &line.spans) {
+        assert!(
+            span.style.bg.is_none(),
+            "assistant markdown never paints a surface: {span:?}"
+        );
+    }
+}
 
 fn assert_snapshot(name: &str, actual: &str) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

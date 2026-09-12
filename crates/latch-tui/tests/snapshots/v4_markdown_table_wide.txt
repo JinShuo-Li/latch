@@ -1,8 +1,8 @@
-Mode  Mutation         Validation  Notes                                                                            │deepseek-flash                             
-──────────────────────────────────────────────────────────                                                          │WORK · 0 turns · 0s                        
-ASK   denied           not run     read-only inspection                                                             │on main                                    
-PLAN  denied           not run     produces a plan                                                                  │                                           
-WORK  policy-approved  required    implements and verifies                                                          │CONTEXT                                    
+• Mode  Mutation         Validation  Notes                                                                          │deepseek-flash                             
+  ──────────────────────────────────────────────────────────                                                        │WORK · 0 turns · 0s                        
+  ASK   denied           not run     read-only inspection                                                           │on main                                    
+  PLAN  denied           not run     produces a plan                                                                │                                           
+  WORK  policy-approved  required    implements and verifies                                                        │CONTEXT                                    
                                                                                                                     │                                           
                                                                                                                     │TASK                                       
                                                                                                                     │                                           

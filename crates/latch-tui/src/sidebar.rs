@@ -10,7 +10,7 @@ use chrono::{DateTime, Duration, Utc};
 use latch_protocol::{
     CompletionState, ContextStats, Event, EventPayload, EvidenceStatus, Mode, TaskState, Usage,
 };
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::{BTreeMap, BTreeSet};
 use unicode_segmentation::UnicodeSegmentation;
@@ -517,26 +517,24 @@ fn clears_stall(payload: &EventPayload) -> bool {
 }
 
 fn dim() -> Style {
-    Style::default().fg(Color::DarkGray)
+    crate::theme::palette().faint()
 }
 fn cyan() -> Style {
-    Style::default().fg(Color::Cyan)
+    crate::theme::palette().accent()
 }
 fn green() -> Style {
-    Style::default().fg(Color::Green)
+    crate::theme::palette().success()
 }
 fn red() -> Style {
-    Style::default().fg(Color::Red)
+    crate::theme::palette().failure()
 }
 fn yellow() -> Style {
-    Style::default().fg(Color::Yellow)
+    crate::theme::palette().attention()
 }
 fn section_title(text: &str) -> Line<'static> {
     Line::styled(
         text.to_owned(),
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
+        crate::theme::palette().faint().add_modifier(Modifier::BOLD),
     )
 }
 
