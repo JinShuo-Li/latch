@@ -42,13 +42,21 @@ impl SteeringQueue {
         Self::default()
     }
 
+    /// Locks the queue state, recovering from poisoning instead of reporting a
+    /// default. Poisoning means a panic happened while the lock was held; the
+    /// protected state is a `VecDeque<String>` plus a bool, whose invariants
+    /// cannot be left half-written by a panic, so recovering is strictly safer
+    /// than silently reporting an empty queue and losing user input.
+    fn lock(&self) -> std::sync::MutexGuard<'_, SteeringState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Submits a steering message. The result is the deterministic
     /// accept/reject outcome; a rejected message is never enqueued.
     pub fn push(&self, text: impl Into<String>) -> SteeringSubmission {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.lock();
         if state.closed {
             SteeringSubmission::Closed
         } else {
@@ -59,25 +67,16 @@ impl SteeringQueue {
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.state
-            .lock()
-            .map(|state| state.pending.is_empty())
-            .unwrap_or(true)
+        self.lock().pending.is_empty()
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.state
-            .lock()
-            .map(|state| state.pending.len())
-            .unwrap_or(0)
+        self.lock().pending.len()
     }
 
     pub(super) fn drain(&self) -> Vec<String> {
-        self.state
-            .lock()
-            .map(|mut state| state.pending.drain(..).collect())
-            .unwrap_or_default()
+        self.lock().pending.drain(..).collect()
     }
 
     /// Atomically closes the queue and takes everything accepted before the
@@ -85,10 +84,7 @@ impl SteeringQueue {
     /// exit). When messages were accepted the queue stays open and returns
     /// them, because the current run must consume them before it may close.
     pub(super) fn close_and_drain(&self) -> Vec<String> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.lock();
         if state.pending.is_empty() {
             state.closed = true;
             Vec::new()
@@ -99,10 +95,7 @@ impl SteeringQueue {
 
     /// Marks the run open for acceptance. Called once at the start of `run`.
     pub(super) fn open(&self) {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .closed = false;
+        self.lock().closed = false;
     }
 
     /// Closes the run to further acceptance. Any still-pending message was
@@ -111,11 +104,18 @@ impl SteeringQueue {
     /// existing semantics: the active run stops and queued steers do not
     /// silently survive it.
     pub(super) fn close(&self) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.lock();
         state.closed = true;
         state.pending.clear();
+    }
+
+    /// Test-only: poison the internal lock to prove recovery never drops
+    /// accepted input.
+    #[cfg(test)]
+    pub(super) fn poison_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.lock();
+            panic!("poison the steering lock");
+        }));
     }
 }

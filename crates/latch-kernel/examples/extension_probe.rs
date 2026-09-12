@@ -16,7 +16,11 @@ async fn main() -> Result<()> {
     )
     .await?;
     let result = host
-        .execute_tool("example.echo", json!({"value":"latch-extension-ok"}))
+        .execute_tool(
+            "example.echo",
+            json!({"value":"latch-extension-ok"}),
+            &tokio_util::sync::CancellationToken::new(),
+        )
         .await?;
     println!("{result}");
     host.shutdown().await

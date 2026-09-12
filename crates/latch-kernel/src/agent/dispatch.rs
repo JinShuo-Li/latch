@@ -18,6 +18,7 @@ impl Agent {
                 .guard(
                     "tool.execute",
                     json!({"name":call.name,"arguments":call.arguments}),
+                    &cancel,
                 )
                 .await
             {
@@ -188,7 +189,10 @@ impl Agent {
                 } else if call.name == "validate" {
                     batch.push(self.execute_validate(&call, cancel.clone(), sink).await?);
                 } else if let Some(owner) = self.extensions.owner_for_tool(&call.name) {
-                    batch.push(self.execute_extension_tool(&owner, &call, sink).await?);
+                    batch.push(
+                        self.execute_extension_tool(&owner, &call, &cancel, sink)
+                            .await?,
+                    );
                 } else {
                     batch.push(self.tools.execute(&call, cancel.clone()).await);
                 }
@@ -203,6 +207,7 @@ impl Agent {
         &mut self,
         owner: &str,
         call: &ToolCall,
+        cancel: &CancellationToken,
         sink: &AgentEventSink,
     ) -> Result<ToolResult> {
         self.emit(
@@ -214,7 +219,7 @@ impl Agent {
         )?;
         let result = match self
             .extensions
-            .execute(owner, &call.name, call.arguments.clone())
+            .execute(owner, &call.name, call.arguments.clone(), cancel)
             .await
         {
             Ok(value) => match serde_json::to_string(&value) {

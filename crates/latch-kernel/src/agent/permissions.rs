@@ -99,7 +99,8 @@ impl Agent {
                         .human_resolution(request_id, classification, reason, sink, cancel)
                         .await;
                 };
-                let (risk, explanation) = self.review_command(command, classification).await;
+                let (risk, explanation) =
+                    self.review_command(command, classification, cancel).await;
                 if risk == "low" {
                     self.record_resolution(request_id, true, "ai", Some(risk), sink)?;
                     Ok(grant_for(classification))
@@ -177,6 +178,7 @@ impl Agent {
         &mut self,
         command: &str,
         classification: &Classification,
+        cancel: &CancellationToken,
     ) -> (String, String) {
         let context = json!({
             "task": self.state.state().goal,
@@ -191,11 +193,15 @@ impl Agent {
             tools: vec![],
         };
         let sink: StreamSink = Arc::new(|_| {});
-        match self
-            .provider
-            .stream(request, CancellationToken::new(), sink)
-            .await
-        {
+        // The reviewer is an auxiliary model call: it obeys the same run
+        // cancellation as the primary turn. Ctrl+C must not wait on it.
+        let response = tokio::select! {
+            response = self.provider.stream(request, cancel.clone(), sink) => response,
+            () = cancel.cancelled() => {
+                return ("critical".into(), "reviewer cancelled".into());
+            }
+        };
+        match response {
             Ok(response) => parse_review(&response.text),
             Err(error) => ("critical".into(), format!("reviewer unavailable ({error})")),
         }

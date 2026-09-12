@@ -141,17 +141,23 @@ impl ModelProvider for OpenAiProvider {
         sink: StreamSink,
     ) -> Result<ModelResponse> {
         let body = openai_request(&request, &self.model, self.reasoning);
-        let response = checked_response(
-            "openai-compatible",
-            self.client
-                .post(format!("{}/chat/completions", self.base_url))
-                .bearer_auth(&self.api_key)
-                .headers(self.request_headers())
-                .json(&body)
-                .send()
-                .await?,
-        )
-        .await?;
+        // The transport phase (connect + headers) obeys the same run
+        // cancellation as the streaming loop, so Ctrl+C cannot hang on a
+        // stalled connection.
+        let response = tokio::select! {
+            response = async {
+                let sent = self
+                    .client
+                    .post(format!("{}/chat/completions", self.base_url))
+                    .bearer_auth(&self.api_key)
+                    .headers(self.request_headers())
+                    .json(&body)
+                    .send()
+                    .await?;
+                checked_response("openai-compatible", sent).await
+            } => response?,
+            () = cancel.cancelled() => bail!("model request cancelled"),
+        };
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut text = String::new();
@@ -262,18 +268,22 @@ impl ModelProvider for AnthropicProvider {
         cancel: CancellationToken,
         sink: StreamSink,
     ) -> Result<ModelResponse> {
-        let response = checked_response(
-            "anthropic",
-            self.client
-                .post(format!("{}/v1/messages", self.base_url))
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", "2023-06-01")
-                .headers(user_agent_headers())
-                .json(&anthropic_request(&request, &self.model))
-                .send()
-                .await?,
-        )
-        .await?;
+        // The transport phase obeys the same run cancellation as the stream.
+        let response = tokio::select! {
+            response = async {
+                let sent = self
+                    .client
+                    .post(format!("{}/v1/messages", self.base_url))
+                    .header("x-api-key", &self.api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .headers(user_agent_headers())
+                    .json(&anthropic_request(&request, &self.model))
+                    .send()
+                    .await?;
+                checked_response("anthropic", sent).await
+            } => response?,
+            () = cancel.cancelled() => bail!("model request cancelled"),
+        };
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut text = String::new();

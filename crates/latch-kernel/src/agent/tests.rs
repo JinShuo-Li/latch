@@ -2264,3 +2264,91 @@ async fn persistence_failures_abort_instead_of_claiming_success() {
     assert!(agent.execute_kernel_tool(&call, &sink).is_ok());
     let _ = sid;
 }
+struct HangingProvider;
+
+#[async_trait::async_trait]
+impl ModelProvider for HangingProvider {
+    fn name(&self) -> &str {
+        "hanging"
+    }
+    fn model(&self) -> &str {
+        "hanging-test"
+    }
+    async fn stream(
+        &self,
+        _request: ModelRequest,
+        cancel: CancellationToken,
+        _sink: StreamSink,
+    ) -> Result<ModelResponse> {
+        cancel.cancelled().await;
+        Err(anyhow::anyhow!("hanging provider cancelled"))
+    }
+}
+
+fn hanging_agent(dir: &tempfile::TempDir) -> (EventStore, Uuid, Agent) {
+    let workspace = dir.path();
+    let store = EventStore::open_memory().unwrap();
+    let sid = store.create_session(workspace).unwrap();
+    let tools = ToolExecutor::new(
+        workspace.into(),
+        dir.path().join("art"),
+        store.clone(),
+        sid,
+        PolicyEngine::new(Mode::Work, workspace.into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let agent = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: workspace.into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: Arc::new(HangingProvider),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 3,
+    });
+    (store, sid, agent)
+}
+
+#[test]
+fn steering_survives_a_poisoned_lock() {
+    let queue = SteeringQueue::new();
+    assert_eq!(queue.push("before"), SteeringSubmission::Accepted);
+    queue.poison_for_test();
+    assert!(
+        !queue.is_empty(),
+        "poisoning must not silently report an empty queue"
+    );
+    assert_eq!(queue.len(), 1, "accepted input is never lost");
+    assert_eq!(queue.drain(), vec!["before".to_owned()]);
+    assert!(queue.is_empty());
+    assert_eq!(queue.push("after"), SteeringSubmission::Accepted);
+    assert_eq!(queue.drain(), vec!["after".to_owned()]);
+}
+
+#[tokio::test]
+async fn ai_permission_review_obeys_run_cancellation() {
+    let d = tempdir().unwrap();
+    let (_store, _sid, mut agent) = hanging_agent(&d);
+    agent.set_permissions(PermissionMode::AiReview).unwrap();
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        trigger.cancel();
+    });
+    let call = ToolCall {
+        id: "p1".into(),
+        name: "shell".into(),
+        arguments: json!({"command":"echo hi"}),
+    };
+    let classification = agent.tools.classify_call(&call.name, &call.arguments);
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        agent.resolve_ask(&call, &classification, "test review", &sink, &cancel),
+    )
+    .await;
+    let result = outcome.expect("AI review must observe run cancellation");
+    assert!(result.is_err(), "a cancelled review must not grant");
+}

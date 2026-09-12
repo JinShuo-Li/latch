@@ -8,6 +8,7 @@ use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio_util::sync::CancellationToken;
 
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 pub struct FramedReader<R> {
@@ -231,14 +232,28 @@ impl ExtensionHost {
         }
         Ok(())
     }
-    pub async fn execute_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
+    pub async fn execute_tool(
+        &mut self,
+        name: &str,
+        arguments: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
         if !self.capabilities.tools.iter().any(|t| t.name == name) {
             bail!("extension {} did not register tool {name}", self.name);
         }
-        self.request_value("tool.execute", json!({"name":name,"arguments":arguments}))
-            .await
+        self.request_value(
+            "tool.execute",
+            json!({"name":name,"arguments":arguments}),
+            cancel,
+        )
+        .await
     }
-    pub async fn guard(&mut self, action: &str, payload: Value) -> Result<ExtensionGuardDecision> {
+    pub async fn guard(
+        &mut self,
+        action: &str,
+        payload: Value,
+        cancel: &CancellationToken,
+    ) -> Result<ExtensionGuardDecision> {
         if !self
             .capabilities
             .guard
@@ -248,32 +263,20 @@ impl ExtensionHost {
             return Ok(ExtensionGuardDecision::Allow);
         }
         let value = self
-            .request_value("hook.guard", json!({"action":action,"payload":payload}))
+            .request_value(
+                "hook.guard",
+                json!({"action":action,"payload":payload}),
+                cancel,
+            )
             .await?;
-        match value
-            .get("decision")
-            .and_then(Value::as_str)
-            .unwrap_or("allow")
-        {
-            "allow" => Ok(ExtensionGuardDecision::Allow),
-            "deny" => Ok(ExtensionGuardDecision::Deny(
-                value
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .unwrap_or("extension denied action")
-                    .into(),
-            )),
-            "ask" => Ok(ExtensionGuardDecision::Ask(
-                value
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .unwrap_or("extension requests approval")
-                    .into(),
-            )),
-            other => bail!("extension returned invalid guard decision {other}"),
-        }
+        guard_decision(&value)
     }
-    pub async fn transform(&mut self, structure: &str, value: Value) -> Result<Value> {
+    pub async fn transform(
+        &mut self,
+        structure: &str,
+        value: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
         if !self
             .capabilities
             .transform
@@ -285,25 +288,35 @@ impl ExtensionHost {
         self.request_value(
             "hook.transform",
             json!({"structure":structure,"value":value}),
+            cancel,
         )
         .await
     }
-    pub async fn context(&mut self) -> Result<Vec<Value>> {
+    pub async fn context(&mut self, cancel: &CancellationToken) -> Result<Vec<Value>> {
         let mut values = Vec::new();
         for name in self.capabilities.context_sources.clone() {
             values.push(
-                self.request_value("context_source.get", json!({"name":name}))
+                self.request_value("context_source.get", json!({"name":name}), cancel)
                     .await?,
             );
         }
         Ok(values)
     }
-    async fn request_value(&mut self, method: &str, params: Value) -> Result<Value> {
+    async fn request_value(
+        &mut self,
+        method: &str,
+        params: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
         self.writer.write(&request(id, method, params)).await?;
         loop {
-            let msg = self.reader.read().await?;
+            // An unresponsive extension must not pin a cancelled run.
+            let msg = tokio::select! {
+                message = self.reader.read() => message?,
+                () = cancel.cancelled() => bail!("extension request cancelled"),
+            };
             if msg.id == Some(json!(id)) {
                 if let Some(e) = msg.error {
                     bail!("extension tool failed: {e}");
@@ -382,6 +395,33 @@ fn sandbox_command(command: &str, args: &[String]) -> String {
     line
 }
 
+/// Parses a guard hook response. A malformed response must not silently
+/// allow: an absent or non-string decision is an explicit error.
+fn guard_decision(value: &Value) -> Result<ExtensionGuardDecision> {
+    let decision = value
+        .get("decision")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("extension guard response has no decision"))?;
+    match decision {
+        "allow" => Ok(ExtensionGuardDecision::Allow),
+        "deny" => Ok(ExtensionGuardDecision::Deny(
+            value
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("extension denied action")
+                .into(),
+        )),
+        "ask" => Ok(ExtensionGuardDecision::Ask(
+            value
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("extension requests approval")
+                .into(),
+        )),
+        other => bail!("extension returned invalid guard decision {other}"),
+    }
+}
+
 pub struct ExtensionRegistry {
     hosts: BTreeMap<String, ExtensionHost>,
 }
@@ -419,32 +459,48 @@ impl ExtensionRegistry {
                 .then(|| name.clone())
         })
     }
-    pub async fn execute(&mut self, extension: &str, tool: &str, args: Value) -> Result<Value> {
+    pub async fn execute(
+        &mut self,
+        extension: &str,
+        tool: &str,
+        args: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
         self.hosts
             .get_mut(extension)
             .ok_or_else(|| anyhow!("unknown extension {extension}"))?
-            .execute_tool(tool, args)
+            .execute_tool(tool, args, cancel)
             .await
     }
-    pub async fn guard(&mut self, action: &str, payload: Value) -> Result<ExtensionGuardDecision> {
+    pub async fn guard(
+        &mut self,
+        action: &str,
+        payload: Value,
+        cancel: &CancellationToken,
+    ) -> Result<ExtensionGuardDecision> {
         for host in self.hosts.values_mut() {
-            match host.guard(action, payload.clone()).await? {
+            match host.guard(action, payload.clone(), cancel).await? {
                 ExtensionGuardDecision::Allow => {}
                 decision => return Ok(decision),
             }
         }
         Ok(ExtensionGuardDecision::Allow)
     }
-    pub async fn transform(&mut self, structure: &str, mut value: Value) -> Result<Value> {
+    pub async fn transform(
+        &mut self,
+        structure: &str,
+        mut value: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
         for host in self.hosts.values_mut() {
-            value = host.transform(structure, value).await?;
+            value = host.transform(structure, value, cancel).await?;
         }
         Ok(value)
     }
-    pub async fn context(&mut self) -> Result<Vec<Value>> {
+    pub async fn context(&mut self, cancel: &CancellationToken) -> Result<Vec<Value>> {
         let mut values = Vec::new();
         for host in self.hosts.values_mut() {
-            values.extend(host.context().await?);
+            values.extend(host.context(cancel).await?);
         }
         Ok(values)
     }
@@ -504,6 +560,17 @@ mod tests {
         assert_eq!(back.result.unwrap()["ok"], true);
     }
 
+    #[test]
+    fn guard_responses_are_fail_closed() {
+        assert!(guard_decision(&json!({})).is_err(), "missing decision");
+        assert!(guard_decision(&json!({"decision": 7})).is_err());
+        assert!(guard_decision(&json!({"decision": "maybe"})).is_err());
+        assert_eq!(
+            guard_decision(&json!({"decision": "deny", "reason": "no"})).unwrap(),
+            ExtensionGuardDecision::Deny("no".into())
+        );
+    }
+
     #[tokio::test]
     async fn host_registers_and_executes_external_tool() {
         let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
@@ -513,21 +580,31 @@ mod tests {
         assert_eq!(host.capabilities.tools[0].name, "fixture.echo");
         assert_eq!(host.capabilities.commands, ["fixture-about"]);
         assert_eq!(
-            host.guard("tool.execute", json!({})).await.unwrap(),
+            host.guard("tool.execute", json!({}), &CancellationToken::new())
+                .await
+                .unwrap(),
             ExtensionGuardDecision::Allow
         );
         assert_eq!(
-            host.transform("model_request", json!({"unchanged":true}))
-                .await
-                .unwrap()["unchanged"],
+            host.transform(
+                "model_request",
+                json!({"unchanged":true}),
+                &CancellationToken::new()
+            )
+            .await
+            .unwrap()["unchanged"],
             true
         );
         assert_eq!(
-            host.context().await.unwrap()[0]["content"],
+            host.context(&CancellationToken::new()).await.unwrap()[0]["content"],
             "fixture context"
         );
         let value = host
-            .execute_tool("fixture.echo", json!({"value":"hello"}))
+            .execute_tool(
+                "fixture.echo",
+                json!({"value":"hello"}),
+                &CancellationToken::new(),
+            )
             .await
             .unwrap();
         assert_eq!(value["echoed"], "hello");

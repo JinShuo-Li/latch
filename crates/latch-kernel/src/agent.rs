@@ -465,7 +465,7 @@ impl Agent {
             // Budget the complete request: tool schemas and extension context
             // are part of every call, so they are reserved before the
             // continuity engine allocates its own sections.
-            let extension_context = self.extensions.context().await?;
+            let extension_context = self.extensions.context(&cancel).await?;
             let extension_json = serde_json::to_string_pretty(&extension_context)?;
             let tools = self.tool_definitions();
             let tools_tokens = self.estimator.estimate_tools(&tools);
@@ -513,7 +513,7 @@ impl Agent {
             };
             let request: ModelRequest = serde_json::from_value(
                 self.extensions
-                    .transform("model_request", serde_json::to_value(request)?)
+                    .transform("model_request", serde_json::to_value(request)?, &cancel)
                     .await?,
             )
             .context("extension returned invalid model_request transform")?;
@@ -640,8 +640,14 @@ impl Agent {
                         },
                     )?;
                     last = Some(e);
-                    tokio::time::sleep(std::time::Duration::from_millis(100 * 2u64.pow(attempt)))
-                        .await;
+                    tokio::select! {
+                        () = tokio::time::sleep(
+                            std::time::Duration::from_millis(100 * 2u64.pow(attempt)),
+                        ) => {}
+                        () = cancel.cancelled() => {
+                            return Err(anyhow!("model request cancelled"));
+                        }
+                    }
                 }
                 Err(e) => return Err(e),
             }
