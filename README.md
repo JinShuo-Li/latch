@@ -273,6 +273,14 @@ working set while retaining durable history and canonical state.
   CRLF, Unicode, and blank lines without submitting; Enter remains the only
   submit action. The editor wraps Unicode correctly and never truncates the
   buffer.
+- **Live steering:** while a task is running the composer stays active.
+  Submitting text (Enter) queues it as a normal user turn and acknowledges it
+  with a single `· steering queued` line; the one agent loop injects queued
+  messages in order at the next safe model boundary — never inside an
+  unresolved tool transaction — so the in-flight model request, tool, or
+  managed process is never interrupted. Injected turns are durable user
+  messages with normal provenance and override earlier plan decisions. Ctrl+C
+  remains the only cancellation.
 - **Composer scrolling:** when the prompt overflows the visible editor,
   PageUp/PageDown move through it, as does the mouse wheel over the composer.
   Somewhere-hidden content is marked with `↑`/`↓`/`↕`; the cursor stays visible

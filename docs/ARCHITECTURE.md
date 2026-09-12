@@ -42,6 +42,23 @@ is never mixed into them. The compiled prompt is intentionally bounded and
 covered by tests that pin the fragment order, forbid obsolete policy text, keep
 Latch-specific tool/runtime guidance, and cap its size.
 
+## Live steering
+
+There is one agent loop and one conversation. While a run is in flight the
+interactive layer keeps a `SteeringQueue` handle: submitted text is pushed
+there in FIFO order and the TUI shows a single `steering queued` notice. The
+loop drains the queue only at safe model boundaries — after every prior tool
+transaction has a terminal result and before the next `ModelRequest` is
+constructed — and records each message as a normal durable `UserMessage` with
+the same constraint-memory and extension-observation provenance as an ordinary
+prompt. Injected turns therefore appear in the volatile/append-only portion of
+the current context epoch, resume and replay identically, and can never be
+placed between an assistant tool call and its results. A queued message also
+prevents an early stop: if the model answers with plain text while steering is
+pending, the loop runs another turn so the instruction is actually seen.
+Cancellation stays separate: Ctrl+C cancels the run, while steering never
+touches the in-flight request, tool, or managed process.
+
 ## The validation shift: models express intent, the kernel owns truth
 
 The model names what must hold — `validate {"requirement": "existing unittest
