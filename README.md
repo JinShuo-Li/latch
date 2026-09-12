@@ -7,7 +7,8 @@ sessions, OpenAI-compatible and Anthropic providers, kernel-owned validation
 evidence, guarded coding tools, three orthogonal Mode/Safety/Permissions
 controls behind a mandatory Bubblewrap sandbox, a modern Ratatui interface with
 a slash command palette and real input editing, and language-independent process
-extensions.
+extensions. The main agent can delegate bounded work to durable asynchronous
+child Latch sessions through a fixed generic tool surface.
 
 Latch is independent software. Pi and OpenAI Codex were studied as public
 references for agent and terminal interaction behavior; Latch is not a fork and
@@ -54,6 +55,11 @@ task state, evidence, failure streaks, provider session UUID, continuity, and
 change ownership without re-running historical tools. Session metadata lives
 under `~/.local/state/latch/` by default; large output is stored in its
 `artifacts/` tree.
+
+Child agents are independent sessions and are omitted from the ordinary root
+session picker. Resuming a root reconstructs its durable child graph; a child
+whose turn was running when the process ended becomes `Interrupted` and can be
+continued explicitly rather than silently rerunning work.
 
 ## Terminal interface
 
@@ -174,6 +180,25 @@ identifiers and cannot self-certify a passing validation. A requirement that
 failed and now passes supersedes the failure; historical attempts stay in the
 raw event log. Completion states: `InProgress`, `ImplementedNotVerified`,
 `Verified`, `Blocked` (a required validation could not run).
+
+## Durable child agents
+
+The root model has seven stable control tools: `spawn_agent`,
+`send_agent_message`, `continue_agent`, `wait_agents`, `list_agents`,
+`interrupt_agent`, and `close_agent`. Spawning returns immediately and runs a
+real child session asynchronously. The child starts with a compact delegation
+brief plus the workspace's normal repository instructions, not a copy of the
+parent transcript. The first release permits depth 1 only; children see the
+same fixed schema but the kernel rejects agent control from a child.
+
+Each child owns its conversation, cache epoch, canonical task state, evidence,
+failure/progress supervision, and lifecycle. Its compact `AgentReport` carries
+semantic findings, touched files, child-only validation references, and open
+questions. Reports enter the parent context only at a safe model boundary, and
+child evidence never certifies root completion. Workspace mutation coordination
+and the live parent capability ceiling are shared, while per-call grants and
+managed processes remain isolated. `interrupt_agent` cancels only the current
+turn and leaves the child reusable; `close_agent` shuts it down permanently.
 
 ## Bounded reads, artifacts, and long processes
 

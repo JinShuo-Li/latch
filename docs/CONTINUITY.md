@@ -18,6 +18,13 @@ query-recalled original events, and a budgeted tail of verbatim conversation.
 4. **L3 raw store:** original durable events and artifacts. Normal context
    management never deletes them.
 
+Every child agent has its own complete L0-L3 stack. Parent history does not seed
+a child's active context: it starts from a compact delegation brief and the
+workspace repository instructions. Child task state and evidence remain local
+to its session. A compact semantic `AgentReport` is the only result transferred
+back; its validation entries are informational and never become parent
+evidence.
+
 Summaries are indexes, not truth. Exact questions use deterministic SQLite FTS
 to recover original events. Retrieval uses explicit relationships, paths,
 entities, decisions, evidence, keywords, and recency. There are no embeddings
@@ -81,6 +88,14 @@ explicit, and messages from older generations are excluded from the
 provider-visible epoch while remaining durable. Ordinary task-state,
 evidence, or validation changes therefore append instead of rewriting earlier
 messages, and resume replays the same kernel history.
+
+Asynchronous child lifecycle events are hidden from recent context and recall.
+The root supervisor buffers completed reports, and the root loop appends an
+`AgentNotificationDelivered` event only at a safe model boundary after every
+earlier tool call has a terminal result. That delivered event is semantic,
+provider-visible, and a durable dedupe marker. It therefore extends the current
+cache epoch normally without rewriting its prefix or exposing child transcripts
+and kernel bookkeeping.
 
 `recent_tokens` is the conversation high-water mark. When an epoch exceeds it,
 one hysteretic rotation retains the newest whole semantic units up to about

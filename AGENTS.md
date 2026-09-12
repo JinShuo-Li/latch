@@ -101,7 +101,9 @@ Four crates: `latch-protocol` (durable event/model schema shared by all),
 
 Kernel ownership boundaries — put changes in the right child module:
 `agent.rs` keeps the run loop and public facade, with `agent/{steering,request,
-permissions,dispatch,kernel_tools,validation,supervision}.rs`; `tools.rs` keeps
+permissions,dispatch,agent_controls,kernel_tools,validation,supervision}.rs`;
+root-scoped child ownership is in
+`agents/{supervisor,worker,graph,mailbox,profile}.rs`. `tools.rs` keeps
 `ToolExecutor` + dispatch, with `tools/{policy,ownership,process,files,write,git}.rs`.
 `continuity.rs` is intentionally one module (rollover, episodes, recall share one
 invariant). TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
@@ -119,6 +121,11 @@ Memory/cache invariants (do not violate):
   whole-unit, and replayable.
 - Transitions that must survive resume fail closed: a live state change must not
   be reported successful before its durable event commits.
+- Child agents are independent durable sessions. Their task/evidence/continuity
+  never becomes root truth; only semantic reports cross the boundary. Agent
+  notifications are appended to root history only at safe model boundaries.
+- The initial agent architecture has maximum depth 1. All sessions retain one
+  stable generic agent-control schema; child control attempts are denied.
 
 ## Working preferences (maintainer)
 

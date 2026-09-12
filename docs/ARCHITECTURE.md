@@ -3,7 +3,7 @@
 | Crate | Responsibility |
 |---|---|
 | `latch-protocol` | Events, task/memory/evidence records, provider and extension types, shared display formatting |
-| `latch-kernel` | Store, continuity, prompts, policy, tools, providers, extensions, validation/evidence, failure and progress supervision, permissions, token estimation, loop, session resume |
+| `latch-kernel` | Store, continuity, prompts, policy, tools, providers, extensions, validation/evidence, failure and progress supervision, permissions, child-agent graph/workers, token estimation, loop, session resume |
 | `latch-tui` | Typed transcript, slash palette, input editor, prompt history, semantic rendering |
 | `latch-cli` | Configuration, resume orchestration, provider setup, slash-command coordination |
 
@@ -26,6 +26,11 @@ flowchart LR
     K --> PS[Progress supervision]
     K --> PB[Permission broker]
     PB --> U
+    K --> AS[Root AgentSupervisor]
+    AS --> A1[Child session worker]
+    AS --> A2[Child session worker]
+    A1 --> S
+    A2 --> S
     X[stdio extensions] <--> K
 ```
 
@@ -44,7 +49,7 @@ Latch-specific tool/runtime guidance, and cap its size.
 
 ## Live steering
 
-There is one agent loop and one conversation. While a run is in flight the
+Each session has one agent loop and one conversation. While a run is in flight the
 interactive layer keeps a `SteeringQueue` handle: submitted text is pushed
 there in FIFO order and the TUI shows a single `steering queued` notice. The
 queue is an atomic run-closing handshake. A run opens it at start; when the
@@ -80,6 +85,53 @@ pure workspace reads are allowed to proceed — and read-only calls that were
 already started concurrently may finish. Every tool call still has exactly one
 terminal result, and cancellation stays separate: Ctrl+C cancels the run,
 while steering never touches the in-flight request, tool, or managed process.
+
+## Durable child-agent graph
+
+The root `AgentSupervisor` owns an agent graph and independently spawned async
+workers; the root `Agent` never stores child `Agent` values. A child id is its
+durable session id. `AgentSpawned` is the first event in that session and is
+committed in the same SQLite transaction as session creation, carrying the
+root/parent relationship, name, optional type, depth, and compact delegation
+brief. Status, queued/delivered messages, reports, interrupt, and close are
+append-only child-session events. Graph replay reduces those events in stable
+name/id order. A persisted `Starting` or `Running` state with no surviving
+runtime is reconciled once to `Interrupted`; it is never rerun implicitly.
+
+The model-facing schema is fixed: `spawn_agent`, `send_agent_message`,
+`continue_agent`, `wait_agents`, `list_agents`, `interrupt_agent`, and
+`close_agent` exist regardless of graph contents. Spawn is asynchronous;
+queue-only messages do not wake an idle child, while continue starts a turn or
+uses the child's steering queue at its next safe boundary. `wait_agents`
+returns statuses only — report bodies travel on exactly one channel, the
+durable kernel notification delivered with the request that reads the wait
+result. Interrupt cancels a turn but retains the worker/mailbox. Close
+cancels, waits for resource release, and records the terminal lifecycle. Root
+shutdown closes all live workers. A child whose worker restarts still owes its
+opening turn: an undelivered delegation brief is replayed from `AgentSpawned`
+ahead of any follow-up. Depth is limited to one, so a child receives the
+stable tools but every agent control call fails with a normal terminal tool
+result.
+
+Child context begins fresh: its first user turn is the delegation brief, and
+its system prompt independently loads workspace repository instructions. Task
+state, evidence, failure and progress supervision, continuity, and cache epochs
+are reconstructed solely from that child session. `AgentReport` exposes only
+semantic evidence references; it never imports evidence into the parent ledger.
+All executors share the root workspace mutation/ownership coordinator and the
+live root policy locks as a capability ceiling, but processes, grants, and
+permission brokers remain session-local. OpenAI-compatible transports that use
+session metadata are cloned with the child id, preserving OpenCode Go's stable
+`x-opencode-session` behavior.
+
+Workers never append provider-visible events to the parent asynchronously.
+They queue compact reports in the supervisor; the root loop drains them only
+before constructing a model request or after a plain assistant answer, when all
+prior tool calls already have terminal results. It then appends
+`AgentNotificationDelivered`, the sole graph event visible to parent context
+and the durable resume dedupe marker; the TUI renders it as one quiet
+transcript line. Internal graph/mailbox events are also excluded from FTS
+recall.
 
 ## The validation shift: models express intent, the kernel owns truth
 
@@ -264,7 +316,9 @@ secondary call.
 
 The kernel keeps its stable public types and the run loop in `agent.rs`, with
 one child module per responsibility: `steering`, `request`, `permissions`,
-`dispatch`, `kernel_tools`, `validation`, and `supervision`. Tools keep the
+`dispatch`, `agent_controls`, `kernel_tools`, `validation`, and `supervision`.
+Root graph/runtime ownership lives in `agents/{supervisor,worker,graph,mailbox,
+profile}.rs`. Tools keep the
 `ToolExecutor` facade in `tools.rs` and split `policy`, `ownership`,
 `process`, `files`, `write`, and `git` into children. The continuity engine is
 a single module because rollover, episode segmentation, and recall share one
