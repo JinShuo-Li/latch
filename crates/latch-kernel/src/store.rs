@@ -496,13 +496,15 @@ impl EventStore {
         if query.is_empty() {
             return Ok(vec![]);
         }
-        // Fetch only the matched rows. The FTS LIMIT is applied inside the
-        // subquery exactly as before; the bookkeeping kinds are excluded after
-        // selection so the limit keeps its original meaning.
+        // Fetch only the matched rows. The FTS selection is ordered by
+        // insertion (rowid) so the same durable log always yields the same
+        // bounded recall set; the outer query then presents it in event
+        // order. The bookkeeping kinds are excluded after selection so the
+        // limit keeps its original meaning.
         let sql = "SELECT sequence,id,parent_id,timestamp,payload FROM events \
                    WHERE session_id=?1 AND id IN (\
                        SELECT event_id FROM event_search \
-                       WHERE session_id=?1 AND event_search MATCH ?2 LIMIT ?3\
+                       WHERE session_id=?1 AND event_search MATCH ?2 ORDER BY rowid LIMIT ?3\
                    ) ORDER BY sequence";
         let session = session_id.to_string();
         let events = self.events_query(session_id, sql, &[&session, &query, &(limit as i64)])?;
@@ -526,8 +528,10 @@ impl EventStore {
 
     pub fn memories(&self, session_id: Uuid) -> Result<Vec<MemoryRecord>> {
         let conn = self.conn()?;
+        // Deterministic order even for identical timestamps: insertion order is
+        // the tie-breaker, so canonical rendering cannot churn between runs.
         let mut stmt =
-            conn.prepare("SELECT json FROM memory WHERE session_id=?1 ORDER BY created_at")?;
+            conn.prepare("SELECT json FROM memory WHERE session_id=?1 ORDER BY created_at, rowid")?;
         stmt.query_map([session_id.to_string()], |r| r.get::<_, String>(0))?
             .map(|r| Ok(serde_json::from_str(&r?)?))
             .collect()
@@ -840,12 +844,12 @@ mod tests {
             )
             .unwrap();
 
-        // Recompute the historical implementation: FTS ids first, then a full
-        // history scan filtered by id and excluded kinds.
+        // Recompute the historical implementation: FTS ids first (insertion
+        // order), then a full history scan filtered by id and excluded kinds.
         let raw_ids: Vec<String> = {
             let conn = store.conn().unwrap();
             let mut stmt = conn
-                .prepare("SELECT event_id FROM event_search WHERE session_id=?1 AND event_search MATCH ?2 LIMIT ?3")
+                .prepare("SELECT event_id FROM event_search WHERE session_id=?1 AND event_search MATCH ?2 ORDER BY rowid LIMIT ?3")
                 .unwrap();
             stmt.query_map(params![sid.to_string(), "\"needle\"", 12i64], |row| {
                 row.get(0)
