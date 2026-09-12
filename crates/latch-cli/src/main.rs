@@ -468,6 +468,7 @@ async fn interactive(
     // The TUI is the only path that can approve `Ask` policy decisions.
     agent.enable_interactive_permissions();
     let broker = agent.permission_broker();
+    let steering = agent.steering_handle();
     let (input_tx, mut input_rx) = mpsc::channel(16);
     let (output_tx, output_rx) = mpsc::channel(512);
     let start_mode = agent.mode();
@@ -562,7 +563,17 @@ async fn interactive(
                             Some(Input::Quit) | None => { active.cancel(); let _ = (&mut running).await; break 'session; }
                             Some(Input::Resume) => { output_tx.send(Output::Notice("cancel the active turn before resuming another session".into())).await?; }
                             Some(Input::SetSafety(_)) | Some(Input::SetPermissions(_)) => { output_tx.send(Output::Notice("finish or cancel the active turn before changing safety or permissions".into())).await?; }
-                            Some(Input::Submit(_)) => output_tx.send(Output::Notice("finish or cancel the active turn before submitting another message".into())).await?,
+                            Some(Input::Submit(text)) => {
+                                if is_slash_command_input(&text) {
+                                    output_tx.send(Output::Notice("finish or cancel the active turn before running commands".into())).await?;
+                                } else {
+                                    // Live steering: queue for the next safe
+                                    // model boundary without touching the
+                                    // running request, tool, or process.
+                                    steering.push(text);
+                                    output_tx.send(Output::Notice("steering queued".into())).await?;
+                                }
+                            }
                         }
                     }
                 }

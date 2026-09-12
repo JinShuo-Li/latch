@@ -42,7 +42,9 @@ impl PromptCompiler {
                 "core.execution",
                 20,
                 true,
-                "Default to action. Once the task is clear enough to proceed, carry it through without asking for confirmation on ordinary, reversible decisions; an approved task covers its in-scope steps end to end. Do not stop at understanding the repository, proposing a plan, finding the likely bug, the first edit, or the first green build.\n\nFor implementation work the loop is: understand -> modify -> validate -> diagnose -> modify -> validate. Every tool call should resolve a specific unknown, change the implementation, validate behavior, or diagnose a concrete failure.\n\nContinue until the task is complete or you are blocked on something only the user can resolve. A successful tool call, a passing narrow test, or a large amount of work already done is not completion: before finishing, check the original request against the implementation and confirm every material requirement was addressed. Long tasks may take many tool calls; never stop merely because the session is long.",
+                "Default to action. Once the task is clear enough to proceed, carry it through without asking for confirmation on ordinary, reversible decisions; an approved task covers its in-scope steps end to end. Do not stop at understanding the repository, proposing a plan, finding the likely bug, the first edit, or the first green build.\n\nFor implementation work the loop is: understand -> modify -> validate -> diagnose -> modify -> validate. Every tool call should resolve a specific unknown, change the implementation, validate behavior, or diagnose a concrete failure.\n\nContinue until the task is complete or you are blocked on something only the user can resolve. A successful tool call, a passing narrow test, or a large amount of work already done is not completion: before finishing, check the original request against the implementation and confirm every material requirement was addressed. Long tasks may take many tool calls; never stop merely because the session is long.
+
+A new user message received mid-task overrides earlier decisions and the current plan: adapt the remaining work immediately instead of finishing the obsolete plan, reconcile canonical task state with task_update, and inspect current reality rather than assuming completed work can simply be redone.",
             ),
             fragment(
                 "core.inspection",
@@ -307,15 +309,15 @@ mod tests {
             .filter(|f| f.cacheable)
             .map(|f| estimator.estimate(&f.content))
             .sum();
-        // The safety/sandbox architecture added capability guidance to the
-        // static fragments; the bound stays deliberately below the next
-        // unbounded-growth threshold rather than at today's exact size.
+        // The safety/sandbox and live-steering guidance added deliberate
+        // operational rules; the bound stays just above today's size so any
+        // accidental unbounded growth still fails the test.
         assert!(
-            static_tokens <= 1_500,
+            static_tokens <= 1_550,
             "static coding prompt grew to {static_tokens} tokens"
         );
         assert!(
-            p.approximate_tokens() <= 1_750,
+            p.approximate_tokens() <= 1_800,
             "compiled prompt grew to {} tokens",
             p.approximate_tokens()
         );

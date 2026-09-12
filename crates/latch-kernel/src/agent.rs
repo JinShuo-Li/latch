@@ -28,6 +28,51 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 pub type AgentEventSink = Arc<dyn Fn(AgentOutput) + Send + Sync>;
+
+/// Live user steering: messages typed while a task is running. The TUI/CLI
+/// pushes; the single agent loop drains at safe model boundaries and records
+/// each message durably as a normal user turn. Ordering is FIFO and messages
+/// are never inserted into an unresolved assistant/tool transaction.
+#[derive(Debug, Clone, Default)]
+pub struct SteeringQueue {
+    pending: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+}
+
+impl SteeringQueue {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&self, text: impl Into<String>) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.push_back(text.into());
+        }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.pending
+            .lock()
+            .map(|pending| pending.is_empty())
+            .unwrap_or(true)
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.pending
+            .lock()
+            .map(|pending| pending.len())
+            .unwrap_or(0)
+    }
+
+    fn drain(&self) -> Vec<String> {
+        self.pending
+            .lock()
+            .map(|mut pending| pending.drain(..).collect())
+            .unwrap_or_default()
+    }
+}
 #[derive(Debug, Clone)]
 pub enum AgentOutput {
     Durable(Box<Event>),
@@ -56,6 +101,9 @@ pub struct Agent {
     context_window_tokens: usize,
     estimator: TokenEstimator,
     permissions: PermissionBroker,
+    /// Messages queued while the loop is running; drained only at safe model
+    /// boundaries.
+    steering: SteeringQueue,
     interactive_permissions: bool,
     last_completion: Option<CompletionState>,
 }
@@ -100,6 +148,7 @@ impl Agent {
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
             estimator,
             permissions: PermissionBroker::new(),
+            steering: SteeringQueue::new(),
             interactive_permissions: false,
             last_completion: None,
         }
@@ -113,6 +162,13 @@ impl Agent {
     #[must_use]
     pub fn permission_broker(&self) -> PermissionBroker {
         self.permissions.clone()
+    }
+
+    /// Handle for live steering. The interactive layer keeps one while a run
+    /// is in flight and pushes user messages into it.
+    #[must_use]
+    pub fn steering_handle(&self) -> SteeringQueue {
+        self.steering.clone()
     }
     /// Resolves a pending approval. Returns false when the request is unknown
     /// or already resolved, so a stale or forged id can never approve twice.
@@ -348,31 +404,17 @@ impl Agent {
         let sink: AgentEventSink = Arc::new(|_| {});
         Ok(self.execute_validate(&call, cancel, &sink).await)
     }
-    pub async fn run(
-        &mut self,
-        user_text: &str,
-        cancel: CancellationToken,
-        sink: AgentEventSink,
-    ) -> Result<String> {
-        // Everything appended from here on is fed to the supervisor and to the
-        // live sink in order, exactly as a later replay would process it.
-        let start = self.store.events(self.session_id)?.len();
-        self.progress_watermark = start;
-        self.forward_watermark.set(start);
-        let user_event = self.emit(
-            EventPayload::UserMessage {
-                text: user_text.into(),
-            },
-            &sink,
-        )?;
-        // A constraint stated by the user carries UserConstraint provenance
-        // because its originating event is an actual user message.
-        if looks_like_constraint(user_text) {
+    /// Records one user turn with normal provenance. Used for the initial
+    /// prompt and for every live-steering message, so injected turns are
+    /// indistinguishable from ordinary user turns in durable history.
+    async fn record_user_message(&mut self, text: &str, sink: &AgentEventSink) -> Result<()> {
+        let user_event = self.emit(EventPayload::UserMessage { text: text.into() }, sink)?;
+        if looks_like_constraint(text) {
             self.store.add_memory(&MemoryRecord {
                 id: Uuid::new_v4(),
                 session_id: self.session_id,
                 kind: MemoryKind::UserConstraint,
-                content: user_text.into(),
+                content: text.into(),
                 originating_event: user_event.id,
                 created_at: Utc::now(),
                 validity: Validity::Active,
@@ -384,9 +426,36 @@ impl Agent {
         self.extensions
             .observe(
                 "user_message",
-                json!({"text":user_text,"sessionId":self.session_id}),
+                json!({"text":text,"sessionId":self.session_id}),
             )
             .await?;
+        if self.state.state().goal.is_empty() {
+            self.state.update(crate::state::StateUpdate {
+                goal: Some(text.into()),
+                ..Default::default()
+            });
+            self.emit(
+                EventPayload::TaskStateUpdated {
+                    state: self.state.state().clone(),
+                },
+                sink,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub async fn run(
+        &mut self,
+        user_text: &str,
+        cancel: CancellationToken,
+        sink: AgentEventSink,
+    ) -> Result<String> {
+        // Everything appended from here on is fed to the supervisor and to the
+        // live sink in order, exactly as a later replay would process it.
+        let start = self.store.events(self.session_id)?.len();
+        self.progress_watermark = start;
+        self.forward_watermark.set(start);
+        self.record_user_message(user_text, &sink).await?;
         if self.state.state().goal.is_empty() {
             self.state.update(crate::state::StateUpdate {
                 goal: Some(user_text.into()),
@@ -418,6 +487,19 @@ impl Agent {
                 return Err(anyhow!(
                     "agent exceeded the configured model-turn circuit breaker ({limit})"
                 ));
+            }
+            // Safe model boundary: every prior tool transaction has a terminal
+            // result. Drain live steering here, before the next request exists,
+            // recording each queued message as a normal durable user turn in
+            // the order it was submitted.
+            let queued = self.steering.drain();
+            if !queued.is_empty() {
+                for text in queued {
+                    self.record_user_message(&text, &sink).await?;
+                }
+                // A user turn is meaningful progress for the supervisors, just
+                // like an ordinary new prompt.
+                self.observe_progress_events()?;
             }
             let query = if turns == 1 { Some(user_text) } else { None };
             // Budget the complete request: tool schemas and extension context
@@ -514,7 +596,13 @@ impl Agent {
                 self.emit(EventPayload::ModelUsage { usage }, &sink)?;
             }
             if response.tool_calls.is_empty() {
-                break;
+                // A steering message submitted while the model was streaming
+                // its final answer still gets a turn; otherwise a task could
+                // absorb a new instruction without ever seeing it.
+                if self.steering.is_empty() {
+                    break;
+                }
+                continue;
             }
             for call in &response.tool_calls {
                 self.emit(EventPayload::ToolRequested { call: call.clone() }, &sink)?;
@@ -2933,6 +3021,434 @@ mod tests {
             "critical"
         );
         assert_eq!(parse_review("{\"risk\":\"low\"}").0, "critical");
+    }
+
+    struct SteeringProvider {
+        requests: std::sync::Mutex<Vec<ModelRequest>>,
+        responses: std::sync::Mutex<std::collections::VecDeque<ModelResponse>>,
+        /// Set from `Agent::steering_handle()` after construction; the provider
+        /// simulates a user typing into the live queue.
+        steering: std::sync::RwLock<SteeringQueue>,
+        inject_on_request: usize,
+        injections: Vec<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelProvider for SteeringProvider {
+        fn name(&self) -> &str {
+            "steering"
+        }
+        fn model(&self) -> &str {
+            "steering-test"
+        }
+        async fn stream(
+            &self,
+            request: ModelRequest,
+            _cancel: CancellationToken,
+            sink: StreamSink,
+        ) -> Result<ModelResponse> {
+            let index = {
+                let mut requests = self.requests.lock().unwrap();
+                requests.push(request);
+                requests.len()
+            };
+            if index == self.inject_on_request {
+                let steering = self.steering.read().unwrap().clone();
+                for text in &self.injections {
+                    steering.push(text.clone());
+                }
+            }
+            let response = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("scripted steering response");
+            for chunk in response.text.as_bytes().chunks(8) {
+                sink(StreamEvent::TextDelta(
+                    String::from_utf8_lossy(chunk).into_owned(),
+                ));
+            }
+            sink(StreamEvent::Completed(response.clone()));
+            Ok(response)
+        }
+    }
+
+    fn tool_response(
+        text: &str,
+        id: &str,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> ModelResponse {
+        ModelResponse {
+            text: text.into(),
+            tool_calls: vec![ToolCall {
+                id: id.into(),
+                name: name.into(),
+                arguments,
+            }],
+            stop_reason: "tool_calls".into(),
+            usage: None,
+            reasoning_content: None,
+        }
+    }
+
+    fn steering_agent(
+        dir: &tempfile::TempDir,
+        responses: Vec<ModelResponse>,
+        injections: Vec<String>,
+        inject_on_request: usize,
+    ) -> (EventStore, Uuid, Agent, Arc<SteeringProvider>) {
+        let workspace = dir.path();
+        std::fs::write(dir.path().join("a"), "alpha").unwrap();
+        std::fs::write(dir.path().join("b"), "beta").unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(workspace).unwrap();
+        let tools = ToolExecutor::new(
+            workspace.into(),
+            dir.path().join("art"),
+            store.clone(),
+            sid,
+            PolicyEngine::new(Mode::Work, workspace.into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        let provider = Arc::new(SteeringProvider {
+            requests: std::sync::Mutex::new(Vec::new()),
+            responses: std::sync::Mutex::new(responses.into()),
+            steering: std::sync::RwLock::new(SteeringQueue::new()),
+            inject_on_request,
+            injections,
+        });
+        let agent = Agent::new(AgentRuntime {
+            session_id: sid,
+            workspace: workspace.into(),
+            mode: Mode::Work,
+            store: store.clone(),
+            provider: provider.clone(),
+            tools,
+            continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+            retry_budget: 3,
+        });
+        *provider.steering.write().unwrap() = agent.steering_handle();
+        (store, sid, agent, provider)
+    }
+
+    fn user_turns(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::UserMessage { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn steering_is_injected_after_tool_results_at_the_next_boundary() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, provider) = steering_agent(
+            &d,
+            vec![
+                tool_response("checking", "c1", "read_file", json!({"path":"a"})),
+                ModelResponse {
+                    text: "adapted".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec!["also inspect b".into()],
+            1,
+        );
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let requests = provider.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2, "steering kept the loop going");
+        let messages = &requests[1].messages;
+        let assistant = messages
+            .iter()
+            .position(|message| message.role == "assistant" && !message.tool_calls.is_empty())
+            .expect("assistant tool call");
+        let tool_result = messages
+            .iter()
+            .position(|message| message.role == "tool")
+            .expect("tool result");
+        let steer = messages
+            .iter()
+            .rposition(|message| {
+                message.role == "user" && message.content.contains("also inspect b")
+            })
+            .expect("steering message injected");
+        assert!(assistant < tool_result, "assistant precedes its result");
+        assert!(
+            tool_result < steer,
+            "steering lands after the resolved tool transaction: {messages:#?}"
+        );
+        assert!(
+            !messages[assistant + 1..tool_result]
+                .iter()
+                .any(|message| message.role == "user"),
+            "no user message inside an unresolved transaction"
+        );
+        // Durable history keeps the turns distinct and ordered.
+        let events = store.events(sid).unwrap();
+        assert_eq!(user_turns(&events), vec!["start", "also inspect b"]);
+    }
+
+    #[tokio::test]
+    async fn multiple_steering_messages_preserve_order_and_stay_distinct() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, provider) = steering_agent(
+            &d,
+            vec![
+                tool_response("checking", "c1", "read_file", json!({"path":"a"})),
+                ModelResponse {
+                    text: "adapted".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec!["first steer".into(), "second steer".into()],
+            1,
+        );
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let events = store.events(sid).unwrap();
+        assert_eq!(
+            user_turns(&events),
+            vec!["start", "first steer", "second steer"]
+        );
+        let ids: Vec<Uuid> = events
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
+            .map(|event| event.id)
+            .collect();
+        assert_eq!(ids.len(), 3);
+        assert!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len() == 3,
+            "each turn is a distinct durable message"
+        );
+
+        let requests = provider.requests.lock().unwrap().clone();
+        let messages = &requests[1].messages;
+        let steer_positions: Vec<usize> = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message.role == "user"
+                    && (message.content.contains("first steer")
+                        || message.content.contains("second steer"))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        assert!(!steer_positions.is_empty());
+        let rendered = messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .map(|message| message.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.find("first steer").unwrap() < rendered.find("second steer").unwrap(),
+            "{rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn steering_during_a_running_tool_waits_for_its_result() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, _provider) = steering_agent(
+            &d,
+            vec![
+                tool_response(
+                    "running",
+                    "t1",
+                    "shell",
+                    json!({"command":"sleep 0.3 && echo done"}),
+                ),
+                ModelResponse {
+                    text: "adapted".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec![],
+            0,
+        );
+        let steering = agent.steering_handle();
+        let inject = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            steering.push("stop after this tool".to_owned());
+        });
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        inject.await.unwrap();
+
+        let events = store.events(sid).unwrap();
+        let tool_index = events
+            .iter()
+            .position(|event| matches!(&event.payload, EventPayload::ToolCompleted { result } if !result.is_error))
+            .expect("tool completed normally");
+        let steer_index = events
+            .iter()
+            .position(|event| {
+                matches!(&event.payload, EventPayload::UserMessage { text } if text == "stop after this tool")
+            })
+            .expect("steering recorded");
+        assert!(
+            tool_index < steer_index,
+            "the in-flight tool finished before the message was injected"
+        );
+    }
+
+    #[tokio::test]
+    async fn steering_after_a_plain_answer_gets_another_turn() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, provider) = steering_agent(
+            &d,
+            vec![
+                ModelResponse {
+                    text: "I am done".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+                ModelResponse {
+                    text: "adapted".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec!["not done yet".into()],
+            1,
+        );
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let requests = provider.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2, "a pending steer prevents early stop");
+        assert!(
+            requests[1]
+                .messages
+                .iter()
+                .any(|message| message.role == "user" && message.content.contains("not done yet")),
+            "second request carries the steer"
+        );
+        let events = store.events(sid).unwrap();
+        assert_eq!(user_turns(&events), vec!["start", "not done yet"]);
+    }
+
+    #[tokio::test]
+    async fn injected_constraints_override_stale_decisions_on_the_next_turn() {
+        let d = tempdir().unwrap();
+        let (_store, _sid, mut agent, provider) = steering_agent(
+            &d,
+            vec![
+                tool_response("checking", "c1", "read_file", json!({"path":"a"})),
+                ModelResponse {
+                    text: "adapted".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec!["do not use plan A; use plan B".into()],
+            1,
+        );
+        agent.state.update(crate::state::StateUpdate {
+            add_decisions: vec!["use plan A".into()],
+            ..Default::default()
+        });
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let requests = provider.requests.lock().unwrap().clone();
+        // The new user turn is the authority: it is present in the next request
+        // after the tool transaction, and the prompt tells the model that new
+        // user messages override earlier decisions and state.
+        assert!(requests[1].system.contains("overrides earlier decisions"));
+        let last_user = requests[1]
+            .messages
+            .iter()
+            .rfind(|message| message.role == "user")
+            .expect("user turn");
+        assert!(last_user.content.contains("use plan B"), "{last_user:?}");
+    }
+
+    #[tokio::test]
+    async fn live_and_resumed_steering_state_remain_identical() {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, _provider) = steering_agent(
+            &d,
+            vec![
+                tool_response("checking", "c1", "read_file", json!({"path":"a"})),
+                ModelResponse {
+                    text: "adapted".into(),
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ],
+            vec!["persist this steer".into()],
+            1,
+        );
+        agent
+            .run("start", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+
+        let events = store.events(sid).unwrap();
+        assert_eq!(user_turns(&events), vec!["start", "persist this steer"]);
+        assert_eq!(
+            crate::session::prompt_history(&events),
+            vec!["start", "persist this steer"]
+        );
+        // A resumed continuity materialization sees the same user turns in the
+        // volatile recent window.
+        let continuity = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        let budget = continuity.default_budget(128_000, 0);
+        let ctx = continuity
+            .materialize(
+                sid,
+                &Default::default(),
+                None,
+                &crate::state::EvidenceLedger::default(),
+                &FailureManager::new(3),
+                "system".into(),
+                &budget,
+            )
+            .unwrap();
+        let recent_users: Vec<String> = ctx
+            .recent
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::UserMessage { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recent_users, vec!["start", "persist this steer"]);
     }
 
     #[tokio::test]
