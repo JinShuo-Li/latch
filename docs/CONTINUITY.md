@@ -60,6 +60,19 @@ Recalled originals and the episode index are estimated once as one block, so
 recalled material is never double counted. `/context` reports the token
 breakdown, reserve, headroom, event and episode counts, and status.
 
+## Incremental history access
+
+Every event stays in the raw store; only the queries are incremental. Materialization
+resolves the active epoch start from durable boundary events (`manual_compact`,
+`context_epoch_started`), then loads the rolled-over prefix and the active tail as
+separate indexed ranges instead of deserializing the full log twice. Recall uses
+deterministic SQLite FTS and fetches only the matched rows, preserving the original
+match limit before excluding bookkeeping kinds. Live supervision keeps sequence
+cursors: each turn feeds only newly appended events to the progress supervisor and
+the live sink, and resume continues from the durable cursor. Episodes and the
+canonical view still span all history; no old event is summarized away, truncated,
+or deleted to make queries cheaper.
+
 ## Episodes
 
 Episodes segment on user intents (a new user message starts a new episode, with

@@ -218,6 +218,32 @@ continuity guarantees win over query volume. Store APIs and continuity
 materialization are covered by equivalence tests asserting the incremental
 results match the previous full-scan semantics.
 
+## Durable transitions fail closed
+
+Event persistence is the source of truth: a transition that must survive resume
+never appears successful in live state unless its durable event committed.
+Terminal tool results, kernel task-state updates, evidence, completion, and
+permission resolutions propagate persistence failures and abort the run instead
+of silently continuing. Evidence is persisted before it enters the live ledger,
+and completion is remembered only after its durable announcement. Auxiliary
+work — AI permission review, retry backoff, provider transport, and extension
+RPCs — obeys the run's cancellation token, so Ctrl+C is never pinned by a
+secondary call.
+
+## Source layout
+
+The kernel keeps its stable public types and the run loop in `agent.rs`, with
+one child module per responsibility: `steering`, `request`, `permissions`,
+`dispatch`, `kernel_tools`, `validation`, and `supervision`. Tools keep the
+`ToolExecutor` facade in `tools.rs` and split `policy`, `ownership`,
+`process`, `files`, `write`, and `git` into children. The continuity engine is
+a single module because rollover, episode segmentation, and recall share one
+invariant. The TUI keeps the app state and reducer in `lib.rs` with
+`transcript`, `markdown`, `chrome`, and `runtime` alongside the existing
+`composer`, `sidebar`, `diff`, `presentation`, and `session_picker` modules.
+Child modules are children of their owner, so private state stays private while
+each file owns one concern.
+
 ## Usage and cost
 
 `Usage` keeps provider-reported categories distinct: total input, output,
