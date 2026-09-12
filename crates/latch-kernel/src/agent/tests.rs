@@ -1852,7 +1852,7 @@ async fn a_rejected_late_steer_never_leaks_into_the_next_run() {
 }
 
 #[tokio::test]
-async fn a_steer_retrieves_older_material_into_the_volatile_tail() {
+async fn a_steer_retrieves_archival_material_into_the_epoch() {
     let d = tempdir().unwrap();
     let (store, sid, mut agent, provider) = steering_agent(
         &d,
@@ -1879,6 +1879,10 @@ async fn a_steer_retrieves_older_material_into_the_volatile_tail() {
             },
         )
         .unwrap();
+
+    // Explicitly move the earlier material out of the provider-visible epoch
+    // so the steer has to retrieve it from the archive.
+    agent.compact().unwrap();
 
     agent
         .run("start", CancellationToken::new(), Arc::new(|_| {}))
@@ -2351,4 +2355,64 @@ async fn ai_permission_review_obeys_run_cancellation() {
     .await;
     let result = outcome.expect("AI review must observe run cancellation");
     assert!(result.is_err(), "a cancelled review must not grant");
+}
+
+#[tokio::test]
+async fn ordinary_turns_extend_the_provider_prefix_exactly() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent, provider) = steering_agent(
+        &d,
+        vec![
+            tool_response("checking a", "c1", "read_file", json!({"path":"a"})),
+            tool_response("checking b", "c2", "read_file", json!({"path":"b"})),
+            ModelResponse {
+                text: "done".into(),
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: None,
+                reasoning_content: None,
+            },
+        ],
+        vec![],
+        0,
+    );
+    agent
+        .run("start", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    let requests = provider.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 3, "three model turns");
+    // The reusable head is byte-stable: system prompt and tool schemas.
+    assert_eq!(requests[0].system, requests[1].system);
+    assert_eq!(requests[1].system, requests[2].system);
+    let tools = |request: &ModelRequest| serde_json::to_string(&request.tools).unwrap();
+    assert_eq!(tools(&requests[0]), tools(&requests[1]));
+    assert_eq!(tools(&requests[1]), tools(&requests[2]));
+    // Within one cache epoch every request is an exact extension of the last:
+    // no already-sent message is rewritten or removed.
+    for pair in requests.windows(2) {
+        let (previous, next) = (&pair[0], &pair[1]);
+        assert!(
+            previous.messages.len() <= next.messages.len(),
+            "history must not shrink inside a cache epoch"
+        );
+        assert_eq!(
+            previous.messages,
+            next.messages[..previous.messages.len()],
+            "ordinary turns must only append to the provider-visible prefix"
+        );
+    }
+    // Kernel context is durable history, so the previous turn's authoritative
+    // message is still present verbatim.
+    let kernel_messages: Vec<&str> = requests[2]
+        .messages
+        .iter()
+        .filter(|message| message.content.contains("KERNEL STATE"))
+        .map(|message| message.content.as_str())
+        .collect();
+    assert!(
+        !kernel_messages.is_empty(),
+        "kernel state is part of the provider-visible epoch"
+    );
+    let _ = (store, sid);
 }

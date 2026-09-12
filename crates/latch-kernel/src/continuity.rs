@@ -4,7 +4,8 @@ use crate::store::EventStore;
 use crate::tokens::TokenEstimator;
 use anyhow::{Result, anyhow};
 use latch_protocol::{
-    ContextStats, Event, EventPayload, MemoryKind, MemoryRecord, TaskState, Validity,
+    ContextStats, Event, EventPayload, KernelContextKind, MemoryKind, MemoryRecord, TaskState,
+    Validity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -152,20 +153,10 @@ impl ContinuityEngine {
         self.store.search_events(session_id, query, 12)
     }
 
-    /// Materializes one bounded request view.
-    ///
-    /// Invariant: `instructions + state + recent + recall` (the sections this
-    /// engine owns) stays within the request budget minus any tokens the caller
-    /// already reserved for tool schemas and extension context. Components are
-    /// allocated in explicit priority order — system prompt, canonical core
-    /// (goal/constraints/decisions/evidence/failures), protocol-atomic recent
-    /// verbatim transcript, query-recalled original events, then the scored
-    /// episode index. Lower-priority material shrinks first; nothing durable is
-    /// ever deleted and no automatic compaction exists.
-    ///
-    /// Every size is a token estimate; the caller adds tools/extension costs
-    /// and recomputes the final totals so recalled material is counted exactly
-    /// once.
+    /// Materializes one bounded request view from durable state. Used by the
+    /// `/context` inspector and tests; real requests use
+    /// [`Self::materialize_dynamic`] so extension context and re-ground
+    /// instructions become part of the durable provider-visible history.
     #[allow(clippy::too_many_arguments)]
     pub fn materialize(
         &self,
@@ -177,31 +168,92 @@ impl ContinuityEngine {
         system: String,
         budget: &MaterializeBudget,
     ) -> Result<MaterializedContext> {
+        self.materialize_dynamic(
+            session_id, state, query, evidence, failures, system, budget, "", None,
+        )
+    }
+
+    /// Materializes one provider-visible request view within a durable cache
+    /// epoch.
+    ///
+    /// Invariant: `instructions + state + recent + recall + tools + extension`
+    /// stays within the request budget. Within an epoch the provider-visible
+    /// history is append-only: ordinary turns never rewrite or remove material
+    /// that was already sent, and kernel-owned context (canonical state,
+    /// recalls, archival index, extension sources, re-ground instructions) is
+    /// persisted as [`EventPayload::KernelContext`] messages instead of a
+    /// synthetic tail that disappears on the next request. When the epoch
+    /// approaches the configured working-memory budget it rotates once with
+    /// hysteresis, retaining whole semantic units and emitting a complete
+    /// authoritative snapshot. Raw events are never deleted or summarized
+    /// away; rotation only changes which durable events are inside the current
+    /// provider-visible epoch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn materialize_dynamic(
+        &self,
+        session_id: Uuid,
+        state: &TaskState,
+        query: Option<&str>,
+        evidence: &EvidenceLedger,
+        failures: &FailureManager,
+        system: String,
+        budget: &MaterializeBudget,
+        extension_context: &str,
+        reground: Option<&str>,
+    ) -> Result<MaterializedContext> {
         let estimator = self.estimator;
         let own_budget = budget.request_tokens.saturating_sub(budget.reserved_tokens);
         let memories = self.store.memories(session_id)?;
-        // Working memory is the newest whole conversation units after the last
-        // explicit `/compact`. Units leave one at a time when the budget is
-        // exceeded, so degradation is gradual; nothing is deleted and every
-        // evicted unit stays retrievable through archival episodes and recall.
-        let compact_from = self.compact_start_sequence(session_id)?;
-        let candidates = load_recent_candidates(
+        let instructions_tokens = estimator.estimate(&system);
+        // A deterministic canonical cap keeps emitted kernel state independent
+        // of per-turn extension/tool reservations, so unchanged state does not
+        // churn the durable kernel history.
+        let canonical_cap = budget.request_tokens.saturating_mul(2) / 5;
+        let high_water = budget.recent_tokens.min(own_budget.max(1));
+
+        // Current durable cache epoch. `/compact` forces a later start and a
+        // new generation even before the budget is reached.
+        let latest_epoch = self
+            .store
+            .latest_event_of_kinds(session_id, &["context_epoch_started"])?;
+        let (mut epoch_start, mut generation, mut rotation_reason, mut rotation_retained) =
+            match &latest_epoch {
+                Some(event) => match &event.payload {
+                    EventPayload::ContextEpochStarted {
+                        from_sequence,
+                        generation,
+                        reason,
+                        retained_tokens,
+                    } => (
+                        *from_sequence,
+                        *generation,
+                        reason.clone(),
+                        *retained_tokens,
+                    ),
+                    _ => (1, 0, String::new(), 0),
+                },
+                None => (1, 0, String::new(), 0),
+            };
+        let compact_after = self
+            .store
+            .latest_event_of_kinds(session_id, &["manual_compact"])?
+            .map(|event| event.sequence + 1)
+            .filter(|start| *start > epoch_start);
+        if let Some(start) = compact_after {
+            epoch_start = start;
+            generation = generation.saturating_add(1);
+        }
+
+        let (mut recent, reached_start) = load_epoch_events(
             &self.store,
             session_id,
-            compact_from,
-            budget.recent_tokens,
+            epoch_start,
+            generation,
+            high_water,
             &estimator,
         )?;
-
-        // 1. Hard system/kernel instructions come first.
-        let instructions_tokens = estimator.estimate(&system);
-        let mut used = instructions_tokens;
-
-        // 2. Canonical state, capped by tokens. Individual memory lines drop
-        //    lowest-priority first; goal, constraints, decisions, evidence, and
-        //    failures survive as long as anything does.
-        let canonical_cap = own_budget.saturating_sub(used) * 2 / 5;
-        let bridge = conversation_bridge(state, &candidates);
+        let mut epoch_tokens = estimated_events_tokens(&recent, &estimator);
+        let bridge = conversation_bridge(state, &recent);
         let canonical = render_canonical(
             state,
             &memories,
@@ -211,59 +263,194 @@ impl ContinuityEngine {
             canonical_cap,
             &estimator,
         );
-        let state_tokens = estimator.estimate(&canonical);
-        used = used.saturating_add(state_tokens);
+        let extension_present =
+            !extension_context.trim().is_empty() && extension_context.trim() != "[]";
 
-        // 3. Recent verbatim working memory: the largest suffix of whole
-        //    conversation units that fits the recent budget. A single oversized
-        //    unit is kept whole rather than truncated, but no transaction is
-        //    ever split.
-        let recent_budget = budget.recent_tokens.min(own_budget.saturating_sub(used));
-        let (recent, recent_tokens) = bounded_recent(&candidates, recent_budget, &estimator);
-        used = used.saturating_add(recent_tokens);
-        let recent_start = recent.first().map(|event| event.sequence).unwrap_or(0);
-        let current_user_sequence = recent
+        let compact_pending = compact_after.is_some();
+        // Project the kernel messages this turn would append so the rotation
+        // decision is a pure function of durable state plus the current
+        // canonical render, not of when a prior turn happened to run.
+        let prior_state = last_kernel_body(
+            &recent,
+            generation,
+            &[KernelContextKind::Snapshot, KernelContextKind::StateUpdate],
+        );
+        let state_changed = prior_state != Some(canonical.as_str());
+        let prior_extension =
+            last_kernel_body(&recent, generation, &[KernelContextKind::Extension]);
+        let extension_changed = extension_present && prior_extension != Some(extension_context);
+        // Conversation bytes are what rotation can actually reclaim; an epoch
+        // that is over budget only because authoritative kernel state is large
+        // must not rotate forever.
+        let conversation_tokens: usize = recent
             .iter()
-            .rev()
-            .find(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
-            .map(|event| event.sequence);
+            .filter(|event| !matches!(event.payload, EventPayload::KernelContext { .. }))
+            .map(|event| estimator.estimate(&render_event(event)))
+            .sum();
+        // The high-water mark governs conversation working memory. Kernel
+        // messages (current state, recall, archive index) are authoritative
+        // and counted in the request budget, but they never force a rotation:
+        // current truth must not be crowded out by cache policy.
+        let over_budget = !reached_start || conversation_tokens > high_water;
+        let rotate = compact_pending || over_budget;
+        let mut evicted_tokens = 0usize;
 
-        // Recall never duplicates the current user turn or anything still in
-        // working memory; it reaches into the archival region instead.
-        let mut recalled_events = query
-            .map(|q| -> Result<Vec<Event>> {
-                let events = self
-                    .recall(session_id, q)?
-                    .into_iter()
-                    .filter(|event| {
-                        current_user_sequence.is_none_or(|sequence| event.sequence < sequence)
-                    })
-                    .collect::<Vec<_>>();
-                Ok(events)
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let recent_ids: HashSet<Uuid> = recent.iter().map(|event| event.id).collect();
-        recalled_events.retain(|event| !recent_ids.contains(&event.id));
-        if let Some(query) = query {
-            self.record_recall(session_id, query, &memories, &recalled_events)?;
+        if rotate {
+            let reason = if compact_pending {
+                "manual compact".to_owned()
+            } else {
+                "working budget high-water mark reached".to_owned()
+            };
+            // Retain a large useful working set but leave roughly a quarter of
+            // the budget as growth headroom so rotation is occasional rather
+            // than per-turn. Retention still respects whole semantic units and
+            // reserves room for the snapshot itself.
+            // Reserve room for the snapshot, extension sources, and the
+            // archival index, plus one eighth of the budget as growth
+            // headroom. Post-rotation epochs are therefore at or below the
+            // high-water mark, so rotation is occasional, never per-turn.
+            // Retain three quarters of the conversation budget so a
+            // saturated session rotates once per quarter-budget of growth
+            // rather than every turn, while the retained working set stays
+            // large. Semantic units are still selected whole.
+            let headroom = high_water / 4;
+            let retain_budget = if compact_pending {
+                0
+            } else {
+                high_water.saturating_sub(headroom)
+            };
+            let mut retained = if retain_budget == 0 {
+                Vec::new()
+            } else {
+                bounded_recent(&recent, retain_budget, &estimator).0
+            };
+            // Prior kernel messages are superseded by the fresh snapshot; the
+            // new epoch carries verbatim conversation plus current truth only.
+            retained.retain(|event| !matches!(event.payload, EventPayload::KernelContext { .. }));
+            let retained_tokens: usize = retained
+                .iter()
+                .map(|event| estimator.estimate(&render_event(event)))
+                .sum();
+            let from_sequence = retained
+                .first()
+                .map(|event| event.sequence)
+                .unwrap_or_else(|| self.store.last_sequence(session_id).unwrap_or(0) + 1);
+            generation = generation.saturating_add(1);
+            self.store.append(
+                session_id,
+                EventPayload::ContextEpochStarted {
+                    from_sequence,
+                    reason: reason.clone(),
+                    generation,
+                    retained_tokens,
+                },
+            )?;
+            rotation_reason = reason;
+            rotation_retained = retained_tokens;
+            evicted_tokens = epoch_tokens.saturating_sub(retained_tokens);
+            epoch_start = from_sequence;
+            recent = retained;
+
+            let mut revision = 1u64;
+            let content = kernel_content(
+                generation,
+                revision,
+                KernelContextKind::Snapshot,
+                &canonical,
+            );
+            recent.push(self.emit_kernel(
+                session_id,
+                generation,
+                revision,
+                KernelContextKind::Snapshot,
+                content,
+            )?);
+            revision += 1;
+            if extension_present {
+                let content = kernel_content(
+                    generation,
+                    revision,
+                    KernelContextKind::Extension,
+                    extension_context,
+                );
+                recent.push(self.emit_kernel(
+                    session_id,
+                    generation,
+                    revision,
+                    KernelContextKind::Extension,
+                    content,
+                )?);
+                revision += 1;
+            }
+            if let Some(instruction) = reground {
+                let content = kernel_content(
+                    generation,
+                    revision,
+                    KernelContextKind::Reground,
+                    instruction,
+                );
+                recent.push(self.emit_kernel(
+                    session_id,
+                    generation,
+                    revision,
+                    KernelContextKind::Reground,
+                    content,
+                )?);
+            }
+        } else {
+            let mut revision = next_kernel_revision(&recent, generation);
+            // Current authoritative state: emit a snapshot if this epoch has
+            // none yet (legacy sessions), otherwise only when it changed.
+            if state_changed {
+                let kind = if prior_state.is_none() {
+                    KernelContextKind::Snapshot
+                } else {
+                    KernelContextKind::StateUpdate
+                };
+                let content = kernel_content(generation, revision, kind, &canonical);
+                recent.push(self.emit_kernel(session_id, generation, revision, kind, content)?);
+                revision += 1;
+            }
+            if extension_changed {
+                let content = kernel_content(
+                    generation,
+                    revision,
+                    KernelContextKind::Extension,
+                    extension_context,
+                );
+                recent.push(self.emit_kernel(
+                    session_id,
+                    generation,
+                    revision,
+                    KernelContextKind::Extension,
+                    content,
+                )?);
+                revision += 1;
+            }
+            if let Some(instruction) = reground
+                && last_kernel_body(&recent, generation, &[KernelContextKind::Reground])
+                    != Some(instruction)
+            {
+                let content = kernel_content(
+                    generation,
+                    revision,
+                    KernelContextKind::Reground,
+                    instruction,
+                );
+                recent.push(self.emit_kernel(
+                    session_id,
+                    generation,
+                    revision,
+                    KernelContextKind::Reground,
+                    content,
+                )?);
+            }
         }
 
-        // 4. Recalled originals, then the archival episode index, sharing the
-        //    remaining recall budget. The combined block is estimated exactly
-        //    once so recalled content is never double counted.
-        let recall_budget = own_budget.saturating_sub(used);
-        let recalled_cap = recall_budget * 3 / 4;
-        let (recalled_text, _recalled_selected) =
-            render_recalled(&recalled_events, recalled_cap, &estimator);
-        let recalled_used = estimator.estimate(&recalled_text);
-        let episode_budget = recall_budget.saturating_sub(recalled_used);
-        let archive_end = if recent_start > 1 {
-            recent_start - 1
-        } else {
-            self.store.last_sequence(session_id)?
-        };
-        let (selected, episode_count, episode_index, episode_tokens, evicted_tokens) = {
+        // Archival episode index: episodes cover everything older than the
+        // provider-visible epoch, independently of cache layout.
+        let archive_end = epoch_start.saturating_sub(1);
+        let (selected, episode_count, episode_index) = {
             let mut cache = self
                 .episodes
                 .lock()
@@ -271,12 +458,16 @@ impl ContinuityEngine {
             cache.advance(&self.store, session_id, archive_end, &estimator)?;
             let builder = &cache.builder;
             let open = builder.snapshot();
+            epoch_tokens = estimated_events_tokens(&recent, &estimator);
+            let available = own_budget
+                .saturating_sub(instructions_tokens)
+                .saturating_sub(epoch_tokens);
             let selected = select_episodes(
                 &builder.closed,
                 open.as_ref(),
                 query,
                 state,
-                episode_budget,
+                available.min(high_water / 8),
                 &estimator,
             );
             let episode_index = selected
@@ -284,32 +475,127 @@ impl ContinuityEngine {
                 .map(|episode| episode.summary.clone())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let episode_tokens = estimator.estimate(&episode_index);
-            (
-                selected,
-                builder.closed.len() + usize::from(open.is_some()),
-                episode_index,
-                episode_tokens,
-                cache.last_evicted_tokens,
-            )
+            let count = builder.closed.len() + usize::from(open.is_some());
+            (selected, count, episode_index)
         };
-        let recalled_full = format!(
-            "EPISODE INDEX\n{}\nORIGINAL RECALLED EVENTS\n{}",
-            episode_index, recalled_text
-        );
-        let recall_tokens = estimator.estimate(&recalled_full);
+        if !episode_index.is_empty()
+            && last_kernel_body(&recent, generation, &[KernelContextKind::EpisodeIndex])
+                != Some(episode_index.as_str())
+        {
+            let revision = next_kernel_revision(&recent, generation);
+            let content = kernel_content(
+                generation,
+                revision,
+                KernelContextKind::EpisodeIndex,
+                &episode_index,
+            );
+            recent.push(self.emit_kernel(
+                session_id,
+                generation,
+                revision,
+                KernelContextKind::EpisodeIndex,
+                content,
+            )?);
+        }
 
+        // Recall never duplicates the current user turn or anything still in
+        // the provider-visible epoch; it reaches into the archival region.
+        let mut recalled_text = String::new();
+        if let Some(q) = query {
+            let current_user_sequence = recent
+                .iter()
+                .rev()
+                .find(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
+                .map(|event| event.sequence);
+            let recent_ids: HashSet<Uuid> = recent.iter().map(|event| event.id).collect();
+            let recalled = self
+                .recall(session_id, q)?
+                .into_iter()
+                .filter(|event| {
+                    current_user_sequence.is_none_or(|sequence| event.sequence < sequence)
+                })
+                .filter(|event| !recent_ids.contains(&event.id))
+                .collect::<Vec<_>>();
+            self.record_recall(session_id, q, &memories, &recalled)?;
+            if !recalled.is_empty() {
+                let used = estimated_events_tokens(&recent, &estimator);
+                let available = own_budget
+                    .saturating_sub(instructions_tokens)
+                    .saturating_sub(used);
+                let (text, _) = render_recalled(&recalled, available * 3 / 4, &estimator);
+                if !text.is_empty()
+                    && last_kernel_body(&recent, generation, &[KernelContextKind::Recall])
+                        != Some(text.as_str())
+                {
+                    let revision = next_kernel_revision(&recent, generation);
+                    let content =
+                        kernel_content(generation, revision, KernelContextKind::Recall, &text);
+                    recent.push(self.emit_kernel(
+                        session_id,
+                        generation,
+                        revision,
+                        KernelContextKind::Recall,
+                        content,
+                    )?);
+                }
+                recalled_text = text;
+            }
+        }
+
+        // Component accounting partitions the provider-visible epoch exactly,
+        // so the total is always the sum of its parts.
+        let mut state_used = 0usize;
+        let mut recent_used = 0usize;
+        let mut recall_used = 0usize;
+        let mut episode_used = 0usize;
+        let mut extension_used = 0usize;
+        for event in &recent {
+            let tokens = estimator.estimate(&render_event(event));
+            match &event.payload {
+                EventPayload::KernelContext {
+                    kind: KernelContextKind::Snapshot | KernelContextKind::StateUpdate,
+                    ..
+                } => state_used += tokens,
+                EventPayload::KernelContext {
+                    kind: KernelContextKind::Extension,
+                    ..
+                } => extension_used += tokens,
+                EventPayload::KernelContext {
+                    kind: KernelContextKind::Recall,
+                    ..
+                } => recall_used += tokens,
+                EventPayload::KernelContext {
+                    kind: KernelContextKind::EpisodeIndex,
+                    ..
+                } => {
+                    recall_used += tokens;
+                    episode_used += tokens;
+                }
+                _ => recent_used += tokens,
+            }
+        }
+        let cache_epoch_tokens = state_used + recent_used + recall_used + extension_used;
+        let turns = self.store.count_events_after_of_kind(
+            session_id,
+            "user_message",
+            epoch_start.saturating_sub(1),
+        )?;
         let durable_events = self.store.last_sequence(session_id)? as usize;
         let mut stats = ContextStats {
             instructions_tokens,
-            state_tokens,
-            recent_tokens,
-            recall_tokens,
-            episode_tokens,
-            recent_start_sequence: recent_start,
+            state_tokens: state_used,
+            recent_tokens: recent_used,
+            recall_tokens: recall_used,
+            episode_tokens: episode_used,
+            recent_start_sequence: epoch_start,
             recent_evicted_tokens: evicted_tokens,
+            cache_epoch: generation,
+            cache_epoch_tokens,
+            cache_epoch_turns: turns,
+            cache_rotation_reason: rotation_reason,
+            cache_rotation_retained_tokens: rotation_retained,
             tools_tokens: 0,
-            extension_tokens: 0,
+            extension_tokens: extension_used,
             total_tokens: 0,
             request_tokens: 0,
             common_prefix_tokens: 0,
@@ -327,24 +613,35 @@ impl ContinuityEngine {
         Ok(MaterializedContext {
             system,
             canonical,
-            recalled: recalled_full,
+            recalled: recalled_text,
             recent,
             bridge,
-            episodes: selected.clone(),
+            episodes: selected,
             stats,
         })
     }
-    /// First sequence of the current working set (1 means the beginning).
-    /// `/compact` resets working memory explicitly; ordinary budget pressure
-    /// evicts whole units gradually without a durable boundary, because the
-    /// retained tail is a pure function of the log and the configured budget.
-    fn compact_start_sequence(&self, session_id: Uuid) -> Result<u64> {
-        Ok(self
-            .store
-            .latest_event_of_kinds(session_id, &["manual_compact"])?
-            .map(|event| event.sequence + 1)
-            .unwrap_or(1))
+
+    /// Appends one durable kernel context message to the provider-visible
+    /// history for this epoch.
+    fn emit_kernel(
+        &self,
+        session_id: Uuid,
+        generation: u64,
+        revision: u64,
+        kind: KernelContextKind,
+        content: String,
+    ) -> Result<Event> {
+        self.store.append(
+            session_id,
+            EventPayload::KernelContext {
+                generation,
+                revision,
+                kind,
+                content,
+            },
+        )
     }
+
     fn record_recall(
         &self,
         session_id: Uuid,
@@ -478,6 +775,7 @@ fn is_model_visible_event(payload: &EventPayload) -> bool {
             | EventPayload::ToolCompleted { .. }
             | EventPayload::ToolFailed { .. }
             | EventPayload::RegroundRequested { .. }
+            | EventPayload::KernelContext { .. }
     )
 }
 
@@ -524,50 +822,6 @@ fn bounded_recent(
     (conversation[start..].to_vec(), tokens)
 }
 
-/// Loads enough of the newest post-compact conversation to fill the recent
-/// budget, without touching older history. The newest chunks are fetched until
-/// they hold at least the budget in estimated tokens (or history is
-/// exhausted), and any leading fragment of an unfinished transaction is
-/// dropped so units stay whole.
-fn load_recent_candidates(
-    store: &EventStore,
-    session_id: Uuid,
-    from_inclusive: u64,
-    budget_tokens: usize,
-    estimator: &TokenEstimator,
-) -> Result<Vec<Event>> {
-    let target = budget_tokens.saturating_mul(2).max(1);
-    let mut limit = 256usize;
-    loop {
-        let fetched = store.events_tail(session_id, limit)?;
-        let reached_history_start = fetched.len() < limit;
-        let visible: Vec<Event> = fetched
-            .into_iter()
-            .filter(|event| {
-                event.sequence >= from_inclusive && is_model_visible_event(&event.payload)
-            })
-            .collect();
-        let anchored = match visible
-            .iter()
-            .position(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
-        {
-            Some(index) => visible[index..].to_vec(),
-            None => visible.clone(),
-        };
-        let tokens: usize = anchored
-            .iter()
-            .map(|event| estimator.estimate(&render_event(event)))
-            .sum();
-        let reached_boundary = anchored
-            .first()
-            .is_none_or(|event| event.sequence <= from_inclusive);
-        if tokens >= target || reached_boundary || reached_history_start {
-            return Ok(anchored);
-        }
-        limit = limit.saturating_mul(2);
-    }
-}
-
 /// Groups events into atomic conversation transactions.
 ///
 /// A tool transaction is an assistant turn that proposes tool calls together
@@ -608,14 +862,153 @@ fn conversation_units(events: &[Event]) -> Vec<(usize, usize)> {
                 }
                 cursor += 1;
             }
+            // Kernel context emitted after a transaction belongs to that
+            // transaction for retention purposes, so a rotation cannot split
+            // the call/result pair from the state update that explains it.
+            end = absorb_kernel_events(events, end);
             units.push((index, end));
             index = end;
-        } else {
-            units.push((index, index + 1));
+        } else if matches!(events[index].payload, EventPayload::KernelContext { .. })
+            && !units.is_empty()
+        {
+            // Kernel context attaches to the preceding unit so it is never
+            // separated from the turn it describes.
+            units.last_mut().expect("non-empty").1 = index + 1;
             index += 1;
+        } else {
+            let end = absorb_kernel_events(events, index + 1);
+            units.push((index, end));
+            index = end;
         }
     }
     units
+}
+
+/// Extends a unit boundary over immediately following kernel context messages.
+fn absorb_kernel_events(events: &[Event], mut end: usize) -> usize {
+    while end < events.len() && matches!(events[end].payload, EventPayload::KernelContext { .. }) {
+        end += 1;
+    }
+    end
+}
+
+/// Loads the provider-visible events of the current cache epoch, bounded by the
+/// working-memory high-water mark. `reached_start` is false when history is
+/// larger than the mark, which is the signal to rotate the epoch.
+fn load_epoch_events(
+    store: &EventStore,
+    session_id: Uuid,
+    epoch_start: u64,
+    generation: u64,
+    high_water: usize,
+    estimator: &TokenEstimator,
+) -> Result<(Vec<Event>, bool)> {
+    let mut limit = 256usize;
+    loop {
+        let fetched = store.events_tail(session_id, limit)?;
+        let exhausted = fetched.len() < limit;
+        let visible: Vec<Event> = fetched
+            .into_iter()
+            .filter(|event| event.sequence >= epoch_start && is_epoch_visible(event, generation))
+            .collect();
+        let tokens = estimated_events_tokens(&visible, estimator);
+        let reached_start = exhausted
+            || visible
+                .first()
+                .is_none_or(|event| event.sequence <= epoch_start);
+        if tokens >= high_water || reached_start {
+            return Ok((visible, reached_start));
+        }
+        limit = limit.saturating_mul(2);
+    }
+}
+
+/// Provider-visible events of one cache epoch. Conversation is visible in the
+/// epoch that owns it; kernel context is visible only in the generation that
+/// emitted it, so a rotated epoch never resurrects stale authoritative
+/// messages even though they stay durable.
+fn is_epoch_visible(event: &Event, generation: u64) -> bool {
+    match &event.payload {
+        EventPayload::KernelContext {
+            generation: emitted,
+            ..
+        } => *emitted == generation,
+        payload => is_model_visible_event(payload),
+    }
+}
+
+fn estimated_events_tokens(events: &[Event], estimator: &TokenEstimator) -> usize {
+    events
+        .iter()
+        .map(|event| estimator.estimate(&render_event(event)))
+        .sum()
+}
+
+/// Stable header for one durable kernel context message. The generation and
+/// revision make supersession explicit: a higher revision is current truth,
+/// earlier revisions are provenance.
+fn kernel_content(generation: u64, revision: u64, kind: KernelContextKind, body: &str) -> String {
+    let label = match kind {
+        KernelContextKind::Snapshot => "KERNEL STATE SNAPSHOT",
+        KernelContextKind::StateUpdate => "KERNEL STATE UPDATE",
+        KernelContextKind::Recall => "KERNEL RECALL",
+        KernelContextKind::EpisodeIndex => "KERNEL ARCHIVE INDEX",
+        KernelContextKind::Reground => "KERNEL RE-GROUND",
+        KernelContextKind::Extension => "KERNEL EXTENSION CONTEXT",
+    };
+    let authority = match kind {
+        KernelContextKind::Snapshot | KernelContextKind::StateUpdate => {
+            "authoritative current state; supersedes all earlier kernel context"
+        }
+        KernelContextKind::Recall => {
+            "original historical events relevant to the current instruction; not a new request"
+        }
+        KernelContextKind::EpisodeIndex => {
+            "navigational summaries only; raw events remain retrievable"
+        }
+        KernelContextKind::Reground => "kernel instruction; not user input",
+        KernelContextKind::Extension => "extension-provided context sources",
+    };
+    format!(
+        "{label} (cache epoch {generation}.{revision}; {authority})
+{body}"
+    )
+}
+
+/// Next kernel revision within a generation.
+fn next_kernel_revision(events: &[Event], generation: u64) -> u64 {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::KernelContext {
+                generation: g,
+                revision,
+                ..
+            } if *g == generation => Some(revision + 1),
+            _ => None,
+        })
+        .unwrap_or(1)
+}
+
+/// Body of the most recent kernel context message of the given kinds in this
+/// generation, without its header.
+fn last_kernel_body<'a>(
+    events: &'a [Event],
+    generation: u64,
+    kinds: &[KernelContextKind],
+) -> Option<&'a str> {
+    events.iter().rev().find_map(|event| match &event.payload {
+        EventPayload::KernelContext {
+            generation: g,
+            kind,
+            content,
+            ..
+        } if *g == generation && kinds.contains(kind) => {
+            content.split_once('\n').map(|(_, body)| body)
+        }
+        _ => None,
+    })
 }
 
 /// One in-progress episode segment. Fields accumulate exactly like the
@@ -1205,10 +1598,16 @@ mod tests {
             .iter()
             .filter(|e| matches!(e.payload, EventPayload::ContextEpochStarted { .. }))
             .count();
-        // 4 seed events + 2000 fillers + the recall bookkeeping event. Working
-        // memory decay is explained by stats, not by durable cliff events.
-        assert_eq!(all.len(), 2005);
-        assert_eq!(epoch_events, 0);
+        // 4 seed events + 2000 fillers + the recall bookkeeping event, plus
+        // cache-epoch and kernel-context events. Raw history keeps every user
+        // turn and the epoch rotation is durable.
+        assert!(
+            all.iter()
+                .filter(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
+                .count()
+                >= 2000
+        );
+        assert!(epoch_events >= 1, "the epoch rotates once under pressure");
         assert!(ctx.stats.recent_start_sequence > 1);
         assert!(all.iter().any(|e| e.id == diagnostic.id));
         assert!(
@@ -1289,8 +1688,8 @@ mod tests {
             .iter()
             .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
             .count();
-        assert_eq!(epoch_events, 0, "no cliff-like rollover events are written");
-        assert_eq!(events.len(), 5001);
+        assert!(epoch_events >= 1, "pressure rotates the cache epoch");
+        assert!(events.len() >= 5001, "raw history is retained in full");
     }
 
     #[test]
@@ -1328,8 +1727,28 @@ mod tests {
                 &budget(100, 50),
             )
             .unwrap();
-        assert!(context.recent.is_empty());
-        assert_eq!(e.compact_start_sequence(id).unwrap(), 3);
+        // Working memory resets to an authoritative snapshot; the original
+        // user turn stays durable and retrievable.
+        assert!(
+            context
+                .recent
+                .iter()
+                .all(|event| matches!(event.payload, EventPayload::KernelContext { .. })),
+            "manual compact leaves no old conversation in working memory"
+        );
+        assert!(context.recent.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::KernelContext {
+                kind: KernelContextKind::Snapshot,
+                ..
+            }
+        )));
+        assert!(context.stats.cache_epoch >= 1);
+        assert_eq!(context.stats.cache_rotation_reason, "manual compact");
+        assert!(s.events(id).unwrap().iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::UserMessage { text } if text == "keep"
+        )));
     }
 
     fn event(session: Uuid, sequence: u64, payload: EventPayload) -> Event {
@@ -1616,7 +2035,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn working_memory_decays_gradually_and_stays_retrievable() {
+    async fn cache_epochs_append_between_rotations_and_rotate_with_hysteresis() {
         use crate::state::EvidenceLedger;
         use crate::state::FailureManager;
         let store = EventStore::open_memory().unwrap();
@@ -1669,32 +2088,53 @@ mod tests {
             first.stats.recent_tokens <= 600,
             "working memory respects its budget"
         );
-        assert!(first.recent.len() < 40, "only a bounded tail is retained");
-        // Deterministic: materializing again without new events changes nothing.
+        assert!(
+            first.recent.len() < 40,
+            "only a bounded working set is kept"
+        );
+        assert!(first.stats.cache_epoch >= 1, "pressure rotated once");
+        let rotations = |store: &EventStore| {
+            store
+                .events(sid)
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
+                .count()
+        };
+        assert_eq!(rotations(&store), 1);
+        assert!(
+            first.stats.recent_evicted_tokens > 0,
+            "rotation is explained"
+        );
+        assert!(first.recent.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::KernelContext {
+                kind: KernelContextKind::Snapshot,
+                ..
+            }
+        )));
+
+        // Deterministic: materializing again without new events changes nothing
+        // because the post-rotation epoch is at or below the high-water mark.
         let again = materialize();
         assert_eq!(again.recent, first.recent);
         assert_eq!(
             again.stats.recent_start_sequence,
             first.stats.recent_start_sequence
         );
+        assert_eq!(
+            rotations(&store),
+            1,
+            "hysteresis prevents per-turn rotation"
+        );
 
-        // No durable cliff events are written under budget pressure; the
-        // transition is explained by the per-request stats instead.
-        let epoch_events = store
-            .events(sid)
-            .unwrap()
-            .iter()
-            .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
-            .count();
-        assert_eq!(epoch_events, 0);
-
-        // Add one request/answer pair: only whole units may leave, and only as
-        // many as needed, so the window decays gradually rather than halving.
+        // Ordinary turns append: the previous provider-visible history stays an
+        // exact prefix while the epoch has headroom.
         store
             .append(
                 sid,
                 EventPayload::UserMessage {
-                    text: format!("request 20 {}", "x".repeat(200)),
+                    text: "one more request".into(),
                 },
             )
             .unwrap();
@@ -1702,35 +2142,62 @@ mod tests {
             .append(
                 sid,
                 EventPayload::AssistantMessageCompleted {
-                    text: "answer 20".into(),
+                    text: "one more answer".into(),
                     tool_calls: vec![],
                     reasoning_content: None,
                 },
             )
             .unwrap();
         let third = materialize();
-        assert!(third.stats.recent_tokens <= 600);
+        assert_eq!(rotations(&store), 1, "no rotation while headroom remains");
+        let prefix: Vec<Uuid> = first.recent.iter().map(|event| event.id).collect();
+        assert_eq!(
+            third.recent[..prefix.len()]
+                .iter()
+                .map(|event| event.id)
+                .collect::<Vec<_>>(),
+            prefix,
+            "ordinary turns only append to the provider-visible epoch"
+        );
+        assert!(third.recent.len() > first.recent.len());
+        assert!(third.stats.cache_epoch_turns > first.stats.cache_epoch_turns);
+
+        // Keep appending until the epoch fills; rotation happens occasionally,
+        // not every turn.
+        let mut turns = 3u64;
+        let mut previous = third;
+        while rotations(&store) < 2 && turns < 200 {
+            store
+                .append(
+                    sid,
+                    EventPayload::UserMessage {
+                        text: format!("filler {turns} {}", "y".repeat(200)),
+                    },
+                )
+                .unwrap();
+            store
+                .append(
+                    sid,
+                    EventPayload::AssistantMessageCompleted {
+                        text: format!("reply {turns}"),
+                        tool_calls: vec![],
+                        reasoning_content: None,
+                    },
+                )
+                .unwrap();
+            previous = materialize();
+            turns += 1;
+        }
+        assert!(rotations(&store) >= 2, "the epoch rotates again when full");
         assert!(
-            third.stats.recent_evicted_tokens > 0,
-            "eviction is explained in the stats"
+            turns > 3 && (rotations(&store) as u64) < turns,
+            "rotation is periodic, not per-turn (took {turns} turns)"
         );
         assert!(
-            third.stats.recent_start_sequence > first.stats.recent_start_sequence,
-            "the window start advanced"
+            previous.stats.recent_start_sequence > 0,
+            "working set remains useful after rotation"
         );
-        let kept_old = first
-            .recent
-            .iter()
-            .filter(|old| third.recent.iter().any(|new| new.id == old.id))
-            .count();
-        let evicted = first.recent.len() - kept_old;
-        assert!(evicted >= 2, "at least one whole unit left");
-        assert_eq!(evicted % 2, 0, "whole request/answer units leave");
-        assert!(
-            kept_old + 1 >= first.recent.len() / 2,
-            "no half-size cliff: {kept_old} of {} kept",
-            first.recent.len()
-        );
+        assert!(previous.stats.recent_tokens > 0);
 
         // Evicted originals stay durable and reachable through recall.
         let recalled = engine.recall(sid, "request 0").unwrap();
@@ -1760,13 +2227,16 @@ mod tests {
                 &budget,
             )
             .unwrap();
-        assert_eq!(resumed_ctx.recent, third.recent);
+        assert_eq!(resumed_ctx.recent, previous.recent);
         assert_eq!(
             resumed_ctx.stats.recent_start_sequence,
-            third.stats.recent_start_sequence
+            previous.stats.recent_start_sequence
         );
-        assert_eq!(resumed_ctx.stats.recent_tokens, third.stats.recent_tokens);
-        let summaries: Vec<_> = third.episodes.iter().map(|e| e.summary.clone()).collect();
+        let summaries: Vec<_> = previous
+            .episodes
+            .iter()
+            .map(|e| e.summary.clone())
+            .collect();
         let resumed_summaries: Vec<_> = resumed_ctx
             .episodes
             .iter()
@@ -2046,18 +2516,6 @@ mod tests {
                 },
             )
             .unwrap();
-        // Legacy ContextEpochStarted events from older builds must not move the
-        // working-memory reset point; the retained tail is recomputed from the
-        // log and the budget.
-        store
-            .append(
-                sid,
-                EventPayload::ContextEpochStarted {
-                    from_sequence: 1,
-                    reason: "legacy rollover".into(),
-                },
-            )
-            .unwrap();
         let tail = store
             .append(
                 sid,
@@ -2068,10 +2526,6 @@ mod tests {
             .unwrap();
 
         let engine = ContinuityEngine::new(store.clone(), ContextConfig::default());
-        assert_eq!(
-            engine.compact_start_sequence(sid).unwrap(),
-            first_after.sequence
-        );
         let context = engine
             .materialize(
                 sid,
@@ -2083,20 +2537,225 @@ mod tests {
                 &budget(100_000, 60_000),
             )
             .unwrap();
+        // `/compact` starts a fresh cache epoch: the provider-visible history
+        // begins at a new authoritative snapshot, and nothing behind the
+        // compact is sent as verbatim history.
         assert!(
             context
                 .recent
                 .iter()
-                .all(|event| event.sequence >= first_after.sequence),
+                .all(|event| event.sequence > tail.sequence),
             "working memory never reaches behind an explicit compact"
         );
-        assert!(
-            context
-                .recent
+        assert_eq!(context.stats.cache_rotation_reason, "manual compact");
+        assert!(context.stats.cache_epoch >= 1);
+        assert!(context.recent.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::KernelContext {
+                kind: KernelContextKind::Snapshot,
+                ..
+            }
+        )));
+        // The raw log keeps every event, including the ones the compact moved
+        // out of the provider view.
+        let all = store.events(sid).unwrap();
+        assert!(all.iter().any(|event| event.id == first_after.id));
+        assert!(all.iter().any(|event| event.id == tail.id));
+        assert!(all.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::UserMessage { text } if text.starts_with("before compact")
+        )));
+    }
+    #[test]
+    fn cache_epochs_beat_per_turn_sliding_suffix_on_prefix_reuse() {
+        use crate::state::EvidenceLedger;
+        use crate::state::FailureManager;
+        fn common_prefix(a: &str, b: &str) -> usize {
+            a.bytes()
+                .zip(b.bytes())
+                .take_while(|(left, right)| left == right)
+                .count()
+        }
+        fn ratio(previous: &str, next: &str) -> f64 {
+            common_prefix(previous, next) as f64 / previous.len().max(1) as f64
+        }
+
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(Path::new("/measure")).unwrap();
+        let engine = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        let mut state = TaskStateManager::default();
+        state.update(crate::state::StateUpdate {
+            add_constraints: vec!["preserve current truth".into()],
+            add_decisions: vec!["epoch-based cache".into()],
+            ..Default::default()
+        });
+        let high = 1_000usize;
+        let budget = MaterializeBudget {
+            request_tokens: 100_000,
+            window_tokens: 128_000,
+            reserve_tokens: 0,
+            recent_tokens: high,
+            reserved_tokens: 0,
+        };
+        let mut new_signatures: Vec<String> = Vec::new();
+        let mut old_signatures: Vec<String> = Vec::new();
+        let mut visible: Vec<Event> = Vec::new();
+        let turns = 48usize;
+        for turn in 0..turns {
+            visible.push(
+                store
+                    .append(
+                        sid,
+                        EventPayload::UserMessage {
+                            text: format!("turn {turn} {}", "x".repeat(200)),
+                        },
+                    )
+                    .unwrap(),
+            );
+            visible.push(
+                store
+                    .append(
+                        sid,
+                        EventPayload::AssistantMessageCompleted {
+                            text: format!("answer {turn}"),
+                            tool_calls: vec![],
+                            reasoning_content: None,
+                        },
+                    )
+                    .unwrap(),
+            );
+            let ctx = engine
+                .materialize(
+                    sid,
+                    state.state(),
+                    None,
+                    &EvidenceLedger::default(),
+                    &FailureManager::new(3),
+                    "system".into(),
+                    &budget,
+                )
+                .unwrap();
+            new_signatures.push(
+                ctx.recent
+                    .iter()
+                    .map(render_event)
+                    .collect::<Vec<_>>()
+                    .join("\u{1e}"),
+            );
+            // The old architecture kept the largest suffix and regenerated a
+            // synthetic kernel tail every request; neither was append-only.
+            let (old_recent, _) = bounded_recent(&visible, high, &engine.estimator);
+            let old = old_recent
                 .iter()
-                .any(|event| event.id == first_after.id)
+                .map(render_event)
+                .collect::<Vec<_>>()
+                .join("\u{1e}");
+            old_signatures.push(format!("{old}\u{1f}KERNEL TAIL {turn}"));
+        }
+
+        let ratios = |signatures: &[String]| -> Vec<f64> {
+            signatures
+                .windows(2)
+                .map(|pair| ratio(&pair[0], &pair[1]))
+                .collect()
+        };
+        let mean = |values: &[f64]| values.iter().sum::<f64>() / values.len().max(1) as f64;
+        let median = |values: &[f64]| {
+            let mut sorted = values.to_vec();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            sorted[sorted.len() / 2]
+        };
+        let new_ratios = ratios(&new_signatures);
+        let old_ratios = ratios(&old_signatures);
+        let high_reuse = |values: &[f64]| {
+            values.iter().filter(|value| **value >= 0.9).count() as f64 / values.len().max(1) as f64
+        };
+        let rotations = store
+            .events(sid)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
+            .count();
+        let worst_rotation = new_ratios.iter().cloned().fold(1.0f64, f64::min);
+        eprintln!(
+            "cache measurement: turns={turns} rotations={rotations} \
+             new_mean={:.2} old_mean={:.2} new_median={:.2} old_median={:.2} \
+             new_high_reuse={:.0}% old_high_reuse={:.0}% worst={:.2}",
+            mean(&new_ratios),
+            mean(&old_ratios),
+            median(&new_ratios),
+            median(&old_ratios),
+            high_reuse(&new_ratios) * 100.0,
+            high_reuse(&old_ratios) * 100.0,
+            worst_rotation
         );
-        assert!(context.recent.iter().any(|event| event.id == tail.id));
-        assert_eq!(context.stats.recent_start_sequence, first_after.sequence);
+
+        // Cache resets are occasional and never a large cliff.
+        assert!(
+            rotations <= turns / 4,
+            "too many rotations: {rotations} over {turns} turns"
+        );
+        assert!(
+            new_ratios.len() == turns - 1 && old_ratios.len() == turns - 1,
+            "every ordinary turn is measured"
+        );
+        // The epoch strategy keeps most turns highly reusable, while the old
+        // per-turn suffix reset the provider prefix almost every turn.
+        assert!(
+            mean(&new_ratios) > mean(&old_ratios) + 0.3,
+            "new {:.2} vs old {:.2}",
+            mean(&new_ratios),
+            mean(&old_ratios)
+        );
+        assert!(high_reuse(&new_ratios) >= 0.7);
+        assert!(
+            high_reuse(&new_ratios) > high_reuse(&old_ratios) + 0.4,
+            "new {:.0}% vs old {:.0}%",
+            high_reuse(&new_ratios) * 100.0,
+            high_reuse(&old_ratios) * 100.0
+        );
+        assert!(rotations >= 2, "the epoch rotates under pressure");
+        // Cache breaks are occasional and controlled: at most one per rotation.
+        let breaks = new_ratios.iter().filter(|ratio| **ratio < 0.5).count();
+        assert!(
+            breaks <= rotations,
+            "{breaks} prefix breaks for {rotations} rotations"
+        );
+        let _ = worst_rotation;
+
+        // Current truth survives every rotation.
+        let last = engine
+            .materialize(
+                sid,
+                state.state(),
+                None,
+                &EvidenceLedger::default(),
+                &FailureManager::new(3),
+                "system".into(),
+                &budget,
+            )
+            .unwrap();
+        assert!(last.canonical.contains("preserve current truth"));
+        assert!(last.canonical.contains("epoch-based cache"));
+        assert!(last.stats.cache_epoch > 0);
+
+        // Resume equivalence: a cold engine reconstructs the same epoch view.
+        let resumed = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        let resumed_ctx = resumed
+            .materialize(
+                sid,
+                state.state(),
+                None,
+                &EvidenceLedger::default(),
+                &FailureManager::new(3),
+                "system".into(),
+                &budget,
+            )
+            .unwrap();
+        assert_eq!(resumed_ctx.recent, last.recent);
+        assert_eq!(
+            resumed_ctx.stats.cache_epoch, last.stats.cache_epoch,
+            "durable epoch boundaries replay deterministically"
+        );
     }
 }

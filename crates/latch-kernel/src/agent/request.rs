@@ -108,6 +108,11 @@ pub(super) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
                 })
             }
             EventPayload::RegroundRequested { signature } => Some(ModelMessage::text("user", format!("Kernel re-ground required after repeated failure {signature}. Re-read current reality, identify disproven assumptions, and form a materially different strategy before another mutation."))),
+            // Durable kernel context is rendered in history order so the
+            // provider-visible request stays append-only within a cache epoch.
+            EventPayload::KernelContext { content, .. } => {
+                Some(ModelMessage::text("user", content.clone()))
+            }
             // ScopeExpansionRequested is a legacy, replay-only event; it has no
             // place in the live model conversation.
             _ => None,

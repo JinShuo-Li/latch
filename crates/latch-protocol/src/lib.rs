@@ -276,6 +276,26 @@ fn default_currency() -> String {
     "USD".into()
 }
 
+/// What kind of kernel-owned authoritative context one message carries. The
+/// event is durable so a request within a cache epoch is an exact prefix of the
+/// next; the newest snapshot or state update is the current truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KernelContextKind {
+    /// Complete authoritative state at a cache-epoch start.
+    Snapshot,
+    /// Complete authoritative state after a material change during an epoch.
+    StateUpdate,
+    /// Recalled original historical events for the current instruction.
+    Recall,
+    /// Navigational archival episode index.
+    EpisodeIndex,
+    /// Kernel re-ground instruction after repeated failure/stagnation.
+    Reground,
+    /// Extension-provided context sources.
+    Extension,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum EventPayload {
@@ -425,6 +445,23 @@ pub enum EventPayload {
     ContextEpochStarted {
         from_sequence: u64,
         reason: String,
+        /// Cache-epoch generation; increments on every rotation.
+        #[serde(default)]
+        generation: u64,
+        /// Working-memory tokens retained after the rotation.
+        #[serde(default)]
+        retained_tokens: usize,
+    },
+    /// One kernel-owned authoritative context message as it was sent to the
+    /// provider. Persisting it keeps every request within a cache epoch an
+    /// append-only extension of the previous request, and lets resume replay
+    /// the exact provider-visible kernel history. The newest snapshot or state
+    /// update carries the complete current state; earlier ones are provenance.
+    KernelContext {
+        generation: u64,
+        revision: u64,
+        kind: KernelContextKind,
+        content: String,
     },
     /// The kernel recomputed completion and the derived value changed. This is
     /// the only place completion truth is announced; the model never sets it.
@@ -626,6 +663,21 @@ pub struct ContextStats {
     /// materialization, explaining a drop in `recent_tokens`.
     #[serde(default)]
     pub recent_evicted_tokens: usize,
+    /// Cache-epoch generation currently in use (0 before the first rotation).
+    #[serde(default)]
+    pub cache_epoch: u64,
+    /// Estimated provider-visible tokens in the current cache epoch.
+    #[serde(default)]
+    pub cache_epoch_tokens: usize,
+    /// User turns in the current cache epoch (its conversation span).
+    #[serde(default)]
+    pub cache_epoch_turns: u64,
+    /// Why the current epoch was established.
+    #[serde(default)]
+    pub cache_rotation_reason: String,
+    /// Working-memory tokens retained when the current epoch was established.
+    #[serde(default)]
+    pub cache_rotation_retained_tokens: usize,
     /// Tool schemas actually sent with this request.
     pub tools_tokens: usize,
     /// Extension-provided context sources.
@@ -878,8 +930,11 @@ pub fn display_items(event: &Event) -> Vec<DisplayItem> {
         // do not belong in the durable transcript.
         EventPayload::SafetyChanged { .. } | EventPayload::PermissionsChanged { .. } => Vec::new(),
         EventPayload::ContextEpochStarted { .. } => vec![DisplayItem::KernelNotice {
-            text: "context epoch advanced; earlier events remain durable and searchable".into(),
+            text: "cache epoch rotated; earlier events remain durable and searchable".into(),
         }],
+        // Kernel context is authoritative provider-facing state, not transcript
+        // chrome; it stays durable and replayable without double-rendering.
+        EventPayload::KernelContext { .. } => Vec::new(),
         EventPayload::CompletionChanged { completion } => vec![DisplayItem::KernelNotice {
             text: format!("completion: {completion:?}"),
         }],

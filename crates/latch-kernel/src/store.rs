@@ -410,6 +410,22 @@ impl EventStore {
         self.events_query(session_id, &sql, &params)
     }
 
+    /// Number of events of one kind after a sequence. Derived counters (such
+    /// as cache-epoch turns) stay cheap and deterministic on resume.
+    pub fn count_events_after_of_kind(
+        &self,
+        session_id: Uuid,
+        kind: &str,
+        after_sequence: u64,
+    ) -> Result<u64> {
+        let count: i64 = self.conn()?.query_row(
+            "SELECT COUNT(*) FROM events WHERE session_id=?1 AND kind=?2 AND sequence > ?3",
+            rusqlite::params![session_id.to_string(), kind, after_sequence],
+            |row| row.get(0),
+        )?;
+        Ok(count as u64)
+    }
+
     /// Newest event among the given kinds, if any. Boundary lookups (compact and
     /// epoch markers) use this instead of scanning the log.
     pub fn latest_event_of_kinds(&self, session_id: Uuid, kinds: &[&str]) -> Result<Option<Event>> {
@@ -497,6 +513,7 @@ impl EventStore {
                     &event.payload,
                     EventPayload::ContextMemoryRecalled { .. }
                         | EventPayload::ContextMaterialized { .. }
+                        | EventPayload::KernelContext { .. }
                 )
             })
             .collect())

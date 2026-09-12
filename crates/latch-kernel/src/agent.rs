@@ -471,7 +471,7 @@ impl Agent {
             let tools_tokens = self.estimator.estimate_tools(&tools);
             let extension_tokens = self.estimator.estimate(&extension_json);
             let budget = self.materialize_budget(tools_tokens.saturating_add(extension_tokens));
-            let ctx = self.continuity.materialize(
+            let ctx = self.continuity.materialize_dynamic(
                 self.session_id,
                 self.state.state(),
                 query.as_deref(),
@@ -479,33 +479,15 @@ impl Agent {
                 &self.failures,
                 PromptCompiler::compile(self.mode, &self.workspace)?.text,
                 &budget,
+                &extension_json,
+                self.progress.reground_instruction().as_deref(),
             )?;
             let mut stats = ctx.stats.clone();
             stats.tools_tokens = tools_tokens;
-            stats.extension_tokens = extension_tokens;
             stats.recompute();
-            let mut messages = context_messages(&ctx);
-            // Kernel-owned re-ground: while stagnation supervision is active,
-            // the model receives the explicit list of unchanged observations.
-            if let Some(instruction) = self.progress.reground_instruction() {
-                messages.push(ModelMessage::text("user", instruction));
-            }
-            // The compiled system prompt is the stable, cacheable prefix. The
-            // frequently changing canonical state, recalled originals, and
-            // extension context travel as a final kernel context turn, so
-            // ordinary task-state/evidence updates cannot invalidate the
-            // reusable system + tools + conversation prefix.
-            let kernel_context = format!(
-                "Kernel context (authoritative current state; not a new request):\n\n{}\n\nRECALLED ORIGINAL MATERIAL\n{}\n\nEXTENSION CONTEXT SOURCES\n{}",
-                ctx.canonical, ctx.recalled, extension_json
-            );
-            messages.push(ModelMessage {
-                role: "user".into(),
-                content: kernel_context,
-                tool_calls: vec![],
-                tool_call_id: None,
-                reasoning_content: None,
-            });
+            // Kernel-owned context is durable history now: every request within
+            // a cache epoch is an append-only extension of the previous one.
+            let messages = context_messages(&ctx);
             let request = ModelRequest {
                 system: ctx.system.clone(),
                 messages,
