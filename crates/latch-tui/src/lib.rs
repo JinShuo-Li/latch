@@ -2562,7 +2562,7 @@ fn draw_composer_hints(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui:
         &[("ctrl+p", "commands")]
     } else {
         &[
-            ("enter", "send"),
+            ("enter", if app.busy { "steer" } else { "send" }),
             ("ctrl+j", "newline"),
             ("ctrl+p", "commands"),
         ]
@@ -4196,6 +4196,32 @@ mod tests {
             parent_id: None,
             payload,
         }
+    }
+
+    #[test]
+    fn steering_submit_keeps_running_while_ctrl_c_still_cancels() {
+        let mut app = App {
+            busy: true,
+            ..App::default()
+        };
+        app.input.insert_text("change direction");
+        let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(action, Some(Action::Submit(ref text)) if text == "change direction"),
+            "submitting while running is steering, not a no-op"
+        );
+        assert!(app.busy, "steering never cancels the active task");
+        assert_eq!(app.input.text(), "", "the steering draft is taken");
+
+        app.input.insert_text("half-written");
+        let action = app.on_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(matches!(action, Some(Action::Cancel)), "Ctrl+C cancels");
+        assert!(app.interrupted);
+        assert_eq!(
+            app.input.text(),
+            "half-written",
+            "cancel never submits the composer contents"
+        );
     }
 
     #[test]
