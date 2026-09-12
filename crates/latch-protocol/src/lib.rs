@@ -349,6 +349,11 @@ pub enum EventPayload {
         before: Option<FileVersion>,
         after: FileVersion,
         owner: ChangeOwner,
+        /// True when the path did not exist before this change, so undo means
+        /// deletion. Legacy events default to false; undo refuses rather than
+        /// guessing and deleting a pre-existing file.
+        #[serde(default)]
+        created: bool,
         /// Content-addressed artifact (relative to the session artifact store)
         /// holding the pre-change bytes so ownership and undo survive resume.
         #[serde(default, skip_serializing_if = "Option::is_none")]

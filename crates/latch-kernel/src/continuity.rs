@@ -1384,6 +1384,7 @@ mod tests {
                     size: 3,
                 },
                 owner: latch_protocol::ChangeOwner::Latch,
+                created: true,
                 undo_artifact: None,
                 additions: 1,
                 deletions: 0,

@@ -32,6 +32,7 @@ impl ToolExecutor {
                     after,
                     owner,
                     undo_artifact,
+                    created,
                     ..
                 } if !matches!(owner, ChangeOwner::External) => {
                     let path = self.workspace.join(&after.path);
@@ -41,6 +42,7 @@ impl ToolExecutor {
                         after_hash: after.content_hash.clone(),
                         owner: owner.clone(),
                         undo_artifact: undo_artifact.clone(),
+                        created: *created,
                     };
                     // A change whose result is no longer on disk was externally
                     // modified after the fact; keep it distinguishable.
@@ -136,10 +138,11 @@ impl ToolExecutor {
             .unwrap_or_default();
         self.ledger.lock().await.owned.push(ChangeRecord {
             path: path.clone(),
-            before,
+            before: before.clone(),
             after_hash: after_version.content_hash.clone(),
             owner: owner.clone(),
             undo_artifact: undo_artifact.clone(),
+            created: before.is_none(),
         });
         self.store.append(
             self.session_id,
@@ -147,6 +150,7 @@ impl ToolExecutor {
                 before: before_version,
                 after: after_version.clone(),
                 owner,
+                created: before.is_none(),
                 undo_artifact,
                 additions,
                 deletions,
@@ -217,24 +221,23 @@ impl ToolExecutor {
         &self,
         command: &str,
         before: Option<&[(PathBuf, Vec<u8>)]>,
-    ) {
-        let mark_unavailable = |executor: &Self| {
-            let _ = executor.store.append(
+    ) -> Result<()> {
+        let mark_unavailable = |executor: &Self| -> Result<()> {
+            executor.store.append(
                 executor.session_id,
                 EventPayload::ShellMutationObserved {
                     command: command.into(),
                     reversible: false,
                     paths: vec![],
                 },
-            );
+            )?;
+            Ok(())
         };
         let Some(before) = before else {
-            mark_unavailable(self);
-            return;
+            return mark_unavailable(self);
         };
         let Ok(listing) = git_porcelain(&self.workspace) else {
-            mark_unavailable(self);
-            return;
+            return mark_unavailable(self);
         };
         let listing = listing.unwrap_or_default();
         let before_paths: HashSet<&Path> = before.iter().map(|(path, _)| path.as_path()).collect();
@@ -318,6 +321,8 @@ impl ToolExecutor {
                 .transpose()
                 .ok()
                 .flatten();
+            // If the pre-change artifact cannot be stored, the record still
+            // exists but is not reversible; undo refuses rather than guessing.
             let undo_artifact = before_bytes
                 .as_ref()
                 .and_then(|bytes| self.store_undo_artifact(bytes).ok());
@@ -336,35 +341,38 @@ impl ToolExecutor {
                 .unwrap_or_default();
             self.ledger.lock().await.owned.push(ChangeRecord {
                 path: path.clone(),
-                before: before_bytes,
+                before: before_bytes.clone(),
                 after_hash: after.content_hash.clone(),
                 owner: ChangeOwner::Shell,
                 undo_artifact: undo_artifact.clone(),
+                created: before_bytes.is_none(),
             });
-            let _ = self.store.append(
+            self.store.append(
                 self.session_id,
                 EventPayload::FileChanged {
                     before: before_version,
                     after,
                     owner: ChangeOwner::Shell,
+                    created: before_bytes.is_none(),
                     undo_artifact,
                     additions,
                     deletions,
                     preview,
                     call_id: None,
                 },
-            );
+            )?;
         }
         if !untrackable.is_empty() {
-            let _ = self.store.append(
+            self.store.append(
                 self.session_id,
                 EventPayload::ShellMutationObserved {
                     command: command.into(),
                     reversible: false,
                     paths: untrackable,
                 },
-            );
+            )?;
         }
+        Ok(())
     }
     pub(super) async fn checkpoint(&self, _: &ToolCall) -> Result<(String, Option<String>)> {
         let mut l = self.ledger.lock().await;
@@ -417,7 +425,12 @@ impl ToolExecutor {
         };
         match before {
             Some(bytes) => tokio::fs::write(&change.path, bytes).await?,
-            None => tokio::fs::remove_file(&change.path).await?,
+            None if change.created => tokio::fs::remove_file(&change.path).await?,
+            None => bail!(
+                "cannot undo: {} existed before this change but its original content                  was not captured, so undo would have to guess. Revert it manually.",
+                relative(&self.workspace, &change.path)
+                    .unwrap_or_else(|_| change.path.display().to_string()),
+            ),
         }
         let relative_path = relative(&self.workspace, &change.path)?;
         // The bytes restored (or removed) are Latch-authored too.
@@ -446,6 +459,10 @@ pub(super) struct ChangeRecord {
     pub(super) owner: ChangeOwner,
     /// Session artifact holding the pre-change bytes for resume-safe undo.
     pub(super) undo_artifact: Option<String>,
+    /// True only when the path did not exist before this change. Undo may
+    /// delete the file only in that case; otherwise missing bytes mean the
+    /// original content is unavailable and undo must refuse.
+    pub(super) created: bool,
 }
 
 #[derive(Debug, Default)]

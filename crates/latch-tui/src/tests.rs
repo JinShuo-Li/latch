@@ -1635,6 +1635,7 @@ fn patch_preview_fixture(app: &mut App) {
     ))));
     app.output(Output::Event(Box::new(presentation_event(
             latch_protocol::EventPayload::FileChanged {
+                created: false,
                 before: None,
                 after: latch_protocol::FileVersion {
                     path: "src/calc.rs".into(),
@@ -1670,6 +1671,7 @@ fn patch_preview_fixture(app: &mut App) {
     ))));
     app.output(Output::Event(Box::new(presentation_event(
             latch_protocol::EventPayload::FileChanged {
+                created: false,
                 before: None,
                 after: latch_protocol::FileVersion {
                     path: "tests/calc.rs".into(),

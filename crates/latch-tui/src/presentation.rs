@@ -173,6 +173,7 @@ impl PresentationModel {
             } => self.finish_validation(command, *passed, detail),
             EventPayload::FileChanged {
                 after,
+                created: false,
                 owner: ChangeOwner::Latch,
                 additions,
                 deletions,
@@ -1235,6 +1236,7 @@ mod tests {
                     content_hash: "h".into(),
                     size: 5,
                 },
+                created: false,
                 owner: latch_protocol::ChangeOwner::Latch,
                 undo_artifact: None,
                 additions: 1,

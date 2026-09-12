@@ -575,6 +575,75 @@ async fn resumed_executor(
 }
 
 #[tokio::test]
+async fn resumed_shell_change_without_captured_bytes_refuses_undo() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("kept.txt");
+    std::fs::write(&path, "original").unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(d.path()).unwrap();
+    let after_bytes = std::fs::read(&path).unwrap();
+    let after = version(d.path(), &path, &after_bytes).unwrap();
+    // A shell mutation of a pre-existing file whose original bytes were not
+    // captured: `before` is absent, but `created` is false.
+    store
+        .append(
+            session,
+            EventPayload::FileChanged {
+                before: None,
+                after,
+                owner: ChangeOwner::Shell,
+                created: false,
+                undo_artifact: None,
+                additions: 1,
+                deletions: 0,
+                preview: String::new(),
+                call_id: None,
+            },
+        )
+        .unwrap();
+    let e = resumed_executor(&d, &store, session).await;
+    let error = e.undo(&call("undo", json!({}))).await.unwrap_err();
+    assert!(
+        error.to_string().contains("not captured"),
+        "undo must explain why it refuses: {error}"
+    );
+    assert!(
+        path.exists(),
+        "undo must never delete a pre-existing file with unknown original content"
+    );
+}
+
+#[tokio::test]
+async fn resumed_created_file_undo_deletes_the_created_file() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("made.txt");
+    std::fs::write(&path, "created by shell").unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(d.path()).unwrap();
+    let after_bytes = std::fs::read(&path).unwrap();
+    let after = version(d.path(), &path, &after_bytes).unwrap();
+    store
+        .append(
+            session,
+            EventPayload::FileChanged {
+                before: None,
+                after,
+                owner: ChangeOwner::Shell,
+                created: true,
+                undo_artifact: None,
+                additions: 1,
+                deletions: 0,
+                preview: String::new(),
+                call_id: None,
+            },
+        )
+        .unwrap();
+    let e = resumed_executor(&d, &store, session).await;
+    e.undo(&call("undo", json!({}))).await.unwrap();
+    assert!(!path.exists(), "a created file is undone by deletion");
+}
+
+#[tokio::test]
 async fn guarded_edit_undo_works_after_resume() {
     let d = tempdir().unwrap();
     std::fs::write(d.path().join("a.txt"), "old").unwrap();
