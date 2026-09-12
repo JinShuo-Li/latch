@@ -118,16 +118,23 @@ only from durable kernel events, so live and resumed sessions show the same
 state. Abnormal states (over-budget context, stalled progress, externally
 modified owned files) are highlighted; healthy states stay quiet.
 
-Context telemetry distinguishes the estimated request size from the reusable
-prefix: the sidebar shows estimated architecture cacheability (shared prefix /
-request under Latch's own serialization and estimator, not the provider's
-tokenizer) and, once the provider reports usage, provider cache efficiency
-(cache reads / shared prefix). Provider-reported cache usage is authoritative.
-Usage keeps cache hit, miss, and total input distinct, so cost never
-double-charges cached tokens. The recent transcript is append-only within a
-context epoch; when it reaches its budget, one non-destructive rollover starts
-a new epoch from durable state instead of evicting a little every turn, and
-rolled-over events remain searchable.
+Context telemetry distinguishes three quantities: estimated architecture
+cacheability (shared prefix / request under Latch's own serialization and
+estimator, not the provider's tokenizer), provider prefix utilization (cache
+reads / shared prefix), and the measured provider cache hit rate (cache reads /
+(reported hits + misses)). Provider-reported usage is authoritative, and
+unknown categories stay unknown. Usage keeps cache hit, miss, and total input
+distinct, so cost never double-charges cached tokens.
+
+The provider-visible conversation is append-only within a durable cache epoch;
+kernel state and recalled material are durable messages, so ordinary turns do
+not rewrite the reusable prefix. When the working budget fills, one hysteretic
+rotation keeps a large whole-unit working set and emits a fresh authoritative
+snapshot instead of evicting a little every turn. Cache epochs are performance
+boundaries only: raw events, canonical state, archival episodes, and recall are
+independent of them, rotation never deletes memory, and `/compact` remains the
+explicit reset. The sidebar shows the epoch generation, span, last rotation
+reason, and retained tokens.
 
 Context budgets and every user-visible context number are tokens, estimated
 conservatively per provider/model; bytes remain only for internal file,

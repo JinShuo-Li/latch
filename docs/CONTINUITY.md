@@ -64,36 +64,56 @@ token breakdown, the first retained sequence, how many tokens left working
 memory since the previous request, reserve, headroom, event and episode counts,
 and status.
 
-## Gradual working-memory decay
+## Cache epochs and working memory
 
-Working memory does not collapse at a threshold. Each new turn appends whole
-units and, when the recent budget is exceeded, only the oldest units needed to
-fit are evicted — one at a time in the common case. The retained tail is a pure
-function of the durable log, the budget, and the last `/compact`, so resume
-reconstructs exactly the same working set without any rollover bookkeeping.
-Tool transactions stay atomic, and an oversized transaction is kept whole
-rather than split. Evicted units are never deleted: they move into the archival
-region, remain searchable through FTS, and stay visible through the episode
-index. `/compact` remains the only explicit working-memory reset; legacy
-`ContextEpochStarted` events from older builds are retained for history but no
-longer move the retained start.
+Working memory is organized into durable cache epochs. The governing rule is
+that memory decides what the model needs to know, while the cache decides how
+cheaply it can be sent: cache epochs are performance boundaries, not memory
+boundaries.
 
-Context changes are explainable from durable state: every materialization emits
-`ContextMaterialized` with `recent_tokens`, `recent_start_sequence`, and
-`recent_evicted_tokens`, so an advancing window start and the tokens it
-released can be reconstructed from the event log alone.
+Within an epoch the provider-visible conversation is append-only. Kernel-owned
+context is persisted as durable `KernelContext` messages rather than a
+synthetic tail: a complete authoritative snapshot starts the epoch, and deltas
+are appended only when state actually changes — a full current-state update at
+a higher revision, extension sources, recalled originals, an archival index
+update, or a re-ground instruction. Revision numbers make supersession
+explicit, and messages from older generations are excluded from the
+provider-visible epoch while remaining durable. Ordinary task-state,
+evidence, or validation changes therefore append instead of rewriting earlier
+messages, and resume replays the same kernel history.
 
-## Incremental history access
+`recent_tokens` is the conversation high-water mark. When an epoch exceeds it,
+one hysteretic rotation retains the newest whole semantic units up to about
+three quarters of the budget and emits a fresh snapshot. The quarter-budget of
+headroom makes rotation occasional rather than per-turn; tool transactions stay
+atomic and an oversized unit is kept whole. Rotation never deletes memory:
+evicted material stays in the raw log, remains searchable through FTS recall,
+and stays visible through the episode index. `/compact` is the explicit
+working-memory reset and starts a fresh epoch.
 
-Every event stays in the raw store; only the queries are incremental.
-Materialization loads recent candidates from the newest events with
-`events_tail`, computes the retained tail locally, and asks the episode cache
-for only the newly archived delta via `events_between`; it never deserializes
-history it has already indexed. Recall uses deterministic SQLite FTS and
-fetches only matched rows, preserving the original match limit before excluding
-bookkeeping kinds. Live supervision keeps sequence cursors, so each turn feeds
-only newly appended events to the progress supervisor and the live sink, and
-resume continues from the durable cursor.
+Canonical state remains authoritative. A higher kernel revision is current
+truth; the append-only history is provenance, and old decisions, constraints,
+or evidence never remain ambiguously current because each state update carries
+the complete current canonical state. Recall reaches into the archival region
+only for material that is no longer in the provider-visible epoch.
+
+## Context metrics
+
+Three distinct quantities are reported, never conflated:
+
+- **estimated architecture cacheability**: `common_prefix_tokens /
+  request_tokens`, measured on Latch's canonical serialization and token
+  estimator; an architecture diagnostic only;
+- **provider prefix utilization**: `cache_read_tokens / common_prefix_tokens`,
+  how much of the estimated reusable prefix the provider actually read;
+- **measured provider cache hit rate**: `cache_read_tokens / (cache_read_tokens
+  + cache_miss_tokens)` from provider-reported categories; unknown categories
+  remain unknown.
+
+Every materialization also records the cache epoch generation, its
+conversation span in user turns, the last rotation reason, and the tokens
+retained after that rotation, so context changes are explainable from durable
+events alone.
 
 ## Episodes
 

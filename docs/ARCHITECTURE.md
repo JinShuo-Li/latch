@@ -163,12 +163,16 @@ replayed `reasoning_content` are included, kernel bookkeeping events are not.
 (system, messages, tool schemas) after any extension transform, and
 `ContextStats.common_prefix_tokens` is the byte prefix shared with the
 previous request under Latch's canonical serialization and token estimator.
-Their ratio is the **estimated architecture cacheability**, a diagnostic for
-Latch's own request layout: it is not measured with the provider's tokenizer
-or wire representation and does not predict an exact cache hit.
-`provider_cache_efficiency = cache_read_tokens / common_prefix_tokens` is
-shown once provider usage is known, and provider-reported cache-read/hit/miss
-usage remains authoritative.
+Their ratio is the **estimated architecture cacheability**: a Latch
+architecture diagnostic, not a provider measurement. When provider usage is
+known, `provider prefix utilization = cache_read_tokens /
+common_prefix_tokens` shows how much of that estimated prefix the provider
+actually reused, and the **measured provider cache hit rate** is
+`cache_read_tokens / (cache_read_tokens + cache_miss_tokens)` from
+provider-reported categories. Unknown categories stay unknown rather than
+being fabricated. The sidebar labels all three distinctly and also shows the
+current cache epoch generation, its conversation span, the last rotation
+reason, and the tokens retained by that rotation.
 
 ### Prompt cache layout
 
@@ -185,27 +189,45 @@ alternating; it also marks the system block as an ephemeral cache breakpoint
 (an adapter-only control), while OpenAI-compatible endpoints rely on automatic
 prefix caching.
 
-### Gradual working-memory decay and incremental episodes
+### Cache epochs are performance boundaries, not memory boundaries
 
-Recent verbatim working memory is the largest suffix of whole conversation
-units that fits `recent_tokens` after the last `/compact`. Budget pressure
-evicts only the oldest units needed to fit, so the window decays gradually
-instead of collapsing to a smaller size at a threshold; tool transactions stay
-atomic and an oversized unit is kept whole. The retained tail is a pure
-function of the durable log and the configured budget, so resume reconstructs
-exactly the same working set; `/compact` is the only explicit reset. Legacy
-`ContextEpochStarted` events are preserved for history but no longer drive the
-retained start.
+The provider-visible conversation is organized into durable **cache epochs**.
+Within one epoch every request is an exact append-only extension of the
+previous one: no already-sent message is removed, reordered, or rewritten. The
+system prompt and tool schemas are session-stable, and kernel-owned context is
+sent as durable [`KernelContext`] messages instead of a synthetic trailing
+turn, so the reusable prefix does not break on ordinary turns.
 
-The archival episode index is built incrementally. The engine caches closed
-episodes and the open trailing segment with a sequence watermark; each turn
-consumes only the newly archived delta. A session change or a budget increase
-that moves the archive backwards triggers a deterministic rebuild from the raw
-log. Nothing is deleted, summarized away, or lost: evicted units stay in the
-event log, are reachable through FTS recall, and remain visible through the
-episode index. `ContextStats` distinguishes `episode_tokens` (archival
-metadata, a subset of `recall_tokens`) and records `recent_start_sequence` and
-`recent_evicted_tokens` so changes are explainable from durable events.
+A new epoch starts with a complete authoritative `KERNEL STATE SNAPSHOT`.
+During the epoch the kernel appends deltas only when something materially
+changes: a state update carrying the complete current canonical state at a
+higher revision, an extension-context update, recalled original events, an
+archival index update, or a re-ground instruction. Revision numbers make
+supersession explicit: the highest revision of the current generation is
+current truth; earlier revisions are retained provenance. Kernel messages from
+older generations stay in the raw log but are not part of the provider-visible
+epoch.
+
+Rotation is deliberate and hysteretic. The `recent_tokens` configuration is
+the conversation high-water mark; when an epoch exceeds it, one rotation keeps
+the newest whole semantic units up to roughly three quarters of the budget and
+emits a fresh snapshot, leaving a quarter-budget of growth headroom so a
+saturated session rotates occasionally rather than every turn. Tool
+transactions are never split, an oversized unit is kept whole, and
+`/compact` is an explicit reset that starts a fresh epoch. Rotation never
+deletes memory: evicted material stays in the event log, remains reachable
+through FTS recall, and remains visible through the archival episode index.
+
+Canonical task state stays authoritative. The append-only kernel history
+exists to preserve both provenance and cache locality, never to replace the
+state system: goal, constraints, decisions, supersession, hypotheses,
+questions, actions, validation requirements, evidence, failure lineages, and
+completion remain durable and are re-rendered into every snapshot.
+
+Cache reuse may be sacrificed whenever semantic continuity requires it. If
+current truth would be crowded out, if a transaction would be split, or if
+unresolved work would be hidden, the epoch rotates (or grows) even though the
+prefix changes.
 
 ### Incremental history access
 
