@@ -8,14 +8,21 @@ impl Agent {
     /// supervisor and advances the watermark. Live supervision and replay
     /// consume the same event stream in the same order.
     pub(super) fn observe_progress_events(&mut self) -> Result<()> {
-        let events = self.store.events(self.session_id)?;
-        if self.progress_watermark > events.len() {
-            self.progress_watermark = 0;
+        let last = self.store.last_sequence(self.session_id)?;
+        if self.progress_watermark > last {
+            // History only grows, so this can only happen if a fresh store
+            // replaced the old one. Skip rather than replaying everything and
+            // double-counting supervision.
+            self.progress_watermark = last;
+            return Ok(());
         }
-        for event in &events[self.progress_watermark..] {
+        let events = self
+            .store
+            .events_after(self.session_id, self.progress_watermark)?;
+        for event in &events {
             self.progress.observe_event(event);
         }
-        self.progress_watermark = events.len();
+        self.progress_watermark = last;
         Ok(())
     }
 
@@ -87,7 +94,10 @@ impl Agent {
     /// Rebuilds failure supervision from the durable event log so a stalled
     /// validation loop survives `--resume`.
     pub fn restore_failures(&mut self) -> Result<()> {
-        let events = self.store.events(self.session_id)?;
+        let events = self.store.events_of_kinds(
+            self.session_id,
+            &["tool_requested", "tool_completed", "tool_failed"],
+        )?;
         let mut calls: std::collections::HashMap<String, (String, String)> =
             std::collections::HashMap::new();
         let mut attempts: Vec<(String, bool, String)> = Vec::new();
@@ -128,7 +138,7 @@ impl Agent {
         let events = self.store.events(self.session_id)?;
         self.progress.reset();
         self.progress.replay(&events);
-        self.progress_watermark = events.len();
+        self.progress_watermark = self.store.last_sequence(self.session_id)?;
         Ok(())
     }
 }

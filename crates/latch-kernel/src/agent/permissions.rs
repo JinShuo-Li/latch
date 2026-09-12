@@ -12,7 +12,8 @@ impl Agent {
     /// Resuming cannot continue a tool call that no longer exists, so each
     /// unresolved request is durably marked, not silently forgotten.
     pub fn expire_pending_permissions(store: &EventStore, session_id: Uuid) -> Result<usize> {
-        let events = store.events(session_id)?;
+        let events =
+            store.events_of_kinds(session_id, &["permission_requested", "permission_resolved"])?;
         let mut pending = std::collections::BTreeSet::new();
         for event in &events {
             match &event.payload {

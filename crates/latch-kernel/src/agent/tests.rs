@@ -2142,3 +2142,63 @@ async fn policy_changes_are_durable_for_resume() {
         PermissionMode::AutoApprove
     );
 }
+
+#[tokio::test]
+async fn watermark_cursors_deliver_each_new_event_once() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent, _provider) = steering_agent(
+        &d,
+        vec![ModelResponse {
+            text: "unused".into(),
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: None,
+        }],
+        vec![],
+        0,
+    );
+    store
+        .append(sid, EventPayload::UserMessage { text: "one".into() })
+        .unwrap();
+    store
+        .append(sid, EventPayload::UserMessage { text: "two".into() })
+        .unwrap();
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let collector = seen.clone();
+    let sink: AgentEventSink = Arc::new(move |output| {
+        if let AgentOutput::Durable(event) = output {
+            collector.lock().unwrap().push(event.sequence);
+        }
+    });
+    agent.forward_appended_events(&sink).unwrap();
+    assert_eq!(*seen.lock().unwrap(), vec![1, 2]);
+
+    store
+        .append(
+            sid,
+            EventPayload::UserMessage {
+                text: "three".into(),
+            },
+        )
+        .unwrap();
+    agent.forward_appended_events(&sink).unwrap();
+    agent.forward_appended_events(&sink).unwrap();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![1, 2, 3],
+        "each durable event is delivered exactly once"
+    );
+
+    // Progress supervision consumes the same sequence cursor and stays put
+    // when no new events were appended.
+    agent.observe_progress_events().unwrap();
+    assert_eq!(
+        agent.progress_watermark,
+        store.last_sequence(sid).unwrap(),
+        "the watermark tracks durable sequences"
+    );
+    agent.observe_progress_events().unwrap();
+    assert_eq!(agent.progress_watermark, 3);
+}

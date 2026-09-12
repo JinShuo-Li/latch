@@ -60,8 +60,11 @@ pub struct Agent {
     extensions: ExtensionRegistry,
     failures: FailureManager,
     progress: ProgressSupervisor,
-    progress_watermark: usize,
-    forward_watermark: Cell<usize>,
+    /// Sequence cursor of the last event already consumed by the progress
+    /// supervisor; per-turn supervision only reads strictly newer events.
+    progress_watermark: u64,
+    /// Sequence cursor of the last event already forwarded to the live sink.
+    forward_watermark: Cell<u64>,
     /// Call ids whose terminal result was produced by the kernel rather than
     /// by model failure (progress suppression or steering supersession).
     /// Failure supervision must not count them against the model.
@@ -406,7 +409,7 @@ impl Agent {
     ) -> Result<String> {
         // Everything appended from here on is fed to the supervisor and to the
         // live sink in order, exactly as a later replay would process it.
-        let start = self.store.events(self.session_id)?.len();
+        let start = self.store.last_sequence(self.session_id)?;
         self.progress_watermark = start;
         self.forward_watermark.set(start);
         self.record_user_message(user_text, &sink).await?;
@@ -653,7 +656,7 @@ impl Agent {
         self.forward_appended_events(sink)?;
         let event = self.store.append(self.session_id, payload)?;
         sink(AgentOutput::Durable(Box::new(event.clone())));
-        self.forward_watermark.set(event.sequence as usize);
+        self.forward_watermark.set(event.sequence);
         Ok(event)
     }
     /// Forwards durable events appended since the watermark to the live sink.
@@ -662,18 +665,18 @@ impl Agent {
     /// `ExternalFileChangeDetected`.
     fn forward_appended_events(&self, sink: &AgentEventSink) -> Result<()> {
         let watermark = self.forward_watermark.get();
-        let count = self.store.event_count(self.session_id)?;
-        if count <= watermark {
-            if count < watermark {
-                self.forward_watermark.set(count);
+        let last = self.store.last_sequence(self.session_id)?;
+        if last <= watermark {
+            if last < watermark {
+                self.forward_watermark.set(last);
             }
             return Ok(());
         }
-        let events = self.store.events(self.session_id)?;
-        for event in &events[watermark..] {
+        let events = self.store.events_after(self.session_id, watermark)?;
+        for event in &events {
             sink(AgentOutput::Durable(Box::new(event.clone())));
         }
-        self.forward_watermark.set(events.len());
+        self.forward_watermark.set(last);
         Ok(())
     }
 }

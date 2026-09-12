@@ -170,9 +170,21 @@ impl ContinuityEngine {
         budget: &MaterializeBudget,
     ) -> Result<MaterializedContext> {
         let memories = self.store.memories(session_id)?;
-        let active_start = self.active_start(session_id)?;
-        let all_events = self.store.events(session_id)?;
-        let active_events = &all_events[active_start.min(all_events.len())..];
+        // The active epoch starts at a durable sequence boundary. Load the
+        // rolled-over prefix and the active tail separately: the boundary query
+        // is indexed, and neither side deserializes the other.
+        let active_start = self.active_start_sequence(session_id)?;
+        let pre_epoch;
+        let active_owned;
+        if active_start <= 1 {
+            active_owned = self.store.events(session_id)?;
+            pre_epoch = Vec::new();
+        } else {
+            pre_epoch = self.store.events_before(session_id, active_start)?;
+            active_owned = self.store.events_after(session_id, active_start - 1)?;
+        }
+        let durable_events = pre_epoch.len() + active_owned.len();
+        let active_events = &active_owned;
         // The current user turn is already in the recent transcript; recalling
         // it as "original material" would duplicate it and make the dynamic
         // system block differ between the first and later requests of an epoch.
@@ -263,7 +275,7 @@ impl ContinuityEngine {
         // Episodes index every event older than the current epoch's recent
         // material, so rolled-over history stays retrievable.
         let historical_end = recent_start.min(active_events.len());
-        let mut episodes = build_episodes(&all_events[..active_start.min(all_events.len())]);
+        let mut episodes = build_episodes(&pre_epoch);
         episodes.extend(build_episodes(&active_events[..historical_end]));
         let selected = select_episodes(
             &episodes,
@@ -297,7 +309,7 @@ impl ContinuityEngine {
             window_tokens: budget.window_tokens,
             reserve_tokens: budget.reserve_tokens,
             headroom_tokens: 0,
-            durable_events: all_events.len() + usize::from(rolled),
+            durable_events: durable_events + usize::from(rolled),
             episodes: episodes.len(),
             selected_episodes: selected.len(),
             estimated: true,
@@ -314,22 +326,21 @@ impl ContinuityEngine {
             stats,
         })
     }
-    /// First event index of the current context epoch. `/compact` resets
-    /// explicitly; automatic rollover reuses the `from_sequence` recorded in
-    /// the durable epoch event so resume reconstructs the exact same start.
-    fn active_start(&self, session_id: Uuid) -> Result<usize> {
-        let events = self.store.events(session_id)?;
-        let mut start = 0usize;
-        for (index, event) in events.iter().enumerate() {
+    /// First sequence of the current context epoch (1 means the beginning).
+    /// `/compact` resets explicitly; automatic rollover reuses the
+    /// `from_sequence` recorded in the durable epoch event so resume
+    /// reconstructs the exact same start. Only boundary events are loaded, so
+    /// this lookup never scans the transcript.
+    fn active_start_sequence(&self, session_id: Uuid) -> Result<u64> {
+        let boundaries = self
+            .store
+            .events_of_kinds(session_id, &["manual_compact", "context_epoch_started"])?;
+        let mut start = 1u64;
+        for event in &boundaries {
             match &event.payload {
-                EventPayload::ManualCompact { .. } => start = index + 1,
+                EventPayload::ManualCompact { .. } => start = event.sequence + 1,
                 EventPayload::ContextEpochStarted { from_sequence, .. } => {
-                    if let Some(position) = events
-                        .iter()
-                        .position(|candidate| candidate.sequence == *from_sequence)
-                    {
-                        start = position;
-                    }
+                    start = *from_sequence;
                 }
                 _ => {}
             }
@@ -1540,5 +1551,79 @@ mod tests {
             &event.payload,
             EventPayload::UserMessage { text } if text.contains("request 0")
         )));
+    }
+
+    #[test]
+    fn epoch_boundary_lookup_matches_the_full_scan() {
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(Path::new("/boundary")).unwrap();
+        for i in 0..4 {
+            store
+                .append(
+                    sid,
+                    EventPayload::UserMessage {
+                        text: format!("before compact {i}"),
+                    },
+                )
+                .unwrap();
+        }
+        store
+            .append(sid, EventPayload::ManualCompact { generation: 1 })
+            .unwrap();
+        let first_after = store
+            .append(
+                sid,
+                EventPayload::UserMessage {
+                    text: "after compact".into(),
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                sid,
+                EventPayload::ContextEpochStarted {
+                    from_sequence: first_after.sequence,
+                    reason: "test rollover".into(),
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                sid,
+                EventPayload::UserMessage {
+                    text: "tail".into(),
+                },
+            )
+            .unwrap();
+
+        let engine = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        // Reference: the historical index scan, expressed as a first sequence.
+        let events = store.events(sid).unwrap();
+        let mut expected = 1u64;
+        for (index, event) in events.iter().enumerate() {
+            match &event.payload {
+                EventPayload::ManualCompact { .. } => expected = index as u64 + 2,
+                EventPayload::ContextEpochStarted { from_sequence, .. } => {
+                    expected = *from_sequence;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(engine.active_start_sequence(sid).unwrap(), expected);
+        assert_eq!(
+            engine.active_start_sequence(sid).unwrap(),
+            first_after.sequence,
+            "the last boundary wins"
+        );
+
+        // The split loads reconstruct the same active tail as a full slice.
+        let active = store.events_after(sid, expected - 1).unwrap();
+        assert_eq!(
+            active,
+            events[(expected as usize - 1)..].to_vec(),
+            "incremental active tail equals the full-history slice"
+        );
+        let pre = store.events_before(sid, expected).unwrap();
+        assert_eq!(pre.len() as u64 + active.len() as u64, events.len() as u64);
     }
 }

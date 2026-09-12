@@ -67,6 +67,7 @@ impl EventStore {
             CREATE INDEX IF NOT EXISTS sessions_workspace_updated ON sessions(workspace, updated_at DESC);
             CREATE INDEX IF NOT EXISTS sessions_updated ON sessions(updated_at DESC);
             CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, originating_event TEXT NOT NULL, created_at TEXT NOT NULL, validity TEXT NOT NULL, json TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS memory_session ON memory(session_id, created_at);
             CREATE VIRTUAL TABLE IF NOT EXISTS event_search USING fts5(session_id UNINDEXED, event_id UNINDEXED, text);
             CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL);")?;
         Ok(())
@@ -249,9 +250,9 @@ impl EventStore {
             parent_id: parent_id.map(|s| Uuid::parse_str(&s)).transpose()?,
             payload,
         };
-        let kind = event_kind(&event.payload);
+        let kind = event_kind(&event.payload)?;
         let json = serde_json::to_string(&event.payload)?;
-        let searchable = searchable_text(&event.payload);
+        let searchable = searchable_text(&event.payload)?;
         tx.execute("INSERT INTO events(session_id,sequence,id,parent_id,timestamp,kind,payload) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![session_id.to_string(),sequence,event.id.to_string(),event.parent_id.map(|v|v.to_string()),event.timestamp.to_rfc3339(),kind,json])?;
         tx.execute(
             "INSERT INTO event_search(session_id,event_id,text) VALUES(?1,?2,?3)",
@@ -277,9 +278,106 @@ impl EventStore {
     }
 
     pub fn events(&self, session_id: Uuid) -> Result<Vec<Event>> {
+        self.events_query(
+            session_id,
+            "SELECT sequence,id,parent_id,timestamp,payload FROM events WHERE session_id=?1 ORDER BY sequence",
+            &[&session_id.to_string()],
+        )
+    }
+
+    /// Highest sequence currently stored for the session (0 when empty). This is
+    /// the same cursor as a 1-based event count but never deserializes history.
+    pub fn last_sequence(&self, session_id: Uuid) -> Result<u64> {
+        let last: u64 = self.conn()?.query_row(
+            "SELECT COALESCE(MAX(sequence),0) FROM events WHERE session_id=?1",
+            [session_id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(last)
+    }
+
+    /// Events strictly after `after_sequence`, in sequence order. Watermarks use
+    /// this so per-turn supervision never reloads or re-deserializes history it
+    /// has already consumed.
+    pub fn events_after(&self, session_id: Uuid, after_sequence: u64) -> Result<Vec<Event>> {
+        self.events_query(
+            session_id,
+            "SELECT sequence,id,parent_id,timestamp,payload FROM events \
+             WHERE session_id=?1 AND sequence > ?2 ORDER BY sequence",
+            &[&session_id.to_string(), &after_sequence],
+        )
+    }
+
+    /// Events strictly before `before_sequence`, in sequence order. Used to load
+    /// the rolled-over history an epoch no longer keeps in its recent tail.
+    pub fn events_before(&self, session_id: Uuid, before_sequence: u64) -> Result<Vec<Event>> {
+        self.events_query(
+            session_id,
+            "SELECT sequence,id,parent_id,timestamp,payload FROM events \
+             WHERE session_id=?1 AND sequence < ?2 ORDER BY sequence",
+            &[&session_id.to_string(), &before_sequence],
+        )
+    }
+
+    /// Events of the given kinds, in sequence order. Uses the `events_kind`
+    /// index instead of deserializing the whole history for a small, targeted
+    /// replay (approvals, change ownership, failed tool lineages).
+    pub fn events_of_kinds(&self, session_id: Uuid, kinds: &[&str]) -> Result<Vec<Event>> {
+        if kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = (0..kinds.len())
+            .map(|index| format!("?{}", index + 2))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT sequence,id,parent_id,timestamp,payload FROM events \
+             WHERE session_id=?1 AND kind IN ({placeholders}) ORDER BY sequence"
+        );
+        let session = session_id.to_string();
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(kinds.len() + 1);
+        params.push(&session);
+        for kind in kinds {
+            params.push(kind);
+        }
+        self.events_query(session_id, &sql, &params)
+    }
+
+    /// Newest event among the given kinds, if any. Boundary lookups (compact and
+    /// epoch markers) use this instead of scanning the log.
+    pub fn latest_event_of_kinds(&self, session_id: Uuid, kinds: &[&str]) -> Result<Option<Event>> {
+        if kinds.is_empty() {
+            return Ok(None);
+        }
+        let placeholders = (0..kinds.len())
+            .map(|index| format!("?{}", index + 2))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT sequence,id,parent_id,timestamp,payload FROM events \
+             WHERE session_id=?1 AND kind IN ({placeholders}) ORDER BY sequence DESC LIMIT 1"
+        );
+        let session = session_id.to_string();
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(kinds.len() + 1);
+        params.push(&session);
+        for kind in kinds {
+            params.push(kind);
+        }
+        Ok(self
+            .events_query(session_id, &sql, &params)?
+            .into_iter()
+            .next())
+    }
+
+    fn events_query(
+        &self,
+        session_id: Uuid,
+        sql: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> Result<Vec<Event>> {
         let conn = self.conn()?;
-        let mut stmt=conn.prepare("SELECT sequence,id,parent_id,timestamp,payload FROM events WHERE session_id=?1 ORDER BY sequence")?;
-        let rows = stmt.query_map([session_id.to_string()], |row| {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(params, |row| {
             Ok((
                 row.get::<_, u64>(0)?,
                 row.get::<_, String>(1)?,
@@ -310,22 +408,24 @@ impl EventStore {
         if query.is_empty() {
             return Ok(vec![]);
         }
-        let ids: Vec<String> = {
-            let conn = self.conn()?;
-            let mut stmt=conn.prepare("SELECT event_id FROM event_search WHERE session_id=?1 AND event_search MATCH ?2 LIMIT ?3")?;
-            stmt.query_map(params![session_id.to_string(), query, limit], |r| r.get(0))?
-                .collect::<Result<_, _>>()?
-        };
-        let all = self.events(session_id)?;
-        Ok(all
+        // Fetch only the matched rows. The FTS LIMIT is applied inside the
+        // subquery exactly as before; the bookkeeping kinds are excluded after
+        // selection so the limit keeps its original meaning.
+        let sql = "SELECT sequence,id,parent_id,timestamp,payload FROM events \
+                   WHERE session_id=?1 AND id IN (\
+                       SELECT event_id FROM event_search \
+                       WHERE session_id=?1 AND event_search MATCH ?2 LIMIT ?3\
+                   ) ORDER BY sequence";
+        let session = session_id.to_string();
+        let events = self.events_query(session_id, sql, &[&session, &query, &(limit as i64)])?;
+        Ok(events
             .into_iter()
             .filter(|event| {
-                ids.contains(&event.id.to_string())
-                    && !matches!(
-                        &event.payload,
-                        EventPayload::ContextMemoryRecalled { .. }
-                            | EventPayload::ContextMaterialized { .. }
-                    )
+                !matches!(
+                    &event.payload,
+                    EventPayload::ContextMemoryRecalled { .. }
+                        | EventPayload::ContextMaterialized { .. }
+                )
             })
             .collect())
     }
@@ -414,14 +514,17 @@ impl EventStore {
     }
 }
 
-fn event_kind(p: &EventPayload) -> String {
-    serde_json::to_value(p)
-        .ok()
-        .and_then(|v| v.get("type")?.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "unknown".into())
+/// The snake_case tag stored in the `kind` column. A payload without a tag is
+/// a durable-state corruption, not a value to paper over with `"unknown"`.
+fn event_kind(p: &EventPayload) -> Result<String> {
+    serde_json::to_value(p)?
+        .get("type")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("event payload has no type tag"))
 }
-fn searchable_text(p: &EventPayload) -> String {
-    serde_json::to_string(p).unwrap_or_default()
+fn searchable_text(p: &EventPayload) -> Result<String> {
+    Ok(serde_json::to_string(p)?)
 }
 fn fts_query(q: &str) -> String {
     q.split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -539,6 +642,154 @@ mod tests {
         let error = store.resolve_session("aaaaaaaa").unwrap_err().to_string();
         assert!(error.contains("ambiguous"));
         assert!(error.contains("aaaaaaaa"));
+    }
+
+    #[test]
+    fn incremental_queries_match_full_history() {
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(Path::new("/tmp/incremental")).unwrap();
+        for index in 0..6 {
+            store
+                .append(
+                    sid,
+                    EventPayload::UserMessage {
+                        text: format!("message {index}"),
+                    },
+                )
+                .unwrap();
+        }
+        store
+            .append(sid, EventPayload::ModeChanged { mode: Mode::Plan })
+            .unwrap();
+        store
+            .append(
+                sid,
+                EventPayload::PermissionRequested {
+                    request_id: Uuid::new_v4(),
+                    tool: "shell".into(),
+                    arguments: serde_json::json!({"command":"ls"}),
+                    reason: "test".into(),
+                    capabilities: vec![],
+                },
+            )
+            .unwrap();
+
+        let all = store.events(sid).unwrap();
+        assert_eq!(store.last_sequence(sid).unwrap(), all.len() as u64);
+        assert_eq!(
+            store.events_after(sid, 0).unwrap(),
+            all,
+            "after 0 is the whole history"
+        );
+        assert_eq!(
+            store.events_after(sid, 3).unwrap(),
+            all[3..],
+            "strictly after the cursor, in order"
+        );
+        assert_eq!(store.events_before(sid, 4).unwrap(), all[..3]);
+        assert!(store.events_before(sid, 1).unwrap().is_empty());
+
+        let modes = store.events_of_kinds(sid, &["mode_changed"]).unwrap();
+        assert_eq!(modes.len(), 1);
+        assert_eq!(modes[0].sequence, 7);
+        assert_eq!(
+            store
+                .latest_event_of_kinds(sid, &["mode_changed", "permission_requested"])
+                .unwrap()
+                .map(|event| event.sequence),
+            Some(8),
+            "newest of the selected kinds"
+        );
+        assert!(
+            store
+                .latest_event_of_kinds(sid, &["safety_changed"])
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.events_of_kinds(sid, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_events_matches_the_naive_full_scan() {
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(Path::new("/tmp/search")).unwrap();
+        for (index, text) in [
+            "alpha needle one",
+            "needle two beta",
+            "no match here",
+            "gamma needle three",
+        ]
+        .iter()
+        .enumerate()
+        {
+            store
+                .append(
+                    sid,
+                    EventPayload::UserMessage {
+                        text: format!("{text} {index}"),
+                    },
+                )
+                .unwrap();
+        }
+        // Bookkeeping events also match the FTS text but must never be returned.
+        store
+            .append(
+                sid,
+                EventPayload::ContextMaterialized {
+                    stats: latch_protocol::ContextStats::default(),
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                sid,
+                EventPayload::ContextMemoryRecalled {
+                    query: "needle".into(),
+                    memory_ids: vec![],
+                    event_ids: vec![],
+                },
+            )
+            .unwrap();
+
+        // Recompute the historical implementation: FTS ids first, then a full
+        // history scan filtered by id and excluded kinds.
+        let raw_ids: Vec<String> = {
+            let conn = store.conn().unwrap();
+            let mut stmt = conn
+                .prepare("SELECT event_id FROM event_search WHERE session_id=?1 AND event_search MATCH ?2 LIMIT ?3")
+                .unwrap();
+            stmt.query_map(params![sid.to_string(), "\"needle\"", 12i64], |row| {
+                row.get(0)
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+        };
+        let expected: Vec<Event> = store
+            .events(sid)
+            .unwrap()
+            .into_iter()
+            .filter(|event| {
+                raw_ids.contains(&event.id.to_string())
+                    && !matches!(
+                        event.payload,
+                        EventPayload::ContextMemoryRecalled { .. }
+                            | EventPayload::ContextMaterialized { .. }
+                    )
+            })
+            .collect();
+        let actual = store.search_events(sid, "needle", 12).unwrap();
+        assert_eq!(
+            actual, expected,
+            "incremental search must match the old scan"
+        );
+        assert_eq!(actual.len(), 3, "only the matching user turns");
+        assert!(
+            actual
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence),
+            "results stay in sequence order"
+        );
     }
 
     #[test]

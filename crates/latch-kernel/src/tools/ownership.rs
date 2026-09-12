@@ -21,7 +21,9 @@ impl ToolExecutor {
         {
             return Ok(0);
         }
-        let events = self.store.events(self.session_id)?;
+        let events = self
+            .store
+            .events_of_kinds(self.session_id, &["file_changed", "change_reverted"])?;
         let mut restored = 0;
         let mut ledger = self.ledger.lock().await;
         for event in &events {

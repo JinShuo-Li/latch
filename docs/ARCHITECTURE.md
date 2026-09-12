@@ -191,10 +191,32 @@ The recent transcript is append-only within an epoch. When an epoch reaches
 `recent_tokens`, one deterministic rollover drops whole old conversation units
 until the newest tail fits within half the budget and records a durable
 `ContextEpochStarted { from_sequence }` boundary. Rollover never splits a
-tool transaction, never deletes raw events, and `active_start` reconstructs
-the exact epoch from the durable sequence on resume; `/compact` remains an
+tool transaction, never deletes raw events, and the epoch start is
+reconstructed from the durable sequence on resume; `/compact` remains an
 explicit, separate reset. Rolled-over material stays retrievable through
 recall and the episode index built from all pre-epoch events.
+
+### Incremental history access
+
+Every raw event is retained in full; only *how* history is queried is
+incremental. `EventStore` exposes narrow, indexed reads used by the hot
+paths: `last_sequence` for watermarks, `events_after`/`events_before` for
+bounded ranges, `events_of_kinds` for targeted replay (approvals, failed tool
+lineages, change ownership, process starts), and `latest_event_of_kinds` for
+epoch/compact boundaries. `search_events` retrieves FTS-matched rows directly
+instead of loading and filtering the whole transcript, preserving the original
+FTS limit order before the bookkeeping-kind exclusion.
+
+Live supervision keeps sequence cursors, so each turn feeds only newly
+appended events to the progress supervisor and the live sink. Continuity loads
+the rolled-over prefix and the active epoch tail as separate bounded reads;
+`durable_events` comes from the row count rather than a full deserialize.
+Episode summaries still span all history by design, so rolled-over material
+remains model-visible through the episode index and recall. Segmenting
+episodes or summarizing old events to save work is intentionally not done:
+continuity guarantees win over query volume. Store APIs and continuity
+materialization are covered by equivalence tests asserting the incremental
+results match the previous full-scan semantics.
 
 ## Usage and cost
 
