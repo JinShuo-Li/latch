@@ -693,7 +693,10 @@ async fn recent_window_without_user_prompt_still_replays_history() {
         provider.clone(),
         ContextConfig {
             max_request_tokens: Some(20_000),
-            recent_tokens: 1_500,
+            // Small enough that the append-only epoch rolls over past the
+            // original prompt once the big tool result lands (the discrete
+            // replacement for the old continuously sliding window).
+            recent_tokens: 300,
             reserve_tokens: 1_000,
             output_reserve_tokens: 0,
         },

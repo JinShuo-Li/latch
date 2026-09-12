@@ -413,6 +413,14 @@ pub enum EventPayload {
     PermissionsChanged {
         mode: PermissionMode,
     },
+    /// The recent working set reached its budget and Latch advanced to a new
+    /// append-only context epoch. Non-destructive: every earlier raw event
+    /// remains durable and recallable. The new epoch starts at the event with
+    /// `from_sequence` (itself still present in the raw log).
+    ContextEpochStarted {
+        from_sequence: u64,
+        reason: String,
+    },
     /// The kernel recomputed completion and the derived value changed. This is
     /// the only place completion truth is announced; the model never sets it.
     CompletionChanged {
@@ -846,6 +854,9 @@ pub fn display_items(event: &Event) -> Vec<DisplayItem> {
         // Safety and permissions are chrome state, shown in the composer; they
         // do not belong in the durable transcript.
         EventPayload::SafetyChanged { .. } | EventPayload::PermissionsChanged { .. } => Vec::new(),
+        EventPayload::ContextEpochStarted { .. } => vec![DisplayItem::KernelNotice {
+            text: "context epoch advanced; earlier events remain durable and searchable".into(),
+        }],
         EventPayload::CompletionChanged { completion } => vec![DisplayItem::KernelNotice {
             text: format!("completion: {completion:?}"),
         }],

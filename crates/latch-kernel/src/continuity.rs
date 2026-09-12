@@ -220,10 +220,24 @@ impl ContinuityEngine {
         let state_tokens = estimator.estimate(&canonical);
         used = used.saturating_add(state_tokens);
 
-        // 3. Recent verbatim transcript, protocol-atomic, within its own
-        //    budget and the global remainder.
+        // 3. Recent verbatim transcript for the current append-only epoch. The
+        //    whole epoch is included; when it reaches its budget one discrete,
+        //    non-destructive rollover advances the epoch instead of sliding the
+        //    window a little every turn.
         let recent_budget = budget.recent_tokens.min(own_budget.saturating_sub(used));
-        let recent = select_recent(active_events, recent_budget, &estimator);
+        let (recent, roll_from, recent_start) =
+            epoch_recent(active_events, recent_budget, &estimator);
+        let mut rolled = false;
+        if let Some(from_sequence) = roll_from {
+            self.store.append(
+                session_id,
+                EventPayload::ContextEpochStarted {
+                    from_sequence,
+                    reason: "recent working set reached its budget".into(),
+                },
+            )?;
+            rolled = true;
+        }
         let recent_tokens = recent
             .iter()
             .map(|event| estimator.estimate(&render_event(event)))
@@ -238,8 +252,11 @@ impl ContinuityEngine {
         let (recalled_text, _recalled_selected) =
             render_recalled(&recalled_events, recalled_cap, &estimator);
         let recalled_used = estimator.estimate(&recalled_text);
-        let old_end = active_events.len().saturating_sub(recent.len());
-        let episodes = build_episodes(&active_events[..old_end]);
+        // Episodes index every event older than the current epoch's recent
+        // material, so rolled-over history stays retrievable.
+        let historical_end = recent_start.min(active_events.len());
+        let mut episodes = build_episodes(&all_events[..active_start.min(all_events.len())]);
+        episodes.extend(build_episodes(&active_events[..historical_end]));
         let selected = select_episodes(
             &episodes,
             query,
@@ -272,7 +289,7 @@ impl ContinuityEngine {
             window_tokens: budget.window_tokens,
             reserve_tokens: budget.reserve_tokens,
             headroom_tokens: 0,
-            durable_events: all_events.len(),
+            durable_events: all_events.len() + usize::from(rolled),
             episodes: episodes.len(),
             selected_episodes: selected.len(),
             estimated: true,
@@ -289,12 +306,27 @@ impl ContinuityEngine {
             stats,
         })
     }
+    /// First event index of the current context epoch. `/compact` resets
+    /// explicitly; automatic rollover reuses the `from_sequence` recorded in
+    /// the durable epoch event so resume reconstructs the exact same start.
     fn active_start(&self, session_id: Uuid) -> Result<usize> {
         let events = self.store.events(session_id)?;
-        Ok(events
-            .iter()
-            .rposition(|event| matches!(event.payload, EventPayload::ManualCompact { .. }))
-            .map_or(0, |index| index + 1))
+        let mut start = 0usize;
+        for (index, event) in events.iter().enumerate() {
+            match &event.payload {
+                EventPayload::ManualCompact { .. } => start = index + 1,
+                EventPayload::ContextEpochStarted { from_sequence, .. } => {
+                    if let Some(position) = events
+                        .iter()
+                        .position(|candidate| candidate.sequence == *from_sequence)
+                    {
+                        start = position;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(start)
     }
     fn record_recall(
         &self,
@@ -408,27 +440,80 @@ fn score_episode(episode: &Episode, query: Option<&str>, state: &TaskState) -> i
     score
 }
 
-fn select_recent(events: &[Event], budget_tokens: usize, estimator: &TokenEstimator) -> Vec<Event> {
-    let units = conversation_units(events);
-    let mut size = 0;
-    let mut selected = Vec::new();
-    for &(start, end) in units.iter().rev() {
-        let n = events[start..end]
-            .iter()
-            .map(|event| estimator.estimate(&render_event(event)))
-            .sum::<usize>();
-        if !selected.is_empty() && size + n > budget_tokens {
+/// Events that appear in the provider-facing conversation. Kernel bookkeeping
+/// (context materialization, epoch boundaries, compaction, file observations)
+/// never reaches the model and must not inflate the recent working set.
+fn is_model_visible_event(payload: &EventPayload) -> bool {
+    matches!(
+        payload,
+        EventPayload::UserMessage { .. }
+            | EventPayload::AssistantMessageCompleted { .. }
+            | EventPayload::ToolCompleted { .. }
+            | EventPayload::ToolFailed { .. }
+            | EventPayload::RegroundRequested { .. }
+    )
+}
+
+/// Chooses the model-visible recent conversation for the current epoch.
+///
+/// Within an epoch the selection is append-only: every event since the epoch
+/// start is included. When the epoch's estimated size exceeds the budget, one
+/// deterministic rollover drops whole old conversation units until the newest
+/// tail fits within half the budget (hysteresis, so the next turn does not
+/// roll again), returning the new epoch's start sequence. Transactions are
+/// never split, and a single oversized unit is kept whole rather than
+/// truncated. The returned index is the start of the retained tail in the
+/// input slice, so callers can index dropped material for episodes.
+fn epoch_recent(
+    events: &[Event],
+    budget_tokens: usize,
+    estimator: &TokenEstimator,
+) -> (Vec<Event>, Option<u64>, usize) {
+    let visible: Vec<(usize, Event)> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| is_model_visible_event(&event.payload))
+        .map(|(index, event)| (index, event.clone()))
+        .collect();
+    if visible.is_empty() {
+        return (Vec::new(), None, events.len());
+    }
+    let first_visible = visible[0].0;
+    let conversation: Vec<Event> = visible.iter().map(|(_, event)| event.clone()).collect();
+    let units = conversation_units(&conversation);
+    let unit_tokens: Vec<usize> = units
+        .iter()
+        .map(|(start, end)| {
+            conversation[*start..*end]
+                .iter()
+                .map(|event| estimator.estimate(&render_event(event)))
+                .sum::<usize>()
+        })
+        .collect();
+    let total: usize = unit_tokens.iter().sum();
+    if total <= budget_tokens || units.len() <= 1 {
+        return (conversation, None, first_visible);
+    }
+    let keep_budget = (budget_tokens / 2).max(1);
+    let mut size = 0usize;
+    let mut first = units.len();
+    for index in (0..units.len()).rev() {
+        let tokens = unit_tokens[index];
+        if first != units.len() && size + tokens > keep_budget {
             break;
         }
-        size += n;
-        selected.push((start, end));
+        size += tokens;
+        first = index;
     }
-    selected.reverse();
-    let mut recent = Vec::new();
-    for (start, end) in selected {
-        recent.extend_from_slice(&events[start..end]);
+    if first == 0 {
+        return (conversation, None, first_visible);
     }
-    recent
+    let start = units[first].0;
+    (
+        conversation[start..].to_vec(),
+        Some(conversation[start].sequence),
+        visible[start].0,
+    )
 }
 
 /// Groups events into atomic conversation transactions.
@@ -945,8 +1030,14 @@ mod tests {
             EventPayload::UserMessage { text } if text.contains("unrelated conversation 1999")
         )));
         let all = store.events(sid).unwrap();
-        // 4 seed events + 2000 fillers + the recall bookkeeping event.
-        assert_eq!(all.len(), 2005);
+        let epoch_events = all
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::ContextEpochStarted { .. }))
+            .count();
+        // 4 seed events + 2000 fillers + the recall bookkeeping event; the
+        // automatic epoch rollover adds only its durable boundary event.
+        assert_eq!(all.len() - epoch_events, 2005);
+        assert!(epoch_events >= 1, "an over-budget history rolls its epoch");
         assert!(all.iter().any(|e| e.id == diagnostic.id));
         assert!(
             !all.iter()
@@ -1012,8 +1103,15 @@ mod tests {
             .unwrap();
         assert!(ctx.stats.total_tokens <= 16_000);
         assert_eq!(ctx.stats.status, "bounded");
-        // 5000 durable fillers plus the one recall bookkeeping event.
-        assert_eq!(store.events(sid).unwrap().len(), 5001);
+        // 5000 durable fillers plus the one recall bookkeeping event, plus the
+        // discrete epoch boundary event.
+        let events = store.events(sid).unwrap();
+        let epoch_events = events
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
+            .count();
+        assert!(epoch_events >= 1);
+        assert_eq!(events.len() - epoch_events, 5001);
     }
 
     #[test]
@@ -1145,9 +1243,10 @@ mod tests {
         let tail = estimator.estimate(&render_event(&events[3]));
 
         // Budget fits the trailing assistant reply and the tool result but not
-        // the assistant tool-call message: the transaction must be dropped
+        // the assistant tool-call message: the rollover drops the transaction
         // whole, never leaving a dangling tool result.
-        let split = select_recent(&events, tail + transaction - 1, &estimator);
+        let (split, roll, _) = epoch_recent(&events, tail + transaction - 1, &estimator);
+        assert!(roll.is_some(), "an over-budget epoch rolls over");
         assert_eq!(split.len(), 1);
         assert!(matches!(
             split[0].payload,
@@ -1159,8 +1258,14 @@ mod tests {
                 .any(|e| matches!(e.payload, EventPayload::ToolCompleted { .. }))
         );
 
-        // Budget fits the whole transaction: both halves are selected.
-        let whole = select_recent(&events, tail + transaction, &estimator);
+        // A budget that covers the whole epoch keeps every unit intact.
+        let total: usize = events
+            .iter()
+            .map(|event| estimator.estimate(&render_event(event)))
+            .sum();
+        let (whole, roll, _) = epoch_recent(&events, total, &estimator);
+        assert!(roll.is_none(), "no rollover when the epoch fits");
+        assert_eq!(whole.len(), 4);
         assert!(
             whole
                 .iter()
@@ -1208,7 +1313,7 @@ mod tests {
         let units = conversation_units(&events);
         assert_eq!(units, vec![(0, 2)]);
         for budget in [0, 1, 10, 100, 10_000] {
-            let recent = select_recent(&events, budget, &TokenEstimator::generic());
+            let (recent, _, _) = epoch_recent(&events, budget, &TokenEstimator::generic());
             let has_assistant = recent.iter().any(|e| matches!(
                 &e.payload,
                 EventPayload::AssistantMessageCompleted { tool_calls, .. } if !tool_calls.is_empty()
@@ -1320,5 +1425,112 @@ mod tests {
             TokenEstimator::generic().estimate(&rendered) < 30_000,
             "canonical must be capped"
         );
+    }
+
+    #[tokio::test]
+    async fn epoch_rollover_is_discrete_non_destructive_and_retrievable() {
+        use crate::state::EvidenceLedger;
+        use crate::state::FailureManager;
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(Path::new("/tmp")).unwrap();
+        for index in 0..20 {
+            store
+                .append(
+                    sid,
+                    EventPayload::UserMessage {
+                        text: format!("request {index} {}", "x".repeat(200)),
+                    },
+                )
+                .unwrap();
+            store
+                .append(
+                    sid,
+                    EventPayload::AssistantMessageCompleted {
+                        text: format!("answer {index}"),
+                        tool_calls: vec![],
+                        reasoning_content: None,
+                    },
+                )
+                .unwrap();
+        }
+        let engine = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        let state = TaskStateManager::default();
+        let budget = MaterializeBudget {
+            request_tokens: 100_000,
+            window_tokens: 128_000,
+            reserve_tokens: 0,
+            recent_tokens: 600,
+            reserved_tokens: 0,
+        };
+        let materialize = || {
+            engine
+                .materialize(
+                    sid,
+                    state.state(),
+                    None,
+                    &EvidenceLedger::default(),
+                    &FailureManager::new(3),
+                    "stable system".into(),
+                    &budget,
+                )
+                .unwrap()
+        };
+        let first = materialize();
+        assert!(first.recent.len() < 40, "the epoch rolled to a tail");
+        // No dangling tool result may survive a rollover: every terminal result
+        // in the retained tail has its assistant tool call present too.
+        let retained_calls: std::collections::BTreeSet<&str> = first
+            .recent
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::AssistantMessageCompleted { tool_calls, .. } => {
+                    Some(tool_calls.iter().map(|call| call.id.as_str()))
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        for event in &first.recent {
+            if let EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } =
+                &event.payload
+            {
+                assert!(
+                    retained_calls.contains(result.call_id.as_str()),
+                    "rollover retained a dangling tool result"
+                );
+            }
+        }
+        let epoch_events = |store: &EventStore| {
+            store
+                .events(sid)
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
+                .count()
+        };
+        assert_eq!(epoch_events(&store), 1, "one discrete rollover");
+
+        // A second materialization without new events must not roll again.
+        let second = materialize();
+        assert_eq!(
+            epoch_events(&store),
+            1,
+            "rollover is discrete, not per turn"
+        );
+        assert_eq!(second.recent, first.recent);
+
+        // Rolled-over raw material stays durable and searchable.
+        let recalled = engine.recall(sid, "request 0").unwrap();
+        assert!(
+            recalled.iter().any(|event| matches!(
+                &event.payload,
+                EventPayload::UserMessage { text } if text.contains("request 0")
+            )),
+            "rolled-over events remain retrievable"
+        );
+        assert!(store.events(sid).unwrap().iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::UserMessage { text } if text.contains("request 0")
+        )));
     }
 }
