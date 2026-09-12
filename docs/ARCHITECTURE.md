@@ -323,8 +323,9 @@ profile}.rs`. Tools keep the
 `process`, `files`, `write`, and `git` into children. The continuity engine is
 a single module because rollover, episode segmentation, and recall share one
 invariant. The TUI keeps the app state and reducer in `lib.rs` with
-`transcript`, `markdown`, `chrome`, and `runtime` alongside the existing
-`composer`, `sidebar`, `diff`, `presentation`, and `session_picker` modules.
+`transcript`, `markdown`, `chrome`, `theme`, and `runtime` alongside the
+existing `composer`, `sidebar`, `diff`, `presentation`, `agents`, and
+`session_picker` modules.
 Child modules are children of their owner, so private state stays private while
 each file owns one concern.
 
@@ -439,7 +440,15 @@ only while its visual row is visible. PageUp/PageDown move through an
 overflowing prompt and fall back to transcript scrolling when it fits; the
 wheel routes by pointer position. Layout chrome (footer, spacer, hints, gap,
 metadata) drops before the editor body shrinks, so the prompt stays usable on
-narrow or short terminals.
+narrow or short terminals. The palette (`latch-tui::theme`) centralizes every
+surface, status, and diff decision and degrades to semantic foregrounds without
+backgrounds on ANSI-16. The composer, user messages, and bottom action surfaces
+share one neutral band; approvals and `/safety`//`/permissions` selection render
+above the composer, and a compact active-status row reports running work
+derived from authoritative state. Child sessions surface through
+`latch-tui::agents`: compact delegation/report cells in the root transcript, an
+active child summary in the status row, and a bounded `CHILDREN` sidebar
+section. Child transcripts never cross into the root.
 
 Diffs are first-class: `git_diff` completions become a typed
 `DiffDocument` (parser in `latch-tui::diff`) rendered with restrained semantic

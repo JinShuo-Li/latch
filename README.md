@@ -64,8 +64,11 @@ continued explicitly rather than silently rerunning work.
 ## Terminal interface
 
 The transcript is a semantic conversation rather than a kernel event log.
-Inspection calls coalesce into an updating exploration cell; commands, edits,
-and validation have dedicated lifecycle cells. Successful routine work stays
+User-authored messages sit on a full-width neutral band with a `›` gutter,
+while model output stays on the terminal background behind a quiet `•` bullet
+and clean Markdown, so the two are distinguishable at a glance. Inspection
+calls coalesce into an updating exploration cell; commands, edits, and
+validation have dedicated lifecycle cells. Successful routine work stays
 compact, while failures retain a bounded diagnostic:
 
 ```text
@@ -87,21 +90,27 @@ compact, while failures retain a bounded diagnostic:
 ```
 
 Edit cells carry the real unified diff computed by the kernel from the actual
-before/after bytes: added source lines render green, removed lines red, and
-unchanged context is subdued. Previews are bounded with an explicit
+before/after bytes: additions and deletions keep their semantic green/red and
+gain a restrained tinted background where the terminal supports it, unchanged
+context stays neutral, and hunk/file metadata is dimmed rather than saturated.
+Previews are compact by default and bounded with an explicit
 `… N diff lines omitted · /diff for the full diff` note, and newly created,
 deleted, repeated, multi-file, and Unicode content all render the same way. The
 `+N −N` summary remains, but the diff itself is never reconstructed from those
 counters.
 
-The composer is the main control surface: a closed rounded frame (cyan while it
-owns input, quiet gray during overlays or approvals) with comfortable padding, a
-placeholder, mode/model/branch metadata, live status (`ready`, `● working`,
-`interrupted`, `approval needed`), and subdued keyboard hints. It grows with the
-prompt up to a fraction of the terminal height and is backed by a real
-scrollable viewport, so a prompt pasted as hundreds of lines can be inspected
-from anywhere before submission. When the sidebar is hidden, the composer also
-carries a compact `≈tokens/window` working-set summary.
+The composer is the main control surface: a full-width neutral band (shared
+with user messages and bottom action surfaces) with a `›` prompt gutter,
+comfortable padding, a placeholder, mode/model/branch metadata, and subdued
+keyboard hints. It grows with the prompt up to a fraction of the terminal
+height and is backed by a real scrollable viewport, so a prompt pasted as
+hundreds of lines can be inspected from anywhere before submission. When the
+sidebar is hidden, the composer also carries a compact `≈tokens/window`
+working-set summary. While a turn runs, a compact transient status row above
+the composer reports the current activity from authoritative state
+(`Exploring`, `Editing`, `Running tests`, `Validating`, `Waiting for
+approval`, child-agent activity); completed work lands in the transcript
+instead.
 
 On an empty session a restrained welcome state keeps the composer as the
 focus; it disappears once the conversation starts. Assistant responses render
@@ -109,14 +118,19 @@ headings, paragraphs, lists, fenced and inline code, bold/italic text, links,
 URLs, and simple Markdown tables. ANSI and progress control sequences are
 normalized. Ctrl+T or `/raw` toggles a copy-friendly detailed transcript;
 `/diff` deliberately shows the complete bounded workspace diff (with artifact
-spill for very large output).
+spill for very large output). The palette is terminal-aware: it detects
+truecolor/ANSI-256/ANSI-16 and light/dark via `COLORTERM`, `TERM`,
+`COLORFGBG`, and the `LATCH_THEME`/`LATCH_COLOR` overrides, and drops
+backgrounds entirely on ANSI-16 rather than guessing the palette.
 
 ## Observability sidebar
 
 On wide terminals the transcript gets a right sidebar: session/model and turn
 count, a token-native **working set** estimate against the model context window
 (never "time until context death"), kernel canonical task state and completion,
-provider-neutral usage totals, and change ownership. It is responsive: ~32% on
+a compact **children** section for root-visible child sessions (durable
+delegation and reports only, never a child transcript), provider-neutral usage
+totals, and change ownership. It is responsive: ~32% on
 very wide screens (clamped 28–44 columns), ~27% at 130–159, a compact sidebar
 at 110–129, and hidden below 110 columns. `Ctrl+B` or `/sidebar` toggles it;
 the transcript takes the full width when it is hidden. The sidebar is derived
@@ -230,11 +244,16 @@ off-by-default circuit breaker (`failure.stagnation_budget`, default 2).
 
 When policy asks for approval (for example an outside-workspace write with
 `outside_workspace = "ask"`), the kernel emits a durable approval request and
-pauses. The TUI shows a centered prompt: `y`/Enter approves, `n`/Esc denies,
-Ctrl+C cancels. Approval is single-use and keyed to a kernel call id the model
-never sees, so the model cannot fabricate consent. Non-interactive sessions
-record an explicit denial instead of hanging, and resume marks requests that
-were pending at exit as expired. Dangerous shell commands remain denied.
+pauses. The TUI shows a bottom action surface above the composer, leaving the
+transcript visible: it names the tool, shows a readable command preview, the
+reason, and the requested capability, with selectable Approve/Deny actions.
+`y` approves, `n`/Esc denies, Enter confirms the highlighted action, and
+Ctrl+O opens a scrollable full-request inspector instead of truncating what is
+being approved; Ctrl+C cancels. Approval is single-use and keyed to a kernel
+call id the model never sees, so the model cannot fabricate consent.
+Non-interactive sessions record an explicit denial instead of hanging, and
+resume marks requests that were pending at exit as expired. Dangerous shell
+commands remain denied.
 
 ## Safety, permissions, and the sandbox
 
@@ -245,8 +264,9 @@ Mode, Safety, and Permissions are three orthogonal controls:
 - **Safety** (`/safety`: Strict, Standard, Autonomous) classifies each proposed
   capability as Allow, Ask, or Deny. Strict asks before workspace writes,
   Standard allows ordinary source edits, Autonomous also pre-grants network.
-- **Permissions** (`/permissions`: All approved, Approved by ask, Approve for
-  me) decides how an Ask is resolved.
+- **Permissions** (`/permissions`: Ask for approval, Approve for me, Auto
+  approve) decides how an Ask is resolved; the selector marks the active mode
+  and shows modes as unavailable with a reason during a live turn.
 
 The decision flow for every operation is:
 
@@ -339,10 +359,12 @@ working set while retaining durable history and canonical state.
   wheel outside the composer. Auto-follow resumes at the bottom; a subtle hint
   shows when newer content is below.
 - **Cancel/quit:** Ctrl+C cancels a running turn, or quits when idle.
-- **Permission:** when a tool needs approval, the modal shows the operation,
-  the requested capability class, the reason, and the target; `y` approves and
-  `n`/Esc denies; Ctrl+C cancels the turn. Approval is single-use and grants
-  only the requested capability for that call.
+- **Permission:** when a tool needs approval, the bottom action surface above
+  the composer shows the operation, the requested capability class, the reason,
+  and a readable argument preview; Up/Down select, Enter confirms, `y` approves,
+  `n`/Esc denies, Ctrl+O inspects the full request, and Ctrl+C cancels the turn.
+  Approval is single-use and grants only the requested capability for that
+  call.
 - **Safety/permissions:** `/safety` and `/permissions` open restrained
   selectors above the composer; the effective short labels are shown in the
   composer metadata (for example `WORK · deepseek-flash · main · std · ask`)

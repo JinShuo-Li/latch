@@ -136,27 +136,36 @@ provider usage as zero. Abnormal states become visually obvious; healthy state
 stays quiet.
 
 Code modification reads at a glance: edit rows carry green `+N` and red `−N`
-independently, a compact preview of the real unified diff (green additions, red
-removals, subdued context) is shown inline, and `/diff` opens a typed
-unified-diff inspector. Counts come from a real Myers line diff over the kernel
-change ledger, so moved blocks and duplicate lines are not misreported. The
-preview text is generated from the actual before/after bytes at mutation time,
-never reconstructed from counters, and is bounded with an explicit omission
-note. Only parsed unified diffs receive red/green semantics, so compiler output
-or shell text can never be misclassified.
+independently, a compact preview of the real unified diff is shown inline with
+restrained tinted backgrounds on additions/removals, neutral unchanged context,
+and dimmed hunk/file metadata, and `/diff` opens a typed unified-diff
+inspector. Counts come from a real Myers line diff over the kernel change
+ledger, so moved blocks and duplicate lines are not misreported. The preview
+text is generated from the actual before/after bytes at mutation time, never
+reconstructed from counters, and is bounded with an explicit omission note.
+Only parsed unified diffs receive red/green semantics, so compiler output or
+shell text can never be misclassified.
 
 ## Terminal experience
 
-The composer is the application's control surface: a closed rounded frame with
-padding, a placeholder, mode/model/branch metadata, live status, and subdued
-hints. The frame is accented while the editor owns input and steps down to gray
-when an overlay or approval owns the screen. It is a real scrollable viewport
-over the untouched buffer, so large pastes can be inspected at any position
-before submission. An empty session
-shows a restrained centered identity instead of a dead terminal. The transcript
-is typed and dense: user messages, assistant messages rendered with a small
-deterministic Markdown subset, one visual lifecycle row per tool call (running
-→ done/FAIL, keyed by call id), kernel notices, and errors.
+The composer is the application's control surface: a full-width neutral surface
+band with a `>` prompt gutter, padding, a placeholder, mode/model/branch
+metadata, and subdued hints. It steps its prompt accent down to gray when an
+overlay or approval owns the screen. It is a real scrollable viewport over the
+untouched buffer, so large pastes can be inspected at any position before
+submission. An empty session shows a restrained centered identity instead of a
+dead terminal.
+
+One palette layer owns every surface, status tone, and diff tint, and adapts to
+truecolor/ANSI-256/ANSI-16 and dark/light terminals; ANSI-16 drops backgrounds
+rather than guessing the terminal palette. The transcript is typed and dense:
+user messages on a neutral band with a `>` gutter, assistant messages on the
+terminal background behind a quiet bullet and a deterministic Markdown subset,
+one visual lifecycle row per tool call (running → done/FAIL, keyed by call id),
+kernel notices, and errors. Transient activity lives in a compact status row
+above the composer, not in the durable-looking transcript. Human approvals and
+policy selection share one bottom action surface above the composer, keeping
+the transcript visible; a full-request inspector is one keystroke away.
 Hidden internals — reasoning content, context statistics, model usage, raw task
 state — are never displayed, live or on resume. Typing `/` opens a command
 palette filtered from the same list `/help` prints. The input is a real editor:

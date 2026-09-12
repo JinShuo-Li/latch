@@ -107,7 +107,7 @@ root-scoped child ownership is in
 `ToolExecutor` + dispatch, with `tools/{policy,ownership,process,files,write,git}.rs`.
 `continuity.rs` is intentionally one module (rollover, episodes, recall share one
 invariant). TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
-runtime}.rs` and existing siblings.
+theme,runtime,agents}.rs` and existing siblings.
 
 Memory/cache invariants (do not violate):
 - Memory decides what the model needs to know. Cache decides how cheaply we can
