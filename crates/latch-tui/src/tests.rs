@@ -861,26 +861,35 @@ fn multiline_paste_places_the_cursor_on_the_visible_composer_row() {
 }
 
 #[test]
-fn composer_is_a_closed_rounded_frame_with_the_cursor_at_the_text_edge() {
+fn composer_is_a_neutral_band_with_a_prompt_gutter() {
     let backend = ratatui::backend::TestBackend::new(48, 12);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::default();
 
     terminal.draw(|frame| draw(frame, &mut app)).unwrap();
 
-    let text = buffer_text(terminal.backend().buffer());
+    let buffer = terminal.backend().buffer();
+    let text = buffer_text(buffer);
     let rows: Vec<&str> = text.lines().collect();
     let area = app.composer_body;
-    let top = rows[area.y as usize];
-    let bottom = rows[(area.y + area.height - 1) as usize];
-    assert!(top.starts_with('╭') && top.ends_with('╮'), "{top:?}");
-    assert!(
-        bottom.starts_with('╰') && bottom.ends_with('╯'),
-        "{bottom:?}"
-    );
-    for row in &rows[area.y as usize + 1..(area.y + area.height - 1) as usize] {
-        assert!(row.starts_with('│') && row.ends_with('│'), "{row:?}");
+    // No decorative border: the composer reads as a surface band.
+    for row in &rows[area.y as usize..(area.y + area.height) as usize] {
+        assert!(
+            !row.contains('╭') && !row.contains('│') && !row.contains('╰'),
+            "{row:?}"
+        );
     }
+    // Every composer cell carries the neutral surface, and the prompt gutter
+    // marks the input row.
+    let surface = crate::theme::palette().surface().bg;
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            let cell = buffer.cell((x, y)).expect("in bounds");
+            assert_eq!(cell.style().bg, surface, "composer band is continuous");
+        }
+    }
+    let body_row = rows[area.y as usize + 1];
+    assert!(body_row.starts_with("› "), "{body_row:?}");
     // The empty composer leaves the cursor on the first text cell, directly
     // before the placeholder — never one column inside it.
     assert_eq!(app.last_cursor, Some((area.x + 2, area.y + 1)));
@@ -1080,6 +1089,27 @@ fn draw_never_panics_across_responsive_sizes_and_cjk_goal() {
         1, 10, 20, 30, 40, 60, 80, 100, 110, 120, 130, 159, 160, 200, 240,
     ] {
         for height in [1, 2, 4, 6, 10, 24, 60] {
+            let _ = render_to_text(&mut app, width, height);
+        }
+    }
+
+    // Action surfaces must never panic on tiny terminals either.
+    app.output(Output::Event(Box::new(permission_event(
+        uuid::Uuid::new_v4(),
+        None,
+    ))));
+    for width in [10, 20, 48, 100, 200] {
+        for height in [1, 2, 4, 6, 10, 24] {
+            let _ = render_to_text(&mut app, width, height);
+        }
+    }
+    app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+    for ch in "/permissions".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    for width in [10, 20, 48, 100, 200] {
+        for height in [1, 2, 4, 6, 10, 24] {
             let _ = render_to_text(&mut app, width, height);
         }
     }

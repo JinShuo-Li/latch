@@ -9,12 +9,12 @@
                  Ask Latch to inspect, change, or verify code. /help lists commands.                
   • Working                                                                                         
                                                                                                     
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Ask Latch…                                                                                       │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│ WORK · deepseek-flash · main · std · ask                                                         │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                    
+› Ask Latch…                                                                                        
+                                                                                                    
+                                                                                                    
+                                                                                                    
+  WORK · deepseek-flash · main · std · ask                                                          
+                                                                                                    
 enter steer  ctrl+j newline  ctrl+p commands                                                        
 /tmp/latch-ui                                                                           latch v0.2.0

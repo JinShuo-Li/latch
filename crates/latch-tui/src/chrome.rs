@@ -816,16 +816,18 @@ pub(super) fn draw_composer(
     if area.height == 0 || area.width == 0 {
         return;
     }
+    let palette = crate::theme::palette();
     let focused = app.permission.is_none() && app.diff_overlay.is_none();
-    let border_style = if focused {
-        focused_accent()
+    let surface = palette.surface();
+    let prompt_style = if focused {
+        palette.accent()
     } else {
         notice_style()
     };
-    // A closed rounded frame: one border column and one padding column on each
-    // side of the editor content.
-    let framed = chrome.top > 0;
-    let inner_width = area.width.saturating_sub(4).max(1) as usize;
+    // The composer is a neutral band, not a box: a two-column prompt gutter and
+    // a one-column right margin keep text aligned with user-message rows.
+    const GUTTER: usize = 2;
+    let inner_width = (area.width as usize).saturating_sub(GUTTER + 1).max(1);
     let body_height = chrome.body.max(1) as usize;
     app.last_input_width = inner_width;
     app.last_input_height = body_height;
@@ -836,31 +838,26 @@ pub(super) fn draw_composer(
     let viewport = app.input.viewport();
     let (cursor_row, cursor_col) = app.input.cursor_visual(&layout);
 
-    let plain = |content: Vec<Span<'static>>, inner: usize| -> Line<'static> {
-        let used: usize = content
-            .iter()
-            .map(|span| display_width(&span.content))
-            .sum();
-        let mut spans = vec![Span::styled("│ ".to_owned(), border_style)];
+    let band = |content: Vec<Span<'static>>, indent: usize| -> Line<'static> {
+        let used: usize = indent
+            + content
+                .iter()
+                .map(|span| display_width(&span.content))
+                .sum::<usize>();
+        let mut spans = vec![Span::raw(" ".repeat(indent))];
         spans.extend(content);
-        if used < inner {
-            spans.push(Span::raw(" ".repeat(inner - used)));
+        if used < area.width as usize {
+            spans.push(Span::raw(" ".repeat(area.width as usize - used)));
         }
-        if framed {
-            spans.push(Span::styled(" │".to_owned(), border_style));
-        }
-        Line::from(spans)
+        Line::from(spans).style(surface)
     };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     for _ in 0..chrome.spacer {
         lines.push(Line::from(""));
     }
-    if framed {
-        lines.push(Line::styled(
-            format!("╭{}╮", "─".repeat(area.width.saturating_sub(2) as usize)),
-            border_style,
-        ));
+    for _ in 0..chrome.top {
+        lines.push(band(Vec::new(), 0));
     }
     let body_start = lines.len();
     for offset in 0..body_height {
@@ -891,23 +888,31 @@ pub(super) fn draw_composer(
                 content
             }
         };
-        lines.push(plain(content, inner_width));
+        let prompt = if index == 0 { "› " } else { "  " };
+        let mut spans = vec![Span::styled(
+            prompt.to_owned(),
+            if index == 0 {
+                prompt_style
+            } else {
+                Style::default()
+            },
+        )];
+        spans.extend(content);
+        lines.push(band(spans, 0));
     }
     for _ in 0..chrome.gap {
-        lines.push(plain(Vec::new(), inner_width));
+        lines.push(band(Vec::new(), 0));
     }
     if chrome.meta > 0 {
-        let meta = composer_meta_line(app, inner_width, sidebar_shown);
-        lines.push(plain(meta.spans, inner_width));
-    }
-    if chrome.rule > 0 {
-        let (left, right) = if framed { ("╰", "╯") } else { ("╰", "") };
-        let mut rule = format!(
-            "{left}{}",
-            "─".repeat(area.width.saturating_sub(2) as usize)
+        let meta = composer_meta_line(
+            app,
+            (area.width as usize).saturating_sub(GUTTER),
+            sidebar_shown,
         );
-        rule.push_str(right);
-        lines.push(Line::styled(rule, border_style));
+        lines.push(band(meta.spans, GUTTER));
+    }
+    for _ in 0..chrome.rule {
+        lines.push(band(Vec::new(), 0));
     }
     frame.render_widget(Paragraph::new(lines), area);
 
@@ -915,9 +920,9 @@ pub(super) fn draw_composer(
     // a viewport scrolled away hides it rather than pinning it to an edge.
     if focused && cursor_row >= viewport && cursor_row < viewport + body_height {
         let row = body_start + (cursor_row - viewport);
-        // Frame column + padding column, then the cursor cell. It is clamped to
-        // the right padding so it never covers the border.
-        let col = (2 + cursor_col).min(area.width.saturating_sub(2) as usize) as u16;
+        // The prompt gutter precedes the first text cell; clamp to the right
+        // margin so it never runs past the band.
+        let col = (GUTTER + cursor_col).min(area.width.saturating_sub(2) as usize) as u16;
         let position = (area.x + col, area.y + row as u16);
         frame.set_cursor_position(position);
         app.last_cursor = Some(position);
@@ -1027,7 +1032,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         sidebar_visible(area.width, app.sidebar_override) && !overlay_open && !request_open;
     let sidebar_cols = sidebar_width(area.width, sidebar_shown);
 
-    let composer_inner = area.width.saturating_sub(4).max(1) as usize;
+    let composer_inner = area.width.saturating_sub(3).max(1) as usize;
     let content_rows = app.input.total_visual_rows(composer_inner);
     let palette_rows = if palette_active {
         candidates.len().min(MAX_PALETTE_ROWS) as u16
@@ -1041,6 +1046,13 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let status_line = active_status_line(app);
     let status_rows = u16::from(status_line.is_some());
     let chrome = ComposerChrome::responsive(area.height, content_rows);
+    // The approval surface carries its own hints; drop the composer hint row
+    // so no contradictory shortcut row sits underneath it.
+    let hints_rows = if app.permission.is_some() {
+        0
+    } else {
+        chrome.hints
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1051,7 +1063,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             Constraint::Length(
                 chrome.spacer + chrome.top + chrome.body + chrome.gap + chrome.meta + chrome.rule,
             ),
-            Constraint::Length(chrome.hints),
+            Constraint::Length(hints_rows),
             Constraint::Length(chrome.footer),
         ])
         .split(area);

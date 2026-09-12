@@ -19,12 +19,12 @@
   ↑↓ select · enter apply · esc cancel                                                              
                                                                                                     
                                                                                                     
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Ask Latch…                                                                                       │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│ WORK · deepseek-flash · main · std · ask                                                   ready │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                    
+› Ask Latch…                                                                                        
+                                                                                                    
+                                                                                                    
+                                                                                                    
+  WORK · deepseek-flash · main · std · ask                                                     ready
+                                                                                                    
 enter send  ctrl+j newline  ctrl+p commands                                                         
 /tmp/latch-ui                                                                           latch v0.2.0

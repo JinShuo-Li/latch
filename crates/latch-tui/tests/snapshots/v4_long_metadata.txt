@@ -9,12 +9,12 @@
                          Ask Latch to inspect, change, or verify code. /help lists commands.                        │USAGE                                      
                                                                                                                     │                                           
                                                                                                                                                                 
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ check the long metadata handling                                                                                                                             │
-│                                                                                                                                                              │
-│                                                                                                                                                              │
-│                                                                                                                                                              │
-│ WORK · a-very-long-model-name-that-keeps-going-and-going-flash · main · std · ask                                                                      ready │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                                                                                
+› check the long metadata handling                                                                                                                              
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+  WORK · a-very-long-model-name-that-keeps-going-and-going-flash · main · std · ask                                                                        ready
+                                                                                                                                                                
 enter send  ctrl+j newline  ctrl+p commands                                                                                                                     
 /home/someone/very/deeply/nested/workspace/path/that/is/long                                                                                        latch v0.2.0
