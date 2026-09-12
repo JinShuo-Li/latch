@@ -161,11 +161,14 @@ Recent estimation prices the provider-facing shape: tool-call arguments and
 replayed `reasoning_content` are included, kernel bookkeeping events are not.
 `ContextStats.request_tokens` is measured on the exact assembled request
 (system, messages, tool schemas) after any extension transform, and
-`ContextStats.common_prefix_tokens` is the byte-exact prefix shared with the
-previous request. Their ratio is `architecture_cacheability`;
+`ContextStats.common_prefix_tokens` is the byte prefix shared with the
+previous request under Latch's canonical serialization and token estimator.
+Their ratio is the **estimated architecture cacheability**, a diagnostic for
+Latch's own request layout: it is not measured with the provider's tokenizer
+or wire representation and does not predict an exact cache hit.
 `provider_cache_efficiency = cache_read_tokens / common_prefix_tokens` is
-shown once provider usage is known. Provider-reported usage stays
-authoritative.
+shown once provider usage is known, and provider-reported cache-read/hit/miss
+usage remains authoritative.
 
 ### Prompt cache layout
 

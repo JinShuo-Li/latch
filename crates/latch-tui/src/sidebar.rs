@@ -638,13 +638,17 @@ impl SidebarModel {
             ));
         }
         if detail && context.request_tokens > 0 {
-            // The prefix and the request are estimated from slightly different
-            // shapes, so clamp the display to a fully-reusable prefix.
+            // Estimated architecture cacheability from Latch's canonical
+            // serialization and token estimator; the provider's own tokenizer
+            // may differ, so provider-reported cache reads below are the
+            // authoritative measurement. The prefix and the request are
+            // estimated from slightly different shapes, so clamp the display to
+            // a fully-reusable prefix.
             let cacheable = (context.common_prefix_tokens.saturating_mul(100)
                 / context.request_tokens.max(1))
             .min(100);
             lines.push(Line::from(vec![
-                Span::styled("Cacheable   ", dim()),
+                Span::styled("Cache est.  ", dim()),
                 Span::raw(format!(
                     "≈{cacheable}% · {} tok shared",
                     format_tokens(context.common_prefix_tokens as u64)

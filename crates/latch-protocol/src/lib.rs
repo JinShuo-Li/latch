@@ -618,9 +618,13 @@ pub struct ContextStats {
     /// tool calls, arguments, and replayed reasoning, plus tool schemas.
     #[serde(default)]
     pub request_tokens: usize,
-    /// Exact common-prefix tokens shared with the previous request, measured on
-    /// the serialized system + messages + tools signature. This is the reusable
-    /// provider cache prefix.
+    /// Estimated architecture cacheability: exact byte prefix shared with the
+    /// previous request, measured on Latch's canonical serialization
+    /// (system + messages + tools) and priced with the kernel's conservative
+    /// token estimator. This is a diagnostic for Latch's own request layout,
+    /// not the provider's tokenizer or wire representation, so it does not
+    /// predict an exact provider cache hit. Provider-reported cache-read/hit
+    /// usage remains authoritative.
     #[serde(default)]
     pub common_prefix_tokens: usize,
     /// Request budget: context window minus the output/safety reserve.

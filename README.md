@@ -118,10 +118,12 @@ only from durable kernel events, so live and resumed sessions show the same
 state. Abnormal states (over-budget context, stalled progress, externally
 modified owned files) are highlighted; healthy states stay quiet.
 
-Context telemetry distinguishes the estimated request size from the byte-exact
-reusable prefix: the sidebar shows cacheability (shared prefix / request) and,
-once the provider reports usage, cache efficiency (cache reads / shared
-prefix). Usage keeps cache hit, miss, and total input distinct, so cost never
+Context telemetry distinguishes the estimated request size from the reusable
+prefix: the sidebar shows estimated architecture cacheability (shared prefix /
+request under Latch's own serialization and estimator, not the provider's
+tokenizer) and, once the provider reports usage, provider cache efficiency
+(cache reads / shared prefix). Provider-reported cache usage is authoritative.
+Usage keeps cache hit, miss, and total input distinct, so cost never
 double-charges cached tokens. The recent transcript is append-only within a
 context epoch; when it reaches its budget, one non-destructive rollover starts
 a new epoch from durable state instead of evicting a little every turn, and

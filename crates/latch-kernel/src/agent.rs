@@ -674,9 +674,11 @@ impl Agent {
             )
             .context("extension returned invalid model_request transform")?;
             // Diagnostics for the exact provider-facing shape: the real request
-            // size (including tool calls, arguments, and replayed reasoning) and
-            // the exact prefix shared with the previous request, which is what a
-            // provider prompt cache can reuse.
+            // size (including tool calls, arguments, and replayed reasoning)
+            // and the estimated architecture cacheability — the byte prefix
+            // shared with the previous request under Latch's own serialization
+            // and estimator, not the provider's tokenizer. Provider-reported
+            // cache usage stays authoritative.
             let signature = request_signature(&request);
             stats.request_tokens = self
                 .estimator
@@ -1942,11 +1944,24 @@ fn request_signature(request: &ModelRequest) -> String {
     signature
 }
 
+/// Byte length of the common prefix of two strings, clamped down to a valid
+/// UTF-8 char boundary so callers can safely slice `&a[..shared]`.
+///
+/// Comparing raw bytes can land inside a multibyte character when the first
+/// differing bytes are an earlier byte of two different characters (for
+/// example `你` and `何` share their first two bytes). Clamping to the previous
+/// boundary keeps the measurement exact: the bytes before the boundary are
+/// identical and form a complete character prefix.
 fn common_prefix_bytes(a: &str, b: &str) -> usize {
-    a.bytes()
+    let mut shared = a
+        .bytes()
         .zip(b.bytes())
         .take_while(|(left, right)| left == right)
-        .count()
+        .count();
+    while shared > 0 && !a.is_char_boundary(shared) {
+        shared -= 1;
+    }
+    shared
 }
 
 fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMessage> {
@@ -3859,6 +3874,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn common_prefix_bytes_stays_on_utf8_char_boundaries() {
+        assert_eq!(common_prefix_bytes("abc", "abd"), 2);
+        assert_eq!(common_prefix_bytes("identical", "identical"), 9);
+        // 你 and 何 share their first two bytes, so the raw byte prefix lands
+        // inside a three-byte CJK character; the measurement must clamp to the
+        // previous char boundary instead of producing an invalid slice offset.
+        assert_eq!(common_prefix_bytes("你", "何"), 0);
+        assert_eq!(common_prefix_bytes("a你", "a何"), 1);
+        let left = "goal: 修复缓存策略";
+        let right = "goal: 修复上下文预算";
+        let shared = common_prefix_bytes(left, right);
+        assert!(left.is_char_boundary(shared));
+        assert_eq!(&left[..shared], "goal: 修复");
+        // A shared string keeps the complete measured prefix.
+        assert_eq!(common_prefix_bytes(left, left), left.len());
     }
 
     #[tokio::test]
