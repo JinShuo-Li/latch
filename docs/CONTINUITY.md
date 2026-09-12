@@ -48,40 +48,70 @@ output plus safety. Components are allocated in explicit priority order:
 2. canonical core — goal, constraints, decisions, required validations,
    current evidence, active failure lineages (memory lines drop
    lowest-priority first: notes before hypotheses before decisions);
-3. protocol-safe recent verbatim transcript (tool transactions stay atomic —
-   an assistant tool-call turn and all of its results are selected as one
-   unit, never split at a budget boundary) within `recent_tokens`;
+3. protocol-safe recent working memory: the largest suffix of whole
+   conversation units (an assistant tool-call turn and all of its results are
+   one unit) whose estimated size fits `recent_tokens`; a single oversized unit
+   is kept whole rather than truncated;
 4. targeted recalled original events;
 5. the scored episode index, capped at 16 entries;
 6. tool schemas and extension context, reserved by the agent before the
    continuity engine allocates its own sections.
 
-Recalled originals and the episode index are estimated once as one block, so
-recalled material is never double counted. `/context` reports the token
-breakdown, reserve, headroom, event and episode counts, and status.
+Recalled originals and the episode index are estimated together, so recalled
+material is never double counted; `episode_tokens` distinguishes the archival
+index from recalled originals inside `recall_tokens`. `/context` reports the
+token breakdown, the first retained sequence, how many tokens left working
+memory since the previous request, reserve, headroom, event and episode counts,
+and status.
+
+## Gradual working-memory decay
+
+Working memory does not collapse at a threshold. Each new turn appends whole
+units and, when the recent budget is exceeded, only the oldest units needed to
+fit are evicted — one at a time in the common case. The retained tail is a pure
+function of the durable log, the budget, and the last `/compact`, so resume
+reconstructs exactly the same working set without any rollover bookkeeping.
+Tool transactions stay atomic, and an oversized transaction is kept whole
+rather than split. Evicted units are never deleted: they move into the archival
+region, remain searchable through FTS, and stay visible through the episode
+index. `/compact` remains the only explicit working-memory reset; legacy
+`ContextEpochStarted` events from older builds are retained for history but no
+longer move the retained start.
+
+Context changes are explainable from durable state: every materialization emits
+`ContextMaterialized` with `recent_tokens`, `recent_start_sequence`, and
+`recent_evicted_tokens`, so an advancing window start and the tokens it
+released can be reconstructed from the event log alone.
 
 ## Incremental history access
 
-Every event stays in the raw store; only the queries are incremental. Materialization
-resolves the active epoch start from durable boundary events (`manual_compact`,
-`context_epoch_started`), then loads the rolled-over prefix and the active tail as
-separate indexed ranges instead of deserializing the full log twice. Recall uses
-deterministic SQLite FTS and fetches only the matched rows, preserving the original
-match limit before excluding bookkeeping kinds. Live supervision keeps sequence
-cursors: each turn feeds only newly appended events to the progress supervisor and
-the live sink, and resume continues from the durable cursor. Episodes and the
-canonical view still span all history; no old event is summarized away, truncated,
-or deleted to make queries cheaper.
+Every event stays in the raw store; only the queries are incremental.
+Materialization loads recent candidates from the newest events with
+`events_tail`, computes the retained tail locally, and asks the episode cache
+for only the newly archived delta via `events_between`; it never deserializes
+history it has already indexed. Recall uses deterministic SQLite FTS and
+fetches only matched rows, preserving the original match limit before excluding
+bookkeeping kinds. Live supervision keeps sequence cursors, so each turn feeds
+only newly appended events to the progress supervisor and the live sink, and
+resume continues from the durable cursor.
 
 ## Episodes
 
 Episodes segment on user intents (a new user message starts a new episode, with
-a volume cap) rather than fixed 20-event chunks. Each episode carries its event
-range, topic, file entities, tool names, and structural markers
-(`validation-passed`, `validation-failed`, `reground`, `mutation`, `evidence`,
-`failure`). At materialization time a deterministic score — lexical overlap
-with the query, current file entities, marker weights, and recency — selects a
-bounded subset for the index. Exact raw-event recall stays available via FTS.
+a volume cap) rather than fixed chunks. Each episode carries its event range,
+topic, file entities, tool names, and structural markers (`validation-passed`,
+`validation-failed`, `reground`, `mutation`, `evidence`, `failure`). A
+deterministic score — lexical overlap with the query, current file entities,
+marker weights, and recency — selects a bounded subset for the index.
+
+The index is built incrementally. A cached builder keeps the closed episodes
+and the open trailing segment plus a sequence watermark; new events extend the
+open segment, and only a session change or a working-memory budget increase
+(which moves the archive backwards) triggers a deterministic rebuild from the
+raw log. The one-shot builder and the streaming builder share the same
+accumulation rules, and equivalence tests pin that incremental extension equals
+a full rebuild at every prefix. Exact raw-event recall stays available via FTS,
+and no episode ever replaces the events it summarizes.
 
 ## File state and compaction
 

@@ -2,7 +2,7 @@ use crate::config::ContextConfig;
 use crate::state::{EvidenceLedger, FailureManager};
 use crate::store::EventStore;
 use crate::tokens::TokenEstimator;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use latch_protocol::{
     ContextStats, Event, EventPayload, MemoryKind, MemoryRecord, TaskState, Validity,
 };
@@ -12,12 +12,14 @@ use uuid::Uuid;
 
 /// Upper bound on episode index entries materialized into context.
 const MAX_EPISODE_ENTRIES: usize = 16;
+/// Event count that closes an episode even without a new user intent.
+const EPISODE_MAX_EVENTS: usize = 48;
 /// Upper bound on durable memories rendered into canonical state.
 const MAX_MEMORY_LINES: usize = 64;
 /// Per-record content truncation for canonical memory lines.
 const MAX_MEMORY_CONTENT: usize = 400;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Episode {
     pub start_sequence: u64,
     pub end_sequence: u64,
@@ -74,6 +76,10 @@ pub struct ContinuityEngine {
     config: ContextConfig,
     estimator: TokenEstimator,
     generation: u32,
+    /// Cached archival episode index. It only ever advances over the immutable
+    /// event log and is rebuilt deterministically when the session changes or
+    /// history rolls back (a larger working-memory budget).
+    episodes: std::sync::Mutex<EpisodeCache>,
 }
 impl ContinuityEngine {
     #[must_use]
@@ -83,6 +89,7 @@ impl ContinuityEngine {
             config,
             estimator: TokenEstimator::generic(),
             generation: 0,
+            episodes: std::sync::Mutex::new(EpisodeCache::default()),
         }
     }
     /// Builds an engine whose estimator matches the provider model.
@@ -93,6 +100,7 @@ impl ContinuityEngine {
             config,
             estimator: TokenEstimator::for_model(model),
             generation: 0,
+            episodes: std::sync::Mutex::new(EpisodeCache::default()),
         }
     }
     #[must_use]
@@ -169,30 +177,59 @@ impl ContinuityEngine {
         system: String,
         budget: &MaterializeBudget,
     ) -> Result<MaterializedContext> {
+        let estimator = self.estimator;
+        let own_budget = budget.request_tokens.saturating_sub(budget.reserved_tokens);
         let memories = self.store.memories(session_id)?;
-        // The active epoch starts at a durable sequence boundary. Load the
-        // rolled-over prefix and the active tail separately: the boundary query
-        // is indexed, and neither side deserializes the other.
-        let active_start = self.active_start_sequence(session_id)?;
-        let pre_epoch;
-        let active_owned;
-        if active_start <= 1 {
-            active_owned = self.store.events(session_id)?;
-            pre_epoch = Vec::new();
-        } else {
-            pre_epoch = self.store.events_before(session_id, active_start)?;
-            active_owned = self.store.events_after(session_id, active_start - 1)?;
-        }
-        let durable_events = pre_epoch.len() + active_owned.len();
-        let active_events = &active_owned;
-        // The current user turn is already in the recent transcript; recalling
-        // it as "original material" would duplicate it and make the dynamic
-        // system block differ between the first and later requests of an epoch.
-        let current_user_sequence = active_events
+        // Working memory is the newest whole conversation units after the last
+        // explicit `/compact`. Units leave one at a time when the budget is
+        // exceeded, so degradation is gradual; nothing is deleted and every
+        // evicted unit stays retrievable through archival episodes and recall.
+        let compact_from = self.compact_start_sequence(session_id)?;
+        let candidates = load_recent_candidates(
+            &self.store,
+            session_id,
+            compact_from,
+            budget.recent_tokens,
+            &estimator,
+        )?;
+
+        // 1. Hard system/kernel instructions come first.
+        let instructions_tokens = estimator.estimate(&system);
+        let mut used = instructions_tokens;
+
+        // 2. Canonical state, capped by tokens. Individual memory lines drop
+        //    lowest-priority first; goal, constraints, decisions, evidence, and
+        //    failures survive as long as anything does.
+        let canonical_cap = own_budget.saturating_sub(used) * 2 / 5;
+        let bridge = conversation_bridge(state, &candidates);
+        let canonical = render_canonical(
+            state,
+            &memories,
+            evidence,
+            failures,
+            &bridge,
+            canonical_cap,
+            &estimator,
+        );
+        let state_tokens = estimator.estimate(&canonical);
+        used = used.saturating_add(state_tokens);
+
+        // 3. Recent verbatim working memory: the largest suffix of whole
+        //    conversation units that fits the recent budget. A single oversized
+        //    unit is kept whole rather than truncated, but no transaction is
+        //    ever split.
+        let recent_budget = budget.recent_tokens.min(own_budget.saturating_sub(used));
+        let (recent, recent_tokens) = bounded_recent(&candidates, recent_budget, &estimator);
+        used = used.saturating_add(recent_tokens);
+        let recent_start = recent.first().map(|event| event.sequence).unwrap_or(0);
+        let current_user_sequence = recent
             .iter()
             .rev()
             .find(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
             .map(|event| event.sequence);
+
+        // Recall never duplicates the current user turn or anything still in
+        // working memory; it reaches into the archival region instead.
         let mut recalled_events = query
             .map(|q| -> Result<Vec<Event>> {
                 let events = self
@@ -206,100 +243,71 @@ impl ContinuityEngine {
             })
             .transpose()?
             .unwrap_or_default();
-
-        let estimator = self.estimator;
-        let own_budget = budget.request_tokens.saturating_sub(budget.reserved_tokens);
-
-        // 1. Hard system/kernel instructions come first.
-        let instructions_tokens = estimator.estimate(&system);
-        let mut used = instructions_tokens;
-
-        // 2. Canonical state, capped by tokens. Individual memory lines drop
-        //    lowest-priority first; goal, constraints, decisions, evidence, and
-        //    failures survive as long as anything does.
-        let canonical_cap = own_budget.saturating_sub(used) * 2 / 5;
-        let bridge = conversation_bridge(state, active_events);
-        let canonical = render_canonical(
-            state,
-            &memories,
-            evidence,
-            failures,
-            &bridge,
-            canonical_cap,
-            &estimator,
-        );
-        let state_tokens = estimator.estimate(&canonical);
-        used = used.saturating_add(state_tokens);
-
-        // 3. Recent verbatim transcript for the current append-only epoch. The
-        //    whole epoch is included; when it reaches its budget one discrete,
-        //    non-destructive rollover advances the epoch instead of sliding the
-        //    window a little every turn.
-        let recent_budget = budget.recent_tokens.min(own_budget.saturating_sub(used));
-        let (recent, roll_from, recent_start) =
-            epoch_recent(active_events, recent_budget, &estimator);
-        let mut rolled = false;
-        if let Some(from_sequence) = roll_from {
-            self.store.append(
-                session_id,
-                EventPayload::ContextEpochStarted {
-                    from_sequence,
-                    reason: "recent working set reached its budget".into(),
-                },
-            )?;
-            rolled = true;
-        }
-        let recent_tokens = recent
-            .iter()
-            .map(|event| estimator.estimate(&render_event(event)))
-            .sum::<usize>();
-        used = used.saturating_add(recent_tokens);
-
-        // Recall only contributes material older than the current epoch's
-        // retained transcript, so a steer can retrieve older originals without
-        // duplicating turns that are already present.
         let recent_ids: HashSet<Uuid> = recent.iter().map(|event| event.id).collect();
         recalled_events.retain(|event| !recent_ids.contains(&event.id));
         if let Some(query) = query {
             self.record_recall(session_id, query, &memories, &recalled_events)?;
         }
 
-        // 4. Recalled originals, then the episode index, sharing the remaining
-        //    recall budget. The combined block is estimated exactly once so
-        //    recalled content is never double counted.
+        // 4. Recalled originals, then the archival episode index, sharing the
+        //    remaining recall budget. The combined block is estimated exactly
+        //    once so recalled content is never double counted.
         let recall_budget = own_budget.saturating_sub(used);
         let recalled_cap = recall_budget * 3 / 4;
         let (recalled_text, _recalled_selected) =
             render_recalled(&recalled_events, recalled_cap, &estimator);
         let recalled_used = estimator.estimate(&recalled_text);
-        // Episodes index every event older than the current epoch's recent
-        // material, so rolled-over history stays retrievable.
-        let historical_end = recent_start.min(active_events.len());
-        let mut episodes = build_episodes(&pre_epoch);
-        episodes.extend(build_episodes(&active_events[..historical_end]));
-        let selected = select_episodes(
-            &episodes,
-            query,
-            state,
-            recall_budget.saturating_sub(recalled_used),
-            &estimator,
-        );
-        let episode_index = selected
-            .iter()
-            .map(|episode| episode.summary.clone())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let episode_budget = recall_budget.saturating_sub(recalled_used);
+        let archive_end = if recent_start > 1 {
+            recent_start - 1
+        } else {
+            self.store.last_sequence(session_id)?
+        };
+        let (selected, episode_count, episode_index, episode_tokens, evicted_tokens) = {
+            let mut cache = self
+                .episodes
+                .lock()
+                .map_err(|_| anyhow!("episode index lock poisoned"))?;
+            cache.advance(&self.store, session_id, archive_end, &estimator)?;
+            let builder = &cache.builder;
+            let open = builder.snapshot();
+            let selected = select_episodes(
+                &builder.closed,
+                open.as_ref(),
+                query,
+                state,
+                episode_budget,
+                &estimator,
+            );
+            let episode_index = selected
+                .iter()
+                .map(|episode| episode.summary.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let episode_tokens = estimator.estimate(&episode_index);
+            (
+                selected,
+                builder.closed.len() + usize::from(open.is_some()),
+                episode_index,
+                episode_tokens,
+                cache.last_evicted_tokens,
+            )
+        };
         let recalled_full = format!(
             "EPISODE INDEX\n{}\nORIGINAL RECALLED EVENTS\n{}",
             episode_index, recalled_text
         );
         let recall_tokens = estimator.estimate(&recalled_full);
 
+        let durable_events = self.store.last_sequence(session_id)? as usize;
         let mut stats = ContextStats {
             instructions_tokens,
             state_tokens,
             recent_tokens,
             recall_tokens,
+            episode_tokens,
+            recent_start_sequence: recent_start,
+            recent_evicted_tokens: evicted_tokens,
             tools_tokens: 0,
             extension_tokens: 0,
             total_tokens: 0,
@@ -309,8 +317,8 @@ impl ContinuityEngine {
             window_tokens: budget.window_tokens,
             reserve_tokens: budget.reserve_tokens,
             headroom_tokens: 0,
-            durable_events: durable_events + usize::from(rolled),
-            episodes: episodes.len(),
+            durable_events,
+            episodes: episode_count,
             selected_episodes: selected.len(),
             estimated: true,
             status: String::new(),
@@ -326,26 +334,16 @@ impl ContinuityEngine {
             stats,
         })
     }
-    /// First sequence of the current context epoch (1 means the beginning).
-    /// `/compact` resets explicitly; automatic rollover reuses the
-    /// `from_sequence` recorded in the durable epoch event so resume
-    /// reconstructs the exact same start. Only boundary events are loaded, so
-    /// this lookup never scans the transcript.
-    fn active_start_sequence(&self, session_id: Uuid) -> Result<u64> {
-        let boundaries = self
+    /// First sequence of the current working set (1 means the beginning).
+    /// `/compact` resets working memory explicitly; ordinary budget pressure
+    /// evicts whole units gradually without a durable boundary, because the
+    /// retained tail is a pure function of the log and the configured budget.
+    fn compact_start_sequence(&self, session_id: Uuid) -> Result<u64> {
+        Ok(self
             .store
-            .events_of_kinds(session_id, &["manual_compact", "context_epoch_started"])?;
-        let mut start = 1u64;
-        for event in &boundaries {
-            match &event.payload {
-                EventPayload::ManualCompact { .. } => start = event.sequence + 1,
-                EventPayload::ContextEpochStarted { from_sequence, .. } => {
-                    start = *from_sequence;
-                }
-                _ => {}
-            }
-        }
-        Ok(start)
+            .latest_event_of_kinds(session_id, &["manual_compact"])?
+            .map(|event| event.sequence + 1)
+            .unwrap_or(1))
     }
     fn record_recall(
         &self,
@@ -377,14 +375,16 @@ impl ContinuityEngine {
 /// structural markers (validation outcomes, re-grounds), and recency. The
 /// newest few episodes always earn a place so the index reflects the live tail.
 fn select_episodes(
-    episodes: &[Episode],
+    closed: &[Episode],
+    open: Option<&Episode>,
     query: Option<&str>,
     state: &TaskState,
     budget_tokens: usize,
     estimator: &TokenEstimator,
 ) -> Vec<Episode> {
-    let newest_start = episodes.len().saturating_sub(5);
-    let mut scored: Vec<(i64, usize, &Episode)> = episodes
+    let total = closed.len() + usize::from(open.is_some());
+    let newest_start = total.saturating_sub(5);
+    let mut scored: Vec<(i64, usize, &Episode)> = closed
         .iter()
         .enumerate()
         .map(|(rank, episode)| {
@@ -394,6 +394,14 @@ fn select_episodes(
             }
             (score, rank, episode)
         })
+        .chain(open.map(|episode| {
+            let rank = closed.len();
+            let mut score = score_episode(episode, query, state);
+            if rank >= newest_start {
+                score += 4;
+            }
+            (score, rank, episode)
+        }))
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
     let mut selected = Vec::new();
@@ -473,32 +481,25 @@ fn is_model_visible_event(payload: &EventPayload) -> bool {
     )
 }
 
-/// Chooses the model-visible recent conversation for the current epoch.
-///
-/// Within an epoch the selection is append-only: every event since the epoch
-/// start is included. When the epoch's estimated size exceeds the budget, one
-/// deterministic rollover drops whole old conversation units until the newest
-/// tail fits within half the budget (hysteresis, so the next turn does not
-/// roll again), returning the new epoch's start sequence. Transactions are
-/// never split, and a single oversized unit is kept whole rather than
-/// truncated. The returned index is the start of the retained tail in the
-/// input slice, so callers can index dropped material for episodes.
-fn epoch_recent(
+/// Chooses the model-visible recent working memory: the largest suffix of
+/// whole conversation units whose estimated size fits the budget. The newest
+/// unit is always kept even when it alone exceeds the budget, so an oversized
+/// tool transaction is never truncated or split. Because units only ever leave
+/// from the front as new ones arrive, working memory decays gradually instead
+/// of collapsing to half its size at a threshold.
+fn bounded_recent(
     events: &[Event],
     budget_tokens: usize,
     estimator: &TokenEstimator,
-) -> (Vec<Event>, Option<u64>, usize) {
-    let visible: Vec<(usize, Event)> = events
+) -> (Vec<Event>, usize) {
+    let conversation: Vec<Event> = events
         .iter()
-        .enumerate()
-        .filter(|(_, event)| is_model_visible_event(&event.payload))
-        .map(|(index, event)| (index, event.clone()))
+        .filter(|event| is_model_visible_event(&event.payload))
+        .cloned()
         .collect();
-    if visible.is_empty() {
-        return (Vec::new(), None, events.len());
+    if conversation.is_empty() {
+        return (Vec::new(), 0);
     }
-    let first_visible = visible[0].0;
-    let conversation: Vec<Event> = visible.iter().map(|(_, event)| event.clone()).collect();
     let units = conversation_units(&conversation);
     let unit_tokens: Vec<usize> = units
         .iter()
@@ -509,30 +510,62 @@ fn epoch_recent(
                 .sum::<usize>()
         })
         .collect();
-    let total: usize = unit_tokens.iter().sum();
-    if total <= budget_tokens || units.len() <= 1 {
-        return (conversation, None, first_visible);
-    }
-    let keep_budget = (budget_tokens / 2).max(1);
-    let mut size = 0usize;
     let mut first = units.len();
+    let mut tokens = 0usize;
     for index in (0..units.len()).rev() {
-        let tokens = unit_tokens[index];
-        if first != units.len() && size + tokens > keep_budget {
+        let unit = unit_tokens[index];
+        if first != units.len() && tokens.saturating_add(unit) > budget_tokens {
             break;
         }
-        size += tokens;
+        tokens = tokens.saturating_add(unit);
         first = index;
     }
-    if first == 0 {
-        return (conversation, None, first_visible);
-    }
     let start = units[first].0;
-    (
-        conversation[start..].to_vec(),
-        Some(conversation[start].sequence),
-        visible[start].0,
-    )
+    (conversation[start..].to_vec(), tokens)
+}
+
+/// Loads enough of the newest post-compact conversation to fill the recent
+/// budget, without touching older history. The newest chunks are fetched until
+/// they hold at least the budget in estimated tokens (or history is
+/// exhausted), and any leading fragment of an unfinished transaction is
+/// dropped so units stay whole.
+fn load_recent_candidates(
+    store: &EventStore,
+    session_id: Uuid,
+    from_inclusive: u64,
+    budget_tokens: usize,
+    estimator: &TokenEstimator,
+) -> Result<Vec<Event>> {
+    let target = budget_tokens.saturating_mul(2).max(1);
+    let mut limit = 256usize;
+    loop {
+        let fetched = store.events_tail(session_id, limit)?;
+        let reached_history_start = fetched.len() < limit;
+        let visible: Vec<Event> = fetched
+            .into_iter()
+            .filter(|event| {
+                event.sequence >= from_inclusive && is_model_visible_event(&event.payload)
+            })
+            .collect();
+        let anchored = match visible
+            .iter()
+            .position(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
+        {
+            Some(index) => visible[index..].to_vec(),
+            None => visible.clone(),
+        };
+        let tokens: usize = anchored
+            .iter()
+            .map(|event| estimator.estimate(&render_event(event)))
+            .sum();
+        let reached_boundary = anchored
+            .first()
+            .is_none_or(|event| event.sequence <= from_inclusive);
+        if tokens >= target || reached_boundary || reached_history_start {
+            return Ok(anchored);
+        }
+        limit = limit.saturating_mul(2);
+    }
 }
 
 /// Groups events into atomic conversation transactions.
@@ -585,62 +618,35 @@ fn conversation_units(events: &[Event]) -> Vec<(usize, usize)> {
     units
 }
 
-/// Segments old events into structured episodes. Boundaries align with new
-/// user intents (user messages) or volume, so episodes describe coherent spans
-/// instead of arbitrary 20-event chunks.
-fn build_episodes(events: &[Event]) -> Vec<Episode> {
-    let mut episodes = Vec::new();
-    let mut current: Vec<&Event> = Vec::new();
-    let flush = |current: &mut Vec<&Event>, episodes: &mut Vec<Episode>| {
-        if current.is_empty() {
-            return;
-        }
-        let topic = current
-            .iter()
-            .find_map(|event| match &event.payload {
-                EventPayload::UserMessage { text } => {
-                    Some(text.chars().take(100).collect::<String>())
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| "session activity".into());
-        let mut entities = Vec::new();
-        let mut tools = Vec::new();
-        let mut markers = Vec::new();
-        for event in current.iter() {
-            match &event.payload {
-                EventPayload::FileObserved { version } => entities.push(version.path.clone()),
-                EventPayload::FileChanged { after, .. } => {
-                    entities.push(after.path.clone());
-                    markers.push("mutation".into());
-                }
-                EventPayload::ToolCompleted { result } => tools.push(result.name.clone()),
-                EventPayload::ToolFailed { result } => {
-                    tools.push(result.name.clone());
-                    markers.push("failure".into());
-                }
-                EventPayload::ValidationResult { passed, .. } => markers.push(if *passed {
-                    "validation-passed".into()
-                } else {
-                    "validation-failed".into()
-                }),
-                EventPayload::EvidenceCreated { evidence } => {
-                    markers.push(format!("evidence:{:?}", evidence.status));
-                }
-                EventPayload::FailureAttempt { .. } => markers.push("failure".into()),
-                EventPayload::RegroundRequested { .. } => markers.push("reground".into()),
-                _ => {}
-            }
-        }
+/// One in-progress episode segment. Fields accumulate exactly like the
+/// historical full-scan builder, so incremental extension and a from-scratch
+/// rebuild produce the same episodes.
+#[derive(Debug, Clone)]
+struct OpenEpisode {
+    start_sequence: u64,
+    end_sequence: u64,
+    count: usize,
+    topic: Option<String>,
+    entities: Vec<String>,
+    tools: Vec<String>,
+    markers: Vec<String>,
+}
+
+impl OpenEpisode {
+    fn into_episode(self) -> Episode {
+        let topic = self.topic.unwrap_or_else(|| "session activity".into());
+        let mut entities = self.entities;
+        let mut tools = self.tools;
         for list in [&mut entities, &mut tools] {
             list.sort();
             list.dedup();
         }
+        let mut markers = self.markers;
         markers.dedup();
         let summary = format!(
             "- #{}-#{}: {}{}{}",
-            current[0].sequence,
-            current[current.len() - 1].sequence,
+            self.start_sequence,
+            self.end_sequence,
             topic,
             if entities.is_empty() {
                 String::new()
@@ -661,27 +667,173 @@ fn build_episodes(events: &[Event]) -> Vec<Episode> {
                 format!(" [{}]", markers.join(", "))
             },
         );
-        episodes.push(Episode {
-            start_sequence: current[0].sequence,
-            end_sequence: current[current.len() - 1].sequence,
+        Episode {
+            start_sequence: self.start_sequence,
+            end_sequence: self.end_sequence,
             topic,
             entities,
             tools,
             markers,
             summary,
-        });
-        current.clear();
-    };
-    for event in events {
-        let boundary =
-            matches!(&event.payload, EventPayload::UserMessage { .. }) || current.len() >= 48;
-        if boundary && !current.is_empty() {
-            flush(&mut current, &mut episodes);
         }
-        current.push(event);
     }
-    flush(&mut current, &mut episodes);
-    episodes
+
+    fn snapshot(&self) -> Episode {
+        self.clone().into_episode()
+    }
+}
+
+/// Streaming episode segmentation. Boundaries align with new user intents or a
+/// bounded event count, exactly as the one-shot builder did.
+#[derive(Debug, Default, Clone)]
+struct EpisodeBuilder {
+    closed: Vec<Episode>,
+    open: Option<OpenEpisode>,
+    /// Highest sequence incorporated so far (0 = none).
+    through: u64,
+}
+
+impl EpisodeBuilder {
+    fn push(&mut self, event: &Event) {
+        let is_user = matches!(event.payload, EventPayload::UserMessage { .. });
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|open| is_user || open.count >= EPISODE_MAX_EVENTS)
+        {
+            self.flush();
+        }
+        let open = self.open.get_or_insert_with(|| OpenEpisode {
+            start_sequence: event.sequence,
+            end_sequence: event.sequence,
+            count: 0,
+            topic: None,
+            entities: Vec::new(),
+            tools: Vec::new(),
+            markers: Vec::new(),
+        });
+        if open.topic.is_none()
+            && let EventPayload::UserMessage { text } = &event.payload
+        {
+            open.topic = Some(text.chars().take(100).collect());
+        }
+        let push_marker = |markers: &mut Vec<String>, label: String| {
+            if markers.last() != Some(&label) {
+                markers.push(label);
+            }
+        };
+        match &event.payload {
+            EventPayload::FileObserved { version } => open.entities.push(version.path.clone()),
+            EventPayload::FileChanged { after, .. } => {
+                open.entities.push(after.path.clone());
+                push_marker(&mut open.markers, "mutation".into());
+            }
+            EventPayload::ToolCompleted { result } => open.tools.push(result.name.clone()),
+            EventPayload::ToolFailed { result } => {
+                open.tools.push(result.name.clone());
+                push_marker(&mut open.markers, "failure".into());
+            }
+            EventPayload::ValidationResult { passed, .. } => push_marker(
+                &mut open.markers,
+                if *passed {
+                    "validation-passed".into()
+                } else {
+                    "validation-failed".into()
+                },
+            ),
+            EventPayload::EvidenceCreated { evidence } => {
+                push_marker(&mut open.markers, format!("evidence:{:?}", evidence.status));
+            }
+            EventPayload::FailureAttempt { .. } => {
+                push_marker(&mut open.markers, "failure".into());
+            }
+            EventPayload::RegroundRequested { .. } => {
+                push_marker(&mut open.markers, "reground".into());
+            }
+            _ => {}
+        }
+        open.count += 1;
+        open.end_sequence = event.sequence;
+        self.through = event.sequence;
+    }
+
+    fn snapshot(&self) -> Option<Episode> {
+        self.open.as_ref().map(OpenEpisode::snapshot)
+    }
+
+    fn flush(&mut self) {
+        if let Some(open) = self.open.take() {
+            self.closed.push(open.into_episode());
+        }
+    }
+
+    #[cfg(test)]
+    fn finish(&mut self) {
+        self.flush();
+    }
+}
+
+/// Cached archival episode index with a sequence watermark. Newly appended
+/// events extend the open segment; already-closed episodes are never rebuilt
+/// unless the session changes or the archive rolls back. The raw event log
+/// remains the source of truth and is never modified.
+#[derive(Debug, Default)]
+struct EpisodeCache {
+    session_id: Option<Uuid>,
+    builder: EpisodeBuilder,
+    /// Tokens that left working memory since the previous materialization.
+    last_evicted_tokens: usize,
+}
+
+impl EpisodeCache {
+    fn advance(
+        &mut self,
+        store: &EventStore,
+        session_id: Uuid,
+        archive_end: u64,
+        estimator: &TokenEstimator,
+    ) -> Result<()> {
+        // A different session, or an archive that moved backwards (a larger
+        // working-memory budget), invalidates the derived index. Rebuilding is
+        // deterministic and never touches the raw log.
+        let rebuild = self.session_id != Some(session_id) || self.builder.through > archive_end;
+        if rebuild {
+            self.session_id = Some(session_id);
+            self.builder = EpisodeBuilder::default();
+            self.last_evicted_tokens = 0;
+        }
+        if self.builder.through < archive_end {
+            let delta = store.events_between(
+                session_id,
+                self.builder.through,
+                archive_end.saturating_add(1),
+            )?;
+            if !rebuild {
+                self.last_evicted_tokens = delta
+                    .iter()
+                    .map(|event| estimator.estimate(&render_event(event)))
+                    .sum();
+            }
+            for event in &delta {
+                self.builder.push(event);
+            }
+        } else {
+            self.last_evicted_tokens = 0;
+        }
+        Ok(())
+    }
+}
+
+/// One-shot segmentation used by tests and equivalence checks. It is exactly
+/// the streaming builder run to completion.
+#[cfg(test)]
+fn build_episodes(events: &[Event]) -> Vec<Episode> {
+    let mut builder = EpisodeBuilder::default();
+    for event in events {
+        builder.push(event);
+    }
+    builder.finish();
+    builder.closed
 }
 
 fn conversation_bridge(state: &TaskState, events: &[Event]) -> ConversationBridge {
@@ -1053,10 +1205,11 @@ mod tests {
             .iter()
             .filter(|e| matches!(e.payload, EventPayload::ContextEpochStarted { .. }))
             .count();
-        // 4 seed events + 2000 fillers + the recall bookkeeping event; the
-        // automatic epoch rollover adds only its durable boundary event.
-        assert_eq!(all.len() - epoch_events, 2005);
-        assert!(epoch_events >= 1, "an over-budget history rolls its epoch");
+        // 4 seed events + 2000 fillers + the recall bookkeeping event. Working
+        // memory decay is explained by stats, not by durable cliff events.
+        assert_eq!(all.len(), 2005);
+        assert_eq!(epoch_events, 0);
+        assert!(ctx.stats.recent_start_sequence > 1);
         assert!(all.iter().any(|e| e.id == diagnostic.id));
         assert!(
             !all.iter()
@@ -1122,15 +1275,22 @@ mod tests {
             .unwrap();
         assert!(ctx.stats.total_tokens <= 16_000);
         assert_eq!(ctx.stats.status, "bounded");
-        // 5000 durable fillers plus the one recall bookkeeping event, plus the
-        // discrete epoch boundary event.
+        // Working memory moved into the archival region without any durable
+        // cliff event: the raw log still holds every filler plus the recall
+        // bookkeeping event.
+        assert!(ctx.stats.recent_start_sequence > 1);
+        assert!(
+            ctx.stats.episode_tokens <= ctx.stats.recall_tokens,
+            "episode metadata is a subset of the recall section"
+        );
+        assert!(ctx.stats.episodes > 0, "an archival index exists");
         let events = store.events(sid).unwrap();
         let epoch_events = events
             .iter()
             .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
             .count();
-        assert!(epoch_events >= 1);
-        assert_eq!(events.len() - epoch_events, 5001);
+        assert_eq!(epoch_events, 0, "no cliff-like rollover events are written");
+        assert_eq!(events.len(), 5001);
     }
 
     #[test]
@@ -1169,6 +1329,7 @@ mod tests {
             )
             .unwrap();
         assert!(context.recent.is_empty());
+        assert_eq!(e.compact_start_sequence(id).unwrap(), 3);
     }
 
     fn event(session: Uuid, sequence: u64, payload: EventPayload) -> Event {
@@ -1261,11 +1422,10 @@ mod tests {
             + estimator.estimate(&render_event(&events[2]));
         let tail = estimator.estimate(&render_event(&events[3]));
 
-        // Budget fits the trailing assistant reply and the tool result but not
-        // the assistant tool-call message: the rollover drops the transaction
-        // whole, never leaving a dangling tool result.
-        let (split, roll, _) = epoch_recent(&events, tail + transaction - 1, &estimator);
-        assert!(roll.is_some(), "an over-budget epoch rolls over");
+        // Budget fits the trailing assistant reply but not the tool
+        // transaction: the transaction is dropped whole, never leaving a
+        // dangling tool result.
+        let (split, _) = bounded_recent(&events, tail + transaction - 1, &estimator);
         assert_eq!(split.len(), 1);
         assert!(matches!(
             split[0].payload,
@@ -1277,13 +1437,21 @@ mod tests {
                 .any(|e| matches!(e.payload, EventPayload::ToolCompleted { .. }))
         );
 
-        // A budget that covers the whole epoch keeps every unit intact.
+        // Growing the budget by a little includes the whole transaction; it is
+        // never partially included.
+        let (pair, _) = bounded_recent(&events, tail + transaction, &estimator);
+        assert_eq!(pair.len(), 3, "the transaction joins as a whole unit");
+        assert!(
+            pair.iter()
+                .any(|e| matches!(e.payload, EventPayload::ToolCompleted { .. }))
+        );
+
+        // A budget that covers the whole conversation keeps every unit intact.
         let total: usize = events
             .iter()
             .map(|event| estimator.estimate(&render_event(event)))
             .sum();
-        let (whole, roll, _) = epoch_recent(&events, total, &estimator);
-        assert!(roll.is_none(), "no rollover when the epoch fits");
+        let (whole, _) = bounded_recent(&events, total, &estimator);
         assert_eq!(whole.len(), 4);
         assert!(
             whole
@@ -1332,7 +1500,7 @@ mod tests {
         let units = conversation_units(&events);
         assert_eq!(units, vec![(0, 2)]);
         for budget in [0, 1, 10, 100, 10_000] {
-            let (recent, _, _) = epoch_recent(&events, budget, &TokenEstimator::generic());
+            let (recent, _) = bounded_recent(&events, budget, &TokenEstimator::generic());
             let has_assistant = recent.iter().any(|e| matches!(
                 &e.payload,
                 EventPayload::AssistantMessageCompleted { tool_calls, .. } if !tool_calls.is_empty()
@@ -1448,7 +1616,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn epoch_rollover_is_discrete_non_destructive_and_retrievable() {
+    async fn working_memory_decays_gradually_and_stays_retrievable() {
         use crate::state::EvidenceLedger;
         use crate::state::FailureManager;
         let store = EventStore::open_memory().unwrap();
@@ -1496,66 +1664,365 @@ mod tests {
                 .unwrap()
         };
         let first = materialize();
-        assert!(first.recent.len() < 40, "the epoch rolled to a tail");
-        // No dangling tool result may survive a rollover: every terminal result
-        // in the retained tail has its assistant tool call present too.
-        let retained_calls: std::collections::BTreeSet<&str> = first
+        assert!(!first.recent.is_empty());
+        assert!(
+            first.stats.recent_tokens <= 600,
+            "working memory respects its budget"
+        );
+        assert!(first.recent.len() < 40, "only a bounded tail is retained");
+        // Deterministic: materializing again without new events changes nothing.
+        let again = materialize();
+        assert_eq!(again.recent, first.recent);
+        assert_eq!(
+            again.stats.recent_start_sequence,
+            first.stats.recent_start_sequence
+        );
+
+        // No durable cliff events are written under budget pressure; the
+        // transition is explained by the per-request stats instead.
+        let epoch_events = store
+            .events(sid)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
+            .count();
+        assert_eq!(epoch_events, 0);
+
+        // Add one request/answer pair: only whole units may leave, and only as
+        // many as needed, so the window decays gradually rather than halving.
+        store
+            .append(
+                sid,
+                EventPayload::UserMessage {
+                    text: format!("request 20 {}", "x".repeat(200)),
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                sid,
+                EventPayload::AssistantMessageCompleted {
+                    text: "answer 20".into(),
+                    tool_calls: vec![],
+                    reasoning_content: None,
+                },
+            )
+            .unwrap();
+        let third = materialize();
+        assert!(third.stats.recent_tokens <= 600);
+        assert!(
+            third.stats.recent_evicted_tokens > 0,
+            "eviction is explained in the stats"
+        );
+        assert!(
+            third.stats.recent_start_sequence > first.stats.recent_start_sequence,
+            "the window start advanced"
+        );
+        let kept_old = first
             .recent
             .iter()
-            .filter_map(|event| match &event.payload {
-                EventPayload::AssistantMessageCompleted { tool_calls, .. } => {
-                    Some(tool_calls.iter().map(|call| call.id.as_str()))
-                }
-                _ => None,
-            })
-            .flatten()
-            .collect();
-        for event in &first.recent {
-            if let EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } =
-                &event.payload
-            {
-                assert!(
-                    retained_calls.contains(result.call_id.as_str()),
-                    "rollover retained a dangling tool result"
-                );
-            }
-        }
-        let epoch_events = |store: &EventStore| {
-            store
-                .events(sid)
-                .unwrap()
-                .iter()
-                .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
-                .count()
-        };
-        assert_eq!(epoch_events(&store), 1, "one discrete rollover");
-
-        // A second materialization without new events must not roll again.
-        let second = materialize();
-        assert_eq!(
-            epoch_events(&store),
-            1,
-            "rollover is discrete, not per turn"
+            .filter(|old| third.recent.iter().any(|new| new.id == old.id))
+            .count();
+        let evicted = first.recent.len() - kept_old;
+        assert!(evicted >= 2, "at least one whole unit left");
+        assert_eq!(evicted % 2, 0, "whole request/answer units leave");
+        assert!(
+            kept_old + 1 >= first.recent.len() / 2,
+            "no half-size cliff: {kept_old} of {} kept",
+            first.recent.len()
         );
-        assert_eq!(second.recent, first.recent);
 
-        // Rolled-over raw material stays durable and searchable.
+        // Evicted originals stay durable and reachable through recall.
         let recalled = engine.recall(sid, "request 0").unwrap();
         assert!(
             recalled.iter().any(|event| matches!(
                 &event.payload,
                 EventPayload::UserMessage { text } if text.contains("request 0")
             )),
-            "rolled-over events remain retrievable"
+            "evicted events remain retrievable"
         );
         assert!(store.events(sid).unwrap().iter().any(|event| matches!(
             &event.payload,
             EventPayload::UserMessage { text } if text.contains("request 0")
         )));
+
+        // Resume equivalence: a fresh engine reconstructs the same working set
+        // and the same logical episodes from the raw log.
+        let resumed = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        let resumed_ctx = resumed
+            .materialize(
+                sid,
+                state.state(),
+                None,
+                &EvidenceLedger::default(),
+                &FailureManager::new(3),
+                "stable system".into(),
+                &budget,
+            )
+            .unwrap();
+        assert_eq!(resumed_ctx.recent, third.recent);
+        assert_eq!(
+            resumed_ctx.stats.recent_start_sequence,
+            third.stats.recent_start_sequence
+        );
+        assert_eq!(resumed_ctx.stats.recent_tokens, third.stats.recent_tokens);
+        let summaries: Vec<_> = third.episodes.iter().map(|e| e.summary.clone()).collect();
+        let resumed_summaries: Vec<_> = resumed_ctx
+            .episodes
+            .iter()
+            .map(|e| e.summary.clone())
+            .collect();
+        assert_eq!(
+            resumed_summaries, summaries,
+            "episode index is deterministic on resume"
+        );
     }
 
     #[test]
-    fn epoch_boundary_lookup_matches_the_full_scan() {
+    fn episode_index_is_incrementally_equivalent_to_a_full_rebuild() {
+        use latch_protocol::{ToolCall, ToolResult};
+        use serde_json::json;
+        let session = Uuid::new_v4();
+        let mut events = Vec::new();
+        let mut sequence = 0u64;
+        let mut push = |payload: EventPayload| {
+            sequence += 1;
+            events.push(event(session, sequence, payload));
+        };
+        for index in 0..60 {
+            push(EventPayload::UserMessage {
+                text: format!("task {index}"),
+            });
+            if index % 3 == 0 {
+                push(EventPayload::AssistantMessageCompleted {
+                    text: "calling".into(),
+                    tool_calls: vec![ToolCall {
+                        id: format!("call-{index}"),
+                        name: "read_file".into(),
+                        arguments: json!({"path": format!("src/{index}.rs")}),
+                    }],
+                    reasoning_content: None,
+                });
+                push(EventPayload::ToolCompleted {
+                    result: ToolResult {
+                        call_id: format!("call-{index}"),
+                        name: "read_file".into(),
+                        output: "contents".into(),
+                        is_error: false,
+                        artifact_id: None,
+                    },
+                });
+            }
+            if index % 7 == 0 {
+                push(EventPayload::ValidationResult {
+                    command: "cargo test".into(),
+                    passed: index % 14 == 0,
+                    detail: "checked".into(),
+                });
+                push(EventPayload::EvidenceCreated {
+                    evidence: crate::state::EvidenceLedger::default().build(
+                        format!("claim {index}"),
+                        Uuid::new_v4(),
+                        latch_protocol::EvidenceStatus::Passed,
+                        "kernel observed",
+                    ),
+                });
+            }
+            push(EventPayload::AssistantMessageCompleted {
+                text: format!("answer {index}"),
+                tool_calls: vec![],
+                reasoning_content: None,
+            });
+        }
+
+        // A one-shot rebuild is the reference.
+        let reference = build_episodes(&events);
+
+        // Extending the index in chunks must match a fresh rebuild of the same
+        // prefix at every step, including the open (unsealed) trailing segment.
+        let mut builder = EpisodeBuilder::default();
+        let mut consumed = 0usize;
+        for chunk in events.chunks(7) {
+            for event in chunk {
+                builder.push(event);
+            }
+            consumed += chunk.len();
+            let mut incremental = builder.closed.clone();
+            if let Some(open) = builder.snapshot() {
+                incremental.push(open);
+            }
+            assert_eq!(
+                incremental,
+                build_episodes(&events[..consumed]),
+                "incremental index diverged after {consumed} events"
+            );
+        }
+        builder.finish();
+        assert_eq!(
+            builder.closed, reference,
+            "final index equals a full rebuild"
+        );
+        assert!(reference.len() > 10, "the fixture produces real episodes");
+
+        // The engine's cached index must agree with a cold rebuild over the
+        // same durable log, including the selected episode summaries.
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(Path::new("/episodes")).unwrap();
+        let config = ContextConfig {
+            max_request_tokens: Some(8_000),
+            recent_tokens: 200,
+            reserve_tokens: 0,
+            output_reserve_tokens: 0,
+        };
+        let incremental = ContinuityEngine::new(store.clone(), config.clone());
+        let state = TaskState::default();
+        let budget = incremental.default_budget(64_000, 0);
+        for chunk in events.chunks(23) {
+            for event in chunk {
+                store.append(sid, event.payload.clone()).unwrap();
+            }
+            incremental
+                .materialize(
+                    sid,
+                    &state,
+                    None,
+                    &EvidenceLedger::default(),
+                    &crate::state::FailureManager::new(3),
+                    "system".into(),
+                    &budget,
+                )
+                .unwrap();
+        }
+        let warm = incremental
+            .materialize(
+                sid,
+                &state,
+                None,
+                &EvidenceLedger::default(),
+                &crate::state::FailureManager::new(3),
+                "system".into(),
+                &budget,
+            )
+            .unwrap();
+        let cold = ContinuityEngine::new(store.clone(), config)
+            .materialize(
+                sid,
+                &state,
+                None,
+                &EvidenceLedger::default(),
+                &crate::state::FailureManager::new(3),
+                "system".into(),
+                &budget,
+            )
+            .unwrap();
+        assert_eq!(warm.recent, cold.recent, "working set is deterministic");
+        assert_eq!(
+            warm.stats.recent_start_sequence,
+            cold.stats.recent_start_sequence
+        );
+        assert_eq!(warm.stats.episodes, cold.stats.episodes);
+        assert_eq!(
+            warm.episodes, cold.episodes,
+            "incremental and cold indexes select the same episodes"
+        );
+    }
+
+    #[test]
+    fn long_history_turns_index_only_the_delta() {
+        use crate::state::EvidenceLedger;
+        use crate::state::FailureManager;
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(Path::new("/long")).unwrap();
+        for index in 0..5_000 {
+            store
+                .append(
+                    sid,
+                    EventPayload::UserMessage {
+                        text: format!("turn {index}"),
+                    },
+                )
+                .unwrap();
+            store
+                .append(
+                    sid,
+                    EventPayload::AssistantMessageCompleted {
+                        text: format!("reply {index}"),
+                        tool_calls: vec![],
+                        reasoning_content: None,
+                    },
+                )
+                .unwrap();
+        }
+        let config = ContextConfig {
+            max_request_tokens: Some(8_000),
+            recent_tokens: 400,
+            reserve_tokens: 0,
+            output_reserve_tokens: 0,
+        };
+        let engine = ContinuityEngine::new(store.clone(), config.clone());
+        let budget = engine.default_budget(128_000, 0);
+        let mut state = TaskStateManager::default();
+        state.update(crate::state::StateUpdate {
+            add_constraints: vec!["keep the API stable".into()],
+            add_decisions: vec!["index incrementally".into()],
+            ..Default::default()
+        });
+        let materialize = |engine: &ContinuityEngine| {
+            engine
+                .materialize(
+                    sid,
+                    state.state(),
+                    None,
+                    &EvidenceLedger::default(),
+                    &FailureManager::new(3),
+                    "system".into(),
+                    &budget,
+                )
+                .unwrap()
+        };
+        // Cold start builds the archival index once, from the full log.
+        let cold = materialize(&engine);
+        let cold_scanned = store.scanned_events();
+        assert!(cold_scanned >= 10_000, "cold index scanned {cold_scanned}");
+        assert!(cold.canonical.contains("keep the API stable"));
+        assert!(cold.canonical.contains("index incrementally"));
+
+        // A new turn must read only the bounded recent tail and the newly
+        // archived delta, not the 10k-event history.
+        store.reset_scanned_events();
+        store
+            .append(
+                sid,
+                EventPayload::UserMessage {
+                    text: "one more turn".into(),
+                },
+            )
+            .unwrap();
+        let warm = materialize(&engine);
+        let scanned = store.scanned_events();
+        assert!(
+            scanned < 2_000,
+            "a new turn scanned {scanned} of {} durable events",
+            store.last_sequence(sid).unwrap()
+        );
+        assert!(warm.stats.recent_tokens > 0);
+        assert!(warm.canonical.contains("keep the API stable"));
+        assert!(warm.canonical.contains("index incrementally"));
+
+        // Resume equivalence: a fresh engine over the same durable log
+        // reconstructs the same working set and archival selection.
+        let resumed = ContinuityEngine::new(store.clone(), config);
+        let resumed_ctx = materialize(&resumed);
+        assert_eq!(resumed_ctx.recent, warm.recent);
+        assert_eq!(
+            resumed_ctx.stats.recent_start_sequence,
+            warm.stats.recent_start_sequence
+        );
+        assert_eq!(resumed_ctx.episodes, warm.episodes);
+    }
+
+    #[test]
+    fn compact_resets_working_memory_and_ignores_legacy_epoch_boundaries() {
         let store = EventStore::open_memory().unwrap();
         let sid = store.create_session(Path::new("/boundary")).unwrap();
         for i in 0..4 {
@@ -1579,16 +2046,19 @@ mod tests {
                 },
             )
             .unwrap();
+        // Legacy ContextEpochStarted events from older builds must not move the
+        // working-memory reset point; the retained tail is recomputed from the
+        // log and the budget.
         store
             .append(
                 sid,
                 EventPayload::ContextEpochStarted {
-                    from_sequence: first_after.sequence,
-                    reason: "test rollover".into(),
+                    from_sequence: 1,
+                    reason: "legacy rollover".into(),
                 },
             )
             .unwrap();
-        store
+        let tail = store
             .append(
                 sid,
                 EventPayload::UserMessage {
@@ -1598,33 +2068,35 @@ mod tests {
             .unwrap();
 
         let engine = ContinuityEngine::new(store.clone(), ContextConfig::default());
-        // Reference: the historical index scan, expressed as a first sequence.
-        let events = store.events(sid).unwrap();
-        let mut expected = 1u64;
-        for (index, event) in events.iter().enumerate() {
-            match &event.payload {
-                EventPayload::ManualCompact { .. } => expected = index as u64 + 2,
-                EventPayload::ContextEpochStarted { from_sequence, .. } => {
-                    expected = *from_sequence;
-                }
-                _ => {}
-            }
-        }
-        assert_eq!(engine.active_start_sequence(sid).unwrap(), expected);
         assert_eq!(
-            engine.active_start_sequence(sid).unwrap(),
-            first_after.sequence,
-            "the last boundary wins"
+            engine.compact_start_sequence(sid).unwrap(),
+            first_after.sequence
         );
-
-        // The split loads reconstruct the same active tail as a full slice.
-        let active = store.events_after(sid, expected - 1).unwrap();
-        assert_eq!(
-            active,
-            events[(expected as usize - 1)..].to_vec(),
-            "incremental active tail equals the full-history slice"
+        let context = engine
+            .materialize(
+                sid,
+                &TaskState::default(),
+                None,
+                &EvidenceLedger::default(),
+                &crate::state::FailureManager::new(3),
+                "system".into(),
+                &budget(100_000, 60_000),
+            )
+            .unwrap();
+        assert!(
+            context
+                .recent
+                .iter()
+                .all(|event| event.sequence >= first_after.sequence),
+            "working memory never reaches behind an explicit compact"
         );
-        let pre = store.events_before(sid, expected).unwrap();
-        assert_eq!(pre.len() as u64 + active.len() as u64, events.len() as u64);
+        assert!(
+            context
+                .recent
+                .iter()
+                .any(|event| event.id == first_after.id)
+        );
+        assert!(context.recent.iter().any(|event| event.id == tail.id));
+        assert_eq!(context.stats.recent_start_sequence, first_after.sequence);
     }
 }

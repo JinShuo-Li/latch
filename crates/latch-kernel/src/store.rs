@@ -13,6 +13,10 @@ pub struct EventStore {
     /// assert that a persistence failure is not silently downgraded.
     #[cfg(test)]
     fail_appends: Arc<std::sync::atomic::AtomicBool>,
+    /// Test-only accounting of how many event rows were deserialized, so
+    /// stress tests can prove incremental paths do not rescan history.
+    #[cfg(test)]
+    scanned: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Lightweight row for session discovery. Transcript bodies are intentionally
@@ -46,6 +50,8 @@ impl EventStore {
             connection: Arc::new(Mutex::new(connection)),
             #[cfg(test)]
             fail_appends: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            #[cfg(test)]
+            scanned: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
         store.migrate()?;
         Ok(store)
@@ -56,6 +62,8 @@ impl EventStore {
             connection: Arc::new(Mutex::new(Connection::open_in_memory()?)),
             #[cfg(test)]
             fail_appends: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            #[cfg(test)]
+            scanned: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
         store.migrate()?;
         Ok(store)
@@ -235,6 +243,16 @@ impl EventStore {
         Ok(lines)
     }
 
+    #[cfg(test)]
+    pub(crate) fn reset_scanned_events(&self) {
+        self.scanned.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scanned_events(&self) -> usize {
+        self.scanned.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Test-only fault injection: every append fails until disabled.
     #[cfg(test)]
     pub(crate) fn fail_appends(&self, fail: bool) {
@@ -327,6 +345,36 @@ impl EventStore {
         )
     }
 
+    /// The newest `limit` events in sequence order. Bounds per-turn recent
+    /// working-memory loads by the working set instead of history size.
+    pub fn events_tail(&self, session_id: Uuid, limit: usize) -> Result<Vec<Event>> {
+        self.events_query(
+            session_id,
+            "SELECT sequence,id,parent_id,timestamp,payload FROM (                 SELECT sequence,id,parent_id,timestamp,payload FROM events                  WHERE session_id=?1 ORDER BY sequence DESC LIMIT ?2             ) ORDER BY sequence",
+            &[&session_id.to_string(), &(limit as i64)],
+        )
+    }
+
+    /// Events strictly after `after_sequence` and strictly before
+    /// `before_sequence`, in sequence order. Bounded ranges keep incremental
+    /// indexing to the delta.
+    pub fn events_between(
+        &self,
+        session_id: Uuid,
+        after_sequence: u64,
+        before_sequence: u64,
+    ) -> Result<Vec<Event>> {
+        self.events_query(
+            session_id,
+            "SELECT sequence,id,parent_id,timestamp,payload FROM events              WHERE session_id=?1 AND sequence > ?2 AND sequence < ?3 ORDER BY sequence",
+            &[
+                &session_id.to_string(),
+                &after_sequence,
+                &before_sequence,
+            ],
+        )
+    }
+
     /// Events strictly before `before_sequence`, in sequence order. Used to load
     /// the rolled-over history an epoch no longer keeps in its recent tail.
     pub fn events_before(&self, session_id: Uuid, before_sequence: u64) -> Result<Vec<Event>> {
@@ -405,18 +453,23 @@ impl EventStore {
                 row.get::<_, String>(4)?,
             ))
         })?;
-        rows.map(|r| {
-            let (sequence, id, parent, timestamp, payload) = r?;
-            Ok(Event {
-                id: Uuid::parse_str(&id)?,
-                session_id,
-                sequence,
-                timestamp: timestamp.parse()?,
-                parent_id: parent.map(|v| Uuid::parse_str(&v)).transpose()?,
-                payload: serde_json::from_str(&payload)?,
+        let events: Vec<Event> = rows
+            .map(|r| {
+                let (sequence, id, parent, timestamp, payload) = r?;
+                Ok(Event {
+                    id: Uuid::parse_str(&id)?,
+                    session_id,
+                    sequence,
+                    timestamp: timestamp.parse()?,
+                    parent_id: parent.map(|v| Uuid::parse_str(&v)).transpose()?,
+                    payload: serde_json::from_str(&payload)?,
+                })
             })
-        })
-        .collect()
+            .collect::<Result<_>>()?;
+        #[cfg(test)]
+        self.scanned
+            .fetch_add(events.len(), std::sync::atomic::Ordering::Relaxed);
+        Ok(events)
     }
 
     pub fn search_events(&self, session_id: Uuid, query: &str, limit: usize) -> Result<Vec<Event>> {

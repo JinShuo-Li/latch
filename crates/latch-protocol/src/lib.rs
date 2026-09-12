@@ -612,6 +612,20 @@ pub struct ContextStats {
     pub recent_tokens: usize,
     /// Recalled original events plus the scored episode index.
     pub recall_tokens: usize,
+    /// Estimated tokens of the archival episode index alone. This is a subset
+    /// of `recall_tokens` and is never added to the total separately; it lets
+    /// an observer distinguish archival metadata from recalled originals.
+    #[serde(default)]
+    pub episode_tokens: usize,
+    /// First durable sequence retained in recent working memory; 0 when
+    /// working memory is empty. An advancing value explains when and where the
+    /// recent window moved under budget pressure.
+    #[serde(default)]
+    pub recent_start_sequence: u64,
+    /// Tokens that left recent working memory since the previous
+    /// materialization, explaining a drop in `recent_tokens`.
+    #[serde(default)]
+    pub recent_evicted_tokens: usize,
     /// Tool schemas actually sent with this request.
     pub tools_tokens: usize,
     /// Extension-provided context sources.

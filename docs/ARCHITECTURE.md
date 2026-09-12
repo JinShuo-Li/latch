@@ -185,38 +185,45 @@ alternating; it also marks the system block as an ephemeral cache breakpoint
 (an adapter-only control), while OpenAI-compatible endpoints rely on automatic
 prefix caching.
 
-### Append-only context epochs
+### Gradual working-memory decay and incremental episodes
 
-The recent transcript is append-only within an epoch. When an epoch reaches
-`recent_tokens`, one deterministic rollover drops whole old conversation units
-until the newest tail fits within half the budget and records a durable
-`ContextEpochStarted { from_sequence }` boundary. Rollover never splits a
-tool transaction, never deletes raw events, and the epoch start is
-reconstructed from the durable sequence on resume; `/compact` remains an
-explicit, separate reset. Rolled-over material stays retrievable through
-recall and the episode index built from all pre-epoch events.
+Recent verbatim working memory is the largest suffix of whole conversation
+units that fits `recent_tokens` after the last `/compact`. Budget pressure
+evicts only the oldest units needed to fit, so the window decays gradually
+instead of collapsing to a smaller size at a threshold; tool transactions stay
+atomic and an oversized unit is kept whole. The retained tail is a pure
+function of the durable log and the configured budget, so resume reconstructs
+exactly the same working set; `/compact` is the only explicit reset. Legacy
+`ContextEpochStarted` events are preserved for history but no longer drive the
+retained start.
+
+The archival episode index is built incrementally. The engine caches closed
+episodes and the open trailing segment with a sequence watermark; each turn
+consumes only the newly archived delta. A session change or a budget increase
+that moves the archive backwards triggers a deterministic rebuild from the raw
+log. Nothing is deleted, summarized away, or lost: evicted units stay in the
+event log, are reachable through FTS recall, and remain visible through the
+episode index. `ContextStats` distinguishes `episode_tokens` (archival
+metadata, a subset of `recall_tokens`) and records `recent_start_sequence` and
+`recent_evicted_tokens` so changes are explainable from durable events.
 
 ### Incremental history access
 
 Every raw event is retained in full; only *how* history is queried is
 incremental. `EventStore` exposes narrow, indexed reads used by the hot
-paths: `last_sequence` for watermarks, `events_after`/`events_before` for
-bounded ranges, `events_of_kinds` for targeted replay (approvals, failed tool
-lineages, change ownership, process starts), and `latest_event_of_kinds` for
-epoch/compact boundaries. `search_events` retrieves FTS-matched rows directly
-instead of loading and filtering the whole transcript, preserving the original
-FTS limit order before the bookkeeping-kind exclusion.
+paths: `last_sequence` for watermarks, `events_after`/`events_before`/
+`events_between` for bounded ranges, `events_tail` for bounded recent loads,
+`events_of_kinds` for targeted replay (approvals, failed tool lineages, change
+ownership, process starts), and `latest_event_of_kinds` for compact
+boundaries. `search_events` retrieves FTS-matched rows directly instead of
+loading and filtering the whole transcript, preserving the original FTS limit
+order before the bookkeeping-kind exclusion.
 
 Live supervision keeps sequence cursors, so each turn feeds only newly
-appended events to the progress supervisor and the live sink. Continuity loads
-the rolled-over prefix and the active epoch tail as separate bounded reads;
-`durable_events` comes from the row count rather than a full deserialize.
-Episode summaries still span all history by design, so rolled-over material
-remains model-visible through the episode index and recall. Segmenting
-episodes or summarizing old events to save work is intentionally not done:
-continuity guarantees win over query volume. Store APIs and continuity
-materialization are covered by equivalence tests asserting the incremental
-results match the previous full-scan semantics.
+appended events to the progress supervisor and the live sink. Equivalence and
+stress tests assert that incremental episode indexing equals a full rebuild at
+every prefix and that a new turn over a large history reads only the working
+set and the new delta.
 
 ## Durable transitions fail closed
 
