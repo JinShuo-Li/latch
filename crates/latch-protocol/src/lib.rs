@@ -219,6 +219,76 @@ pub struct ToolResult {
     pub artifact_id: Option<String>,
 }
 
+/// Durable lifecycle state for a child Latch session. `Interrupted` keeps the
+/// child reusable; only `Closed` permanently shuts its worker down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatus {
+    Starting,
+    Running,
+    Completed,
+    Interrupted,
+    Failed,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMessageKind {
+    Information,
+    FollowUp,
+}
+
+/// Stable identity and topology metadata for one independently persisted
+/// child session. The agent id is its session id by design.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentIdentity {
+    pub agent_id: Uuid,
+    pub root_session_id: Uuid,
+    pub parent_session_id: Uuid,
+    pub task_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    pub depth: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentMessage {
+    pub message_id: Uuid,
+    pub kind: AgentMessageKind,
+    pub text: String,
+}
+
+/// A semantic evidence reference in a child report. It deliberately omits the
+/// kernel's internal evidence/event ids and never becomes evidence in another
+/// session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentEvidenceRef {
+    pub claim: String,
+    pub status: EvidenceStatus,
+    pub detail: String,
+}
+
+/// Compact terminal output from one child turn. The full child transcript
+/// remains available in its own session and is never copied into its parent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentReport {
+    pub report_id: Uuid,
+    pub agent_id: Uuid,
+    pub task_name: String,
+    pub status: AgentStatus,
+    pub completion: CompletionState,
+    pub summary: String,
+    #[serde(default)]
+    pub findings: Vec<String>,
+    #[serde(default)]
+    pub touched_files: Vec<String>,
+    #[serde(default)]
+    pub evidence: Vec<AgentEvidenceRef>,
+    #[serde(default)]
+    pub unresolved_questions: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Usage {
     /// Total prompt tokens as reported by the provider. For OpenAI/DeepSeek
@@ -299,6 +369,40 @@ pub enum KernelContextKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum EventPayload {
+    /// First event in a child session. Session creation and this durable edge
+    /// commit in one store transaction.
+    AgentSpawned {
+        identity: AgentIdentity,
+        delegation_brief: String,
+    },
+    AgentMessageQueued {
+        message: AgentMessage,
+    },
+    /// A queued parent message accepted by the child loop at a safe model
+    /// boundary. This single event is both the resume receipt and the
+    /// provider-visible user turn.
+    AgentMessageReceived {
+        message: AgentMessage,
+    },
+    AgentStatusChanged {
+        status: AgentStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    AgentReportCreated {
+        report: AgentReport,
+    },
+    AgentInterruptRequested,
+    AgentInterrupted {
+        reason: String,
+    },
+    AgentCloseRequested,
+    AgentClosed,
+    /// The only agent-graph event rendered into a parent's model context. It
+    /// is appended by the parent loop at a safe model boundary.
+    AgentNotificationDelivered {
+        report: AgentReport,
+    },
     UserMessage {
         text: String,
     },
