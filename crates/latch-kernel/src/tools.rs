@@ -2,6 +2,7 @@ use crate::config::PermissionConfig;
 use crate::safety;
 use crate::sandbox::{CapabilitySet, SandboxProfile, SandboxRunner};
 use crate::store::EventStore;
+use crate::tokens::TokenEstimator;
 use anyhow::{Context, Result, anyhow, bail};
 use latch_protocol::{
     ChangeOwner, EventPayload, FileVersion, Mode, PermissionMode, Safety, ToolCall, ToolResult,
@@ -167,8 +168,12 @@ const DRIFT_MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 /// `read_file` defaults to a bounded window with continuation. Files are never
 /// silently injected whole into context; explicit limits may be larger than the
 /// default but stay bounded per call.
-const READ_DEFAULT_LINES: usize = 2_000;
+const READ_DEFAULT_LINES: usize = 400;
 const READ_MAX_LINES: usize = 20_000;
+/// Secondary token cap for one read window. A 400-line window is already small,
+/// but dense code can still be large; whole lines are trimmed until the
+/// selection fits, and the continuation offset keeps the rest reachable.
+const READ_MAX_TOKENS: usize = 8_000;
 /// `search` returns a bounded page with an offset continuation.
 const SEARCH_DEFAULT_RESULTS: usize = 50;
 const SEARCH_MAX_RESULTS: usize = 500;
@@ -518,7 +523,7 @@ impl ToolExecutor {
         vec![
             def(
                 "read_file",
-                "Read a bounded window of a UTF-8 workspace file and return its version hash. Defaults to the first 2000 lines; pass offset (1-based line) and/or limit, or tail, to read another window. The result reports the line range and the offset for continuation, so large files are never injected whole.",
+                "Read a bounded window of a UTF-8 workspace file and return its version hash. Defaults to the first 400 lines; pass offset (1-based line) and/or limit, or tail, to read another window. The result reports the line range and the offset for continuation, so large files are never injected whole.",
                 json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based first line to return"},"limit":{"type":"integer","description":"maximum lines to return"},"tail":{"type":"integer","description":"return the last N lines instead of a head window"}}}),
             ),
             def(
@@ -705,22 +710,22 @@ impl ToolExecutor {
             },
         )?;
         let text = String::from_utf8(bytes).context("file is not UTF-8")?;
-        let window = LineWindow::from_args(
-            call,
-            text.lines().count(),
-            READ_DEFAULT_LINES,
-            READ_MAX_LINES,
-        )?;
+        let total = text.lines().count();
+        let mut window = LineWindow::from_args(call, total, READ_DEFAULT_LINES, READ_MAX_LINES)?;
+        let estimator = TokenEstimator::generic();
+        let token_bounded = window.token_bound(&text, READ_MAX_TOKENS, &estimator);
         let selected = window.slice(&text);
         let mut out = format!("hash: {}\n", version.content_hash);
-        out.push_str(&format!(
-            "[{}: {}]\n",
-            version.path,
-            window.describe(text.lines().count())
-        ));
+        out.push_str(&format!("[{}: {}]\n", version.path, window.describe(total)));
         out.push_str(&selected);
-        if let Some(offset) = window.continue_offset(text.lines().count()) {
-            out.push_str(&format!("\n[continue with offset={offset}]"));
+        if let Some(offset) = window.continue_offset(total) {
+            if token_bounded {
+                out.push_str(&format!(
+                    "\n[token-bounded window; continue with offset={offset}]"
+                ));
+            } else {
+                out.push_str(&format!("\n[continue with offset={offset}]"));
+            }
         }
         Ok((out, None))
     }
@@ -1655,6 +1660,33 @@ impl LineWindow {
         let start = offset.min(total);
         let end = start.saturating_add(limit).min(total);
         Ok(Self { start, end })
+    }
+
+    /// Trims the window to whole lines that fit `max_tokens`, returning true
+    /// when lines were dropped. The continuation offset then points at the
+    /// first dropped line.
+    fn token_bound(&mut self, text: &str, max_tokens: usize, estimator: &TokenEstimator) -> bool {
+        let lines: Vec<&str> = text
+            .lines()
+            .skip(self.start)
+            .take(self.end.saturating_sub(self.start))
+            .collect();
+        let mut used = 0usize;
+        let mut keep = 0usize;
+        for (index, line) in lines.iter().enumerate() {
+            let cost = estimator.estimate(line).saturating_add(1);
+            if index > 0 && used + cost > max_tokens {
+                break;
+            }
+            used += cost;
+            keep = index + 1;
+        }
+        if keep < lines.len() {
+            self.end = self.start + keep;
+            true
+        } else {
+            false
+        }
     }
 
     fn slice(self, text: &str) -> String {
@@ -2925,12 +2957,62 @@ mod tests {
             .await;
         assert!(!result.is_error, "{}", result.output);
         assert!(
-            result.output.contains("lines 1-2000 of 2500"),
+            result.output.contains("lines 1-400 of 2500"),
             "{}",
             result.output
         );
-        assert!(result.output.contains("[continue with offset=2001]"));
-        assert!(!result.output.contains("line 2001"));
+        assert!(
+            result.output.contains("[continue with offset=401]"),
+            "{}",
+            result.output
+        );
+        assert!(!result.output.contains("line 401"));
+
+        // Pagination still works and a dense small window is not token-bounded.
+        let next = e
+            .execute(
+                &call(
+                    "read_file",
+                    json!({"path":"big.txt","offset":401,"limit":50}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            next.output.contains("lines 401-450 of 2500"),
+            "{}",
+            next.output
+        );
+        assert!(next.output.contains("line 401"), "{}", next.output);
+        assert!(!next.output.contains("token-bounded"));
+
+        // A dense file whose selected lines exceed the token cap is trimmed by
+        // whole lines and keeps the continuation offset honest.
+        let dense = (1..=400)
+            .map(|line| format!("dense {line} {}", "z".repeat(400)))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        std::fs::write(d.path().join("dense.txt"), dense).unwrap();
+        let bounded = e
+            .execute(
+                &call("read_file", json!({"path":"dense.txt"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            bounded.output.contains("token-bounded window"),
+            "{}",
+            bounded.output
+        );
+        assert!(
+            bounded.output.contains("continue with offset="),
+            "{}",
+            bounded.output
+        );
+        assert!(bounded.output.contains("of 400]"), "{}", bounded.output);
     }
 
     #[tokio::test]
