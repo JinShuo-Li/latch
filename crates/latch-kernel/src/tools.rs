@@ -145,6 +145,35 @@ impl ToolExecutor {
             search_runtime: Arc::new(std::sync::RwLock::new(search_runtime)),
         })
     }
+    /// Creates a session-scoped executor for a child agent while retaining the
+    /// root workspace coordinator. Policy locks are shared as a live capability
+    /// ceiling; mutation/observation/ownership state is shared so concurrent
+    /// agents cannot race the guarded workspace invariants. Process handles and
+    /// one-shot grants remain isolated per child.
+    pub fn for_child(&self, session_id: Uuid) -> Result<Self> {
+        let artifacts = self.artifacts.parent().map_or_else(
+            || self.artifacts.join(session_id.to_string()),
+            |root| root.join(session_id.to_string()),
+        );
+        std::fs::create_dir_all(&artifacts)?;
+        Ok(Self {
+            workspace: self.workspace.clone(),
+            artifacts,
+            store: self.store.clone(),
+            session_id,
+            policy: self.policy.clone(),
+            observations: self.observations.clone(),
+            self_authored: self.self_authored.clone(),
+            ledger: self.ledger.clone(),
+            mutation_lock: self.mutation_lock.clone(),
+            read_slots: self.read_slots.clone(),
+            restored: self.restored.clone(),
+            processes: Arc::new(Mutex::new(HashMap::new())),
+            grants: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            sandbox: self.sandbox.clone(),
+            search_runtime: self.search_runtime.clone(),
+        })
+    }
     /// Actionable message when the `rg` runtime dependency is unavailable;
     /// `None` means the search tool can run.
     pub fn search_runtime_error(&self) -> Option<String> {
@@ -269,6 +298,10 @@ impl ToolExecutor {
     }
     pub fn set_mode(&self, mode: Mode) {
         self.policy.set_mode(mode);
+    }
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        self.policy.mode()
     }
     pub fn set_safety(&self, safety: Safety) {
         self.policy.set_safety(safety);
