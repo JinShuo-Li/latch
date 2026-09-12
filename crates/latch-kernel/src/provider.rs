@@ -46,6 +46,13 @@ pub fn openai_usage(usage: &Value) -> Option<Usage> {
 pub trait ModelProvider: Send + Sync {
     fn name(&self) -> &str;
     fn model(&self) -> &str;
+    /// Builds an equivalent transport bound to another durable session when
+    /// the provider carries session-scoped wire metadata. Stateless/custom
+    /// providers may return `None`, in which case the supervisor safely shares
+    /// the existing implementation.
+    fn for_session(&self, _session_id: Uuid) -> Option<Arc<dyn ModelProvider>> {
+        None
+    }
     async fn stream(
         &self,
         request: ModelRequest,
@@ -133,6 +140,16 @@ impl ModelProvider for OpenAiProvider {
     }
     fn model(&self) -> &str {
         &self.model
+    }
+    fn for_session(&self, session_id: Uuid) -> Option<Arc<dyn ModelProvider>> {
+        Some(Arc::new(Self {
+            client: self.client.clone(),
+            base_url: self.base_url.clone(),
+            api_key: self.api_key.clone(),
+            model: self.model.clone(),
+            session_id: Some(session_id),
+            reasoning: self.reasoning,
+        }))
     }
     async fn stream(
         &self,
@@ -261,6 +278,14 @@ impl ModelProvider for AnthropicProvider {
     }
     fn model(&self) -> &str {
         &self.model
+    }
+    fn for_session(&self, _session_id: Uuid) -> Option<Arc<dyn ModelProvider>> {
+        Some(Arc::new(Self {
+            client: self.client.clone(),
+            base_url: self.base_url.clone(),
+            api_key: self.api_key.clone(),
+            model: self.model.clone(),
+        }))
     }
     async fn stream(
         &self,
