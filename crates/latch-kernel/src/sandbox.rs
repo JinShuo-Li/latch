@@ -632,23 +632,26 @@ mod tests {
 
     #[tokio::test]
     async fn network_namespace_is_isolated_by_default_and_shared_when_granted() {
+        // Compare interface names, not per-interface byte counters: host
+        // counters advance between reads and made this test flaky on shared CI.
+        fn interface_names(output: &str) -> Vec<String> {
+            output
+                .lines()
+                .filter_map(|line| line.split_once(':').map(|(name, _)| name.trim().to_owned()))
+                .filter(|name| !name.is_empty() && name != "lo")
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        }
+
         let Some(runner) = runner() else {
             return;
         };
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
-        let host: Vec<String> = std::fs::read_to_string("/proc/net/dev")
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_owned)
-            .collect();
-        let host_interfaces = host
-            .iter()
-            .filter(|line| line.contains(':'))
-            .filter(|line| !line.trim_start().starts_with("lo:"))
-            .count();
-        if host_interfaces == 0 {
+        let host = interface_names(&std::fs::read_to_string("/proc/net/dev").unwrap_or_default());
+        if host.is_empty() {
             return; // host has no non-loopback interface; nothing to compare
         }
 
@@ -658,13 +661,10 @@ mod tests {
             "cat /proc/net/dev",
         )
         .await;
-        let isolated: Vec<String> = String::from_utf8_lossy(&isolated.stdout)
-            .lines()
-            .map(str::to_owned)
-            .collect();
-        assert_ne!(
-            isolated, host,
-            "default sandbox must not share the host netns"
+        let isolated = interface_names(&String::from_utf8_lossy(&isolated.stdout));
+        assert!(
+            isolated.is_empty(),
+            "default sandbox must not share the host netns, saw {isolated:?}"
         );
 
         let mut capabilities = CapabilitySet::new();
@@ -672,10 +672,7 @@ mod tests {
         capabilities.insert(Capability::NetworkAccess);
         let profile = SandboxProfile::new(dir.path().to_path_buf(), home, capabilities);
         let shared = run(&runner, &profile, "cat /proc/net/dev").await;
-        let shared: Vec<String> = String::from_utf8_lossy(&shared.stdout)
-            .lines()
-            .map(str::to_owned)
-            .collect();
+        let shared = interface_names(&String::from_utf8_lossy(&shared.stdout));
         assert_eq!(shared, host, "granted network must share the host netns");
     }
 }
