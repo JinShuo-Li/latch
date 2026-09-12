@@ -1,0 +1,30 @@
+• Spawned `audit-locks`                                                                                                                                     │deepseek-flash                             
+  └ child session running                                                                                                                                   │WORK · 0 turns · 0s                        
+                                                                                                                                                            │on main                                    
+✓ Child agent `audit-locks` completed                                                                                                                       │                                           
+  └ Found two unsynchronized locks.                                                                                                                         │CONTEXT                                    
+                                                                                                                                                            │                                           
+                                                                                                                                                            │TASK                                       
+                                                                                                                                                            │                                           
+                                                                                                                                                            │CHILDREN                                   
+                                                                                                                                                            │0 active · 1 known                         
+                                                                                                                                                            │✓ audit-locks [explorer]                   
+                                                                                                                                                            │  Found two unsynchronized locks.          
+                                                                                                                                                            │                                           
+                                                                                                                                                            │USAGE                                      
+                                                                                                                                                            │                                           
+                                                                                                                                                            │CHANGES                                    
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                            │                                           
+                                                                                                                                                                                                        
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Ask Latch…                                                                                                                                                                                           │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│ WORK · deepseek-flash · main · std · ask                                                                                                                                                       ready │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+enter send  ctrl+j newline  ctrl+p commands                                                                                                                                                             
+/tmp/latch-ui                                                                                                                                                                               latch v0.2.0

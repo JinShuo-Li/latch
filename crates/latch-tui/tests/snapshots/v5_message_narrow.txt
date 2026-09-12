@@ -1,0 +1,16 @@
+                                                
+› Please wrap this long user message across     
+  several narrow visual rows and keep the       
+  surface intact.                               
+                                                
+                                                
+                                                
+                                                
+╭──────────────────────────────────────────────╮
+│ Ask Latch…                                   │
+│                                              │
+│                                              │
+│ WORK · deepseek-flash · main · std     ready │
+╰──────────────────────────────────────────────╯
+ctrl+p commands                                 
+/tmp/latch-ui                       latch v0.2.0

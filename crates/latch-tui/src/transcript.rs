@@ -9,6 +9,7 @@
 
 use super::markdown::{MARKDOWN_DEFAULT_WIDTH, render_markdown_at};
 use super::*;
+use crate::presentation::AgentOperation;
 
 /// Left gutter reserved for user (`› `) and assistant (`• `) message rows.
 const MESSAGE_GUTTER: usize = 2;
@@ -98,6 +99,19 @@ pub(super) fn cell_lines(
         Cell::Diff {
             status, document, ..
         } => diff_cell_lines(*status, document),
+        Cell::AgentTask {
+            operation,
+            task_name,
+            status,
+            summary,
+            diagnostic,
+            ..
+        } => agent_task_lines(*operation, task_name, *status, summary, diagnostic),
+        Cell::AgentReport {
+            task_name,
+            status,
+            summary,
+        } => agent_report_lines(task_name, *status, summary),
         Cell::Notice { text } => text
             .split('\n')
             .map(|segment| Line::styled(format!("· {segment}"), notice_style()))
@@ -253,8 +267,79 @@ pub(super) fn validation_lines(
         lines.extend(
             output
                 .lines()
-                .map(|line| Line::styled(format!("    {line}"), Style::default().fg(Color::Red))),
+                .map(|line| Line::styled(format!("    {line}"), crate::theme::palette().failure())),
         );
+    }
+    lines
+}
+
+/// One compact root-visible child-agent coordination row. The child
+/// transcript never reaches the root; only delegation and result summaries do.
+pub(super) fn agent_task_lines(
+    operation: AgentOperation,
+    task_name: &str,
+    status: CellStatus,
+    summary: &str,
+    diagnostic: &str,
+) -> Vec<Line<'static>> {
+    let palette = crate::theme::palette();
+    let (marker, marker_style) = match status {
+        CellStatus::Failed => ("✗", palette.failure()),
+        _ => ("•", palette.accent()),
+    };
+    let title = match operation {
+        AgentOperation::Spawn => format!("Spawned `{task_name}`"),
+        AgentOperation::Send => format!("Sent input to `{task_name}`"),
+        AgentOperation::Continue => format!("Resumed `{task_name}`"),
+        AgentOperation::Wait => "Waited for agents".to_owned(),
+        AgentOperation::List => "Listed child agents".to_owned(),
+        AgentOperation::Interrupt => format!("Interrupted `{task_name}`"),
+        AgentOperation::Close => format!("Closed `{task_name}`"),
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{marker} "), marker_style),
+        Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
+    ])];
+    if !summary.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  └ ", notice_style()),
+            Span::styled(summary.to_owned(), notice_style()),
+        ]));
+    }
+    if !diagnostic.is_empty() {
+        lines.push(Line::styled(format!("    {diagnostic}"), palette.failure()));
+    }
+    lines
+}
+
+/// One compact completion/report row for a child turn.
+pub(super) fn agent_report_lines(
+    task_name: &str,
+    status: latch_protocol::AgentStatus,
+    summary: &str,
+) -> Vec<Line<'static>> {
+    let palette = crate::theme::palette();
+    let (marker, marker_style) = match status {
+        latch_protocol::AgentStatus::Completed => ("✓", palette.success()),
+        latch_protocol::AgentStatus::Failed => ("✗", palette.failure()),
+        latch_protocol::AgentStatus::Interrupted => ("•", palette.attention()),
+        _ => ("•", palette.accent()),
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{marker} "), marker_style),
+        Span::styled(
+            format!(
+                "Child agent `{task_name}` {}",
+                crate::agents::status_label(&status)
+            ),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ])];
+    if !summary.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  └ ", notice_style()),
+            Span::raw(summary.to_owned()),
+        ]));
     }
     lines
 }

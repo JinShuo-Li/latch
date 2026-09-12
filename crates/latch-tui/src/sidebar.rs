@@ -6,9 +6,11 @@
 //! assistant prose. The same reducer is used live and on resume replay, so the
 //! two cannot drift.
 
+use crate::agents::SubagentModel;
 use chrono::{DateTime, Duration, Utc};
 use latch_protocol::{
-    CompletionState, ContextStats, Event, EventPayload, EvidenceStatus, Mode, TaskState, Usage,
+    AgentStatus, CompletionState, ContextStats, Event, EventPayload, EvidenceStatus, Mode,
+    TaskState, Usage,
 };
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -275,6 +277,8 @@ pub struct SidebarModel {
     last_usage: Option<Usage>,
     changes: ChangeView,
     stall: Option<StagnationView>,
+    /// Root-visible child sessions; the child transcripts stay separate.
+    subagents: SubagentModel,
 }
 
 impl SidebarModel {
@@ -292,6 +296,7 @@ impl SidebarModel {
             last_usage: None,
             changes: ChangeView::default(),
             stall: None,
+            subagents: SubagentModel::default(),
         }
     }
 
@@ -343,6 +348,11 @@ impl SidebarModel {
     #[must_use]
     pub fn changes(&self) -> &ChangeView {
         &self.changes
+    }
+
+    #[must_use]
+    pub fn subagents(&self) -> &SubagentModel {
+        &self.subagents
     }
 
     #[must_use]
@@ -429,6 +439,7 @@ impl SidebarModel {
     }
 
     pub fn apply_event(&mut self, event: &Event) {
+        self.subagents.apply_event(event);
         if self.started_at.is_none() {
             self.started_at = Some(event.timestamp);
         }
@@ -559,6 +570,7 @@ impl SidebarModel {
                 self.task_lines(width, true),
                 self.task_lines(width, false),
             ]),
+            (!self.subagents.is_empty()).then(|| vec![self.children_lines(width)]),
             Some(vec![
                 self.usage_lines(width, true),
                 self.usage_lines(width, false),
@@ -600,6 +612,52 @@ impl SidebarModel {
         }
         if !sub.is_empty() {
             lines.push(Line::styled(fit(&sub.join(" · "), width), dim()));
+        }
+        lines
+    }
+
+    /// Compact child-agent section: name, status, and the latest bounded
+    /// semantic summary. Empty when no child sessions are known.
+    fn children_lines(&self, width: usize) -> Vec<Line<'static>> {
+        if self.subagents.is_empty() {
+            return Vec::new();
+        }
+        let mut lines = vec![section_title("CHILDREN")];
+        let active = self.subagents.active_count();
+        let total = self.subagents.agents().len();
+        lines.push(Line::styled(
+            fit(&format!("{active} active · {total} known"), width),
+            if active > 0 { cyan() } else { dim() },
+        ));
+        for agent in self.subagents.agents().iter().take(6) {
+            let (dot, dot_style) = match agent.status {
+                AgentStatus::Running | AgentStatus::Starting => ("●", cyan()),
+                AgentStatus::Completed => ("✓", green()),
+                AgentStatus::Failed => ("✗", red()),
+                AgentStatus::Interrupted => ("●", yellow()),
+                AgentStatus::Closed => ("○", dim()),
+            };
+            let name = agent.agent_type.as_deref().map_or_else(
+                || agent.task_name.clone(),
+                |kind| format!("{} [{kind}]", agent.task_name),
+            );
+            lines.push(Line::from(vec![
+                Span::styled(dot.to_owned(), dot_style),
+                Span::raw(" "),
+                Span::raw(fit(&name, width.saturating_sub(2))),
+            ]));
+            if !agent.summary.is_empty() {
+                lines.push(Line::styled(
+                    format!("  {}", fit(&agent.summary, width.saturating_sub(2))),
+                    dim(),
+                ));
+            }
+        }
+        if self.subagents.agents().len() > 6 {
+            lines.push(Line::styled(
+                format!("  … and {} more", self.subagents.agents().len() - 6),
+                dim(),
+            ));
         }
         lines
     }

@@ -1248,14 +1248,57 @@ fn safety_and_permissions_selectors_change_the_policy() {
 }
 
 #[test]
-fn permission_modal_owns_the_keyboard_and_emits_real_decisions() {
+fn approval_surface_owns_the_keyboard_and_emits_real_decisions() {
     let mut app = App::default();
     let request_id = uuid::Uuid::new_v4();
     app.output(Output::Event(Box::new(permission_event(request_id, None))));
     assert!(app.permission.is_some());
     let text = render_to_text(&mut app, 100, 30);
-    assert!(text.contains("Permission required"), "{text}");
-    assert!(text.contains("approve"), "{text}");
+    assert!(text.contains("Approval needed"), "{text}");
+    assert!(text.contains("Approve"), "{text}");
+    assert!(text.contains("Deny"), "{text}");
+    assert!(
+        text.contains("sudo make install"),
+        "readable argument preview: {text}"
+    );
+    assert!(
+        text.contains("capability: external_filesystem_write"),
+        "{text}"
+    );
+
+    // The composer stays on screen above the bottom action surface.
+    assert!(text.contains("Ask Latch…"), "{text}");
+
+    // Ctrl+O opens the full request without resolving; Esc returns to the
+    // pending surface rather than denying.
+    app.on_key(key(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    let expanded = app.permission.as_ref().expect("still pending");
+    assert!(expanded.expanded);
+    let full = render_to_text(&mut app, 100, 30);
+    assert!(full.contains("full request"), "{full}");
+    assert!(full.contains("sudo make install"), "{full}");
+    app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        app.permission
+            .as_ref()
+            .is_some_and(|prompt| !prompt.expanded),
+        "Esc collapses the inspector before denying"
+    );
+
+    // Down selects Deny; Enter resolves the highlighted option.
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    let denied = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(
+        denied,
+        Some(Action::Permission {
+            approved: false,
+            request_id: id
+        }) if id == request_id
+    ));
+    assert!(app.permission.is_none());
+
+    // `y` is a direct approve shortcut.
+    app.output(Output::Event(Box::new(permission_event(request_id, None))));
     let approved = app.on_key(key(KeyCode::Char('y'), KeyModifiers::NONE));
     assert!(matches!(
         approved,
@@ -1264,8 +1307,8 @@ fn permission_modal_owns_the_keyboard_and_emits_real_decisions() {
             request_id: id
         }) if id == request_id
     ));
-    assert!(app.permission.is_none());
 
+    // Esc denies without an extra confirmation.
     app.output(Output::Event(Box::new(permission_event(request_id, None))));
     let denied = app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
     assert!(matches!(
@@ -1287,6 +1330,80 @@ fn permission_modal_owns_the_keyboard_and_emits_real_decisions() {
         app.on_key(key(KeyCode::Char('x'), KeyModifiers::NONE))
             .is_none()
             || app.input.text().is_empty()
+    );
+}
+
+#[test]
+fn approval_surface_keeps_the_full_request_available() {
+    let mut app = App::default();
+    let request_id = uuid::Uuid::new_v4();
+    let long = "x".repeat(600);
+    app.output(Output::Event(Box::new(latch_protocol::Event {
+        id: uuid::Uuid::new_v4(),
+        session_id: uuid::Uuid::nil(),
+        sequence: 1,
+        timestamp: chrono::Utc::now(),
+        parent_id: None,
+        payload: latch_protocol::EventPayload::PermissionRequested {
+            request_id,
+            tool: "shell".into(),
+            arguments: serde_json::json!({"command": format!("echo {long}")}),
+            reason: "needs network access".into(),
+            capabilities: vec!["network".into()],
+        },
+    })));
+    let prompt = app.permission.as_ref().expect("pending");
+    assert_eq!(
+        prompt.arguments.len(),
+        serde_json::to_string_pretty(&serde_json::json!({"command": format!("echo {long}")}))
+            .unwrap()
+            .len(),
+        "the full raw request is retained, not truncated"
+    );
+    let preview = render_to_text(&mut app, 80, 30);
+    assert!(preview.contains("full request: Ctrl+O"), "{preview}");
+    app.on_key(key(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    let full = render_to_text(&mut app, 80, 30);
+    assert!(
+        full.contains(&long[..40]),
+        "Ctrl+O shows the request body, not only the preview"
+    );
+}
+
+#[test]
+fn permission_modes_render_distinct_labels_and_disable_during_a_turn() {
+    let mut app = App::default();
+    for ch in "/permissions".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    let text = render_to_text(&mut app, 100, 30);
+    assert!(text.contains("Ask for approval"), "{text}");
+    assert!(text.contains("Approve for me"), "{text}");
+    assert!(text.contains("Auto approve"), "{text}");
+    assert!(
+        text.contains("(current)"),
+        "the active mode is marked: {text}"
+    );
+    assert!(
+        text.contains("Latch asks before operations"),
+        "descriptions distinguish the modes: {text}"
+    );
+
+    // During a live turn the CLI refuses policy changes, so the surface says
+    // so instead of hiding the choices.
+    app.busy = true;
+    app.selector = Some(PolicySelector {
+        kind: SelectorKind::Permissions,
+        selected: SelectorKind::Permissions.current(&app),
+    });
+    let busy = render_to_text(&mut app, 100, 30);
+    assert!(busy.contains("unavailable: active turn"), "{busy}");
+    assert!(busy.contains("finish or cancel"), "{busy}");
+    assert!(
+        app.on_key(key(KeyCode::Enter, KeyModifiers::NONE))
+            .is_none(),
+        "a disabled choice cannot be applied"
     );
 }
 
@@ -1935,6 +2052,161 @@ fn snapshot_single_line_composer() {
 }
 
 #[test]
+fn snapshot_user_and_assistant_message_hierarchy() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    for payload in [
+        latch_protocol::EventPayload::UserMessage {
+            text: "Fix the failing test without changing the public API.".into(),
+        },
+        latch_protocol::EventPayload::AssistantMessageCompleted {
+            text: "I'll inspect the failing case and patch it.\n\n- read the parser\n- keep the API stable".into(),
+            tool_calls: vec![],
+            reasoning_content: None,
+        },
+    ] {
+        app.output(Output::Event(Box::new(presentation_event(payload))));
+    }
+    assert_snapshot(
+        "v5_message_hierarchy.txt",
+        &render_to_text(&mut app, 100, 24),
+    );
+}
+
+#[test]
+fn snapshot_narrow_user_message_keeps_the_band() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::UserMessage {
+            text: "Please wrap this long user message across several narrow visual rows and keep the surface intact."
+                .into(),
+        },
+    ))));
+    assert_snapshot("v5_message_narrow.txt", &render_to_text(&mut app, 48, 16));
+}
+
+#[test]
+fn snapshot_approval_surface_above_composer() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    let request_id = uuid::Uuid::new_v4();
+    app.output(Output::Event(Box::new(permission_event(request_id, None))));
+    assert_snapshot(
+        "v5_approval_surface.txt",
+        &render_to_text(&mut app, 100, 30),
+    );
+}
+
+#[test]
+fn snapshot_approval_request_inspector() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    let request_id = uuid::Uuid::new_v4();
+    app.output(Output::Event(Box::new(permission_event(request_id, None))));
+    app.on_key(key(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert_snapshot(
+        "v5_approval_inspector.txt",
+        &render_to_text(&mut app, 100, 30),
+    );
+}
+
+#[test]
+fn snapshot_permission_mode_selector() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    for ch in "/permissions".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert_snapshot(
+        "v5_permission_modes.txt",
+        &render_to_text(&mut app, 100, 30),
+    );
+}
+
+#[test]
+fn snapshot_active_running_status() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.busy = true;
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ToolRequested {
+            call: latch_protocol::ToolCall {
+                id: "t1".into(),
+                name: "shell".into(),
+                arguments: serde_json::json!({"command": "cargo test --workspace"}),
+            },
+        },
+    ))));
+    assert_snapshot("v5_active_status.txt", &render_to_text(&mut app, 100, 20));
+}
+
+#[test]
+fn snapshot_subagent_status_and_sidebar() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ToolRequested {
+            call: latch_protocol::ToolCall {
+                id: "s1".into(),
+                name: "spawn_agent".into(),
+                arguments: serde_json::json!({"task_name":"audit-locks","message":"Review the lock ordering in the cache."}),
+            },
+        },
+    ))));
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ToolCompleted {
+            result: latch_protocol::ToolResult {
+                call_id: "s1".into(),
+                name: "spawn_agent".into(),
+                output: "{\"agent_id\":\"00000000-0000-0000-0000-000000000001\",\"task_name\":\"audit-locks\",\"agent_type\":\"explorer\",\"status\":\"running\"}"
+                    .into(),
+                is_error: false,
+                artifact_id: None,
+            },
+        },
+    ))));
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::AgentNotificationDelivered {
+            report: latch_protocol::AgentReport {
+                report_id: uuid::Uuid::new_v4(),
+                agent_id: uuid::Uuid::from_u128(1),
+                task_name: "audit-locks".into(),
+                status: latch_protocol::AgentStatus::Completed,
+                completion: latch_protocol::CompletionState::InProgress,
+                summary: "Found two unsynchronized locks.\nDetails omitted".into(),
+                findings: vec![],
+                touched_files: vec!["src/locks.rs".into()],
+                evidence: vec![],
+                unresolved_questions: vec![],
+            },
+        },
+    ))));
+    assert_snapshot("v5_subagent_status.txt", &render_to_text(&mut app, 200, 30));
+}
+
+#[test]
+fn snapshot_workspace_diff_cell() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ToolRequested {
+            call: latch_protocol::ToolCall {
+                id: "d1".into(),
+                name: "git_diff".into(),
+                arguments: serde_json::json!({}),
+            },
+        },
+    ))));
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ToolCompleted {
+            result: latch_protocol::ToolResult {
+                call_id: "d1".into(),
+                name: "git_diff".into(),
+                output: "diff --git a/src/calc.rs b/src/calc.rs\nindex 1111111..2222222 100644\n--- a/src/calc.rs\n+++ b/src/calc.rs\n@@ -1,5 +1,5 @@\n pub fn add(a: i32, b: i32) -> i32 {\n     let base = 10;\n-    base + a + b\n+    base + a - b\n }\n"
+                    .into(),
+                is_error: false,
+                artifact_id: None,
+            },
+        },
+    ))));
+    assert_snapshot("v5_workspace_diff.txt", &render_to_text(&mut app, 100, 24));
+}
+
+#[test]
 fn snapshot_multiline_composer() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
     app.input
@@ -2118,13 +2390,74 @@ fn resize_while_editing_preserves_the_buffer_and_cursor() {
 }
 
 #[test]
-fn working_and_interrupted_states_are_visible_in_the_composer() {
+fn working_and_interrupted_states_are_visible_above_the_composer() {
     let mut working = app_with_header("deepseek-flash", "/tmp/latch-ui");
     working.busy = true;
-    assert!(render_to_text(&mut working, 100, 20).contains("working"));
+    let text = render_to_text(&mut working, 100, 20);
+    assert!(text.contains("• Working"), "{text}");
     let mut interrupted = app_with_header("deepseek-flash", "/tmp/latch-ui");
     interrupted.interrupted = true;
-    assert!(render_to_text(&mut interrupted, 100, 20).contains("interrupted"));
+    let text = render_to_text(&mut interrupted, 100, 20);
+    assert!(text.contains("Interrupted"), "{text}");
+}
+
+#[test]
+fn active_status_row_reports_semantic_running_state() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.busy = true;
+    let payload = latch_protocol::EventPayload::ToolRequested {
+        call: latch_protocol::ToolCall {
+            id: "t1".into(),
+            name: "shell".into(),
+            arguments: serde_json::json!({"command": "cargo test --workspace"}),
+        },
+    };
+    app.output(Output::Event(Box::new(presentation_event(payload))));
+    let text = render_to_text(&mut app, 100, 20);
+    assert!(text.contains("Running tests"), "{text}");
+    assert!(text.contains("cargo test --workspace"), "{text}");
+
+    // An approval request takes precedence and names the actual wait state.
+    app.output(Output::Event(Box::new(permission_event(
+        uuid::Uuid::new_v4(),
+        None,
+    ))));
+    let text = render_to_text(&mut app, 100, 20);
+    assert!(text.contains("Waiting for approval"), "{text}");
+}
+
+#[test]
+fn child_agent_activity_reaches_the_status_row_and_sidebar() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ToolRequested {
+            call: latch_protocol::ToolCall {
+                id: "s1".into(),
+                name: "spawn_agent".into(),
+                arguments: serde_json::json!({"task_name":"audit-locks","message":"Review locking"}),
+            },
+        },
+    ))));
+    let text = render_to_text(&mut app, 100, 20);
+    assert!(text.contains("Spawned `audit-locks`"), "{text}");
+    assert!(text.contains("child `audit-locks` starting"), "{text}");
+
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ToolCompleted {
+            result: latch_protocol::ToolResult {
+                call_id: "s1".into(),
+                name: "spawn_agent".into(),
+                output: "{\"agent_id\":\"00000000-0000-0000-0000-000000000001\",\"task_name\":\"audit-locks\",\"agent_type\":\"explorer\",\"status\":\"running\"}"
+                    .into(),
+                is_error: false,
+                artifact_id: None,
+            },
+        },
+    ))));
+    let text = render_to_text(&mut app, 200, 30);
+    assert!(text.contains("child `audit-locks` running"), "{text}");
+    assert!(text.contains("CHILDREN"), "sidebar lists the child: {text}");
+    assert!(text.contains("audit-locks"), "{text}");
 }
 
 #[test]

@@ -91,16 +91,143 @@ pub(super) fn muted_style() -> Style {
     crate::theme::palette().muted()
 }
 
-/// Composer status word and color, derived from real run state.
-pub(super) fn composer_status(app: &App) -> (String, Style) {
-    if app.permission.is_some() {
-        ("approval needed".into(), yellow())
-    } else if app.busy {
-        ("● working".into(), focused_accent())
+/// Idle composer status. Active work is reported by the transient status row
+/// directly above the composer, so the meta line stays quiet while running.
+pub(super) fn composer_status(app: &App) -> Option<(String, Style)> {
+    if app.permission.is_some() || app.busy {
+        None
     } else if app.interrupted {
-        ("interrupted".into(), yellow())
+        Some(("interrupted".into(), yellow()))
     } else {
-        ("ready".into(), muted_style())
+        Some(("ready".into(), muted_style()))
+    }
+}
+
+/// Compact transient activity row shown directly above the composer. Derived
+/// only from authoritative state: running presentation cells, streaming,
+/// pending approval, and root-visible child agents. Completed work stays in
+/// the transcript; transient work stays here.
+pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
+    let palette = crate::theme::palette();
+    let mut label: Option<String> = None;
+    let mut detail: Option<String> = None;
+    if app.permission.is_some() {
+        label = Some("Waiting for approval".into());
+    } else if let Some(cell) = app
+        .presentation
+        .cells()
+        .iter()
+        .rev()
+        .find(|cell| cell_is_running(cell))
+    {
+        let (text, subject) = running_cell_status(cell);
+        label = Some(text);
+        detail = subject;
+    } else if app.streaming.is_some() {
+        label = Some("Writing response".into());
+    } else if app.busy {
+        label = Some("Working".into());
+    } else if app.interrupted {
+        label = Some("Interrupted".into());
+    }
+
+    // Child agents run in their own sessions and can outlive the root turn.
+    let children = app.sidebar.subagents().active();
+    if !children.is_empty() {
+        let child_text = if children.len() == 1 {
+            format!("child `{}` {}", children[0].task_name, children[0].label())
+        } else {
+            format!("{} child agents running", children.len())
+        };
+        detail = Some(match detail.filter(|detail| !detail.is_empty()) {
+            Some(existing) => format!("{existing} · {child_text}"),
+            None => child_text,
+        });
+        if label.is_none() {
+            label = Some(if children.len() == 1 {
+                "Child agent running".into()
+            } else {
+                "Child agents running".into()
+            });
+        }
+    }
+
+    let label = label?;
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled("• ", palette.accent()),
+        Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
+    ];
+    if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
+        spans.push(Span::styled(" · ", notice_style()));
+        spans.push(Span::styled(detail, notice_style()));
+    }
+    Some(Line::from(spans))
+}
+
+fn cell_is_running(cell: &Cell) -> bool {
+    match cell {
+        Cell::Exploration { operations } => operations
+            .iter()
+            .any(|operation| operation.status == CellStatus::Running),
+        Cell::Command { status, .. }
+        | Cell::Validation { status, .. }
+        | Cell::Diff { status, .. }
+        | Cell::AgentTask { status, .. } => *status == CellStatus::Running,
+        Cell::Patch { files } => files.iter().any(|file| file.status == CellStatus::Running),
+        Cell::User { .. }
+        | Cell::Assistant { .. }
+        | Cell::AgentReport { .. }
+        | Cell::Notice { .. }
+        | Cell::Error { .. } => false,
+    }
+}
+
+fn running_cell_status(cell: &Cell) -> (String, Option<String>) {
+    match cell {
+        Cell::Exploration { .. } => ("Exploring".into(), None),
+        Cell::Command { command, .. } => (
+            command_activity(command).into(),
+            Some(sidebar::fit(command, 60)),
+        ),
+        Cell::Validation { requirement, .. } => (
+            "Validating".into(),
+            (!requirement.is_empty()).then(|| sidebar::fit(requirement, 60)),
+        ),
+        Cell::Patch { .. } => ("Editing".into(), None),
+        Cell::Diff { .. } => ("Reading workspace diff".into(), None),
+        Cell::AgentTask { .. } => ("Waiting for child agents".into(), None),
+        Cell::User { .. }
+        | Cell::Assistant { .. }
+        | Cell::AgentReport { .. }
+        | Cell::Notice { .. }
+        | Cell::Error { .. } => ("Working".into(), None),
+    }
+}
+
+/// Semantic label for a running command, keyed only on the real command
+/// string; unrecognized commands stay generic.
+fn command_activity(command: &str) -> &'static str {
+    let lower = command.to_ascii_lowercase();
+    if lower.contains("cargo test")
+        || lower.contains("cargo nextest")
+        || lower.contains("pytest")
+        || lower.contains("npm test")
+    {
+        "Running tests"
+    } else if lower.contains("cargo build")
+        || lower.contains("cargo check")
+        || lower.contains("cargo clippy")
+        || lower.contains("cargo fmt")
+        || lower.contains("cargo run")
+    {
+        "Building"
+    } else if lower.starts_with("rg ") || lower.contains("grep") || lower.contains("find ") {
+        "Searching"
+    } else if lower.starts_with("git ") {
+        "Inspecting git"
+    } else {
+        "Running command"
     }
 }
 
@@ -119,34 +246,282 @@ pub(super) fn hint_spans(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
     spans
 }
 
-/// A restrained selector for `/safety` and `/permissions`, rendered above the
-/// palette slot with the same visual language as the command palette.
-pub(super) fn draw_policy_selector(
+/// A restrained selector and approval surface, rendered directly above the
+/// composer in the same visual language: a neutral full-width surface, a clear
+/// title, concise context, numbered options, and keyboard hints. Long approval
+/// arguments can be inspected in full with Ctrl+O instead of being silently
+/// truncated.
+pub(super) fn action_surface_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    if let Some(prompt) = &app.permission {
+        approval_surface_lines(prompt, width)
+    } else if let Some(selector) = app.selector {
+        selector_surface_lines(app, selector, width)
+    } else {
+        Vec::new()
+    }
+}
+
+/// One padded full-width row on a neutral action surface.
+fn surface_row(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let style = crate::theme::palette().surface();
+    let used: usize = spans.iter().map(|span| display_width(&span.content)).sum();
+    let mut spans = spans;
+    if used < width {
+        spans.push(Span::raw(" ".repeat(width - used)));
+    }
+    Line::from(spans).style(style)
+}
+
+fn surface_blank(width: usize) -> Line<'static> {
+    surface_row(Vec::new(), width)
+}
+
+fn surface_text(text: String, style: Style, width: usize, indent: usize) -> Line<'static> {
+    surface_row(
+        vec![Span::raw(" ".repeat(indent)), Span::styled(text, style)],
+        width,
+    )
+}
+
+fn approval_surface_lines(prompt: &PermissionPrompt, width: usize) -> Vec<Line<'static>> {
+    let palette = crate::theme::palette();
+    let inner = width.saturating_sub(4).max(1);
+    let mut lines = vec![surface_blank(width)];
+    lines.push(surface_text(
+        "Approval needed".into(),
+        palette.attention(),
+        width,
+        2,
+    ));
+    lines.push(surface_blank(width));
+    lines.push(surface_text(
+        prompt.tool.clone(),
+        Style::default().bold(),
+        width,
+        2,
+    ));
+
+    let (preview, truncated) = approval_preview_lines(&prompt.arguments, inner, 3);
+    for line in preview {
+        lines.push(surface_text(line, Style::default(), width, 2));
+    }
+    if truncated {
+        lines.push(surface_text(
+            "… full request: Ctrl+O".into(),
+            notice_style(),
+            width,
+            2,
+        ));
+    }
+    if !prompt.reason.trim().is_empty() {
+        lines.push(surface_blank(width));
+        for line in wrap_surface_text(&prompt.reason, inner, 2) {
+            lines.push(surface_text(
+                line,
+                notice_style().add_modifier(Modifier::ITALIC),
+                width,
+                2,
+            ));
+        }
+    }
+    if !prompt.capabilities.is_empty() {
+        let capability = format!("capability: {}", prompt.capabilities.join(", "));
+        for line in wrap_surface_text(&capability, inner, 2) {
+            lines.push(surface_text(line, palette.attention(), width, 2));
+        }
+    }
+    lines.push(surface_blank(width));
+    for (index, (label, description)) in [
+        ("Approve", "Run this operation once."),
+        ("Deny", "Skip it and tell the model what to do differently."),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let selected = index == prompt.selected;
+        let marker = if selected { "› " } else { "  " };
+        let label_style = if selected {
+            palette.selected()
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+        lines.push(surface_row(
+            vec![
+                Span::raw("  "),
+                Span::styled(marker.to_owned(), label_style),
+                Span::styled((*label).to_owned(), label_style),
+                Span::raw("  "),
+                Span::styled((*description).to_owned(), notice_style()),
+            ],
+            width,
+        ));
+    }
+    lines.push(surface_blank(width));
+    lines.push(surface_text(
+        "enter confirm · y approve · n deny · ctrl+o full request · esc deny".into(),
+        notice_style(),
+        width,
+        2,
+    ));
+    lines.push(surface_blank(width));
+    lines
+}
+
+/// Bounded, readable rendering of the raw approval arguments. A single
+/// `command` field is unwrapped to `$ command`; anything else stays JSON.
+fn approval_preview_lines(arguments: &str, width: usize, max_rows: usize) -> (Vec<String>, bool) {
+    let value: Option<serde_json::Value> = serde_json::from_str(arguments).ok();
+    let command = value
+        .as_ref()
+        .and_then(|value| value.get("command"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let source = command.map_or_else(|| arguments.to_owned(), |command| format!("$ {command}"));
+    let mut rows: Vec<String> = Vec::new();
+    let mut truncated = false;
+    for logical in source.lines() {
+        for row in wrap_surface_text(logical, width, 0) {
+            if rows.len() == max_rows {
+                truncated = true;
+                break;
+            }
+            rows.push(row);
+        }
+        if truncated {
+            break;
+        }
+    }
+    (rows, truncated)
+}
+
+fn wrap_surface_text(text: &str, width: usize, indent: usize) -> Vec<String> {
+    let width = width.saturating_sub(indent).max(1);
+    let chars: Vec<char> = text.chars().collect();
+    let points = composer::wrap_points(text, width);
+    let mut rows = Vec::new();
+    for (index, start) in points.iter().enumerate() {
+        let end = points.get(index + 1).copied().unwrap_or(chars.len());
+        rows.push(chars[*start..end].iter().collect());
+    }
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows
+}
+
+fn selector_surface_lines(app: &App, selector: PolicySelector, width: usize) -> Vec<Line<'static>> {
+    let palette = crate::theme::palette();
+    let mut lines = vec![surface_blank(width)];
+    lines.push(surface_text(
+        selector.kind.title().into(),
+        Style::default().add_modifier(Modifier::BOLD),
+        width,
+        2,
+    ));
+    lines.push(surface_blank(width));
+    let disabled = selector.kind.disabled_reason(app);
+    let current = selector.kind.current(app);
+    for (index, option) in selector.kind.options().iter().enumerate() {
+        let selected = index == selector.selected;
+        let marker = if selected { "› " } else { "  " };
+        let label_style = if disabled.is_some() {
+            notice_style()
+        } else if selected {
+            palette.selected()
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+        let mut label = option.label.to_owned();
+        if index == current {
+            label.push_str(" (current)");
+        }
+        if let Some(reason) = disabled {
+            label.push_str(&format!(" (unavailable: {reason})"));
+        }
+        lines.push(surface_row(
+            vec![
+                Span::raw("  "),
+                Span::styled(marker.to_owned(), label_style),
+                Span::styled(label, label_style),
+                Span::raw("  "),
+                Span::styled(option.description.to_owned(), notice_style()),
+            ],
+            width,
+        ));
+    }
+    lines.push(surface_blank(width));
+    if let Some(reason) = disabled {
+        lines.push(surface_text(
+            format!("finish or cancel the {reason} before changing policy"),
+            notice_style(),
+            width,
+            2,
+        ));
+    } else {
+        lines.push(surface_text(
+            "↑↓ select · enter apply · esc cancel".into(),
+            notice_style(),
+            width,
+            2,
+        ));
+    }
+    lines.push(surface_blank(width));
+    lines
+}
+
+/// Full-request inspector for an approval (Ctrl+O). This is deliberately a
+/// separate full-width view: the human must be able to read everything being
+/// approved, not only the bounded preview on the action surface.
+pub(super) fn draw_request_overlay(
     frame: &mut ratatui::Frame<'_>,
-    app: &App,
+    app: &mut App,
     area: ratatui::layout::Rect,
 ) {
-    let Some(selector) = app.selector else {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let Some(prompt) = app.permission.as_mut() else {
         return;
     };
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-    let mut rows = vec![Line::styled(
-        format!("  {}", selector.kind.title().to_lowercase()),
-        notice_style(),
-    )];
-    for (index, (label, _)) in selector.kind.options().iter().enumerate() {
-        let selected = index == selector.selected;
-        let style = if selected {
-            crate::theme::palette().selected()
-        } else {
-            Style::default()
-        };
-        let marker = if selected { "› " } else { "  " };
-        rows.push(Line::styled(format!("  {marker}{label}"), style));
-    }
-    frame.render_widget(Paragraph::new(rows), area);
+    let palette = crate::theme::palette();
+    let title = Line::from(vec![
+        Span::styled(" full request ", palette.accent()),
+        Span::raw(" "),
+        Span::styled(prompt.tool.clone(), Style::default().bold()),
+        Span::raw("  "),
+        Span::styled(
+            if prompt.capabilities.is_empty() {
+                String::new()
+            } else {
+                format!("capability: {}", prompt.capabilities.join(", "))
+            },
+            palette.attention(),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(title), rows[0]);
+    let body_lines: Vec<Line<'static>> = prompt
+        .arguments
+        .lines()
+        .map(|line| Line::raw(line.to_owned()))
+        .collect();
+    let body = Paragraph::new(body_lines).wrap(Wrap { trim: false });
+    let body_rows = body.line_count(rows[1].width);
+    let max_scroll = body_rows.saturating_sub(rows[1].height as usize);
+    prompt.scroll = prompt.scroll.min(max_scroll);
+    let offset = prompt.scroll.min(u16::MAX as usize) as u16;
+    frame.render_widget(body.scroll((offset, 0)), rows[1]);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            " ↑/↓ PgUp/PgDn Home/End scroll · Ctrl+O or Esc close · approval stays pending",
+            notice_style(),
+        )),
+        rows[2],
+    );
 }
 
 pub(super) fn draw_palette(
@@ -268,6 +643,11 @@ pub(super) fn draw_composer_hints(
     if area.height == 0 || area.width < 28 {
         return;
     }
+    // The approval surface owns the keyboard and carries its own hints; a
+    // contradictory `enter send` row directly beneath it would mislead.
+    if app.permission.is_some() {
+        return;
+    }
     let width = area.width as usize;
     // Secondary shortcuts are abbreviated before the row is clipped.
     let hints: &[(&str, &str)] = if width < 64 {
@@ -330,14 +710,16 @@ pub(super) fn composer_meta_line(app: &App, width: usize, sidebar_shown: bool) -
             .map(|(text, _)| 3 + display_width(text))
             .sum()
     };
-    let (status, status_style) = composer_status(app);
-    let status_width = display_width(&status);
+    let status = composer_status(app);
+    let status_width = status.as_ref().map_or(0, |(text, _)| display_width(text));
 
     // Longest left prefix that still leaves room for the status word, falling
     // back to a prefix without it, and finally to just the mode.
-    let with_status = (0..=fields.len())
-        .rev()
-        .find(|count| mode_width + field_width(*count) + 2 + status_width <= width);
+    let with_status = status.as_ref().and_then(|_| {
+        (0..=fields.len())
+            .rev()
+            .find(|count| mode_width + field_width(*count) + 2 + status_width <= width)
+    });
     let without_status = (0..=fields.len())
         .rev()
         .find(|count| mode_width + field_width(*count) <= width);
@@ -353,9 +735,10 @@ pub(super) fn composer_meta_line(app: &App, width: usize, sidebar_shown: bool) -
         spans.push(Span::styled(text.clone(), *style));
     }
     let left_width: usize = spans.iter().map(|span| display_width(&span.content)).sum();
-    if !include_status || left_width > width {
+    let Some((status, status_style)) = status.filter(|_| include_status && left_width <= width)
+    else {
         return Line::from(spans);
-    }
+    };
 
     // Prefer status + context + cost, then status + context, then status.
     let mut context_span = None;
@@ -636,7 +1019,12 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     app.palette.clamp(candidates.len());
 
     let overlay_open = app.diff_overlay.is_some();
-    let sidebar_shown = sidebar_visible(area.width, app.sidebar_override) && !overlay_open;
+    let request_open = app
+        .permission
+        .as_ref()
+        .is_some_and(|prompt| prompt.expanded);
+    let sidebar_shown =
+        sidebar_visible(area.width, app.sidebar_override) && !overlay_open && !request_open;
     let sidebar_cols = sidebar_width(area.width, sidebar_shown);
 
     let composer_inner = area.width.saturating_sub(4).max(1) as usize;
@@ -646,14 +1034,20 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     } else {
         0
     };
-    let selector_rows = if app.selector.is_some() { 4 } else { 0 };
+    // Action surfaces render at their natural height, bounded so the transcript
+    // above them always keeps most of the screen.
+    let action_lines = action_surface_lines(app, area.width as usize);
+    let action_rows = (action_lines.len() as u16).min(area.height / 2);
+    let status_line = active_status_line(app);
+    let status_rows = u16::from(status_line.is_some());
     let chrome = ComposerChrome::responsive(area.height, content_rows);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),
-            Constraint::Length(selector_rows),
+            Constraint::Length(action_rows),
             Constraint::Length(palette_rows),
+            Constraint::Length(status_rows),
             Constraint::Length(
                 chrome.spacer + chrome.top + chrome.body + chrome.gap + chrome.meta + chrome.rule,
             ),
@@ -662,13 +1056,16 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         ])
         .split(area);
     let transcript_area = chunks[0];
-    let selector_area = chunks[1];
+    let action_area = chunks[1];
     let palette_area = chunks[2];
-    let composer_area = chunks[3];
-    let hints_area = chunks[4];
-    let footer_area = chunks[5];
+    let status_area = chunks[3];
+    let composer_area = chunks[4];
+    let hints_area = chunks[5];
+    let footer_area = chunks[6];
 
-    if overlay_open {
+    if request_open {
+        draw_request_overlay(frame, app, transcript_area);
+    } else if overlay_open {
         draw_diff_overlay(frame, app, transcript_area);
     } else {
         let panes = Layout::default()
@@ -711,8 +1108,12 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             frame.render_widget(sidebar, sidebar_area);
         }
     }
-    draw_permission_modal(frame, app, transcript_area);
-    draw_policy_selector(frame, app, selector_area);
+    if !action_lines.is_empty() {
+        frame.render_widget(Paragraph::new(action_lines), action_area);
+    }
+    if let Some(status) = status_line {
+        frame.render_widget(Paragraph::new(status), status_area);
+    }
     draw_palette(frame, app, palette_area, &candidates);
     draw_composer(
         frame,
@@ -745,62 +1146,3 @@ pub(super) const WORDMARK_COLORS: [Color; 5] = [
     Color::Rgb(184, 164, 126),
     Color::Rgb(172, 146, 178),
 ];
-
-/// Centered approval prompt. Human approval is the only path that lets an
-/// `Ask` policy decision execute; the model never controls this surface.
-pub(super) fn draw_permission_modal(
-    frame: &mut ratatui::Frame<'_>,
-    app: &App,
-    area: ratatui::layout::Rect,
-) {
-    let Some(prompt) = &app.permission else {
-        return;
-    };
-    let width = area.width.saturating_sub(4).clamp(24, 84).min(area.width);
-    // Six content rows plus the top and bottom border.
-    let height = 8.min(area.height).max(3);
-    let rect = ratatui::layout::Rect {
-        x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    };
-    frame.render_widget(Clear, rect);
-    let inner = width.saturating_sub(2) as usize;
-    let lines = vec![
-        Line::styled(
-            "Permission required",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Line::from(vec![
-            Span::styled(format!("{} ", prompt.tool), Style::default().bold()),
-            Span::raw(crate::sidebar::fit(
-                &prompt.arguments,
-                inner.saturating_sub(prompt.tool.len() + 1),
-            )),
-        ]),
-        Line::styled(crate::sidebar::fit(&prompt.reason, inner), notice_style()),
-        Line::styled(
-            crate::sidebar::fit(
-                &format!("capability: {}", prompt.capabilities.join(", ")),
-                inner,
-            ),
-            Style::default().fg(Color::Yellow),
-        ),
-        Line::from(""),
-        Line::styled(
-            "[y] approve   [n] deny   [Ctrl+C] cancel",
-            Style::default().fg(Color::Cyan),
-        ),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow)),
-        ),
-        rect,
-    );
-}

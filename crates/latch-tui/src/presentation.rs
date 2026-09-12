@@ -4,8 +4,9 @@
 //! person. It deliberately contains no Ratatui types, so live events and a
 //! replayed event stream produce the same committed cells.
 
+use crate::agents::is_agent_control;
 use crate::diff::{DiffDocument, parse_unified_diff};
-use latch_protocol::{ChangeOwner, Event, EventPayload, ToolCall, ToolResult};
+use latch_protocol::{AgentStatus, ChangeOwner, Event, EventPayload, ToolCall, ToolResult};
 use serde_json::Value;
 
 const DEFAULT_OUTPUT_LINES: usize = 8;
@@ -16,6 +17,18 @@ pub enum CellStatus {
     Running,
     Passed,
     Failed,
+}
+
+/// Root-visible child-agent coordination operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentOperation {
+    Spawn,
+    Send,
+    Continue,
+    Wait,
+    List,
+    Interrupt,
+    Close,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +93,23 @@ pub enum Cell {
         status: CellStatus,
         document: DiffDocument,
     },
+    /// One root-visible child-agent coordination call. Compact by design: the
+    /// child transcript stays in its own session.
+    AgentTask {
+        call_id: String,
+        operation: AgentOperation,
+        task_name: String,
+        status: CellStatus,
+        summary: String,
+        diagnostic: String,
+        raw: String,
+    },
+    /// The single semantic report that crosses from a finished child turn.
+    AgentReport {
+        task_name: String,
+        status: AgentStatus,
+        summary: String,
+    },
     Notice {
         text: String,
     },
@@ -121,6 +151,15 @@ impl Cell {
                 .collect::<Vec<_>>()
                 .join("\n"),
             Self::Diff { document, .. } => document.raw.clone(),
+            Self::AgentTask { raw, .. } => raw.clone(),
+            Self::AgentReport {
+                task_name,
+                status,
+                summary,
+            } => format!(
+                "child agent {task_name} {}: {summary}",
+                agent_status_label(status)
+            ),
             Self::Notice { text } | Self::Error { text } => text.clone(),
         }
     }
@@ -215,16 +254,21 @@ impl PresentationModel {
             }
             // The only child-agent event that exists in root history: the
             // compact semantic report delivered at a safe model boundary. It
-            // renders as one quiet line; the child transcript stays in its own
-            // session.
+            // renders as one compact cell; the child transcript stays in its
+            // own session.
             EventPayload::AgentNotificationDelivered { report } => {
-                let summary = report.summary.lines().next().unwrap_or_default();
-                self.push_notice(format!(
-                    "Child agent `{}` {}: {}",
-                    report.task_name,
-                    agent_status_label(&report.status),
-                    summary
-                ));
+                let summary = report
+                    .summary
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
+                self.cells.push(Cell::AgentReport {
+                    task_name: report.task_name.clone(),
+                    status: report.status,
+                    summary,
+                });
             }
             _ => {}
         }
@@ -239,6 +283,24 @@ impl PresentationModel {
 
     fn begin_tool(&mut self, call: &ToolCall) {
         if is_hidden_tool(&call.name) {
+            return;
+        }
+        if let Some(operation) = agent_operation(&call.name) {
+            let task_name = string_arg(&call.arguments, "task_name")
+                .map(str::to_owned)
+                .or_else(|| {
+                    string_arg(&call.arguments, "agent_id").map(|id| id.chars().take(8).collect())
+                })
+                .unwrap_or_else(|| "child agent".to_owned());
+            self.cells.push(Cell::AgentTask {
+                call_id: call.id.clone(),
+                operation,
+                task_name,
+                status: CellStatus::Running,
+                summary: String::new(),
+                diagnostic: String::new(),
+                raw: format!("{} {}", call.name, call.arguments),
+            });
             return;
         }
         if call.name == "git_diff" {
@@ -336,6 +398,21 @@ impl PresentationModel {
         let bounded = bounded_output(&clean);
         for cell in self.cells.iter_mut().rev() {
             match cell {
+                Cell::AgentTask {
+                    call_id,
+                    status: cell_status,
+                    summary,
+                    diagnostic,
+                    ..
+                } if *call_id == result.call_id => {
+                    *cell_status = status;
+                    if result.is_error {
+                        *diagnostic = useful_error(&bounded);
+                    } else {
+                        *summary = agent_result_summary(&result.name, &bounded);
+                    }
+                    return;
+                }
                 Cell::Exploration { operations } => {
                     if let Some(op) = operations
                         .iter_mut()
@@ -509,6 +586,72 @@ impl PresentationModel {
 
 fn is_hidden_tool(name: &str) -> bool {
     matches!(name, "record_evidence" | "task_update" | "complete")
+}
+
+fn agent_operation(name: &str) -> Option<AgentOperation> {
+    if !is_agent_control(name) {
+        return None;
+    }
+    Some(match name {
+        "spawn_agent" => AgentOperation::Spawn,
+        "send_agent_message" => AgentOperation::Send,
+        "continue_agent" => AgentOperation::Continue,
+        "wait_agents" => AgentOperation::Wait,
+        "list_agents" => AgentOperation::List,
+        "interrupt_agent" => AgentOperation::Interrupt,
+        _ => AgentOperation::Close,
+    })
+}
+
+/// Compact result summary for an agent-control cell. Only structured fields
+/// that the kernel actually returned are used; anything else is a bounded
+/// first line.
+fn agent_result_summary(name: &str, output: &str) -> String {
+    let value = serde_json::from_str::<Value>(output).ok();
+    match name {
+        "spawn_agent" => value
+            .as_ref()
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str)
+            .map_or_else(
+                || first_line(output),
+                |status| format!("child session {status}"),
+            ),
+        "wait_agents" => {
+            let agents = value
+                .as_ref()
+                .and_then(|value| value.get("agents"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let running = agents
+                .iter()
+                .filter(|agent| {
+                    agent
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .is_some_and(|status| matches!(status, "starting" | "running"))
+                })
+                .count();
+            let finished = agents.len().saturating_sub(running);
+            if agents.is_empty() {
+                "no child agents".into()
+            } else {
+                format!("{running} running · {finished} finished")
+            }
+        }
+        "list_agents" => value.as_ref().and_then(Value::as_array).map_or_else(
+            || first_line(output),
+            |agents| format!("{} known", agents.len()),
+        ),
+        "close_agent" => "closed".into(),
+        "interrupt_agent" => "interrupted".into(),
+        _ => first_line(output),
+    }
+}
+
+fn first_line(text: &str) -> String {
+    text.lines().next().unwrap_or_default().trim().to_owned()
 }
 
 fn exploration_label(call: &ToolCall) -> Option<String> {
@@ -1366,7 +1509,7 @@ mod tests {
     }
 
     #[test]
-    fn delivered_child_report_renders_one_quiet_line() {
+    fn delivered_child_report_renders_one_compact_cell() {
         let mut model = PresentationModel::default();
         model.apply_event(&event(EventPayload::AgentNotificationDelivered {
             report: latch_protocol::AgentReport {
@@ -1382,12 +1525,60 @@ mod tests {
                 unresolved_questions: vec![],
             },
         }));
-        let [Cell::Notice { text }] = model.cells() else {
-            panic!("expected exactly one notice cell");
+        let [
+            Cell::AgentReport {
+                task_name,
+                status,
+                summary,
+            },
+        ] = model.cells()
+        else {
+            panic!("expected exactly one child-report cell");
         };
-        assert_eq!(
-            text,
-            "Child agent `audit-locks` completed: Found two unsynchronized locks."
+        assert_eq!(task_name, "audit-locks");
+        assert_eq!(*status, latch_protocol::AgentStatus::Completed);
+        assert_eq!(summary, "Found two unsynchronized locks.");
+        let rendered = super::super::render_cells_plain(model.cells(), false);
+        assert!(
+            rendered.contains("✓ Child agent `audit-locks` completed"),
+            "{rendered}"
         );
+        assert!(
+            rendered.contains("└ Found two unsynchronized locks."),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("Details omitted"),
+            "only one bounded line crosses"
+        );
+    }
+
+    #[test]
+    fn agent_control_calls_stay_compact_in_root_history() {
+        let model = PresentationModel::from_events(&[
+            request(
+                "s1",
+                "spawn_agent",
+                json!({"task_name":"audit-locks","message":"Review the lock ordering in the cache."}),
+            ),
+            result(
+                "s1",
+                "spawn_agent",
+                "{\"agent_id\":\"00000000-0000-0000-0000-000000000001\",\"task_name\":\"audit-locks\",\"agent_type\":null,\"status\":\"running\"}",
+                false,
+            ),
+            request("w1", "wait_agents", json!({"agent_ids":[]})),
+            result(
+                "w1",
+                "wait_agents",
+                "{\"agents\":[{\"agent_id\":\"00000000-0000-0000-0000-000000000001\",\"task_name\":\"audit-locks\",\"agent_type\":null,\"status\":\"completed\"}],\"reports_pending\":1}",
+                false,
+            ),
+        ]);
+        let rendered = super::super::render_cells_plain(model.cells(), false);
+        assert!(rendered.contains("• Spawned `audit-locks`"), "{rendered}");
+        assert!(rendered.contains("child session running"), "{rendered}");
+        assert!(rendered.contains("• Waited for agents"), "{rendered}");
+        assert!(rendered.contains("0 running · 1 finished"), "{rendered}");
     }
 }

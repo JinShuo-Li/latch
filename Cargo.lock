@@ -1198,6 +1198,7 @@ dependencies = [
  "futures",
  "latch-protocol",
  "ratatui",
+ "serde",
  "serde_json",
  "tokio",
  "unicode-segmentation",

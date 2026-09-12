@@ -1,0 +1,30 @@
+ full request  shell  capability: external_filesystem_write                                         
+{                                                                                                   
+  "command": "sudo make install"                                                                    
+}                                                                                                   
+ ↑/↓ PgUp/PgDn Home/End scroll · Ctrl+O or Esc close · approval stays pending                       
+                                                                                                    
+  Approval needed                                                                                   
+                                                                                                    
+  shell                                                                                             
+  $ sudo make install                                                                               
+                                                                                                    
+  outside-workspace write requires explicit approval                                                
+  capability: external_filesystem_write                                                             
+                                                                                                    
+  › Approve  Run this operation once.                                                               
+    Deny  Skip it and tell the model what to do differently.                                        
+                                                                                                    
+  enter confirm · y approve · n deny · ctrl+o full request · esc deny                               
+                                                                                                    
+  • Waiting for approval                                                                            
+                                                                                                    
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Ask Latch…                                                                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│ WORK · deepseek-flash · main · std · ask                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                    
+/tmp/latch-ui                                                                           latch v0.2.0

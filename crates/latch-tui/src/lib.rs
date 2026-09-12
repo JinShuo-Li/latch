@@ -31,11 +31,12 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use std::io::{self, Stdout, Write};
 use tokio::sync::mpsc;
 
+mod agents;
 mod composer;
 mod diff;
 mod presentation;
@@ -44,7 +45,9 @@ mod sidebar;
 use composer::display_width;
 pub use composer::{Composer, VisualRow};
 pub use diff::{DiffDocument, DiffFile, DiffHunk, DiffLine, DiffLineKind, parse_unified_diff};
-pub use presentation::{Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel};
+pub use presentation::{
+    AgentOperation, Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel,
+};
 pub use session_picker::{PickerSelection, SessionItem, SessionPreviewLine, run_session_picker};
 pub use sidebar::{Pricing, SidebarModel, SidebarSession};
 
@@ -343,11 +346,26 @@ struct App {
 pub struct PermissionPrompt {
     pub request_id: uuid::Uuid,
     pub tool: String,
+    /// Full argument payload, retained verbatim so the human can inspect
+    /// exactly what is being approved instead of a truncated preview.
     pub arguments: String,
     pub reason: String,
     /// Capability names the operation needs, shown so the human sees the
     /// actual requested boundary rather than only the tool name.
     pub capabilities: Vec<String>,
+    /// Highlighted option: 0 approves, 1 denies.
+    pub selected: usize,
+    /// Full-request inspection mode (`Ctrl+O`).
+    pub expanded: bool,
+    pub scroll: usize,
+}
+
+/// One enabled or disabled choice in a bottom action surface.
+#[derive(Debug, Clone)]
+pub(crate) struct ActionOption {
+    pub(crate) label: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) action: Action,
 }
 impl Default for App {
     fn default() -> Self {
@@ -436,12 +454,14 @@ impl App {
                         self.permission = Some(PermissionPrompt {
                             request_id: *request_id,
                             tool: tool.clone(),
-                            arguments: crate::sidebar::fit(
-                                &serde_json::to_string(arguments).unwrap_or_default(),
-                                160,
+                            arguments: serde_json::to_string_pretty(arguments).unwrap_or_else(
+                                |_| serde_json::to_string(arguments).unwrap_or_default(),
                             ),
                             reason: reason.clone(),
                             capabilities: capabilities.clone(),
+                            selected: 0,
+                            expanded: false,
+                            scroll: 0,
                         });
                     }
                     latch_protocol::EventPayload::PermissionResolved { request_id, .. }
@@ -657,14 +677,58 @@ impl App {
 
     /// Handles a key press. Returns an action for the session loop.
     fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
-        // A pending approval owns the keyboard: approve, deny, or cancel.
-        if let Some(request_id) = self.permission.as_ref().map(|prompt| prompt.request_id) {
-            let decision = match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(false),
-                _ => None,
+        // A pending approval owns the keyboard: select, approve, deny, inspect
+        // the full request, or cancel the turn.
+        if self.permission.is_some() {
+            let decision = {
+                let prompt = self.permission.as_mut().expect("checked above");
+                if prompt.expanded {
+                    match key.code {
+                        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            prompt.expanded = false;
+                            prompt.scroll = 0;
+                        }
+                        KeyCode::Esc => {
+                            prompt.expanded = false;
+                            prompt.scroll = 0;
+                        }
+                        KeyCode::Up => prompt.scroll = prompt.scroll.saturating_sub(1),
+                        KeyCode::Down => prompt.scroll = prompt.scroll.saturating_add(1),
+                        KeyCode::PageUp => prompt.scroll = prompt.scroll.saturating_sub(10),
+                        KeyCode::PageDown => prompt.scroll = prompt.scroll.saturating_add(10),
+                        KeyCode::Home => prompt.scroll = 0,
+                        KeyCode::End => prompt.scroll = usize::MAX,
+                        _ => {}
+                    }
+                    None
+                } else {
+                    match key.code {
+                        KeyCode::Up => {
+                            prompt.selected = 0;
+                            None
+                        }
+                        KeyCode::Down => {
+                            prompt.selected = 1;
+                            None
+                        }
+                        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            prompt.expanded = true;
+                            prompt.scroll = 0;
+                            None
+                        }
+                        KeyCode::Char('y') | KeyCode::Char('Y') => Some(true),
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(false),
+                        KeyCode::Enter => Some(prompt.selected == 0),
+                        _ => None,
+                    }
+                }
             };
             if let Some(approved) = decision {
+                let request_id = self
+                    .permission
+                    .as_ref()
+                    .map(|prompt| prompt.request_id)
+                    .expect("checked above");
                 self.permission = None;
                 return Some(Action::Permission {
                     request_id,
@@ -682,8 +746,9 @@ impl App {
         }
         if let Some(selector) = self.selector {
             let options = selector.kind.options();
+            let disabled = selector.kind.disabled_reason(self);
             match key.code {
-                KeyCode::Up => {
+                KeyCode::Up if disabled.is_none() => {
                     let selected = (selector.selected + options.len() - 1) % options.len();
                     self.selector = Some(PolicySelector {
                         selected,
@@ -691,7 +756,7 @@ impl App {
                     });
                     return None;
                 }
-                KeyCode::Down => {
+                KeyCode::Down if disabled.is_none() => {
                     let selected = (selector.selected + 1) % options.len();
                     self.selector = Some(PolicySelector {
                         selected,
@@ -699,11 +764,11 @@ impl App {
                     });
                     return None;
                 }
-                KeyCode::Enter => {
+                KeyCode::Enter if disabled.is_none() => {
                     self.selector = None;
                     return options
                         .get(selector.selected)
-                        .map(|(_, action)| action.clone());
+                        .map(|option| option.action.clone());
                 }
                 KeyCode::Esc => {
                     self.selector = None;
@@ -946,7 +1011,7 @@ impl App {
 }
 
 #[derive(Debug, Clone)]
-enum Action {
+pub(crate) enum Action {
     Submit(String),
     Cancel,
     Resume,
@@ -980,28 +1045,49 @@ impl SelectorKind {
         }
     }
 
-    fn options(self) -> Vec<(&'static str, Action)> {
+    fn options(self) -> Vec<ActionOption> {
         match self {
             Self::Safety => vec![
-                ("Strict", Action::SetSafety(Safety::Strict)),
-                ("Standard", Action::SetSafety(Safety::Standard)),
-                ("Autonomous", Action::SetSafety(Safety::Autonomous)),
+                ActionOption {
+                    label: "Strict",
+                    description: "Ask before every workspace write.",
+                    action: Action::SetSafety(Safety::Strict),
+                },
+                ActionOption {
+                    label: "Standard",
+                    description: "Allow ordinary source edits; ask for risky effects.",
+                    action: Action::SetSafety(Safety::Standard),
+                },
+                ActionOption {
+                    label: "Autonomous",
+                    description: "Pre-grant network access; still classify external effects.",
+                    action: Action::SetSafety(Safety::Autonomous),
+                },
             ],
             Self::Permissions => vec![
-                (
-                    "All approved",
-                    Action::SetPermissions(PermissionMode::AutoApprove),
-                ),
-                (
-                    "Approved by ask",
-                    Action::SetPermissions(PermissionMode::Human),
-                ),
-                (
-                    "Approve for me",
-                    Action::SetPermissions(PermissionMode::AiReview),
-                ),
+                ActionOption {
+                    label: "Ask for approval",
+                    description: "Latch asks before operations that require approval.",
+                    action: Action::SetPermissions(PermissionMode::Human),
+                },
+                ActionOption {
+                    label: "Approve for me",
+                    description: "Latch's reviewer decides eligible requests on your behalf.",
+                    action: Action::SetPermissions(PermissionMode::AiReview),
+                },
+                ActionOption {
+                    label: "Auto approve",
+                    description: "Eligible operations proceed automatically with recorded provenance.",
+                    action: Action::SetPermissions(PermissionMode::AutoApprove),
+                },
             ],
         }
+    }
+
+    /// All modes are always meaningful; only a live turn makes the choice
+    /// unavailable, because the CLI refuses to change policy mid-run.
+    fn disabled_reason(self, app: &App) -> Option<&'static str> {
+        app.busy.then_some("active turn")
     }
 
     fn current(self, app: &App) -> usize {
@@ -1012,9 +1098,9 @@ impl SelectorKind {
                 Safety::Autonomous => 2,
             },
             Self::Permissions => match app.permissions {
-                PermissionMode::AutoApprove => 0,
-                PermissionMode::Human => 1,
-                PermissionMode::AiReview => 2,
+                PermissionMode::Human => 0,
+                PermissionMode::AiReview => 1,
+                PermissionMode::AutoApprove => 2,
             },
         }
     }

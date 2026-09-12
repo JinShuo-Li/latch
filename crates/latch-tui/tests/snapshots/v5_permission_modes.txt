@@ -7,14 +7,24 @@
                                     a quiet terminal coding agent                                   
                                                                                                     
                  Ask Latch to inspect, change, or verify code. /help lists commands.                
-  • Interrupted                                                                                     
+                                                                                                    
+                                                                                                    
+                                                                                                    
+  Permissions                                                                                       
+                                                                                                    
+  › Ask for approval (current)  Latch asks before operations that require approval.                 
+    Approve for me  Latch's reviewer decides eligible requests on your behalf.                      
+    Auto approve  Eligible operations proceed automatically with recorded provenance.               
+                                                                                                    
+  ↑↓ select · enter apply · esc cancel                                                              
+                                                                                                    
                                                                                                     
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Ask Latch…                                                                                       │
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
-│ WORK · deepseek-flash · main · std · ask                                             interrupted │
+│ WORK · deepseek-flash · main · std · ask                                                   ready │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 enter send  ctrl+j newline  ctrl+p commands                                                         
 /tmp/latch-ui                                                                           latch v0.2.0
