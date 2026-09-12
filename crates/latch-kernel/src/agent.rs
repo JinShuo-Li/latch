@@ -534,11 +534,24 @@ impl Agent {
             if let Some(instruction) = self.progress.reground_instruction() {
                 messages.push(ModelMessage::text("user", instruction));
             }
+            // The compiled system prompt is the stable, cacheable prefix. The
+            // frequently changing canonical state, recalled originals, and
+            // extension context travel as a final kernel context turn, so
+            // ordinary task-state/evidence updates cannot invalidate the
+            // reusable system + tools + conversation prefix.
+            let kernel_context = format!(
+                "Kernel context (authoritative current state; not a new request):\n\n{}\n\nRECALLED ORIGINAL MATERIAL\n{}\n\nEXTENSION CONTEXT SOURCES\n{}",
+                ctx.canonical, ctx.recalled, extension_json
+            );
+            messages.push(ModelMessage {
+                role: "user".into(),
+                content: kernel_context,
+                tool_calls: vec![],
+                tool_call_id: None,
+                reasoning_content: None,
+            });
             let request = ModelRequest {
-                system: format!(
-                    "{}\n\n{}\n\nRECALLED ORIGINAL MATERIAL\n{}\n\nEXTENSION CONTEXT SOURCES\n{}",
-                    ctx.system, ctx.canonical, ctx.recalled, extension_json
-                ),
+                system: ctx.system.clone(),
                 messages,
                 tools,
             };

@@ -148,14 +148,17 @@ authoritative.
 ### Prompt cache layout
 
 The compiled system prompt is session-stable by construction: core
-instructions, policy, mode, workspace identity, and repository instructions,
-with canonical task state rendered once by continuity after that prefix. Tool
-schemas are stable and serialized before the messages. The request signature
-is `system + tools + messages`, so within an epoch each turn extends the
-previous request rather than rewriting it. Recalled material and extension
-context follow the canonical block; the Anthropic adapter marks the system
-block as an ephemeral cache breakpoint (an adapter-only control), while
-OpenAI-compatible endpoints rely on automatic prefix caching.
+instructions, policy, mode, workspace identity, and repository instructions.
+Canonical task state is rendered exactly once by continuity and travels as a
+final kernel-context user turn together with recalled originals and extension
+context, so frequently changing state/evidence never invalidates the reusable
+prefix. Tool schemas are stable and serialized before the messages. The
+request signature is `system + tools + messages`, so within an epoch each turn
+extends the previous request rather than rewriting it. The Anthropic adapter
+merges that kernel-context turn into the preceding user message to keep roles
+alternating; it also marks the system block as an ephemeral cache breakpoint
+(an adapter-only control), while OpenAI-compatible endpoints rely on automatic
+prefix caching.
 
 ### Append-only context epochs
 

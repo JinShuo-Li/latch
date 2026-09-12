@@ -598,6 +598,31 @@ pub fn anthropic_request(request: &ModelRequest, model: &str) -> Value {
                 }
                 messages.push(json!({"role":"user","content":blocks}));
             }
+            "user" => {
+                // Anthropic requires alternating roles. A kernel context turn
+                // that follows a tool result (or another user turn) is merged
+                // into that user message instead of creating a second one.
+                if let Some(last) = messages.last_mut()
+                    && last.get("role").and_then(Value::as_str) == Some("user")
+                {
+                    let content = last.get_mut("content").expect("user message has content");
+                    match content {
+                        Value::Array(blocks) => {
+                            blocks.push(json!({"type":"text","text":message.content}));
+                        }
+                        _ => {
+                            let previous = content.take();
+                            *content = json!([
+                                {"type":"text","text": previous},
+                                {"type":"text","text": message.content},
+                            ]);
+                        }
+                    }
+                } else {
+                    messages.push(json!({"role":"user","content":message.content}));
+                }
+                index += 1;
+            }
             role => {
                 messages.push(json!({"role": role, "content": message.content}));
                 index += 1;
@@ -902,6 +927,51 @@ mod tests {
         ] {
             assert!(!is_opencode_go_endpoint(url), "should not match {url}");
         }
+    }
+
+    #[test]
+    fn anthropic_merges_a_kernel_context_user_turn_after_tool_results() {
+        let request = ModelRequest {
+            system: "stable".into(),
+            tools: vec![],
+            messages: vec![
+                ModelMessage::text("user", "do it"),
+                ModelMessage {
+                    role: "assistant".into(),
+                    content: String::new(),
+                    tool_calls: vec![latch_protocol::ToolCall {
+                        id: "c1".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path":"a"}),
+                    }],
+                    tool_call_id: None,
+                    reasoning_content: None,
+                },
+                ModelMessage {
+                    role: "tool".into(),
+                    content: "contents".into(),
+                    tool_calls: vec![],
+                    tool_call_id: Some("c1".into()),
+                    reasoning_content: None,
+                },
+                ModelMessage::text("user", "Kernel context: state"),
+            ],
+        };
+        let body = anthropic_request(&request, "claude-test");
+        let messages = body["messages"].as_array().unwrap();
+        // user / assistant / user(tool_result + kernel context) — roles still
+        // alternate, so the API accepts the request.
+        assert_eq!(messages.len(), 3, "{messages:#?}");
+        assert_eq!(messages[2]["role"], "user");
+        let blocks = messages[2]["content"].as_array().unwrap();
+        assert!(blocks.iter().any(|block| block["type"] == "tool_result"));
+        assert!(blocks.iter().any(|block| {
+            block["type"] == "text"
+                && block["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("Kernel context")
+        }));
     }
 
     #[test]
