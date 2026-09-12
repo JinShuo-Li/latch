@@ -5,13 +5,15 @@ members = [
   "crates/latch-tui",
   "crates/latch-cli",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/latch-agent/latch"
+publish = false
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -23,6 +25,9 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "6.0"
 futures = "0.3"
 hex = "0.4"
+latch-kernel = { path = "crates/latch-kernel" }
+latch-protocol = { path = "crates/latch-protocol" }
+latch-tui = { path = "crates/latch-tui" }
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rusqlite = { version = "0.37", features = ["bundled", "chrono"] }
@@ -30,7 +35,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 tempfile = "3.20"
-thiserror = "2.0"
 tokio = { version = "1.47", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec", "rt"] }
 toml = "0.9"
@@ -39,6 +43,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.18", features = ["v4", "serde"] }
 unicode-segmentation = "1.12"
 unicode-width = "0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
