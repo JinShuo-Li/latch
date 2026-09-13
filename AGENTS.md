@@ -56,6 +56,10 @@ cargo test --workspace
 - Live-model acceptance is opt-in and ignored:
   `LATCH_LIVE_TESTS=1 cargo test -p latch-kernel --test live_acceptance -- --ignored --nocapture`
   (`LATCH_LIVE_SCENARIO=<name>` filters; reports land in `target/live-acceptance/`).
+- Live effort benchmark is opt-in and ignored:
+  `LATCH_LIVE_TESTS=1 cargo test -p latch-kernel --test live_benchmark -- --ignored --nocapture`
+  (`LATCH_BENCH_PROVIDER` / `LATCH_BENCH_MODEL` / `LATCH_BENCH_EFFORTS` filter;
+  reports land in `target/live-benchmark/`).
 - Snapshot updates: `LATCH_UPDATE_SNAPSHOTS=1 cargo test -p latch-tui --lib`.
   Exception: `crates/latch-tui/tests/snapshots/v31_sidebar.txt` is `include_str!`,
   so edit it by hand and keep `cargo test -p latch-tui --lib` green.

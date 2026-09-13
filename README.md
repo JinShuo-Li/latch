@@ -27,14 +27,42 @@ export OPENAI_API_KEY=...
 cargo install --path crates/latch-cli
 ```
 
-For Anthropic, copy `config.example.toml` to
-`~/.config/latch/config.toml`, set `provider.kind = "anthropic"`, choose a model,
-and export `ANTHROPIC_API_KEY`. OpenAI-compatible servers can set `base_url` and
-the environment variable named by `api_key_env`. Credentials are read from the
-environment, never stored in a session or logged. Provider requests identify as
-`latch/0.2.0`; OpenCode Go endpoints (`base_url` under `https://opencode.ai/zen/go`)
-additionally receive a stable `x-opencode-session` header carrying the durable
-session id, so `--resume` keeps the same value.
+Run `/setup` in the TUI to configure a provider interactively: choose the
+provider, confirm the endpoint, pick a credential source (environment variable
+or a securely entered key stored `0600` under the state dir), choose a model,
+and choose a reasoning effort. `/model` switches the live inference profile
+(provider, model, effort) without restarting the session.
+
+Configuration is provider-neutral and multi-provider:
+
+```toml
+[providers.opencode-go]
+kind = "opencode-go"
+credential = "env:OPENCODE_API_KEY"
+default_model = "deepseek-v4.1-flash"
+
+[inference]
+provider = "opencode-go"
+model = "deepseek-v4.1-flash"
+effort = "low"
+```
+
+Credentials are symbolic (`env:NAME`, `file:NAME`, or `keyring:NAME`) and are
+never stored in the config, the durable event log, the transcript, or logs.
+The legacy single `[provider]` table (and global `[models.*]` metadata) still
+loads and migrates automatically, so existing configs keep working. Provider
+requests identify as `latch/0.2.0`; OpenCode Go endpoints additionally receive
+a stable `x-opencode-session` header carrying the durable session id, so
+`--resume` keeps the same value. Model metadata precedence is explicit user
+configuration > built-in catalog > conservative default; unknown models never
+receive invented context windows, pricing, cache semantics, or reasoning
+parameters, and unsupported effort values are never sent on the wire.
+
+Per-invocation overrides: `latch --provider opencode-go --model
+deepseek-v4.1-flash --effort high`. Precedence is CLI override > durable
+session profile > config `[inference]` > built-in default. A resumed session
+restores its profile and resolves credentials freshly from the environment or
+local store.
 
 Run one prompt without the TUI with `latch -p "Explain this repository"`.
 Resume with `latch --resume`. One matching workspace session resumes directly;
@@ -317,7 +345,7 @@ developer commands. Kernel policy denies workspace mutation in ASK and PLAN
 regardless of model instructions.
 
 Slash commands, in discovery order: `/mode`, `/safety`, `/permissions`,
-`/resume`, `/model`, `/context`,
+`/resume`, `/model`, `/setup`, `/context`,
 `/diff`, `/sidebar`, `/checkpoint`, `/undo`, `/compact`, `/raw`, `/help`,
 `/quit`, `/exit`.
 Typing `/` in an empty composer opens a palette above it; Ctrl+P opens the same
@@ -326,7 +354,11 @@ and fuzzy; Up/Down or Ctrl+P/Ctrl+N moves selection, Tab completes, Enter
 dispatches, and Esc dismisses while keeping the typed text. `/resume` makes a clean application-level transition through
 the same picker as `latch --resume`. `/quit` and `/exit` are aliases and never
 become model input or durable user messages. `/compact` resets the active
-working set while retaining durable history and canonical state.
+working set while retaining durable history and canonical state. `/model`
+walks provider → model → effort in the bottom selector and applies the chosen
+profile live; Esc preserves the current profile. `/setup` is the guided
+persistent configuration flow. Both are disabled during an active turn, and
+the composer metadata always shows the active model and effort together.
 
 ## TUI controls
 
@@ -369,8 +401,11 @@ working set while retaining durable history and canonical state.
   call.
 - **Safety/permissions:** `/safety` and `/permissions` open restrained
   selectors above the composer; the effective short labels are shown in the
-  composer metadata (for example `WORK · deepseek-flash · main · std · ask`)
-  and both settings are restored exactly on resume.
+  composer metadata (for example `WORK · deepseek-v4.1-flash/low · main · std ·
+  ask`) and both settings are restored exactly on resume.
+- **Model/effort:** `/model` opens the live inference-profile selector and
+  `/setup` the guided provider setup; both show only values the selected model
+  supports and are unavailable during an active turn.
 - **Sidebar:** Ctrl+B or `/sidebar` toggles the responsive state sidebar.
 - **Detail:** Ctrl+T or `/raw` toggles the detailed, copy-friendly transcript.
 - **Diff:** `/diff` opens a full-width semantic diff inspector (red deletions,

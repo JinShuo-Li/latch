@@ -34,6 +34,49 @@ flowchart LR
     X[stdio extensions] <--> K
 ```
 
+## Providers and inference profiles
+
+Provider handling is a layered subsystem, not a set of endpoint conditionals:
+
+```text
+Provider configuration      [providers.<id>] + legacy [provider]
+        -> Provider capabilities
+        -> Model catalog / metadata
+        -> InferenceProfile     provider + model + reasoning effort
+        -> Agent runtime
+        -> Provider adapter     OpenAI-compatible / Anthropic wire format
+```
+
+`ProviderRegistry` (`kernel/src/providers.rs`) owns provider instances, the
+built-in catalog, user metadata merging, effort capability resolution, alias
+resolution, and provider construction. Precedence for model metadata is
+explicit user configuration > built-in catalog > conservative default; an
+unknown model gets no invented context window, pricing, cache shape, or
+reasoning parameters. `ProviderConfig` entries carry a symbolic credential
+reference (`env:NAME`, `file:NAME`, `keyring:NAME`), and
+`kernel/src/credentials.rs` resolves it at process start from the environment
+or a `0600` local secrets file. Secret values never enter the config file, the
+durable event log, the model context, the transcript, or ordinary logs, and
+provider error bodies are redacted.
+
+`InferenceProfile` is provider-neutral and credential-free. The agent holds the
+effective profile; `Agent::set_inference_profile` swaps the provider adapter,
+model, token estimator, context window, pricing metadata, and reasoning-replay
+policy together, resets architecture prefix accounting, and appends a durable
+`InferenceProfileChanged` event. Continuity observes that event and starts a
+fresh cache epoch with the reason `inference profile changed`, so provider
+cache locality is never claimed across incompatible wire semantics. Resume
+restores the last durable profile but resolves credentials freshly; child
+agents inherit the live root profile at spawn. Reasoning effort is emitted on
+the wire only when the resolved model capability advertises the selected value
+(`low`, `high`, `max`); otherwise the adapter sends no effort field.
+
+The TUI consumes a provider-neutral catalog from the CLI for `/model` and
+`/setup`; it never inspects base URLs, model families, or wire parameters.
+Configuration may come from the interactive flows, `config.toml`, or CLI
+overrides, with precedence CLI/session override > durable session profile >
+user config > built-in defaults.
+
 ## Prompt architecture
 
 `PromptCompiler` assembles the model-facing system prompt from prioritized

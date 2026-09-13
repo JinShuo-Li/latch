@@ -5,6 +5,36 @@
 default_mode = "WORK"
 # state_dir = "/home/you/.local/state/latch"
 
+# Recommended multi-provider configuration. Each provider is a named instance
+# with a symbolic credential reference; secret values never live in this file.
+#
+# [providers.opencode-go]
+# kind = "opencode-go"                  # openai | anthropic | deepseek | opencode-go | openai-compatible
+# credential = "env:OPENCODE_API_KEY"  # env:NAME | file:NAME (0600 local store) | keyring:NAME
+# default_model = "deepseek-v4.1-flash"
+# base_url = "https://opencode.ai/zen/go"   # optional override
+#
+# [providers.opencode-go.models."deepseek-v4.1-flash"]
+# display_name = "DeepSeek V4.1 Flash"
+# context_window_tokens = 131072
+# efforts = ["low", "high", "max"]
+# default_effort = "low"
+# reasoning_replay = "replay"
+# aliases = ["flash"]
+# [providers.opencode-go.models."deepseek-v4.1-flash".pricing]
+# input_per_million = 0.28
+# output_per_million = 0.42
+
+# Default inference profile. Precedence at startup:
+# CLI override > durable session profile (resume) > this config > built-in.
+# [inference]
+# provider = "opencode-go"
+# model = "deepseek-v4.1-flash"
+# effort = "low"          # provider default | low | high | max
+
+# Backward compatibility: the legacy single-provider table below is migrated
+# into the registry automatically when no [providers.*] entries exist. New
+# configurations should prefer the multi-provider shape above.
 [provider]
 kind = "openai-compatible" # or "anthropic"
 model = "gpt-5-mini"
