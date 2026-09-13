@@ -1,0 +1,30 @@
+                                                                                            │deepseek-v4.1-flash        
+                                                                                            │WORK · 0 turns             
+                             ███     ████  ██████  █████ ██  ██                             │on main                    
+                             ███    ██  ██   ██   ██     ██  ██                             │                           
+                             ███    ██████   ██   ██     ██████                             │CONTEXT                    
+                             ███    ██  ██   ██   ██     ██  ██                             │                           
+                             ██████ ██  ██   ██    █████ ██  ██                             │TASK                       
+                                a quiet terminal coding agent                               │                           
+                                                                                            │USAGE                      
+             Ask Latch to inspect, change, or verify code. /help lists commands.            │                           
+                                                                                            │CHANGES                    
+                                                                                            │                           
+                                                                                            │                           
+                                                                                                                        
+  Inference profile · OpenCode Go                                                                                       
+                                                                                                                        
+  › DeepSeek V4.1 Flash  (current)  deepseek-v4.1-flash                                                                 
+    Change provider…                                                                                                    
+                                                                                                                        
+  ↑↓ select · enter choose · backspace back · esc cancel                                                                
+                                                                                                                        
+                                                                                                                        
+› Ask Latch…                                                                                                            
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+  WORK · deepseek-v4.1-flash/low · main · std · ask                                                                ready
+                                                                                                                        
+enter send  ctrl+j newline  ctrl+p commands                                                                             
+/tmp/latch                                                                                                  latch v0.2.0

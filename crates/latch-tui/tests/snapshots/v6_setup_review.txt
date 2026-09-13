@@ -1,0 +1,34 @@
+                                                                                            │                           
+                             ███     ████  ██████  █████ ██  ██                             │WORK · 0 turns             
+                             ███    ██  ██   ██   ██     ██  ██                             │                           
+                             ███    ██████   ██   ██     ██████                             │CONTEXT                    
+                             ███    ██  ██   ██   ██     ██  ██                             │                           
+                             ██████ ██  ██   ██    █████ ██  ██                             │TASK                       
+                                a quiet terminal coding agent                               │                           
+                                                                                            │USAGE                      
+             Ask Latch to inspect, change, or verify code. /help lists commands.            │                           
+                                                                                            │CHANGES                    
+                                                                                            │                           
+                                                                                                                        
+  Setup · review                                                                                                        
+                                                                                                                        
+  › Apply & save  (current)                                                                                             
+    Cancel                                                                                                              
+                                                                                                                        
+  Provider   OpenAI                                                                                                     
+  Endpoint   https://api.openai.com/v1                                                                                  
+  Model      gpt-5.5                                                                                                    
+  Effort     provider default                                                                                           
+  Credential secure local storage (value hidden)                                                                        
+                                                                                                                        
+  ↑↓ select · enter apply · esc cancel                                                                                  
+                                                                                                                        
+                                                                                                                        
+› Ask Latch…                                                                                                            
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+  WORK · std · ask                                                                                                 ready
+                                                                                                                        
+enter send  ctrl+j newline  ctrl+p commands                                                                             
+.                                                                                                           latch v0.2.0

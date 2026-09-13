@@ -2680,3 +2680,46 @@ fn composer_metadata_always_shows_model_and_effort_adjacent() {
         "footer shows model and effort together: {text}"
     );
 }
+
+#[test]
+fn snapshot_model_selector_surface() {
+    let mut app = profile_app();
+    app.input.set_text("/model");
+    app.submit_action();
+    // Provider step.
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert_snapshot("v6_model_selector.txt", &render_to_text(&mut app, 120, 30));
+}
+
+#[test]
+fn snapshot_setup_review_surface_masks_the_credential() {
+    let mut app = App::default();
+    app.output(Output::SetupCatalog(vec![SetupKind {
+        kind: "openai".into(),
+        label: "OpenAI".into(),
+        default_base_url: "https://api.openai.com/v1".into(),
+        credential_label: "env:OPENAI_API_KEY".into(),
+        default_model: "gpt-5.5".into(),
+        models: vec![CatalogModel {
+            id: "gpt-5.5".into(),
+            display_name: "GPT-5.5".into(),
+            efforts: vec![latch_protocol::ReasoningEffort::High],
+            default_effort: latch_protocol::ReasoningEffort::ProviderDefault,
+        }],
+    }]));
+    app.input.set_text("/setup");
+    app.submit_action();
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // kind -> endpoint capture
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // accept default endpoint
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE)); // choose secure entry
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    for ch in "sk-hidden".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // secret submitted
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // model
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // effort
+    let text = render_to_text(&mut app, 120, 34);
+    assert!(!text.contains("sk-hidden"), "{text}");
+    assert_snapshot("v6_setup_review.txt", &text);
+}

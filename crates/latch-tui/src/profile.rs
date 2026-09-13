@@ -95,12 +95,22 @@ pub enum SetupPlan {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum SetupCredential {
     /// Reference an environment variable by name.
     Env(String),
     /// Enter a secret now; the CLI stores it in the 0600 local secrets file.
     Secret(String),
+}
+
+impl std::fmt::Debug for SetupCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Env(name) => f.debug_tuple("Env").field(name).finish(),
+            // A debug log must never expose a typed secret.
+            Self::Secret(_) => f.debug_tuple("Secret").field(&"[redacted]").finish(),
+        }
+    }
 }
 
 /// Requested composer capture for a text field.
@@ -376,7 +386,7 @@ pub enum SetupStep {
 }
 
 /// `/setup`: guided persistent provider configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SetupFlow {
     kinds: Vec<SetupKind>,
     step: SetupStep,
@@ -389,6 +399,17 @@ pub struct SetupFlow {
     secret: String,
     model: usize,
     effort: usize,
+}
+
+impl std::fmt::Debug for SetupFlow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetupFlow")
+            .field("step", &self.step)
+            .field("kind", &self.kind)
+            .field("use_env", &self.use_env)
+            // `secret` is intentionally omitted.
+            .finish_non_exhaustive()
+    }
 }
 
 impl SetupFlow {
@@ -911,6 +932,23 @@ mod tests {
         assert_eq!(model, "deepseek-v4.1-flash");
         assert_eq!(effort, ReasoningEffort::High);
         assert_eq!(credential, SetupCredential::Env("DEEPSEEK_API_KEY".into()));
+    }
+
+    #[test]
+    fn debug_output_never_formats_secret_material() {
+        let credential = SetupCredential::Secret("sk-super-secret".into());
+        assert!(!format!("{credential:?}").contains("sk-super-secret"));
+        let plan = SetupPlan::Apply {
+            provider_kind: "openai".into(),
+            base_url: None,
+            credential: credential.clone(),
+            model: "gpt-5.5".into(),
+            effort: ReasoningEffort::ProviderDefault,
+        };
+        assert!(
+            !format!("{plan:?}").contains("sk-super-secret"),
+            "a setup plan debug log must not leak the typed secret"
+        );
     }
 
     #[test]
