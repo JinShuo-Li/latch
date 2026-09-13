@@ -293,6 +293,28 @@ fn builtin_models(kind: ProviderKind) -> Vec<BuiltinModel> {
     }
 }
 
+/// The built-in catalog for one provider kind, independent of configuration.
+/// Used by `/setup` to offer a small, stable starting set of models.
+#[must_use]
+pub fn builtin_catalog(kind: ProviderKind) -> Vec<ModelDescriptor> {
+    let provider = ProviderId::new(kind.id());
+    builtin_models(kind)
+        .into_iter()
+        .map(|builtin| ModelDescriptor {
+            provider: provider.clone(),
+            model: builtin.id.to_owned(),
+            display_name: builtin.display_name.to_owned(),
+            context_window_tokens: builtin.context_window_tokens,
+            supported_efforts: builtin.efforts.to_vec(),
+            default_effort: builtin.default_effort,
+            reasoning_replay: default_replay(kind, builtin.id),
+            pricing: None,
+            aliases: Vec::new(),
+            known: true,
+        })
+        .collect()
+}
+
 /// One resolved provider instance: identity, endpoint, credential reference,
 /// and the merged model catalog.
 #[derive(Debug, Clone)]
