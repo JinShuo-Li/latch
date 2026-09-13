@@ -1145,6 +1145,7 @@ dependencies = [
  "latch-protocol",
  "latch-tui",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

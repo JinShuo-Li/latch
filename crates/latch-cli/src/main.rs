@@ -16,8 +16,8 @@ use latch_protocol::{
     EventPayload, InferenceProfile, Mode, ProviderId, ReasoningEffort, StreamEvent,
 };
 use latch_tui::{
-    CatalogModel, CatalogProvider, InferenceCatalog, Input, Output, SLASH_COMMANDS, SetupCredential,
-    SetupKind, SetupPlan,
+    CatalogModel, CatalogProvider, InferenceCatalog, Input, Output, SLASH_COMMANDS,
+    SetupCredential, SetupKind, SetupPlan,
 };
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -105,9 +105,8 @@ async fn main() -> Result<()> {
         ResumeChoice::Fresh => None,
         ResumeChoice::Exit => return Ok(()),
     };
-    let interactive = args.prompt.is_none()
-        && std::io::stdin().is_terminal()
-        && std::io::stdout().is_terminal();
+    let interactive =
+        args.prompt.is_none() && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let mut built = build_agent(&workspace, &config, &args, selected, interactive).await?;
     if let Some(prompt) = args.prompt {
         return one_shot(&mut built.agent, &prompt).await;
@@ -728,9 +727,7 @@ async fn interactive_session(
                 apply_live_profile(
                     &mut agent,
                     &context,
-                    provider,
-                    model,
-                    effort,
+                    InferenceProfile::new(provider, model, effort),
                     &output_tx,
                     &workspace,
                     resumed,
@@ -827,14 +824,11 @@ async fn interactive_session(
 async fn apply_live_profile(
     agent: &mut Agent,
     context: &InferenceContext,
-    provider: String,
-    model: String,
-    effort: ReasoningEffort,
+    requested: InferenceProfile,
     tx: &mpsc::Sender<Output>,
     workspace: &Path,
     resumed: bool,
 ) -> Result<()> {
-    let requested = InferenceProfile::new(provider, model, effort);
     let (profile, descriptor) = context.resolve(&requested)?;
     let provider = match context.build(&profile, &descriptor, agent.session_id) {
         Ok(provider) => provider,
@@ -853,27 +847,23 @@ async fn apply_live_profile(
     send_profile_header(context, tx, workspace, resumed, &profile, &descriptor).await
 }
 
-/// Persists a `/setup` plan, resolves the new provider, and switches live.
-async fn apply_setup(
-    agent: &mut Agent,
+/// Persists a `/setup` plan to configuration and, for a directly entered
+/// secret, to the 0600 local credential store. Returns the resolved
+/// (provider id, model, effort). Secret values never reach config.toml.
+fn persist_setup(
     context: &mut InferenceContext,
-    plan: SetupPlan,
-    tx: &mpsc::Sender<Output>,
-    workspace: &Path,
-    resumed: bool,
-) -> Result<()> {
+    plan: &SetupPlan,
+) -> Result<(String, String, ReasoningEffort)> {
     let SetupPlan::Apply {
         provider_kind,
         base_url,
         credential,
         model,
         effort,
-    } = plan;
+    } = plan.clone();
     let kind = ProviderKind::parse(&provider_kind, base_url.as_deref())
         .ok_or_else(|| anyhow!("unknown provider kind {provider_kind:?}"))?;
     let provider_id = kind.id().to_owned();
-    // Secret values only ever travel TUI -> CLI -> 0600 local store. They are
-    // never written to config.toml, the event log, or the transcript.
     let credential_ref = match credential {
         SetupCredential::Env(name) => CredentialRef::Env(name),
         SetupCredential::Secret(secret) => {
@@ -901,6 +891,19 @@ async fn apply_setup(
     if let Some(path) = context.config_path.clone().or_else(Config::default_path) {
         context.config.save(&path)?;
     }
+    Ok((provider_id, model, effort))
+}
+
+/// Persists a `/setup` plan, resolves the new provider, and switches live.
+async fn apply_setup(
+    agent: &mut Agent,
+    context: &mut InferenceContext,
+    plan: SetupPlan,
+    tx: &mpsc::Sender<Output>,
+    workspace: &Path,
+    resumed: bool,
+) -> Result<()> {
+    let (provider_id, model, effort) = persist_setup(context, &plan)?;
     // Rebuild the registry from the persisted configuration so resolution
     // matches what the next process will load.
     context.registry = ProviderRegistry::from_config(&context.config)?;
@@ -958,7 +961,10 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                 let mode = Mode::from_str(value).map_err(anyhow::Error::msg)?;
                 agent.set_mode(mode)?;
                 tx.send(Output::Mode(mode)).await?;
-            } else { tx.send(Output::Notice(format!("mode: {}", agent.mode()))).await?; }
+            } else {
+                tx.send(Output::Notice(format!("mode: {}", agent.mode())))
+                    .await?;
+            }
         }
         "/safety" => {
             if let Some(value) = parts.next() {
@@ -975,7 +981,8 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
         }
         "/permissions" => {
             if let Some(value) = parts.next() {
-                let mode = latch_protocol::PermissionMode::from_str(value).map_err(anyhow::Error::msg)?;
+                let mode =
+                    latch_protocol::PermissionMode::from_str(value).map_err(anyhow::Error::msg)?;
                 agent.set_permissions(mode)?;
                 tx.send(Output::Permissions(mode)).await?;
             } else {
@@ -997,7 +1004,13 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                 s.reserve_tokens, s.headroom_tokens, s.durable_events, s.selected_episodes, s.episodes
             ))).await?;
         }
-        "/compact" => { agent.compact()?; tx.send(Output::Notice("active context reset; durable history and state retained".into())).await?; }
+        "/compact" => {
+            agent.compact()?;
+            tx.send(Output::Notice(
+                "active context reset; durable history and state retained".into(),
+            ))
+            .await?;
+        }
         "/diff" => send_tool(agent, "git_diff", tx).await?,
         "/checkpoint" => send_tool(agent, "checkpoint", tx).await?,
         "/undo" => send_tool(agent, "undo", tx).await?,
@@ -1010,8 +1023,13 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                 profile.effort.label()
             )))
             .await?;
-        }        "/help" => {
-            let commands = SLASH_COMMANDS.iter().map(|c| format!("{}  {}", c.name, c.description)).collect::<Vec<_>>().join("\n");
+        }
+        "/help" => {
+            let commands = SLASH_COMMANDS
+                .iter()
+                .map(|c| format!("{}  {}", c.name, c.description))
+                .collect::<Vec<_>>()
+                .join("\n");
             tx.send(Output::Notice(format!(
                 "modes: /mode ask|plan|work (WORK mutates; ASK/PLAN are read-only)\n\
                  safety: /safety strict|standard|autonomous (ASK/PLAN remain read-only)\n\
@@ -1029,7 +1047,12 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                  commands:\n{commands}"
             ))).await?;
         }
-        other => tx.send(Output::Notice(format!("unknown command {other}; use /help"))).await?,
+        other => {
+            tx.send(Output::Notice(format!(
+                "unknown command {other}; use /help"
+            )))
+            .await?
+        }
     }
     Ok(())
 }
@@ -1152,5 +1175,77 @@ mod tests {
         assert!(is_slash_command_input("  /mode plan"));
         assert!(!is_slash_command_input("/help\nthis is prompt content"));
         assert!(!is_slash_command_input("plain prompt"));
+    }
+
+    #[test]
+    fn setup_secret_reaches_only_the_private_store_and_never_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let state_dir = dir.path().join("state");
+        let config = Config {
+            state_dir: state_dir.clone(),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
+        let plan = SetupPlan::Apply {
+            provider_kind: "deepseek".into(),
+            base_url: Some("https://api.deepseek.com".into()),
+            credential: SetupCredential::Secret("sk-super-secret".into()),
+            model: "deepseek-v4.1-flash".into(),
+            effort: ReasoningEffort::High,
+        };
+        let (provider_id, model, effort) = persist_setup(&mut context, &plan).unwrap();
+        assert_eq!(provider_id, "deepseek");
+        assert_eq!(model, "deepseek-v4.1-flash");
+        assert_eq!(effort, ReasoningEffort::High);
+        let config_text = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            !config_text.contains("sk-super-secret"),
+            "a secret must never be written to config: {config_text}"
+        );
+        assert!(config_text.contains("credential = \"file:deepseek\""));
+        assert!(config_text.contains("[inference]"));
+        let secrets_path = CredentialStore::default_path(&state_dir);
+        let store = CredentialStore::open(&secrets_path).unwrap();
+        assert_eq!(
+            store
+                .require(&CredentialRef::File("deepseek".into()))
+                .unwrap(),
+            "sk-super-secret"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&secrets_path)
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn cli_profile_flags_parse_effort() {
+        let args = Args::try_parse_from([
+            "latch",
+            "--model",
+            "deepseek-v4.1-flash",
+            "--effort",
+            "high",
+        ])
+        .unwrap();
+        assert_eq!(args.model.as_deref(), Some("deepseek-v4.1-flash"));
+        assert_eq!(
+            args.effort
+                .as_deref()
+                .unwrap()
+                .parse::<ReasoningEffort>()
+                .unwrap(),
+            ReasoningEffort::High
+        );
+        assert!(
+            Args::try_parse_from(["latch", "--effort", "ultra"]).is_ok(),
+            "parsing is validated when building the profile, not by clap"
+        );
     }
 }
