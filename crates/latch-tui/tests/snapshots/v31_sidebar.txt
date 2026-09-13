@@ -26,6 +26,8 @@ in          428.6k
 out         31.4k
 cache read  286.1k
 cache write —
+run         1 req · 0 tools · 12m30s
+replay      reasoning 0 · tool args 0 · results 0
 est. cost   $0.06
 
 CHANGES

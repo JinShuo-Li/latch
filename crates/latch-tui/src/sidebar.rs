@@ -275,6 +275,8 @@ pub struct SidebarModel {
     evidence: BTreeMap<String, EvidenceStatus>,
     usage: UsageTotals,
     last_usage: Option<Usage>,
+    /// Provider requests and tool calls observed in the durable stream.
+    tool_calls: u32,
     changes: ChangeView,
     stall: Option<StagnationView>,
     /// Root-visible child sessions; the child transcripts stay separate.
@@ -294,6 +296,7 @@ impl SidebarModel {
             evidence: BTreeMap::new(),
             usage: UsageTotals::default(),
             last_usage: None,
+            tool_calls: 0,
             changes: ChangeView::default(),
             stall: None,
             subagents: SubagentModel::default(),
@@ -473,6 +476,7 @@ impl SidebarModel {
                 self.last_usage = Some(usage.clone());
             }
             EventPayload::ModelRequestStarted { .. } => self.turns += 1,
+            EventPayload::ToolRequested { .. } => self.tool_calls += 1,
             EventPayload::GitStateObserved { dirty_paths, .. } => {
                 self.changes.preexisting(dirty_paths)
             }
@@ -932,6 +936,27 @@ impl SidebarModel {
                     Span::raw(fit(&value, width.saturating_sub(12))),
                 ]));
             }
+            lines.push(Line::from(vec![
+                Span::styled("run         ", dim()),
+                Span::raw(format!(
+                    "{} req · {} tool{} · {}",
+                    self.turns,
+                    self.tool_calls,
+                    if self.tool_calls == 1 { "" } else { "s" },
+                    self.elapsed_text()
+                )),
+            ]));
+            if let Some(stats) = &self.context {
+                lines.push(Line::from(vec![
+                    Span::styled("replay      ", dim()),
+                    Span::raw(format!(
+                        "reasoning {} · tool args {} · results {}",
+                        format_tokens(stats.reasoning_replay_tokens as u64),
+                        format_tokens(stats.tool_arguments_tokens as u64),
+                        format_tokens(stats.tool_result_tokens as u64)
+                    )),
+                ]));
+            }
         } else {
             lines.push(Line::styled(
                 fit(
@@ -950,6 +975,22 @@ impl SidebarModel {
             Span::raw(self.cost_text()),
         ]));
         lines
+    }
+
+    /// Wall-clock span observed in the durable stream, coarse enough to stay
+    /// quiet in the sidebar.
+    fn elapsed_text(&self) -> String {
+        let (Some(started), Some(updated)) = (self.started_at, self.updated_at) else {
+            return "—".to_owned();
+        };
+        let seconds = (updated - started).num_seconds().max(0);
+        if seconds >= 3600 {
+            format!("{}h{}m", seconds / 3600, (seconds % 3600) / 60)
+        } else if seconds >= 60 {
+            format!("{}m{}s", seconds / 60, seconds % 60)
+        } else {
+            format!("{seconds}s")
+        }
     }
 
     fn cost_text(&self) -> String {
