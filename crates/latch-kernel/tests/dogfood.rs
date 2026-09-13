@@ -621,6 +621,124 @@ async fn resumed_failure_state_survives() {
     );
 }
 
+/// A trivial one-file fix follows the short proportional path: read, patch,
+/// validate, complete, report. It uses five model turns and four tool calls,
+/// with no plan, repository search, subagent, or broader validation sweep. The
+/// provider-visible system prompt carries the proportional-effort core and
+/// none of the obsolete blanket-persistence wording.
+#[tokio::test]
+async fn trivial_one_file_fix_takes_the_short_path() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().join("sample");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("app.txt"), "bug").unwrap();
+    let db = dir.path().join("state.sqlite3");
+    let store = EventStore::open(&db).unwrap();
+    let session = store.create_session(&workspace).unwrap();
+    let scripted = vec![
+        response(
+            "Reading the fixture.",
+            vec![call("read", "read_file", json!({"path":"app.txt"}))],
+        ),
+        response(
+            "Replacing the marker.",
+            vec![call(
+                "fix",
+                "patch",
+                json!({"path":"app.txt","base_hash":digest("bug"),"old":"bug","new":"good"}),
+            )],
+        ),
+        response(
+            "Checking the fixture.",
+            vec![call(
+                "check",
+                "validate",
+                json!({"requirement":"fixture exact-content check","command":"test \"$(cat app.txt)\" = good"}),
+            )],
+        ),
+        response(
+            "Done.",
+            vec![call(
+                "complete",
+                "complete",
+                json!({"implementation_done":true}),
+            )],
+        ),
+        response("Fixed app.txt and verified the exact content.", vec![]),
+    ];
+    let provider = Arc::new(RecordingProvider::new(scripted));
+    let tools = ToolExecutor::new(
+        workspace.clone(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, workspace.clone(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: workspace.clone(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 3,
+    });
+    agent
+        .run(
+            "Fix the bug in app.txt.",
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("app.txt")).unwrap(),
+        "good"
+    );
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+
+    // One model request per semantic step plus the final report.
+    let requests = provider.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "a trivial fix must not take extra model turns"
+    );
+    let tools_used: Vec<String> = store
+        .events(session)
+        .unwrap()
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::ToolRequested { call } => Some(call.name.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        tools_used,
+        vec!["read_file", "patch", "validate", "complete"],
+        "no plan, search, subagent, or broad sweep for a one-file fix"
+    );
+
+    // The provider-visible system prompt is the proportional core.
+    let system = &requests[0].system;
+    assert!(system.contains("Match effort to the task"));
+    assert!(system.contains("Simple, local work"));
+    for banned in [
+        "Default to action",
+        "the first green build",
+        "Long tasks may take many tool calls",
+        "never stop merely because the session is long",
+    ] {
+        assert!(
+            !system.contains(banned),
+            "obsolete persistence wording `{banned}` reached the provider"
+        );
+    }
+}
+
 /// Reasoning and tool history still round-trip across resume byte-for-byte.
 #[tokio::test]
 async fn reasoning_and_tool_history_round_trip_across_resume() {
