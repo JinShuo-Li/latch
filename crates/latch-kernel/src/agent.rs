@@ -6,6 +6,7 @@ use crate::permissions::PermissionBroker;
 use crate::progress::{DEFAULT_STAGNATION_BUDGET, ProgressSupervisor, StagnationDecision};
 use crate::prompt::PromptCompiler;
 use crate::provider::{ModelProvider, StreamSink};
+use crate::providers::ModelDescriptor;
 use crate::safety::{Classification, Decision as SafetyDecision};
 use crate::state::{
     EvidenceLedger, FailureManager, StateUpdate, TaskStateManager, failure_subject,
@@ -17,8 +18,9 @@ use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use latch_protocol::{
     AgentEvidenceRef, AgentIdentity, AgentReport, AgentStatus, CompletionState, Event,
-    EventPayload, EvidenceStatus, MemoryKind, MemoryRecord, Mode, ModelMessage, ModelRequest,
-    PermissionMode, Safety, StreamEvent, ToolCall, ToolDefinition, ToolResult, Validity,
+    EventPayload, EvidenceStatus, InferenceProfile, MemoryKind, MemoryRecord, Mode, ModelMessage,
+    ModelRequest, PermissionMode, ReasoningEffort, Safety, StreamEvent, ToolCall, ToolDefinition,
+    ToolResult, Validity,
 };
 use request::{common_prefix_bytes, context_messages, request_signature};
 use serde_json::json;
@@ -75,6 +77,14 @@ pub struct Agent {
     max_model_turns: Option<u32>,
     context_window_tokens: usize,
     estimator: TokenEstimator,
+    /// Effective inference selection: configured provider identity, model, and
+    /// reasoning effort. Durable changes are appended as
+    /// `InferenceProfileChanged`; credentials never live here.
+    profile: InferenceProfile,
+    /// Set when the current turn executed `complete` and the kernel-derived
+    /// completion is terminal. Lets the loop exit in the same turn instead of
+    /// spending another provider request on a summary already produced.
+    terminal_complete: bool,
     permissions: PermissionBroker,
     /// Messages queued while the loop is running; drained only at safe model
     /// boundaries.
@@ -110,6 +120,11 @@ impl Agent {
             retry_budget: runtime.retry_budget,
             stagnation_budget: DEFAULT_STAGNATION_BUDGET,
             max_model_turns: None,
+            profile: InferenceProfile::new(
+                runtime.provider.name().to_owned(),
+                runtime.provider.model().to_owned(),
+                ReasoningEffort::ProviderDefault,
+            ),
         };
         let supervisor = AgentSupervisor::new(
             runtime.session_id,
@@ -137,6 +152,11 @@ impl Agent {
         // The request estimator and the continuity budget must agree on the
         // provider model.
         continuity.set_estimator(estimator);
+        let profile = InferenceProfile::new(
+            runtime.provider.name().to_owned(),
+            runtime.provider.model().to_owned(),
+            ReasoningEffort::ProviderDefault,
+        );
         let progress =
             ProgressSupervisor::new(DEFAULT_STAGNATION_BUDGET, runtime.workspace.clone());
         Self {
@@ -159,6 +179,8 @@ impl Agent {
             max_model_turns: None,
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
             estimator,
+            profile,
+            terminal_complete: false,
             permissions: PermissionBroker::new(),
             steering: SteeringQueue::new(),
             child_mailbox: ChildMailbox::default(),
@@ -222,6 +244,86 @@ impl Agent {
                 settings.context = context;
                 settings.context_window_tokens = window_tokens.max(1);
             });
+        }
+    }
+
+    /// The effective inference selection of this session.
+    #[must_use]
+    pub fn profile(&self) -> InferenceProfile {
+        self.profile.clone()
+    }
+
+    /// Records the inherited profile on a child without appending a durable
+    /// event: the child's provider was cloned from the root profile and the
+    /// root session carries the authoritative durable provenance.
+    pub(crate) fn set_inherited_profile(&mut self, profile: InferenceProfile) {
+        self.profile = profile;
+    }
+
+    /// Switches the live provider, model, and reasoning effort without
+    /// recreating the session. Task state, evidence, history, workspace
+    /// ownership, permissions, continuity, and child sessions are preserved.
+    ///
+    /// The change is recorded durably as [`EventPayload::InferenceProfileChanged`]
+    /// so resume restores the same profile. Credentials are never recorded.
+    /// Continuity observes the event and starts a new cache epoch before the
+    /// next request, because reasoning replay and wire semantics changed.
+    pub fn set_inference_profile(
+        &mut self,
+        provider: Arc<dyn ModelProvider>,
+        profile: InferenceProfile,
+        descriptor: &ModelDescriptor,
+        context: ContextConfig,
+        reason: &str,
+    ) -> Result<()> {
+        self.apply_inference_profile(provider, profile.clone(), descriptor, context);
+        self.store.append(
+            self.session_id,
+            EventPayload::InferenceProfileChanged {
+                provider: profile.provider,
+                model: profile.model,
+                effort: profile.effort,
+                reason: reason.to_owned(),
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Applies a profile restored from durable history without appending a
+    /// duplicate event. Used by resume.
+    pub fn restore_inference_profile(
+        &mut self,
+        provider: Arc<dyn ModelProvider>,
+        profile: InferenceProfile,
+        descriptor: &ModelDescriptor,
+        context: ContextConfig,
+    ) {
+        self.apply_inference_profile(provider, profile, descriptor, context);
+    }
+
+    fn apply_inference_profile(
+        &mut self,
+        provider: Arc<dyn ModelProvider>,
+        profile: InferenceProfile,
+        descriptor: &ModelDescriptor,
+        context: ContextConfig,
+    ) {
+        // The estimator, context window, cache accounting, and provider must
+        // all move together; a partial switch would misprice the next request.
+        let estimator = TokenEstimator::for_model(&profile.model);
+        self.provider = provider;
+        self.profile = profile.clone();
+        self.estimator = estimator;
+        self.continuity.set_estimator(estimator);
+        // A profile change invalidates architecture-level prefix accounting.
+        self.last_request_signature = None;
+        let window = descriptor
+            .context_window_tokens
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS);
+        self.set_context_budget(context, window);
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.set_provider(self.provider.clone());
+            supervisor.update_settings(|settings| settings.profile = profile.clone());
         }
     }
     #[must_use]
@@ -587,6 +689,7 @@ impl Agent {
         let mut steer_query: Option<String> = None;
         loop {
             turns += 1;
+            self.terminal_complete = false;
             // The ultimate circuit breaker is opt-in and off by default: a
             // long-horizon task making real progress is never killed by turn
             // count. Stagnation and failure supervision are the primary loop
@@ -771,6 +874,36 @@ impl Agent {
             }
             self.supervise_failures(&response.tool_calls, &tool_results, &sink)?;
             self.supervise_progress(&sink)?;
+            // Terminal-complete fast path: when this turn executed `complete`
+            // and the kernel-derived completion is terminal, the assistant text
+            // emitted in the same turn is the final answer. Do not spend another
+            // provider request on a summary that already exists. The safe
+            // boundary handshake still applies: accepted steering, child
+            // messages, and undelivered child reports keep the run open.
+            if self.terminal_complete {
+                self.terminal_complete = false;
+                let late = self.steering.close_and_drain();
+                let agent_messages = self.child_mailbox.drain();
+                if !agent_messages.is_empty() {
+                    self.record_agent_messages(&agent_messages, &sink).await?;
+                    steer_query = Some(
+                        agent_messages
+                            .iter()
+                            .map(|message| message.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    );
+                }
+                let notifications = self.deliver_agent_notifications(&sink)?;
+                if late.is_empty() && agent_messages.is_empty() && notifications == 0 {
+                    break;
+                }
+                if !late.is_empty() {
+                    self.record_steers(&late, &sink).await?;
+                    steer_query = Some(late.join("\n"));
+                }
+                continue;
+            }
         }
         Ok(final_text)
     }

@@ -247,6 +247,19 @@ impl ContinuityEngine {
             epoch_start = start;
             generation = generation.saturating_add(1);
         }
+        // A provider/model/effort change alters wire semantics (reasoning
+        // replay, tokenizer family, pricing), so the previous epoch's cache
+        // accounting must not be reported as reusable across the boundary. The
+        // next materialization rotates once, retaining the working set and
+        // emitting a fresh snapshot under the new profile.
+        let profile_change = self
+            .store
+            .latest_event_of_kinds(session_id, &["inference_profile_changed"])?;
+        let profile_pending = match (&profile_change, &latest_epoch) {
+            (Some(profile), Some(epoch)) => profile.sequence > epoch.sequence,
+            (Some(_), None) => true,
+            _ => false,
+        };
 
         let (mut recent, reached_start) = load_epoch_events(
             &self.store,
@@ -296,12 +309,14 @@ impl ContinuityEngine {
         // and counted in the request budget, but they never force a rotation:
         // current truth must not be crowded out by cache policy.
         let over_budget = !reached_start || conversation_tokens > high_water;
-        let rotate = compact_pending || over_budget;
+        let rotate = compact_pending || profile_pending || over_budget;
         let mut evicted_tokens = 0usize;
 
         if rotate {
             let reason = if compact_pending {
                 "manual compact".to_owned()
+            } else if profile_pending {
+                "inference profile changed".to_owned()
             } else {
                 "working budget high-water mark reached".to_owned()
             };
@@ -553,6 +568,10 @@ impl ContinuityEngine {
         let mut recall_used = 0usize;
         let mut episode_used = 0usize;
         let mut extension_used = 0usize;
+        let mut conversation_used = 0usize;
+        let mut reasoning_replay_used = 0usize;
+        let mut tool_arguments_used = 0usize;
+        let mut tool_result_used = 0usize;
         for event in &recent {
             let tokens = estimator.estimate(&render_event(event));
             match &event.payload {
@@ -575,7 +594,35 @@ impl ContinuityEngine {
                     recall_used += tokens;
                     episode_used += tokens;
                 }
-                _ => recent_used += tokens,
+                EventPayload::ToolCompleted { .. } | EventPayload::ToolFailed { .. } => {
+                    recent_used += tokens;
+                    tool_result_used += tokens;
+                }
+                EventPayload::AssistantMessageCompleted {
+                    text,
+                    tool_calls,
+                    reasoning_content,
+                } => {
+                    recent_used += tokens;
+                    let reasoning = reasoning_content
+                        .as_deref()
+                        .map_or(0, |reasoning| estimator.estimate(reasoning));
+                    let arguments: usize = tool_calls
+                        .iter()
+                        .map(|call| {
+                            estimator.estimate(&call.name)
+                                + estimator.estimate_json(&call.arguments)
+                        })
+                        .sum();
+                    conversation_used += tokens.saturating_sub(reasoning).saturating_sub(arguments);
+                    reasoning_replay_used += reasoning;
+                    tool_arguments_used += arguments;
+                    let _ = text;
+                }
+                _ => {
+                    recent_used += tokens;
+                    conversation_used += tokens;
+                }
             }
         }
         let cache_epoch_tokens = state_used + recent_used + recall_used + extension_used;
@@ -589,6 +636,10 @@ impl ContinuityEngine {
             instructions_tokens,
             state_tokens: state_used,
             recent_tokens: recent_used,
+            conversation_tokens: conversation_used,
+            reasoning_replay_tokens: reasoning_replay_used,
+            tool_arguments_tokens: tool_arguments_used,
+            tool_result_tokens: tool_result_used,
             recall_tokens: recall_used,
             episode_tokens: episode_used,
             recent_start_sequence: epoch_start,

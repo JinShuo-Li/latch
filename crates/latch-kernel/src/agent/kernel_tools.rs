@@ -92,6 +92,15 @@ impl Agent {
                     .unwrap_or(false);
                 self.state.set_implementation_done(implemented);
                 self.sync_completion(sink)?;
+                // The model claimed completion and the kernel derived a
+                // terminal, verified-or-implemented state. The loop may exit in
+                // this same turn; `Blocked` still earns a reporting turn.
+                if matches!(
+                    self.state.state().completion,
+                    CompletionState::Verified | CompletionState::ImplementedNotVerified
+                ) {
+                    self.terminal_complete = true;
+                }
                 tool_ok(
                     call,
                     format!(

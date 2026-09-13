@@ -52,6 +52,26 @@ pub fn resumed_permissions(events: &[Event], default: PermissionMode) -> Permiss
         .unwrap_or(default)
 }
 
+/// The inference profile a session last selected. `None` means the session
+/// never changed profile and starts from configuration. Credentials are never
+/// part of this record; the CLI resolves them freshly at startup.
+#[must_use]
+pub fn resumed_inference_profile(events: &[Event]) -> Option<latch_protocol::InferenceProfile> {
+    events.iter().rev().find_map(|event| match &event.payload {
+        EventPayload::InferenceProfileChanged {
+            provider,
+            model,
+            effort,
+            ..
+        } => Some(latch_protocol::InferenceProfile {
+            provider: provider.clone(),
+            model: model.clone(),
+            effort: *effort,
+        }),
+        _ => None,
+    })
+}
+
 /// Rebuilds the user-visible transcript from durable events in chronological
 /// order. Hidden internals (reasoning content, context statistics, model usage,
 /// raw task state) never appear; this is the exact formatter the live TUI

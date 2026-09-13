@@ -1249,6 +1249,421 @@ fn multi_tool_response(text: &str, calls: Vec<(&str, &str, serde_json::Value)>) 
     }
 }
 
+/// Test provider that can inject late user steering, a queued child message,
+/// or a child report at a chosen request, so the terminal-complete safe
+/// boundary can be exercised deterministically.
+struct GateProvider {
+    requests: std::sync::Mutex<Vec<ModelRequest>>,
+    responses: std::sync::Mutex<std::collections::VecDeque<ModelResponse>>,
+    steering: std::sync::RwLock<Option<SteeringQueue>>,
+    mailbox: std::sync::RwLock<Option<ChildMailbox>>,
+    supervisor: std::sync::RwLock<Option<AgentSupervisor>>,
+    inject_on_request: usize,
+    steer: std::sync::Mutex<Vec<String>>,
+    message: std::sync::Mutex<Option<latch_protocol::AgentMessage>>,
+    report: std::sync::Mutex<Option<AgentReport>>,
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for GateProvider {
+    fn name(&self) -> &str {
+        "gate"
+    }
+    fn model(&self) -> &str {
+        "gate-test"
+    }
+    async fn stream(
+        &self,
+        request: ModelRequest,
+        _cancel: CancellationToken,
+        sink: StreamSink,
+    ) -> Result<ModelResponse> {
+        let index = {
+            let mut requests = self.requests.lock().unwrap();
+            requests.push(request);
+            requests.len()
+        };
+        if index == self.inject_on_request {
+            if let Some(steering) = self.steering.read().unwrap().clone() {
+                for text in self.steer.lock().unwrap().iter() {
+                    let _ = steering.push(text.clone());
+                }
+            }
+            if let (Some(mailbox), Some(message)) = (
+                self.mailbox.read().unwrap().clone(),
+                self.message.lock().unwrap().clone(),
+            ) {
+                mailbox.push(message);
+            }
+            if let (Some(supervisor), Some(report)) = (
+                self.supervisor.read().unwrap().clone(),
+                self.report.lock().unwrap().clone(),
+            ) {
+                supervisor.restore_notifications(vec![report]);
+            }
+        }
+        let response = self
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("scripted gate response");
+        for chunk in response.text.as_bytes().chunks(8) {
+            sink(StreamEvent::TextDelta(
+                String::from_utf8_lossy(chunk).into_owned(),
+            ));
+        }
+        sink(StreamEvent::Completed(response.clone()));
+        Ok(response)
+    }
+}
+
+fn gate_agent(
+    dir: &tempfile::TempDir,
+    responses: Vec<ModelResponse>,
+    inject_on_request: usize,
+) -> (EventStore, Uuid, Agent, Arc<GateProvider>) {
+    let workspace = dir.path();
+    let store = EventStore::open_memory().unwrap();
+    let sid = store.create_session(workspace).unwrap();
+    let tools = ToolExecutor::new(
+        workspace.into(),
+        dir.path().join("art"),
+        store.clone(),
+        sid,
+        PolicyEngine::new(Mode::Work, workspace.into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let provider = Arc::new(GateProvider {
+        requests: std::sync::Mutex::new(Vec::new()),
+        responses: std::sync::Mutex::new(responses.into()),
+        steering: std::sync::RwLock::new(None),
+        mailbox: std::sync::RwLock::new(None),
+        supervisor: std::sync::RwLock::new(None),
+        inject_on_request,
+        steer: std::sync::Mutex::new(Vec::new()),
+        message: std::sync::Mutex::new(None),
+        report: std::sync::Mutex::new(None),
+    });
+    let agent = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: workspace.into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 3,
+    });
+    *provider.steering.write().unwrap() = Some(agent.steering_handle());
+    *provider.mailbox.write().unwrap() = Some(agent.child_mailbox_handle());
+    *provider.supervisor.write().unwrap() = agent.agent_supervisor();
+    (store, sid, agent, provider)
+}
+
+fn gate_complete_script() -> Vec<ModelResponse> {
+    vec![
+        tool_response(
+            "validating",
+            "v1",
+            "validate",
+            json!({"requirement":"fixture check","command":"true"}),
+        ),
+        tool_response(
+            "all done",
+            "c1",
+            "complete",
+            json!({"implementation_done": true}),
+        ),
+        ModelResponse {
+            text: "final after the gate".into(),
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: None,
+        },
+    ]
+}
+
+#[tokio::test]
+async fn late_steering_prevents_premature_terminal_complete() {
+    let d = tempdir().unwrap();
+    let (_store, _sid, mut agent, provider) = gate_agent(&d, gate_complete_script(), 2);
+    provider
+        .steer
+        .lock()
+        .unwrap()
+        .push("also update the docs".into());
+    let out = agent
+        .run("start", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    // The run stayed open for the accepted steer and answered it, instead of
+    // exiting after `complete`.
+    assert!(out.contains("all done") && out.ends_with("final after the gate"));
+    assert_eq!(provider.requests.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn pending_child_report_prevents_premature_terminal_complete() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent, provider) = gate_agent(&d, gate_complete_script(), 2);
+    *provider.report.lock().unwrap() = Some(AgentReport {
+        report_id: Uuid::new_v4(),
+        agent_id: Uuid::new_v4(),
+        task_name: "child".into(),
+        status: latch_protocol::AgentStatus::Completed,
+        completion: CompletionState::Verified,
+        summary: "child finished".into(),
+        findings: vec![],
+        touched_files: vec![],
+        evidence: vec![],
+        unresolved_questions: vec![],
+    });
+    agent
+        .run("start", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert_eq!(
+        provider.requests.lock().unwrap().len(),
+        3,
+        "a pending child report earns a delivery turn"
+    );
+    assert!(store.events(sid).unwrap().iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::AgentNotificationDelivered { .. }
+    )));
+}
+
+#[tokio::test]
+async fn queued_child_message_prevents_premature_terminal_complete() {
+    let d = tempdir().unwrap();
+    let (_store, _sid, mut agent, provider) = gate_agent(&d, gate_complete_script(), 2);
+    *provider.message.lock().unwrap() = Some(latch_protocol::AgentMessage {
+        message_id: Uuid::new_v4(),
+        kind: latch_protocol::AgentMessageKind::FollowUp,
+        text: "parent follow-up".into(),
+    });
+    agent
+        .run("start", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert_eq!(
+        provider.requests.lock().unwrap().len(),
+        3,
+        "a queued child message earns a consumption turn"
+    );
+}
+
+#[tokio::test]
+async fn terminal_complete_never_exits_with_a_pending_permission() {
+    let d = tempdir().unwrap();
+    let responses = vec![
+        tool_response(
+            "writing outside",
+            "p1",
+            "write",
+            json!({"path":"../outside.txt","content":"x"}),
+        ),
+        tool_response(
+            "done",
+            "c1",
+            "complete",
+            json!({"implementation_done": true}),
+        ),
+    ];
+    let (_store, sid, mut agent, provider) = gate_agent(&d, responses, 99);
+    agent
+        .run("start", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert_eq!(
+        provider.requests.lock().unwrap().len(),
+        2,
+        "terminal complete exits without a summary request"
+    );
+    let store = agent.store.clone();
+    let events = store.events(sid).unwrap();
+    let requested = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::PermissionRequested { request_id, .. } => Some(*request_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for request_id in requested {
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.payload,
+                EventPayload::PermissionResolved { request_id: resolved, .. } if *resolved == request_id
+            )),
+            "every approval is resolved before the fast path can exit"
+        );
+    }
+}
+
+struct ProfileProvider {
+    model: String,
+    requests: std::sync::Mutex<Vec<ModelRequest>>,
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for ProfileProvider {
+    fn name(&self) -> &str {
+        "profile"
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
+    async fn stream(
+        &self,
+        request: ModelRequest,
+        _cancel: CancellationToken,
+        sink: StreamSink,
+    ) -> Result<ModelResponse> {
+        self.requests.lock().unwrap().push(request);
+        let response = ModelResponse {
+            text: format!("{} answered", self.model),
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: None,
+        };
+        sink(StreamEvent::Completed(response.clone()));
+        Ok(response)
+    }
+}
+
+fn profile_descriptor(model: &str, window: Option<usize>) -> crate::providers::ModelDescriptor {
+    crate::providers::ModelDescriptor {
+        provider: latch_protocol::ProviderId::new("custom"),
+        model: model.into(),
+        display_name: model.into(),
+        context_window_tokens: window,
+        supported_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+        default_effort: ReasoningEffort::Low,
+        reasoning_replay: crate::provider::ReasoningReplay::Replay,
+        pricing: Some(latch_protocol::ModelPricing {
+            input_per_million: Some(1.0),
+            output_per_million: Some(2.0),
+            cache_read_per_million: None,
+            cache_write_per_million: None,
+            currency: "USD".into(),
+        }),
+        aliases: vec![],
+        known: true,
+    }
+}
+
+#[tokio::test]
+async fn live_profile_switch_updates_the_actual_runtime_and_rotates_the_epoch() {
+    let d = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let sid = store.create_session(d.path()).unwrap();
+    let provider_a = Arc::new(ProfileProvider {
+        model: "gpt-model-a".into(),
+        requests: std::sync::Mutex::new(Vec::new()),
+    });
+    let tools = ToolExecutor::new(
+        d.path().into(),
+        d.path().join("art"),
+        store.clone(),
+        sid,
+        PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: d.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: provider_a.clone(),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    agent.set_context_budget(ContextConfig::default(), 32_000);
+    agent
+        .run("start", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert_eq!(provider_a.requests.lock().unwrap().len(), 1);
+
+    // Switch provider, model, and effort without recreating the session.
+    let provider_b = Arc::new(ProfileProvider {
+        model: "claude-model-b".into(),
+        requests: std::sync::Mutex::new(Vec::new()),
+    });
+    let descriptor = profile_descriptor("claude-model-b", Some(123_000));
+    agent
+        .set_inference_profile(
+            provider_b.clone(),
+            InferenceProfile::new("custom", "claude-model-b", ReasoningEffort::High),
+            &descriptor,
+            ContextConfig::default(),
+            "test switch",
+        )
+        .unwrap();
+
+    // Runtime state moved together.
+    assert_eq!(agent.profile().provider.as_str(), "custom");
+    assert_eq!(agent.profile().model, "claude-model-b");
+    assert_eq!(agent.profile().effort, ReasoningEffort::High);
+    assert_eq!(agent.context_window_tokens, 123_000);
+    assert_eq!(
+        agent.estimator().profile(),
+        TokenEstimator::for_model("claude-model-b").profile()
+    );
+
+    // The next run actually uses the new provider and preserves the session.
+    agent
+        .run("continue", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert_eq!(provider_a.requests.lock().unwrap().len(), 1);
+    assert_eq!(provider_b.requests.lock().unwrap().len(), 1);
+
+    let events = store.events(sid).unwrap();
+    let changed = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::InferenceProfileChanged {
+                provider,
+                model,
+                effort,
+                ..
+            } => Some((provider.clone(), model.clone(), *effort)),
+            _ => None,
+        })
+        .expect("durable profile change");
+    assert_eq!(changed.0.as_str(), "custom");
+    assert_eq!(changed.1, "claude-model-b");
+    assert_eq!(changed.2, ReasoningEffort::High);
+    assert!(
+        events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::ContextEpochStarted { reason, .. }
+                if reason == "inference profile changed"
+        )),
+        "a profile change starts a fresh cache epoch"
+    );
+
+    // Resume restores the profile from durable history, not from config.
+    assert_eq!(
+        crate::session::resumed_inference_profile(&events),
+        Some(InferenceProfile::new(
+            "custom",
+            "claude-model-b",
+            ReasoningEffort::High
+        ))
+    );
+    // The first user turn and its answer are still in history.
+    assert!(events.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::UserMessage { text } if text == "start"
+    )));
+}
+
 fn steering_agent(
     dir: &tempfile::TempDir,
     responses: Vec<ModelResponse>,

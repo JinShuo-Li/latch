@@ -621,13 +621,15 @@ async fn resumed_failure_state_survives() {
     );
 }
 
-/// A trivial one-file fix follows the short proportional path: read, patch,
-/// validate, complete, report. It uses five model turns and four tool calls,
-/// with no plan, repository search, subagent, or broader validation sweep. The
-/// provider-visible system prompt carries the proportional-effort core and
-/// none of the obsolete blanket-persistence wording.
+/// Deterministic runtime regression fixture (NOT a live-model proof): a
+/// one-file fix is driven through the short proportional path by a scripted
+/// provider. The kernel must not add turns of its own, and terminal-complete
+/// must end the run in the same assistant turn: four provider requests total
+/// (read, patch, validate, complete) with no separate summary request. A real
+/// model's choice to take this path is exercised only by the opt-in live
+/// benchmark, never here.
 #[tokio::test]
-async fn trivial_one_file_fix_takes_the_short_path() {
+async fn trivial_one_file_fix_is_a_deterministic_four_request_fixture() {
     let dir = tempdir().unwrap();
     let workspace = dir.path().join("sample");
     std::fs::create_dir(&workspace).unwrap();
@@ -657,14 +659,13 @@ async fn trivial_one_file_fix_takes_the_short_path() {
             )],
         ),
         response(
-            "Done.",
+            "Fixed app.txt and verified the exact content.",
             vec![call(
                 "complete",
                 "complete",
                 json!({"implementation_done":true}),
             )],
         ),
-        response("Fixed app.txt and verified the exact content.", vec![]),
     ];
     let provider = Arc::new(RecordingProvider::new(scripted));
     let tools = ToolExecutor::new(
@@ -700,12 +701,28 @@ async fn trivial_one_file_fix_takes_the_short_path() {
     );
     assert_eq!(agent.state().completion, CompletionState::Verified);
 
-    // One model request per semantic step plus the final report.
+    // Terminal-complete ends the run in the same assistant turn: read, patch,
+    // validate, complete; no fifth request for the final summary.
     let requests = provider.requests();
     assert_eq!(
         requests.len(),
-        5,
-        "a trivial fix must not take extra model turns"
+        4,
+        "terminal complete must not spend a summary-only model request"
+    );
+    let events = store.events(session).unwrap();
+    let final_assistant = events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::AssistantMessageCompleted {
+                text, tool_calls, ..
+            } if tool_calls.iter().any(|call| call.name == "complete") => Some(text.clone()),
+            _ => None,
+        })
+        .expect("assistant turn that invoked complete");
+    assert!(
+        final_assistant.contains("verified the exact content"),
+        "the final answer travels in the same assistant turn as complete: {final_assistant:?}"
     );
     let tools_used: Vec<String> = store
         .events(session)

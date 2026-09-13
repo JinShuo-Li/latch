@@ -29,6 +29,9 @@ pub struct WorkerSettings {
     pub retry_budget: u32,
     pub stagnation_budget: u32,
     pub max_model_turns: Option<u32>,
+    /// Effective root inference profile. Children inherit it at spawn so
+    /// delegation never silently reverts to a config-default model/effort.
+    pub profile: latch_protocol::InferenceProfile,
 }
 
 struct WorkerHandle {
@@ -41,7 +44,9 @@ pub(super) struct SupervisorInner {
     pub root_session_id: Uuid,
     pub workspace: PathBuf,
     pub store: EventStore,
-    pub provider: Arc<dyn ModelProvider>,
+    /// Live root provider. Replaced when the root switches inference profile so
+    /// subsequently spawned children inherit the new profile.
+    pub provider: RwLock<Arc<dyn ModelProvider>>,
     pub tools: ToolExecutor,
     pub settings: RwLock<WorkerSettings>,
     pub graph: Mutex<AgentGraph>,
@@ -128,7 +133,7 @@ impl AgentSupervisor {
                 root_session_id,
                 workspace,
                 store,
-                provider,
+                provider: RwLock::new(provider),
                 tools,
                 settings: RwLock::new(settings),
                 graph: Mutex::new(graph),
@@ -147,6 +152,15 @@ impl AgentSupervisor {
             .write()
             .unwrap_or_else(|e| e.into_inner());
         update(&mut settings);
+    }
+
+    /// Replaces the live root provider used for future child sessions.
+    pub(crate) fn set_provider(&self, provider: Arc<dyn ModelProvider>) {
+        *self
+            .inner
+            .provider
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = provider;
     }
 
     pub async fn spawn_agent(
@@ -470,11 +484,15 @@ impl AgentSupervisor {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let provider = self
+        let root_provider = self
             .inner
             .provider
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let provider = root_provider
             .for_session(identity.agent_id)
-            .unwrap_or_else(|| self.inner.provider.clone());
+            .unwrap_or_else(|| root_provider.clone());
         let tools = self.inner.tools.for_child(identity.agent_id)?;
         let continuity = ContinuityEngine::for_model(
             self.inner.store.clone(),
@@ -496,7 +514,8 @@ impl AgentSupervisor {
         );
         agent.set_stagnation_budget(settings.stagnation_budget);
         agent.set_max_model_turns(settings.max_model_turns);
-        agent.set_context_budget(settings.context, settings.context_window_tokens);
+        agent.set_context_budget(settings.context.clone(), settings.context_window_tokens);
+        agent.set_inherited_profile(settings.profile.clone());
         let events = self.inner.store.events(identity.agent_id)?;
         if let Some(state) = events.iter().rev().find_map(|event| match &event.payload {
             EventPayload::TaskStateUpdated { state } => Some(state.clone()),
