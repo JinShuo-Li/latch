@@ -2630,7 +2630,11 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     // Credential list: choose "Enter API key securely".
     app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.capture.as_ref().is_some_and(|capture| capture.spec.masked));
+    assert!(
+        app.capture
+            .as_ref()
+            .is_some_and(|capture| capture.spec.masked)
+    );
     for ch in "sk-live-secret".chars() {
         app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
     }
@@ -2645,7 +2649,10 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     let rendered = render_to_text(&mut app, 100, 30);
-    assert!(rendered.contains("secure local storage (value hidden)"), "{rendered}");
+    assert!(
+        rendered.contains("secure local storage (value hidden)"),
+        "{rendered}"
+    );
     assert!(!rendered.contains("sk-live-secret"));
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(matches!(
@@ -2656,6 +2663,12 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
             ..
         })) if provider_kind == "openai" && secret == "sk-live-secret"
     ));
+    // The secret never entered the durable-ish transcript or the composer
+    // buffer; it travels only in the action payload.
+    assert!(app.capture.is_none());
+    assert!(app.input.text().is_empty());
+    let visible = format!("{:?}", app.items);
+    assert!(!visible.contains("sk-live-secret"), "{visible}");
 }
 
 #[test]

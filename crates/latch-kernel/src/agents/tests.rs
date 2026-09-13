@@ -875,3 +875,101 @@ async fn resumed_child_owes_its_delegation_brief_before_any_follow_up() {
         "the resumed child must see its brief before the follow-up"
     );
 }
+
+/// Minimal provider with a distinct model id, used to prove inheritance.
+struct FixedProvider {
+    model: String,
+}
+
+#[async_trait]
+impl ModelProvider for FixedProvider {
+    fn name(&self) -> &str {
+        "fixed"
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
+    async fn stream(
+        &self,
+        _request: ModelRequest,
+        _cancel: CancellationToken,
+        sink: crate::provider::StreamSink,
+    ) -> Result<ModelResponse> {
+        let response = ModelResponse {
+            text: "child work done".into(),
+            tool_calls: Vec::new(),
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: None,
+        };
+        sink(StreamEvent::Completed(response.clone()));
+        Ok(response)
+    }
+}
+
+#[tokio::test]
+async fn child_inherits_the_live_inference_profile() {
+    let (_workspace, store, mut agent) = test_agent(Arc::new(TestProvider::plain(0)), Mode::Work);
+    // Switch the root to a distinct provider/model/effort before spawning.
+    let inherited = Arc::new(FixedProvider {
+        model: "inherited-model".into(),
+    });
+    let descriptor = crate::providers::ModelDescriptor {
+        provider: latch_protocol::ProviderId::new("custom"),
+        model: "inherited-model".into(),
+        display_name: "inherited-model".into(),
+        context_window_tokens: Some(64_000),
+        supported_efforts: vec![
+            latch_protocol::ReasoningEffort::Low,
+            latch_protocol::ReasoningEffort::High,
+        ],
+        default_effort: latch_protocol::ReasoningEffort::Low,
+        reasoning_replay: crate::provider::ReasoningReplay::Omit,
+        pricing: None,
+        aliases: Vec::new(),
+        known: true,
+    };
+    agent
+        .set_inference_profile(
+            inherited.clone(),
+            latch_protocol::InferenceProfile::new(
+                "custom",
+                "inherited-model",
+                latch_protocol::ReasoningEffort::High,
+            ),
+            &descriptor,
+            crate::config::ContextConfig::default(),
+            "test switch",
+        )
+        .unwrap();
+
+    let supervisor = agent.agent_supervisor().expect("root supervisor");
+    let snapshot = supervisor
+        .spawn_agent(
+            "inherit".into(),
+            "do a bounded task".into(),
+            None,
+            DelegationContext::default(),
+        )
+        .await
+        .unwrap();
+    supervisor
+        .wait_agents(&[snapshot.agent_id], Duration::from_secs(2))
+        .await
+        .unwrap();
+
+    // The child's own durable request provenance proves it inherited the live
+    // profile instead of reverting to a config default.
+    let child_events = store.events(snapshot.agent_id).unwrap();
+    let model = child_events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ModelRequestStarted { model, .. } => Some(model.clone()),
+            _ => None,
+        })
+        .expect("child made a request");
+    assert_eq!(model, "inherited-model");
+    // The root's own profile is unchanged by the child existing.
+    assert_eq!(agent.profile().model, "inherited-model");
+    agent.shutdown_extensions().await.unwrap();
+}
