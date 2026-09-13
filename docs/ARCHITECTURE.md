@@ -66,10 +66,15 @@ policy together, resets architecture prefix accounting, and appends a durable
 `InferenceProfileChanged` event. Continuity observes that event and starts a
 fresh cache epoch with the reason `inference profile changed`, so provider
 cache locality is never claimed across incompatible wire semantics. Resume
-restores the last durable profile but resolves credentials freshly; child
-agents inherit the live root profile at spawn. Reasoning effort is emitted on
-the wire only when the resolved model capability advertises the selected value
-(`low`, `high`, `max`); otherwise the adapter sends no effort field.
+restores the last durable profile but resolves credentials freshly. A child's
+effective profile is pinned durably in its own session at spawn
+(`InferenceProfileChanged`, reason `inherited from root at spawn`); worker
+recreation and process resume rebuild the child from that record, while a new
+child inherits the root's current profile. Reasoning effort is emitted on the
+wire only when the resolved model capability advertises the selected value
+(the neutral set is `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`, but
+each model exposes only its documented subset); otherwise the adapter sends no
+effort field.
 
 Transport is a per-model capability: OpenAI reasoning models use the
 Responses API (stateless `store: false` replay with

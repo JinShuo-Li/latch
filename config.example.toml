@@ -13,7 +13,7 @@ default_mode = "WORK"
 # credential = "env:OPENCODE_API_KEY"  # env:NAME | file:NAME (0600 local store).
 # keyring:NAME parses for forward compatibility but is not available in this
 # build and is never advertised by /setup.
-# default_model = "deepseek-v4.1-flash"
+# default_model = "deepseek-v4-flash"
 # base_url = "https://opencode.ai/zen/go"   # optional override
 #
 # [providers.opencode-go.models."deepseek-v4-flash"]
@@ -24,8 +24,8 @@ default_mode = "WORK"
 # reasoning_replay = "replay"
 # transport = "chat_completions"   # chat_completions | responses | anthropic_messages
 # adaptive_thinking = false        # Anthropic adaptive thinking
-# aliases = ["flash"]
-# [providers.opencode-go.models."deepseek-v4.1-flash".pricing]
+# aliases = ["flash", "deepseek-v4.1-flash"]
+# [providers.opencode-go.models."deepseek-v4-flash".pricing]
 # input_per_million = 0.28
 # output_per_million = 0.42
 
@@ -33,8 +33,8 @@ default_mode = "WORK"
 # CLI override > durable session profile (resume) > this config > built-in.
 # [inference]
 # provider = "opencode-go"
-# model = "deepseek-v4.1-flash"
-# effort = "low"          # provider default | low | high | max
+# model = "deepseek-v4-flash"
+# effort = "low"   # per-model: provider default | none | minimal | low | medium | high | xhigh | max
 
 # Backward compatibility: the legacy single-provider table below is migrated
 # into the registry automatically when no [providers.*] entries exist. New

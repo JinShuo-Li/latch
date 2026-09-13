@@ -39,11 +39,11 @@ Configuration is provider-neutral and multi-provider:
 [providers.opencode-go]
 kind = "opencode-go"
 credential = "env:OPENCODE_API_KEY"
-default_model = "deepseek-v4.1-flash"
+default_model = "deepseek-v4-flash"
 
 [inference]
 provider = "opencode-go"
-model = "deepseek-v4.1-flash"
+model = "deepseek-v4-flash"
 effort = "low"
 ```
 
@@ -65,18 +65,20 @@ restores its profile and resolves credentials freshly from the environment or
 local store.
 
 Reasoning effort is a model capability, not a provider-wide constant. The
-built-in catalog follows current official documentation: OpenAI models use the
-Responses transport (required for tool calling with reasoning effort on
-GPT-5.4 and later) and support `none`/`low`/`medium`/`high`/`xhigh` (plus
-`max` where advertised); Anthropic models use adaptive thinking with
-`low`/`medium`/`high`/`xhigh`/`max`; DeepSeek Flash/Pro use Chat Completions
-with `none`/`low`/`high`/`max` and required `reasoning_content` replay; and
-OpenCode Go resolves transport and capabilities per model (GPT over Responses,
-Claude/Qwen/MiniMax over Messages, the rest over Chat Completions). Unknown
-models stay conservative: provider-default effort only, no replay assumption,
-no invented context window or pricing. Advanced users can override context
-window, efforts, default effort, replay policy, aliases, pricing, transport,
-and adaptive thinking per model under `[providers.<id>.models.<id>]`.
+neutral set is `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`, and each
+model exposes only its documented subset: OpenAI models use the Responses
+transport (required for tool calling with reasoning effort on GPT-5.4 and
+later) with 1,050,000-token public API context windows; Anthropic models use
+adaptive thinking with exact thinking/redacted-block replay; DeepSeek's
+canonical API models are `deepseek-flash` and `deepseek-v4-pro` (Chat
+Completions, `none`/`low`/`high`/`max`, required `reasoning_content` replay,
+retired names accepted as aliases only); and OpenCode Go resolves transport
+and capabilities per model (GPT over Responses, Claude/Qwen/MiniMax over
+Messages, the rest over Chat Completions). Unknown models stay conservative:
+provider-default effort only, no replay assumption, no invented context
+window or pricing. Advanced users can override context window, efforts,
+default effort, replay policy, aliases, pricing, transport, and adaptive
+thinking per model under `[providers.<id>.models.<id>]`.
 
 `keyring:NAME` credentials parse for forward compatibility but are not
 available in this build; `/setup` offers environment variables and the 0600
@@ -419,11 +421,21 @@ the composer metadata always shows the active model and effort together.
   call.
 - **Safety/permissions:** `/safety` and `/permissions` open restrained
   selectors above the composer; the effective short labels are shown in the
-  composer metadata (for example `WORK · deepseek-v4.1-flash/low · main · std ·
+  composer metadata (for example `WORK · deepseek-v4-flash/low · main · std ·
   ask`) and both settings are restored exactly on resume.
 - **Model/effort:** `/model` opens the live inference-profile selector and
   `/setup` the guided provider setup; both show only values the selected model
-  supports and are unavailable during an active turn.
+  supports and are unavailable during an active turn. `/setup` also supports
+  adding, editing, and removing provider instances: removal asks for one
+  confirmation, keeps stored credentials, and refuses to remove the only
+  configured provider so `[inference]` never dangles.
+- **Run metrics:** the sidebar shows a RUN block for the current/last user
+  request next to cumulative SESSION totals. Reasoning-replay, tool-argument,
+  and tool-result estimates are run-cumulative with the most recent request
+  shown separately.
+- **Child profiles:** a child is permanently associated with the inference
+  profile it was spawned under; a root profile switch affects only future
+  children, and a rebuilt or resumed child returns to its own pinned profile.
 - **Sidebar:** Ctrl+B or `/sidebar` toggles the responsive state sidebar.
 - **Detail:** Ctrl+T or `/raw` toggles the detailed, copy-friendly transcript.
 - **Diff:** `/diff` opens a full-width semantic diff inspector (red deletions,
