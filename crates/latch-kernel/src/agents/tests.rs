@@ -931,6 +931,8 @@ async fn child_inherits_the_live_inference_profile() {
         ],
         default_effort: latch_protocol::ReasoningEffort::Low,
         reasoning_replay: crate::provider::ReasoningReplay::Omit,
+        adaptive_thinking: false,
+        transport: crate::config::TransportKind::Responses,
         pricing: None,
         aliases: Vec::new(),
         known: true,

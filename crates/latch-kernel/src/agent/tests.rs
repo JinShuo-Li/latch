@@ -1620,6 +1620,8 @@ fn profile_descriptor(model: &str, window: Option<usize>) -> crate::providers::M
         supported_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
         default_effort: ReasoningEffort::Low,
         reasoning_replay: crate::provider::ReasoningReplay::Replay,
+        adaptive_thinking: false,
+        transport: crate::config::TransportKind::ChatCompletions,
         pricing: Some(latch_protocol::ModelPricing {
             input_per_million: Some(1.0),
             output_per_million: Some(2.0),

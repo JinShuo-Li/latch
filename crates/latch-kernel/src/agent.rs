@@ -631,7 +631,32 @@ impl Agent {
         sink: AgentEventSink,
     ) -> Result<String> {
         self.steering.open();
-        let result = self.run_loop(user_text, cancel, sink).await;
+        // Durable run boundary: every provider request, tool call, usage
+        // record, and mutation between these events belongs to exactly one run.
+        let run_id = Uuid::new_v4();
+        self.emit(
+            EventPayload::RunStarted {
+                run_id,
+                prompt: compact_agent_summary(user_text),
+            },
+            &sink,
+        )?;
+        let result = self.run_loop(user_text, cancel.clone(), sink.clone()).await;
+        let outcome = match &result {
+            Ok(_) => "completed",
+            Err(_) if cancel.is_cancelled() => "cancelled",
+            Err(_) => "error",
+        };
+        // RunCompleted commits even on failure: the boundary is provenance,
+        // not a success claim. A storage failure here is returned instead of
+        // masking the boundary.
+        self.emit(
+            EventPayload::RunCompleted {
+                run_id,
+                outcome: outcome.to_owned(),
+            },
+            &sink,
+        )?;
         // Normal exits already atomically closed the queue at the final
         // answer. Aborted runs (cancel or error) close here, dropping any
         // accepted-but-unconsumed steer instead of leaking it into the next

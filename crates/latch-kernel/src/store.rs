@@ -29,6 +29,8 @@ pub struct SessionSummary {
     pub updated_at: DateTime<Utc>,
     pub mode: Option<Mode>,
     pub model: Option<String>,
+    /// Last durable reasoning effort selected for this session, if any.
+    pub effort: Option<latch_protocol::ReasoningEffort>,
     pub event_count: u64,
     pub prompt_preview: Option<String>,
     pub completion: Option<CompletionState>,
@@ -198,7 +200,8 @@ impl EventStore {
             (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='model_request_started' ORDER BY sequence DESC LIMIT 1),
             (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id),
             (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='user_message' ORDER BY sequence ASC LIMIT 1),
-            (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='completion_changed' ORDER BY sequence DESC LIMIT 1)
+            (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='completion_changed' ORDER BY sequence DESC LIMIT 1),
+            (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='inference_profile_changed' ORDER BY sequence DESC LIMIT 1)
             FROM sessions s WHERE (?1 IS NULL OR s.workspace=?1)
             AND NOT EXISTS (SELECT 1 FROM events child WHERE child.session_id=s.id AND child.kind='agent_spawned')
             ORDER BY s.updated_at DESC,s.id ASC";
@@ -215,6 +218,7 @@ impl EventStore {
                 row.get::<_, u64>(6)?,
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         })?;
         rows.map(|row| {
@@ -228,6 +232,7 @@ impl EventStore {
                 event_count,
                 prompt,
                 completion,
+                effort,
             ) = row?;
             Ok(SessionSummary {
                 id: Uuid::parse_str(&id)?,
@@ -240,6 +245,10 @@ impl EventStore {
                 }),
                 model: payload(model)?.and_then(|payload| match payload {
                     EventPayload::ModelRequestStarted { model, .. } => Some(model),
+                    _ => None,
+                }),
+                effort: payload(effort)?.and_then(|payload| match payload {
+                    EventPayload::InferenceProfileChanged { effort, .. } => Some(effort),
                     _ => None,
                 }),
                 event_count,
