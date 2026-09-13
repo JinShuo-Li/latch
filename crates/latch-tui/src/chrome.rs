@@ -335,7 +335,7 @@ fn profile_surface_lines(selector: &ProfileSelector, width: usize) -> Vec<Line<'
 }
 
 fn setup_surface_lines(flow: &SetupFlow, width: usize) -> Vec<Line<'static>> {
-    let review = if flow.step() == SetupStep::Review {
+    let review = if matches!(flow.step(), SetupStep::Review | SetupStep::RemoveConfirm) {
         flow.review_lines()
     } else {
         Vec::new()

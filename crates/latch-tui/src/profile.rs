@@ -52,6 +52,8 @@ impl CatalogModel {
 pub struct CatalogProvider {
     pub id: String,
     pub display_name: String,
+    /// Configured default model, used by the setup surface.
+    pub default_model: String,
     pub models: Vec<CatalogModel>,
 }
 
@@ -101,6 +103,15 @@ pub enum SetupPlan {
         model: String,
         effort: ReasoningEffort,
     },
+    /// Remove one configured provider instance. Credentials are never deleted.
+    Remove { name: String },
+}
+
+/// One configured provider instance shown by the removal surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfiguredProvider {
+    pub id: String,
+    pub model: String,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -411,6 +422,9 @@ impl ProfileSelector {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupStep {
+    Action,
+    RemoveSelect,
+    RemoveConfirm,
     Kind,
     Name,
     Endpoint,
@@ -442,6 +456,8 @@ pub struct SetupFlow {
     /// Model id typed by the user when it is not in the catalog.
     custom_model: Option<String>,
     effort: usize,
+    configured: Vec<ConfiguredProvider>,
+    remove: usize,
 }
 
 impl std::fmt::Debug for SetupFlow {
@@ -472,9 +488,27 @@ impl SetupFlow {
             model: 0,
             custom_model: None,
             effort: 0,
+            configured: Vec::new(),
+            remove: 0,
         };
         flow.reset_endpoint();
         flow
+    }
+
+    /// Adds the configured provider instances and starts on the add/remove
+    /// menu. An empty list keeps the flow on the original add/edit path.
+    #[must_use]
+    pub fn with_providers(mut self, configured: Vec<ConfiguredProvider>) -> Self {
+        if !configured.is_empty() {
+            self.configured = configured;
+            self.step = SetupStep::Action;
+            self.selected = 0;
+        }
+        self
+    }
+
+    fn removing(&self) -> Option<&ConfiguredProvider> {
+        self.configured.get(self.remove)
     }
 
     fn current_kind(&self) -> Option<&SetupKind> {
@@ -496,6 +530,9 @@ impl SetupFlow {
     #[must_use]
     pub fn title(&self) -> String {
         match self.step {
+            SetupStep::Action => "Setup · providers".to_owned(),
+            SetupStep::RemoveSelect => "Setup · remove provider".to_owned(),
+            SetupStep::RemoveConfirm => "Setup · confirm removal".to_owned(),
             SetupStep::Kind => "Setup · provider".to_owned(),
             SetupStep::Name => "Setup · provider name".to_owned(),
             SetupStep::Endpoint => "Setup · endpoint".to_owned(),
@@ -512,9 +549,13 @@ impl SetupFlow {
     #[must_use]
     pub fn hint(&self) -> &'static str {
         match self.step {
-            SetupStep::Kind | SetupStep::Credential | SetupStep::Model | SetupStep::Effort => {
-                "↑↓ select · enter next · esc cancel"
-            }
+            SetupStep::Action
+            | SetupStep::RemoveSelect
+            | SetupStep::Kind
+            | SetupStep::Credential
+            | SetupStep::Model
+            | SetupStep::Effort => "↑↓ select · enter next · esc cancel",
+            SetupStep::RemoveConfirm => "↑↓ select · enter confirm · esc cancel",
             SetupStep::Review => "↑↓ select · enter apply · esc cancel",
             _ => "enter next · esc cancel",
         }
@@ -529,6 +570,43 @@ impl SetupFlow {
             selected: index == self.selected,
         };
         match self.step {
+            SetupStep::Action => {
+                let mut rows = vec![row(
+                    0,
+                    "Add or edit provider…".to_owned(),
+                    "configure endpoint, credential, model, and effort".to_owned(),
+                    false,
+                )];
+                rows.push(row(
+                    1,
+                    "Remove provider…".to_owned(),
+                    format!("{} configured", self.configured.len()),
+                    false,
+                ));
+                rows
+            }
+            SetupStep::RemoveSelect => self
+                .configured
+                .iter()
+                .enumerate()
+                .map(|(index, provider)| {
+                    row(
+                        index,
+                        provider.id.clone(),
+                        provider.model.clone(),
+                        index == self.remove,
+                    )
+                })
+                .collect(),
+            SetupStep::RemoveConfirm => vec![
+                row(
+                    0,
+                    "Remove".to_owned(),
+                    "config only; credentials kept".to_owned(),
+                    self.selected == 0,
+                ),
+                row(1, "Cancel".to_owned(), String::new(), self.selected == 1),
+            ],
             SetupStep::Kind => self
                 .kinds
                 .iter()
@@ -616,6 +694,20 @@ impl SetupFlow {
     /// The review summary shown on the review step. Never contains the secret.
     #[must_use]
     pub fn review_lines(&self) -> Vec<(String, String)> {
+        if self.step == SetupStep::RemoveConfirm {
+            let provider = self.removing().cloned().unwrap_or(ConfiguredProvider {
+                id: String::new(),
+                model: String::new(),
+            });
+            return vec![
+                ("Provider".to_owned(), provider.id),
+                ("Model".to_owned(), provider.model),
+                (
+                    "Effect".to_owned(),
+                    "removes provider config only; stored credentials are kept".to_owned(),
+                ),
+            ];
+        }
         let kind = self
             .current_kind()
             .map(|kind| kind.label.clone())
@@ -740,6 +832,22 @@ impl SetupFlow {
 
     pub fn back(&mut self) -> bool {
         match self.step {
+            SetupStep::Action => false,
+            SetupStep::RemoveSelect => {
+                self.step = SetupStep::Action;
+                self.selected = 1;
+                true
+            }
+            SetupStep::RemoveConfirm => {
+                self.step = SetupStep::RemoveSelect;
+                self.selected = self.remove;
+                true
+            }
+            SetupStep::Kind if !self.configured.is_empty() => {
+                self.step = SetupStep::Action;
+                self.selected = 0;
+                true
+            }
             SetupStep::Kind => false,
             SetupStep::Name => {
                 self.step = SetupStep::Kind;
@@ -787,6 +895,38 @@ impl SetupFlow {
 
     pub fn confirm(&mut self) -> SetupStepOutcome {
         match self.step {
+            SetupStep::Action => {
+                if self.selected == 1 && !self.configured.is_empty() {
+                    self.step = SetupStep::RemoveSelect;
+                    self.selected = 0;
+                } else {
+                    self.step = SetupStep::Kind;
+                    self.selected = self.kind;
+                }
+                SetupStepOutcome::None
+            }
+            SetupStep::RemoveSelect => {
+                if self.configured.is_empty() {
+                    self.step = SetupStep::Action;
+                    self.selected = 0;
+                    return SetupStepOutcome::None;
+                }
+                self.remove = self.selected.min(self.configured.len() - 1);
+                self.step = SetupStep::RemoveConfirm;
+                self.selected = 0;
+                SetupStepOutcome::None
+            }
+            SetupStep::RemoveConfirm => {
+                if self.selected == 1 {
+                    return SetupStepOutcome::Cancel;
+                }
+                SetupStepOutcome::Apply(SetupPlan::Remove {
+                    name: self
+                        .removing()
+                        .map(|provider| provider.id.clone())
+                        .unwrap_or_default(),
+                })
+            }
             SetupStep::Kind => {
                 if self.kinds.is_empty() {
                     return SetupStepOutcome::Cancel;
@@ -921,6 +1061,7 @@ mod tests {
                 CatalogProvider {
                     id: "opencode-go".into(),
                     display_name: "OpenCode Go".into(),
+                    default_model: String::new(),
                     models: vec![CatalogModel {
                         id: "deepseek-v4.1-flash".into(),
                         display_name: "DeepSeek V4.1 Flash".into(),
@@ -935,6 +1076,7 @@ mod tests {
                 CatalogProvider {
                     id: "anthropic".into(),
                     display_name: "Anthropic".into(),
+                    default_model: String::new(),
                     models: vec![CatalogModel {
                         id: "claude-sonnet-4-5".into(),
                         display_name: "Claude Sonnet 4.5".into(),
@@ -1107,6 +1249,70 @@ mod tests {
         assert_eq!(model, "deepseek-v4.1-flash");
         assert_eq!(effort, ReasoningEffort::High);
         assert_eq!(credential, SetupCredential::Env("DEEPSEEK_API_KEY".into()));
+    }
+
+    fn setup_kind() -> SetupKind {
+        SetupKind {
+            kind: "deepseek".into(),
+            label: "DeepSeek".into(),
+            default_base_url: "https://api.deepseek.com".into(),
+            credential_label: "env:DEEPSEEK_API_KEY".into(),
+            default_model: "deepseek-flash".into(),
+            models: vec![CatalogModel {
+                id: "deepseek-flash".into(),
+                display_name: "DeepSeek Flash".into(),
+                efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+                default_effort: ReasoningEffort::High,
+            }],
+        }
+    }
+
+    #[test]
+    fn setup_offers_removal_with_confirmation_and_cancel_preserves() {
+        let configured = vec![
+            ConfiguredProvider {
+                id: "deepseek".into(),
+                model: "deepseek-flash".into(),
+            },
+            ConfiguredProvider {
+                id: "lab-endpoint".into(),
+                model: "lab-model".into(),
+            },
+        ];
+        // Cancel path: menu -> remove -> select -> cancel keeps the flow open
+        // and applies nothing.
+        let mut flow = SetupFlow::new(vec![setup_kind()]).with_providers(configured.clone());
+        assert_eq!(flow.step(), SetupStep::Action);
+        assert_eq!(flow.rows().len(), 2);
+        flow.down(); // select "Remove provider…"
+        assert_eq!(flow.confirm(), SetupStepOutcome::None);
+        assert_eq!(flow.step(), SetupStep::RemoveSelect);
+        flow.down(); // select the second provider
+        assert_eq!(flow.confirm(), SetupStepOutcome::None);
+        assert_eq!(flow.step(), SetupStep::RemoveConfirm);
+        let review = flow.review_lines();
+        assert!(
+            review
+                .iter()
+                .any(|(key, value)| key == "Provider" && value == "lab-endpoint")
+        );
+        assert!(
+            review
+                .iter()
+                .any(|(_, value)| value.contains("credentials are kept"))
+        );
+        flow.down(); // highlight Cancel
+        assert_eq!(flow.confirm(), SetupStepOutcome::Cancel);
+
+        // Confirm path: removing the first provider applies exactly that plan.
+        let mut flow = SetupFlow::new(vec![setup_kind()]).with_providers(configured);
+        flow.down(); // select "Remove provider…"
+        flow.confirm(); // action -> remove select
+        assert_eq!(flow.confirm(), SetupStepOutcome::None); // select first
+        let SetupStepOutcome::Apply(SetupPlan::Remove { name }) = flow.confirm() else {
+            panic!("expected removal");
+        };
+        assert_eq!(name, "deepseek");
     }
 
     #[test]

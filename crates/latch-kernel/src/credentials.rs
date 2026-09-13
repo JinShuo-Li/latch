@@ -114,7 +114,9 @@ struct SecretsFile {
 }
 
 /// Read-only view plus writer for the local secrets file. `Debug` is redacted
-/// so a store can never leak secret material through logging.
+/// so a store can never leak secret material through logging. Cloning keeps
+/// the same in-memory values; it never widens file access.
+#[derive(Clone)]
 pub struct CredentialStore {
     path: PathBuf,
     values: BTreeMap<String, String>,

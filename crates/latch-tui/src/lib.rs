@@ -50,8 +50,8 @@ pub use presentation::{
     AgentOperation, Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel,
 };
 pub use profile::{
-    CaptureSpec, CatalogModel, CatalogProvider, ChoiceRow, InferenceCatalog, ProfileSelector,
-    SetupCredential, SetupFlow, SetupKind, SetupPlan, SetupStep, SetupStepOutcome,
+    CaptureSpec, CatalogModel, CatalogProvider, ChoiceRow, ConfiguredProvider, InferenceCatalog,
+    ProfileSelector, SetupCredential, SetupFlow, SetupKind, SetupPlan, SetupStep, SetupStepOutcome,
 };
 pub use session_picker::{PickerSelection, SessionItem, SessionPreviewLine, run_session_picker};
 pub use sidebar::{Pricing, SidebarModel, SidebarSession};
@@ -1400,7 +1400,17 @@ impl App {
                     .push_notice("provider setup is unavailable in this session");
                 return None;
             }
-            self.setup = Some(SetupFlow::new(self.setup_catalog.clone()));
+            let configured = self
+                .inference_catalog
+                .providers
+                .iter()
+                .map(|provider| ConfiguredProvider {
+                    id: provider.id.clone(),
+                    model: provider.default_model.clone(),
+                })
+                .collect();
+            self.setup =
+                Some(SetupFlow::new(self.setup_catalog.clone()).with_providers(configured));
             return None;
         }
         if !slash_command {

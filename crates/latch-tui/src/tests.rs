@@ -2522,6 +2522,7 @@ fn profile_catalog() -> InferenceCatalog {
             CatalogProvider {
                 id: "opencode-go".into(),
                 display_name: "OpenCode Go".into(),
+                default_model: String::new(),
                 models: vec![CatalogModel {
                     id: "deepseek-v4.1-flash".into(),
                     display_name: "DeepSeek V4.1 Flash".into(),
@@ -2536,6 +2537,7 @@ fn profile_catalog() -> InferenceCatalog {
             CatalogProvider {
                 id: "anthropic".into(),
                 display_name: "Anthropic".into(),
+                default_model: String::new(),
                 models: vec![CatalogModel {
                     id: "claude-sonnet-4-5".into(),
                     display_name: "Claude Sonnet 4.5".into(),

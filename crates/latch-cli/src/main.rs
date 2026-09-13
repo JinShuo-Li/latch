@@ -174,6 +174,23 @@ impl InferenceContext {
             .build_provider(profile, descriptor, &self.credentials, session_id)
     }
 
+    /// Snapshot factory used to rebuild a child session pinned to a profile
+    /// the root no longer runs. On `/setup` the registry is rebuilt, so the
+    /// agent receives a fresh factory.
+    fn provider_factory(&self) -> latch_kernel::ProviderFactory {
+        let registry = Arc::new(self.registry.clone());
+        let credentials = Arc::new(self.credentials.clone());
+        Arc::new(move |profile: &InferenceProfile, session_id: Uuid| {
+            let (resolved, descriptor) = registry.resolve_profile(profile)?;
+            let provider =
+                registry.build_provider(&resolved, &descriptor, &credentials, session_id)?;
+            Ok(latch_kernel::ProviderBuild {
+                provider,
+                descriptor,
+            })
+        })
+    }
+
     fn provider_label(&self, id: &str) -> String {
         self.registry
             .provider(id)
@@ -191,6 +208,7 @@ impl InferenceContext {
                 .map(|provider| CatalogProvider {
                     id: provider.id.to_string(),
                     display_name: provider.display_name.clone(),
+                    default_model: provider.default_model.clone(),
                     models: provider
                         .available_models()
                         .into_iter()
@@ -536,6 +554,7 @@ async fn build_agent(
     });
     agent.set_stagnation_budget(config.failure.stagnation_budget);
     agent.set_max_model_turns(config.failure.max_model_turns);
+    agent.set_provider_factory(context.provider_factory());
     if overridden {
         // A command-line override is durable provenance so a later resume
         // keeps the profile the user actually selected.
@@ -855,8 +874,8 @@ async fn apply_live_profile(
     send_profile_header(context, tx, workspace, resumed, &profile, &descriptor).await
 }
 
-/// Persists a `/setup` plan to configuration and, for a directly entered
-/// secret, to the 0600 local credential store. Returns the resolved
+/// Persists a `/setup` apply plan to configuration and, for a directly
+/// entered secret, to the 0600 local credential store. Returns the resolved
 /// (provider id, model, effort). Secret values never reach config.toml.
 fn persist_setup(
     context: &mut InferenceContext,
@@ -869,7 +888,10 @@ fn persist_setup(
         credential,
         model,
         effort,
-    } = plan.clone();
+    } = plan.clone()
+    else {
+        bail!("persist_setup only handles apply plans");
+    };
     let kind = ProviderKind::parse(&provider_kind, base_url.as_deref())
         .ok_or_else(|| anyhow!("unknown provider kind {provider_kind:?}"))?;
     // Provider id is instance identity. The setup flow defaults it to the kind
@@ -906,13 +928,56 @@ fn persist_setup(
         model: Some(model.clone()),
         effort,
     };
-    if let Some(path) = context.config_path.clone().or_else(Config::default_path) {
-        context.config.save(&path)?;
-    }
+    save_config(context)?;
     Ok((provider_id, model, effort))
 }
 
-/// Persists a `/setup` plan, resolves the new provider, and switches live.
+/// Removes a provider instance from configuration. Returns an inference
+/// profile when the removed provider was the active one and a replacement was
+/// selected; the caller must then switch the live agent. Credential material
+/// (environment variables and the local secrets file) is never deleted.
+fn remove_provider(context: &mut InferenceContext, name: &str) -> Result<Option<InferenceProfile>> {
+    if !context.config.providers.contains_key(name) {
+        bail!("no provider named {name:?}");
+    }
+    let active = context.config.inference.provider.as_deref() == Some(name);
+    if active && context.config.providers.len() == 1 {
+        bail!("cannot remove the only configured provider; configure a replacement first");
+    }
+    context.config.providers.remove(name);
+    let replacement = if active {
+        let next = context
+            .config
+            .providers
+            .keys()
+            .next()
+            .cloned()
+            .expect("checked non-empty above");
+        context.config.inference = InferenceConfig {
+            provider: Some(next.clone()),
+            model: None,
+            effort: ReasoningEffort::ProviderDefault,
+        };
+        Some(InferenceProfile::new(
+            next,
+            String::new(),
+            ReasoningEffort::ProviderDefault,
+        ))
+    } else {
+        None
+    };
+    save_config(context)?;
+    Ok(replacement)
+}
+
+fn save_config(context: &InferenceContext) -> Result<()> {
+    if let Some(path) = context.config_path.clone().or_else(Config::default_path) {
+        context.config.save(&path)?;
+    }
+    Ok(())
+}
+
+/// Persists a `/setup` plan and applies the resulting change live.
 async fn apply_setup(
     agent: &mut Agent,
     context: &mut InferenceContext,
@@ -921,10 +986,47 @@ async fn apply_setup(
     workspace: &Path,
     resumed: bool,
 ) -> Result<()> {
+    if let SetupPlan::Remove { name } = &plan {
+        let replacement = remove_provider(context, name)?;
+        // Rebuild the registry so the removal is reflected everywhere.
+        context.registry = ProviderRegistry::from_config(&context.config)?;
+        agent.set_provider_factory(context.provider_factory());
+        match replacement {
+            Some(requested) => {
+                let (profile, descriptor) = context.resolve(&requested)?;
+                let provider = context.build(&profile, &descriptor, agent.session_id)?;
+                agent.set_inference_profile(
+                    provider,
+                    profile.clone(),
+                    &descriptor,
+                    context.context.clone(),
+                    "active provider removed",
+                )?;
+                tx.send(Output::Notice(format!(
+                    "removed provider {name}; active profile moved to {} · {} ({})",
+                    context.provider_label(profile.provider.as_str()),
+                    profile.model,
+                    profile.effort.label()
+                )))
+                .await?;
+                return send_profile_header(context, tx, workspace, resumed, &profile, &descriptor)
+                    .await;
+            }
+            None => {
+                tx.send(Output::Notice(format!(
+                    "removed provider {name}; {} remain",
+                    context.config.providers.len()
+                )))
+                .await?;
+                return Ok(());
+            }
+        }
+    }
     let (provider_id, model, effort) = persist_setup(context, &plan)?;
     // Rebuild the registry from the persisted configuration so resolution
     // matches what the next process will load.
     context.registry = ProviderRegistry::from_config(&context.config)?;
+    agent.set_provider_factory(context.provider_factory());
     let requested = InferenceProfile::new(provider_id, model, effort);
     let (profile, descriptor) = context.resolve(&requested)?;
     let provider = context.build(&profile, &descriptor, agent.session_id)?;
@@ -1339,6 +1441,95 @@ mod tests {
         .unwrap();
         assert_eq!(context.config.providers.len(), 2);
         assert!(context.config.providers.contains_key("openai-proxy"));
+    }
+
+    #[test]
+    fn provider_removal_keeps_inference_valid_and_preserves_other_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let state_dir = dir.path().join("state");
+        let config = Config {
+            state_dir: state_dir.clone(),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
+        for (name, kind) in [("openai-main", "openai"), ("deepseek", "deepseek")] {
+            persist_setup(
+                &mut context,
+                &setup_plan(
+                    name,
+                    kind,
+                    SetupCredential::Env("KEY".into()),
+                    "",
+                    ReasoningEffort::ProviderDefault,
+                ),
+            )
+            .unwrap();
+        }
+        // The last applied provider is active (`deepseek`).
+        assert_eq!(
+            context.config.inference.provider.as_deref(),
+            Some("deepseek")
+        );
+        // Metadata on a non-active instance survives removal of a sibling.
+        context
+            .config
+            .providers
+            .get_mut("deepseek")
+            .unwrap()
+            .models
+            .insert(
+                "deepseek-flash".into(),
+                latch_kernel::config::ModelConfig {
+                    context_window_tokens: Some(555),
+                    ..Default::default()
+                },
+            );
+        let replacement = remove_provider(&mut context, "openai-main").unwrap();
+        assert!(replacement.is_none(), "non-active removal needs no switch");
+        assert_eq!(
+            context.config.inference.provider.as_deref(),
+            Some("deepseek")
+        );
+        assert!(remove_provider(&mut context, "missing").is_err());
+
+        // Removing the active provider picks a replacement and keeps
+        // [inference] pointing at an existing provider.
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "lab",
+                "openai-compatible",
+                SetupCredential::Env("LAB_KEY".into()),
+                "lab-model",
+                ReasoningEffort::ProviderDefault,
+            ),
+        )
+        .unwrap();
+        assert_eq!(context.config.inference.provider.as_deref(), Some("lab"));
+        let replacement = remove_provider(&mut context, "lab").unwrap().unwrap();
+        assert_eq!(replacement.provider.as_str(), "deepseek");
+        assert_eq!(
+            context.config.inference.provider.as_deref(),
+            Some("deepseek")
+        );
+
+        // The persisted config reloads, resolves a default profile, and the
+        // surviving instance keeps its metadata.
+        let reloaded = Config::load(Some(&config_path)).unwrap();
+        let registry = ProviderRegistry::from_config(&reloaded).unwrap();
+        let (profile, _) = registry.default_profile(&reloaded).unwrap();
+        assert_eq!(profile.provider.as_str(), "deepseek");
+        assert_eq!(
+            reloaded.providers["deepseek"].models["deepseek-flash"].context_window_tokens,
+            Some(555)
+        );
+
+        // Removing the only remaining provider is refused rather than leaving
+        // [inference] dangling.
+        let error = remove_provider(&mut context, "deepseek").unwrap_err();
+        assert!(error.to_string().contains("cannot remove the only"));
+        assert!(context.config.providers.contains_key("deepseek"));
     }
 
     #[test]
