@@ -166,6 +166,8 @@ mod tests {
                 text: "looking".into(),
                 tool_calls: vec![],
                 reasoning_content: Some("secret reasoning that must not display".into()),
+
+                reasoning: vec![],
             }),
             event(EventPayload::ToolFailed {
                 result: latch_protocol::ToolResult {
@@ -195,6 +197,7 @@ mod tests {
                     cache_read_tokens: None,
                     cache_write_tokens: None,
                     cache_miss_tokens: None,
+                    reasoning_tokens: None,
                 },
             }),
             event(EventPayload::TaskStateUpdated {
@@ -227,6 +230,8 @@ mod tests {
                 text: "ok".into(),
                 tool_calls: vec![],
                 reasoning_content: None,
+
+                reasoning: vec![],
             }),
             event(EventPayload::UserMessage {
                 text: "second prompt".into(),

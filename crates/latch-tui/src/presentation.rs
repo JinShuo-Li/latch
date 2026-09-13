@@ -1295,6 +1295,8 @@ mod tests {
                 text: "answer".into(),
                 tool_calls: vec![],
                 reasoning_content: Some("secret".into()),
+
+                reasoning: vec![],
             }),
             request("call-secret", "record_evidence", json!({"claim":"x"})),
             event(EventPayload::FileObserved {
@@ -1328,6 +1330,8 @@ mod tests {
                 text: "Done.".into(),
                 tool_calls: vec![],
                 reasoning_content: Some("hidden".into()),
+
+                reasoning: vec![],
             }),
         ];
         let replay = PresentationModel::from_events(&events);

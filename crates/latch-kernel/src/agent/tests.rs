@@ -33,6 +33,8 @@ async fn loop_executes_multiple_read_tools() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "done".into(),
@@ -40,6 +42,8 @@ async fn loop_executes_multiple_read_tools() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ];
     let p = Arc::new(FakeProvider::scripted(responses));
@@ -94,6 +98,8 @@ async fn loop_executes_registered_extension_tool() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "extension complete".into(),
@@ -101,6 +107,8 @@ async fn loop_executes_registered_extension_tool() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ]));
     let tools = ToolExecutor::new(
@@ -158,6 +166,8 @@ async fn validate_links_kernel_provenance_without_model_ids() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "validated".into(),
@@ -169,6 +179,8 @@ async fn validate_links_kernel_provenance_without_model_ids() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "done".into(),
@@ -176,6 +188,8 @@ async fn validate_links_kernel_provenance_without_model_ids() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ]));
     let tools = ToolExecutor::new(
@@ -253,6 +267,8 @@ async fn record_evidence_rejects_kernel_owned_statuses() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "done".into(),
@@ -260,6 +276,8 @@ async fn record_evidence_rejects_kernel_owned_statuses() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ]));
     let tools = ToolExecutor::new(
@@ -401,6 +419,8 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             ],
             tool_call_id: None,
             reasoning_content: Some("reasoned".into()),
+
+            reasoning: vec![],
         },
         ModelMessage {
             role: "tool".into(),
@@ -408,6 +428,8 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             tool_calls: vec![],
             tool_call_id: Some("b".into()),
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ];
     let sanitized = sanitize_tool_history(corrupt);
@@ -442,6 +464,8 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             ],
             tool_call_id: None,
             reasoning_content: Some("reasoned".into()),
+
+            reasoning: vec![],
         },
         ModelMessage {
             role: "tool".into(),
@@ -449,6 +473,8 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             tool_calls: vec![],
             tool_call_id: Some("a".into()),
             reasoning_content: None,
+
+            reasoning: vec![],
         },
         ModelMessage {
             role: "tool".into(),
@@ -456,6 +482,8 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             tool_calls: vec![],
             tool_call_id: Some("b".into()),
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ];
     let kept = sanitize_tool_history(complete);
@@ -494,6 +522,8 @@ fn context_messages_anchor_mid_task_windows_instead_of_dropping_them() {
                 arguments: json!({"path":"a"}),
             }],
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     );
     let tool = event(
@@ -572,6 +602,8 @@ async fn context_stats_cover_the_complete_request_in_tokens() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "done".into(),
@@ -579,6 +611,8 @@ async fn context_stats_cover_the_complete_request_in_tokens() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ];
     let tools = ToolExecutor::new(
@@ -675,6 +709,8 @@ async fn approved_outside_write_executes_and_denied_write_does_not() {
                 stop_reason: "tool_calls".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
             ModelResponse {
                 text: "done".into(),
@@ -682,6 +718,8 @@ async fn approved_outside_write_executes_and_denied_write_does_not() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ];
         let tools = ToolExecutor::new(
@@ -772,6 +810,8 @@ async fn non_interactive_ask_is_denied_with_a_durable_record() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "done".into(),
@@ -779,6 +819,8 @@ async fn non_interactive_ask_is_denied_with_a_durable_record() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ];
     let tools = ToolExecutor::new(
@@ -865,6 +907,8 @@ async fn configured_turn_breaker_stops_abnormal_loops() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         })
         .collect();
     let tools = ToolExecutor::new(
@@ -935,6 +979,8 @@ fn tool_then_final(id: &str, name: &str, arguments: serde_json::Value) -> Vec<Mo
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "done".into(),
@@ -942,6 +988,8 @@ fn tool_then_final(id: &str, name: &str, arguments: serde_json::Value) -> Vec<Mo
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ]
 }
@@ -953,6 +1001,8 @@ fn review_response(risk: &str, reason: &str) -> ModelResponse {
         stop_reason: "stop".into(),
         usage: None,
         reasoning_content: None,
+
+        reasoning: vec![],
     }
 }
 
@@ -1150,6 +1200,8 @@ async fn ai_review_unparseable_output_rejects_conservatively() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     );
     let (store, sid, mut agent) = policy_agent(
@@ -1246,6 +1298,8 @@ fn tool_response(text: &str, id: &str, name: &str, arguments: serde_json::Value)
         stop_reason: "tool_calls".into(),
         usage: None,
         reasoning_content: None,
+
+        reasoning: vec![],
     }
 }
 
@@ -1263,6 +1317,8 @@ fn multi_tool_response(text: &str, calls: Vec<(&str, &str, serde_json::Value)>) 
         stop_reason: "tool_calls".into(),
         usage: None,
         reasoning_content: None,
+
+        reasoning: vec![],
     }
 }
 
@@ -1398,6 +1454,8 @@ fn gate_complete_script() -> Vec<ModelResponse> {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ]
 }
@@ -1545,6 +1603,8 @@ impl ModelProvider for ProfileProvider {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         };
         sink(StreamEvent::Completed(response.clone()));
         Ok(response)
@@ -1744,6 +1804,8 @@ async fn steering_is_injected_after_tool_results_at_the_next_boundary() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec!["also inspect b".into()],
@@ -1798,6 +1860,8 @@ async fn multiple_steering_messages_preserve_order_and_stay_distinct() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec!["first steer".into(), "second steer".into()],
@@ -1867,6 +1931,8 @@ async fn steering_during_a_running_tool_waits_for_its_result() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec![],
@@ -1912,6 +1978,8 @@ async fn steering_after_a_plain_answer_gets_another_turn() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
             ModelResponse {
                 text: "adapted".into(),
@@ -1919,6 +1987,8 @@ async fn steering_after_a_plain_answer_gets_another_turn() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec!["not done yet".into()],
@@ -1977,6 +2047,8 @@ async fn injected_constraints_override_stale_decisions_end_to_end() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec!["do not use plan A; use plan B".into()],
@@ -2045,6 +2117,8 @@ async fn live_and_resumed_steering_state_remain_identical() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec!["persist this steer".into()],
@@ -2100,6 +2174,8 @@ async fn request_prefix_is_append_only_and_cacheable_within_an_epoch() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec![],
@@ -2242,6 +2318,8 @@ async fn a_rejected_late_steer_never_leaks_into_the_next_run() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
             ModelResponse {
                 text: "second turn".into(),
@@ -2249,6 +2327,8 @@ async fn a_rejected_late_steer_never_leaks_into_the_next_run() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec![],
@@ -2296,6 +2376,8 @@ async fn a_steer_retrieves_archival_material_into_the_epoch() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec!["what did we decide about the nebula protocol?".into()],
@@ -2308,6 +2390,8 @@ async fn a_steer_retrieves_archival_material_into_the_epoch() {
                 text: "Earlier step: the nebula protocol uses ordered batching.".into(),
                 tool_calls: vec![],
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         )
         .unwrap();
@@ -2371,6 +2455,8 @@ async fn a_steer_between_sequential_mutations_supersedes_the_stale_tail() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec![],
@@ -2500,6 +2586,8 @@ async fn a_steer_does_not_supersede_started_read_only_calls() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec!["one more thought".into()],
@@ -2590,6 +2678,8 @@ async fn watermark_cursors_deliver_each_new_event_once() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         }],
         vec![],
         0,
@@ -2650,6 +2740,8 @@ async fn persistence_failures_abort_instead_of_claiming_success() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         }],
         vec![],
         0,
@@ -2803,6 +2895,8 @@ async fn ordinary_turns_extend_the_provider_prefix_exactly() {
                 stop_reason: "stop".into(),
                 usage: None,
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         vec![],

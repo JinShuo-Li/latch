@@ -602,6 +602,7 @@ impl ContinuityEngine {
                     text,
                     tool_calls,
                     reasoning_content,
+                    ..
                 } => {
                     recent_used += tokens;
                     let reasoning = reasoning_content
@@ -1466,6 +1467,7 @@ fn render_event(e: &Event) -> String {
             text,
             tool_calls,
             reasoning_content,
+            ..
         } => {
             let mut rendered = format!("assistant: {text}");
             if let Some(reasoning) = reasoning_content {
@@ -1843,6 +1845,8 @@ mod tests {
                     arguments: serde_json::json!({"path":"src/lib.rs","content":"x".repeat(2000)}),
                 }],
                 reasoning_content: Some("because ".repeat(100)),
+
+                reasoning: vec![],
             },
         );
         let rendered = render_event(&event);
@@ -1878,6 +1882,8 @@ mod tests {
                         arguments: json!({"path":"a"}),
                     }],
                     reasoning_content: Some("reasoning".into()),
+
+                    reasoning: vec![],
                 },
             ),
             event(
@@ -1900,6 +1906,8 @@ mod tests {
                     text: "done".into(),
                     tool_calls: vec![],
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
             ),
         ];
@@ -1967,6 +1975,8 @@ mod tests {
                         arguments: json!({"path":"a"}),
                     }],
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
             ),
             event(
@@ -2123,6 +2133,8 @@ mod tests {
                         text: format!("answer {index}"),
                         tool_calls: vec![],
                         reasoning_content: None,
+
+                        reasoning: vec![],
                     },
                 )
                 .unwrap();
@@ -2212,6 +2224,8 @@ mod tests {
                     text: "one more answer".into(),
                     tool_calls: vec![],
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
             )
             .unwrap();
@@ -2249,6 +2263,8 @@ mod tests {
                         text: format!("reply {turns}"),
                         tool_calls: vec![],
                         reasoning_content: None,
+
+                        reasoning: vec![],
                     },
                 )
                 .unwrap();
@@ -2339,6 +2355,8 @@ mod tests {
                         arguments: json!({"path": format!("src/{index}.rs")}),
                     }],
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 });
                 push(EventPayload::ToolCompleted {
                     result: ToolResult {
@@ -2369,6 +2387,8 @@ mod tests {
                 text: format!("answer {index}"),
                 tool_calls: vec![],
                 reasoning_content: None,
+
+                reasoning: vec![],
             });
         }
 
@@ -2486,6 +2506,8 @@ mod tests {
                         text: format!("reply {index}"),
                         tool_calls: vec![],
                         reasoning_content: None,
+
+                        reasoning: vec![],
                     },
                 )
                 .unwrap();
@@ -2687,6 +2709,8 @@ mod tests {
                             text: format!("answer {turn}"),
                             tool_calls: vec![],
                             reasoning_content: None,
+
+                            reasoning: vec![],
                         },
                     )
                     .unwrap(),

@@ -286,6 +286,8 @@ mod tests {
             tool_calls: vec![],
             tool_call_id: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         }];
         let rich = vec![ModelMessage {
             role: "assistant".into(),
@@ -297,6 +299,8 @@ mod tests {
             }],
             tool_call_id: None,
             reasoning_content: Some("deep reasoning ".repeat(200)),
+
+            reasoning: vec![],
         }];
         let plain_tokens = estimator.estimate_messages(&plain);
         let rich_tokens = estimator.estimate_messages(&rich);

@@ -101,12 +101,14 @@ pub(super) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
                 text,
                 tool_calls,
                 reasoning_content,
+                reasoning,
             } => Some(ModelMessage {
                 role: "assistant".into(),
                 content: text.clone(),
                 tool_calls: tool_calls.clone(),
                 tool_call_id: None,
                 reasoning_content: reasoning_content.clone(),
+                reasoning: reasoning.clone(),
             }),
             EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } => {
                 Some(ModelMessage {
@@ -115,6 +117,7 @@ pub(super) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
                     tool_calls: vec![],
                     tool_call_id: Some(result.call_id.clone()),
                     reasoning_content: None,
+                    reasoning: Vec::new(),
                 })
             }
             EventPayload::RegroundRequested { signature } => Some(ModelMessage::text("user", format!("Kernel re-ground required after repeated failure {signature}. Re-read current reality, identify disproven assumptions, and form a materially different strategy before another mutation."))),

@@ -822,6 +822,8 @@ impl Agent {
                     text: response.text.clone(),
                     tool_calls: response.tool_calls.clone(),
                     reasoning_content: response.reasoning_content.clone(),
+
+                    reasoning: vec![],
                 },
                 &sink,
             )?;

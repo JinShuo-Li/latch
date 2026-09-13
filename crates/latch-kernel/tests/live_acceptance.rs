@@ -101,6 +101,7 @@ impl Metrics {
                             cache_miss_tokens: _,
                             cache_read_tokens,
                             cache_write_tokens,
+                            ..
                         },
                 } => {
                     metrics.input_tokens += input_tokens;

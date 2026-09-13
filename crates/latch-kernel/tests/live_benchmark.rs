@@ -193,6 +193,8 @@ async fn run_once(
         cache_read_tokens: None,
         cache_write_tokens: None,
         cache_miss_tokens: None,
+
+        reasoning_tokens: None,
     };
     for event in &events {
         match &event.payload {

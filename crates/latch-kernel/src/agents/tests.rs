@@ -86,6 +86,8 @@ impl ModelProvider for TestProvider {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         };
         sink(StreamEvent::Completed(response.clone()));
         Ok(response)
@@ -482,6 +484,8 @@ async fn child_notification_enters_parent_only_after_terminal_tool_result() {
                 text: String::new(),
                 tool_calls: vec![old_call.clone()],
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         )
         .unwrap();
@@ -901,6 +905,8 @@ impl ModelProvider for FixedProvider {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         };
         sink(StreamEvent::Completed(response.clone()));
         Ok(response)

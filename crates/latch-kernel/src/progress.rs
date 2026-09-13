@@ -660,6 +660,8 @@ mod tests {
                     text: "again".into(),
                     tool_calls: vec![read_call(path)],
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
             ),
             requested("r2", "read_file", json!({"path": path})),
@@ -670,6 +672,8 @@ mod tests {
                     text: "again".into(),
                     tool_calls: vec![read_call(path)],
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
             ),
             requested("r3", "read_file", json!({"path": path})),

@@ -807,6 +807,8 @@ mod tests {
                     text: "visible answer".into(),
                     tool_calls: vec![],
                     reasoning_content: Some("hidden chain".into()),
+
+                    reasoning: vec![],
                 },
             )
             .unwrap();

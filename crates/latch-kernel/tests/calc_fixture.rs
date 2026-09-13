@@ -23,6 +23,8 @@ fn response(text: &str, calls: Vec<ToolCall>) -> ModelResponse {
         stop_reason: "stop".into(),
         usage: None,
         reasoning_content: None,
+
+        reasoning: vec![],
     }
 }
 fn call(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {

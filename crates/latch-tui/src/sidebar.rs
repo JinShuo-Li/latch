@@ -1397,6 +1397,7 @@ mod tests {
                 cache_read_tokens: Some(1_000),
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         }));
         model.apply_event(&event(EventPayload::ModelUsage {
@@ -1406,6 +1407,7 @@ mod tests {
                 cache_read_tokens: Some(2_000),
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         }));
         assert_eq!(model.usage().input, Some(400));
@@ -1428,6 +1430,7 @@ mod tests {
                 cache_read_tokens: None,
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         }));
         model.apply_event(&event(EventPayload::ModelUsage {
@@ -1437,6 +1440,7 @@ mod tests {
                 cache_read_tokens: Some(5),
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         }));
         assert_eq!(model.usage().cache_read, Some(5));
@@ -1454,6 +1458,7 @@ mod tests {
                 cache_read_tokens: None,
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         }));
         assert!(model.estimated_cost().is_none(), "no pricing configured");
@@ -1473,6 +1478,7 @@ mod tests {
                 cache_read_tokens: Some(100_000),
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         }));
         let cost = model.estimated_cost().expect("cost");
@@ -1502,6 +1508,7 @@ mod tests {
                 cache_read_tokens: Some(600),
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         }));
         let cost = model.estimated_cost().expect("cost");
@@ -1532,6 +1539,7 @@ mod tests {
                 // The adapter normalized a provider-reported miss that is not
                 // simply input minus read; the explicit value wins.
                 cache_miss_tokens: Some(350),
+                reasoning_tokens: None,
             },
         }));
         let cost = model.estimated_cost().expect("cost");
@@ -1559,6 +1567,7 @@ mod tests {
                 cache_read_tokens: None,
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         }));
         let cost = model.estimated_cost().expect("cost");
@@ -1584,6 +1593,7 @@ mod tests {
                 cache_read_tokens: None,
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         }));
         assert!(model.estimated_cost().is_none());
@@ -1688,6 +1698,7 @@ mod tests {
                     cache_read_tokens: Some(4),
                     cache_write_tokens: None,
                     cache_miss_tokens: None,
+                    reasoning_tokens: None,
                 },
             }),
             event(EventPayload::TaskStateUpdated {
@@ -1817,6 +1828,7 @@ mod tests {
                     cache_read_tokens: Some(286_100),
                     cache_write_tokens: None,
                     cache_miss_tokens: None,
+                    reasoning_tokens: None,
                 },
             },
         );

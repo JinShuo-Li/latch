@@ -39,6 +39,8 @@ pub fn openai_usage(usage: &Value) -> Option<Usage> {
         cache_read_tokens: cache_read,
         cache_write_tokens: None,
         cache_miss_tokens: cache_miss,
+
+        reasoning_tokens: None,
     })
 }
 
@@ -280,6 +282,8 @@ impl ModelProvider for OpenAiProvider {
             stop_reason: stop,
             usage,
             reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
+
+            reasoning: vec![],
         };
         sink(StreamEvent::Completed(result.clone()));
         Ok(result)
@@ -361,6 +365,8 @@ impl ModelProvider for AnthropicProvider {
             cache_read_tokens: None,
             cache_write_tokens: None,
             cache_miss_tokens: None,
+
+            reasoning_tokens: None,
         };
         loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
@@ -461,6 +467,8 @@ impl ModelProvider for AnthropicProvider {
             stop_reason: stop,
             usage: Some(usage),
             reasoning_content: None,
+
+            reasoning: vec![],
         };
         sink(StreamEvent::Completed(result.clone()));
         Ok(result)
@@ -824,6 +832,8 @@ mod tests {
                     }],
                     tool_call_id: None,
                     reasoning_content: Some("step by step".into()),
+
+                    reasoning: vec![],
                 },
                 ModelMessage {
                     role: "tool".into(),
@@ -831,6 +841,8 @@ mod tests {
                     tool_calls: vec![],
                     tool_call_id: Some("call-1".into()),
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
             ],
             tools: vec![],
@@ -865,6 +877,8 @@ mod tests {
                     tool_calls: vec![],
                     tool_call_id: None,
                     reasoning_content: Some("step by step".into()),
+
+                    reasoning: vec![],
                 },
             ],
             tools: vec![],
@@ -929,6 +943,8 @@ mod tests {
                     }],
                     tool_call_id: None,
                     reasoning_content: Some("secret reasoning".into()),
+
+                    reasoning: vec![],
                 },
                 ModelMessage {
                     role: "tool".into(),
@@ -936,6 +952,8 @@ mod tests {
                     tool_calls: vec![],
                     tool_call_id: Some("call-1".into()),
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
             ],
             tools: vec![],
@@ -1081,6 +1099,8 @@ mod tests {
                     }],
                     tool_call_id: None,
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
                 ModelMessage {
                     role: "tool".into(),
@@ -1088,6 +1108,8 @@ mod tests {
                     tool_calls: vec![],
                     tool_call_id: Some("c1".into()),
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
                 ModelMessage::text("user", "Kernel context: state"),
             ],

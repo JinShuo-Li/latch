@@ -84,25 +84,51 @@ impl From<String> for ProviderId {
 /// Provider-neutral reasoning effort. `ProviderDefault` means Latch does not
 /// select a value and lets the model use its own default; the other variants
 /// are only ever emitted when the resolved model capability lists them.
+///
+/// The set mirrors the union of current provider controls (OpenAI
+/// `none|minimal|low|medium|high|xhigh|max`, Anthropic
+/// `low|medium|high|xhigh|max`, DeepSeek `low|high|max`). No provider supports
+/// every value; the model capability descriptor decides what is selectable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
     #[default]
     ProviderDefault,
+    None,
+    Minimal,
     Low,
+    Medium,
     High,
+    #[serde(rename = "xhigh")]
+    XHigh,
     Max,
 }
 
 impl ReasoningEffort {
+    /// Every concrete level in increasing depth order. `ProviderDefault` is a
+    /// selection state, not a level.
+    pub const LEVELS: [Self; 7] = [
+        Self::None,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::XHigh,
+        Self::Max,
+    ];
+
     /// The exact value sent on the wire when this effort is selected. `None`
     /// means the provider payload must not carry an effort field at all.
     #[must_use]
     pub const fn wire(self) -> Option<&'static str> {
         match self {
             Self::ProviderDefault => None,
+            Self::None => Some("none"),
+            Self::Minimal => Some("minimal"),
             Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
             Self::High => Some("high"),
+            Self::XHigh => Some("xhigh"),
             Self::Max => Some("max"),
         }
     }
@@ -111,8 +137,12 @@ impl ReasoningEffort {
     pub const fn label(self) -> &'static str {
         match self {
             Self::ProviderDefault => "provider default",
+            Self::None => "none",
+            Self::Minimal => "minimal",
             Self::Low => "low",
+            Self::Medium => "medium",
             Self::High => "high",
+            Self::XHigh => "xhigh",
             Self::Max => "max",
         }
     }
@@ -121,9 +151,7 @@ impl ReasoningEffort {
     pub const fn short(self) -> &'static str {
         match self {
             Self::ProviderDefault => "default",
-            Self::Low => "low",
-            Self::High => "high",
-            Self::Max => "max",
+            other => other.label(),
         }
     }
 }
@@ -141,8 +169,12 @@ impl FromStr for ReasoningEffort {
             "default" | "provider-default" | "provider_default" | "auto" => {
                 Ok(Self::ProviderDefault)
             }
-            "low" | "minimal" => Ok(Self::Low),
+            "none" | "off" | "disabled" => Ok(Self::None),
+            "minimal" | "min" => Ok(Self::Minimal),
+            "low" => Ok(Self::Low),
+            "medium" | "med" => Ok(Self::Medium),
             "high" => Ok(Self::High),
+            "xhigh" | "x-high" | "extra-high" | "extended" => Ok(Self::XHigh),
             "max" => Ok(Self::Max),
             other => Err(format!("unknown reasoning effort {other:?}")),
         }
@@ -457,6 +489,11 @@ pub struct Usage {
     /// derived when the cache-read category is known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_miss_tokens: Option<u64>,
+    /// Provider-reported reasoning/thinking tokens generated for this request.
+    /// `None` means the provider did not report the category; it is never
+    /// derived from output tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
 }
 
 impl Usage {
@@ -469,6 +506,60 @@ impl Usage {
             self.cache_read_tokens
                 .map(|read| self.input_tokens.saturating_sub(read))
         })
+    }
+}
+
+/// One provider-visible reasoning artifact attached to an assistant turn.
+///
+/// Reasoning is provider-specific opaque material that must be replayed
+/// byte-for-byte when the provider requires it (DeepSeek `reasoning_content`,
+/// OpenAI encrypted reasoning items, Anthropic thinking/redacted-thinking
+/// blocks). It is durable and replayable but never rendered as assistant text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReasoningArtifact {
+    /// Plain reasoning text with no replay requirement beyond the text itself
+    /// (for example a DeepSeek `reasoning_content` value).
+    Text {
+        #[serde(default)]
+        text: String,
+    },
+    /// Provider-encrypted opaque reasoning that must be echoed back verbatim
+    /// (OpenAI Responses `reasoning.encrypted_content`).
+    Encrypted {
+        #[serde(default)]
+        data: String,
+    },
+    /// Anthropic thinking block: readable summary text plus the opaque
+    /// `signature` that authenticates the original block.
+    Thinking {
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        signature: String,
+    },
+    /// Anthropic redacted thinking block: fully opaque `data`.
+    Redacted {
+        #[serde(default)]
+        data: String,
+    },
+}
+
+impl ReasoningArtifact {
+    /// Tokens this artifact contributes to a replayed request, priced by the
+    /// caller's estimator over its provider-visible payload.
+    #[must_use]
+    pub fn replay_text(&self) -> &str {
+        match self {
+            Self::Text { text } | Self::Thinking { text, .. } => text,
+            Self::Encrypted { data } | Self::Redacted { data } => data,
+        }
+    }
+
+    /// Whether this artifact must be replayed to the provider unchanged.
+    #[must_use]
+    pub const fn requires_replay(&self) -> bool {
+        true
     }
 }
 
@@ -555,6 +646,21 @@ pub enum EventPayload {
     UserMessage {
         text: String,
     },
+    /// One root user-request execution began. Run boundaries are explicit and
+    /// durable so per-run accounting never has to infer duration or totals
+    /// from session-wide timestamps.
+    RunStarted {
+        run_id: Uuid,
+        /// First user text of the run, for cheap display. The authoritative
+        /// prompt remains the `UserMessage` event.
+        #[serde(default)]
+        prompt: String,
+    },
+    /// The run terminated. `outcome` is `completed`, `cancelled`, or `error`.
+    RunCompleted {
+        run_id: Uuid,
+        outcome: String,
+    },
     AssistantMessageCompleted {
         text: String,
         tool_calls: Vec<ToolCall>,
@@ -564,6 +670,11 @@ pub enum EventPayload {
         /// no reasoning was present or the field is not applicable.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reasoning_content: Option<String>,
+        /// Provider-specific reasoning artifacts (encrypted reasoning,
+        /// Anthropic thinking/redacted blocks). Empty for providers that only
+        /// use `reasoning_content`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        reasoning: Vec<ReasoningArtifact>,
     },
     ModelRequestStarted {
         provider: String,
@@ -1055,6 +1166,10 @@ pub struct ModelMessage {
     /// reasoning replay it; others ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// Provider-specific reasoning artifacts that must be replayed unchanged
+    /// (Anthropic thinking/redacted blocks, OpenAI encrypted reasoning).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning: Vec<ReasoningArtifact>,
 }
 
 impl ModelMessage {
@@ -1066,6 +1181,7 @@ impl ModelMessage {
             tool_calls: vec![],
             tool_call_id: None,
             reasoning_content: None,
+            reasoning: Vec::new(),
         }
     }
 }
@@ -1093,6 +1209,10 @@ pub struct ModelResponse {
     /// Reasoning returned by a reasoning-capable model, preserved verbatim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// Provider-specific reasoning artifacts (Anthropic thinking, OpenAI
+    /// encrypted reasoning) preserved for exact replay.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning: Vec<ReasoningArtifact>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1356,20 +1476,63 @@ mod tests {
     #[test]
     fn reasoning_effort_parses_and_round_trips() {
         for (raw, effort) in [
+            ("none", ReasoningEffort::None),
+            ("minimal", ReasoningEffort::Minimal),
+            ("min", ReasoningEffort::Minimal),
             ("low", ReasoningEffort::Low),
+            ("medium", ReasoningEffort::Medium),
             ("high", ReasoningEffort::High),
+            ("xhigh", ReasoningEffort::XHigh),
+            ("extra-high", ReasoningEffort::XHigh),
             ("max", ReasoningEffort::Max),
             ("provider-default", ReasoningEffort::ProviderDefault),
             ("provider_default", ReasoningEffort::ProviderDefault),
             ("default", ReasoningEffort::ProviderDefault),
         ] {
-            assert_eq!(raw.parse::<ReasoningEffort>().unwrap(), effort);
+            assert_eq!(raw.parse::<ReasoningEffort>().unwrap(), effort, "{raw}");
         }
         assert!("ultra".parse::<ReasoningEffort>().is_err());
         assert_eq!(ReasoningEffort::Low.wire(), Some("low"));
+        assert_eq!(ReasoningEffort::XHigh.wire(), Some("xhigh"));
         assert_eq!(ReasoningEffort::ProviderDefault.wire(), None);
+        assert_eq!(ReasoningEffort::LEVELS.len(), 7);
         let json = serde_json::to_string(&ReasoningEffort::Max).unwrap();
         assert_eq!(json, "\"max\"");
+        assert_eq!(
+            serde_json::to_string(&ReasoningEffort::XHigh).unwrap(),
+            "\"xhigh\"",
+            "the wire/config spelling stays xhigh"
+        );
+        // Legacy configurations only ever used these four values.
+        for legacy in ["low", "high", "max", "default"] {
+            assert!(legacy.parse::<ReasoningEffort>().is_ok());
+        }
+    }
+
+    #[test]
+    fn reasoning_artifacts_round_trip_and_never_render_as_text() {
+        let artifacts = vec![
+            ReasoningArtifact::Text {
+                text: "deepseek reasoning".into(),
+            },
+            ReasoningArtifact::Encrypted {
+                data: "opaque-encrypted".into(),
+            },
+            ReasoningArtifact::Thinking {
+                text: "summary".into(),
+                signature: "sig".into(),
+            },
+            ReasoningArtifact::Redacted {
+                data: "redacted".into(),
+            },
+        ];
+        let json = serde_json::to_string(&artifacts).unwrap();
+        assert!(json.contains("\"kind\":\"thinking\""));
+        assert!(json.contains("\"kind\":\"redacted\""));
+        let back: Vec<ReasoningArtifact> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, artifacts);
+        assert_eq!(artifacts[0].replay_text(), "deepseek reasoning");
+        assert_eq!(artifacts[3].replay_text(), "redacted");
     }
 
     #[test]

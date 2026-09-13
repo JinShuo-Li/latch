@@ -769,6 +769,8 @@ fn replay_items_rebuild_transcript_without_hidden_data() {
         text: "done".into(),
         tool_calls: vec![],
         reasoning_content: Some("hidden".into()),
+
+        reasoning: vec![],
     })) {
         app.apply_item(item);
     }
@@ -1679,6 +1681,7 @@ fn header_pricing_reaches_the_sidebar() {
                 cache_read_tokens: None,
                 cache_write_tokens: None,
                 cache_miss_tokens: None,
+                reasoning_tokens: None,
             },
         },
     })));
@@ -1859,6 +1862,8 @@ fn transcript_fixture(app: &mut App) {
             text: "The addend is wrong; fixing it now.".into(),
             tool_calls: vec![],
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ] {
         app.output(Output::Event(Box::new(presentation_event(payload))));
@@ -2001,6 +2006,8 @@ fn markdown_table_fixture(app: &mut App, text: &str) {
             text: text.into(),
             tool_calls: vec![],
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ))));
 }
@@ -2096,7 +2103,8 @@ fn snapshot_user_and_assistant_message_hierarchy() {
             text: "I'll inspect the failing case and patch it.\n\n- read the parser\n- keep the API stable".into(),
             tool_calls: vec![],
             reasoning_content: None,
-        },
+
+            reasoning: vec![],},
     ] {
         app.output(Output::Event(Box::new(presentation_event(payload))));
     }

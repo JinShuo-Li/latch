@@ -42,6 +42,8 @@ fn response(text: &str, calls: Vec<ToolCall>) -> ModelResponse {
         stop_reason: "stop".into(),
         usage: None,
         reasoning_content: None,
+
+        reasoning: vec![],
     }
 }
 
@@ -418,6 +420,8 @@ fn rotation_is_occasional_and_preserves_truth_and_recall() {
                     text: format!("answer {turns}"),
                     tool_calls: vec![],
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
             )
             .unwrap();
@@ -529,6 +533,8 @@ fn tool_transactions_survive_rotation_atomically() {
                         arguments: json!({"path": format!("src/{index}.rs")}),
                     }],
                     reasoning_content: None,
+
+                    reasoning: vec![],
                 },
             )
             .unwrap();
@@ -589,6 +595,8 @@ fn provider_serialization_is_deterministic() {
                 tool_calls: vec![call("c1", "read_file", json!({"path":"a.txt"}))],
                 tool_call_id: None,
                 reasoning_content: Some("reasoning must replay".into()),
+
+                reasoning: vec![],
             },
             ModelMessage {
                 role: "tool".into(),
@@ -596,6 +604,8 @@ fn provider_serialization_is_deterministic() {
                 tool_calls: vec![],
                 tool_call_id: Some("c1".into()),
                 reasoning_content: None,
+
+                reasoning: vec![],
             },
         ],
         tools: ToolExecutor::definitions(),
@@ -816,6 +826,8 @@ fn cache_accounting_stays_provider_authoritative() {
         cache_read_tokens: None,
         cache_write_tokens: None,
         cache_miss_tokens: None,
+
+        reasoning_tokens: None,
     };
     assert_eq!(unknown.uncached_input_tokens(), None);
 
@@ -825,6 +837,8 @@ fn cache_accounting_stays_provider_authoritative() {
         cache_read_tokens: Some(600),
         cache_write_tokens: None,
         cache_miss_tokens: None,
+
+        reasoning_tokens: None,
     };
     assert_eq!(openai_style.uncached_input_tokens(), Some(400));
 
@@ -834,6 +848,8 @@ fn cache_accounting_stays_provider_authoritative() {
         cache_read_tokens: Some(600),
         cache_write_tokens: None,
         cache_miss_tokens: Some(350),
+
+        reasoning_tokens: None,
     };
     assert_eq!(
         explicit.uncached_input_tokens(),

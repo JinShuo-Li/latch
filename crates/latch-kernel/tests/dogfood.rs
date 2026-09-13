@@ -24,6 +24,8 @@ fn response(text: &str, calls: Vec<ToolCall>) -> ModelResponse {
         stop_reason: "stop".into(),
         usage: None,
         reasoning_content: None,
+
+        reasoning: vec![],
     }
 }
 fn call(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
@@ -772,6 +774,8 @@ async fn reasoning_and_tool_history_round_trip_across_resume() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: Some("I should read the file before deciding".into()),
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "The file contains the bug marker.".into(),
@@ -779,6 +783,8 @@ async fn reasoning_and_tool_history_round_trip_across_resume() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: Some("final reasoning".into()),
+
+            reasoning: vec![],
         },
     ];
     let provider = Arc::new(RecordingProvider::new(scripted));
@@ -874,6 +880,8 @@ async fn reasoning_and_tool_history_round_trip_across_resume() {
         stop_reason: "stop".into(),
         usage: None,
         reasoning_content: None,
+
+        reasoning: vec![],
     }]));
     let tools = ToolExecutor::new(
         workspace.clone(),
@@ -1076,6 +1084,8 @@ async fn denied_tool_call_preserves_complete_provider_transaction() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: Some("I should inspect before deciding".into()),
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "The read succeeded; the mutation was refused.".into(),
@@ -1083,6 +1093,8 @@ async fn denied_tool_call_preserves_complete_provider_transaction() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: Some("final reasoning".into()),
+
+            reasoning: vec![],
         },
     ];
     let provider = Arc::new(RecordingProvider::new(scripted));
@@ -1229,6 +1241,8 @@ async fn denied_tool_call_preserves_complete_provider_transaction() {
         stop_reason: "stop".into(),
         usage: None,
         reasoning_content: None,
+
+        reasoning: vec![],
     }]));
     let tools = ToolExecutor::new(
         workspace.clone(),
@@ -1342,6 +1356,8 @@ async fn single_denied_tool_call_gets_one_terminal_result() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: Some("reasoning for the denied call".into()),
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "denied.".into(),
@@ -1349,6 +1365,8 @@ async fn single_denied_tool_call_gets_one_terminal_result() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ];
     let provider = Arc::new(RecordingProvider::new(scripted));
@@ -1415,6 +1433,8 @@ async fn multiple_denied_calls_in_one_turn_each_get_a_terminal_result() {
             stop_reason: "tool_calls".into(),
             usage: None,
             reasoning_content: Some("thinking about both".into()),
+
+            reasoning: vec![],
         },
         ModelResponse {
             text: "both refused.".into(),
@@ -1422,6 +1442,8 @@ async fn multiple_denied_calls_in_one_turn_each_get_a_terminal_result() {
             stop_reason: "stop".into(),
             usage: None,
             reasoning_content: None,
+
+            reasoning: vec![],
         },
     ];
     let provider = Arc::new(RecordingProvider::new(scripted));
