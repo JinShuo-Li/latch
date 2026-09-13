@@ -1,13 +1,22 @@
 use anyhow::{Context, Result};
-use latch_protocol::{Mode, ModelPricing, PermissionMode, Safety};
+use latch_protocol::{Mode, ModelPricing, PermissionMode, ReasoningEffort, Safety};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Legacy single-provider table. Still read and migrated into
+    /// [`Self::providers`] when no explicit `[providers.*]` entries exist, so
+    /// existing configs keep working without manual migration.
     #[serde(default)]
     pub provider: ProviderConfig,
+    /// User-defined provider instances, keyed by stable provider id.
+    #[serde(default)]
+    pub providers: BTreeMap<String, ProviderProfileConfig>,
+    /// Default inference profile (provider, model, reasoning effort).
+    #[serde(default)]
+    pub inference: InferenceConfig,
     #[serde(default)]
     pub default_mode: Mode,
     #[serde(default = "default_state_dir")]
@@ -22,21 +31,175 @@ pub struct Config {
     pub failure: FailureConfig,
     #[serde(default)]
     pub extensions: Vec<ExtensionConfig>,
-    /// Per-model product metadata. Pricing is optional and user-configured;
-    /// Latch never fetches or invents provider prices.
+    /// Legacy global per-model metadata keyed by provider model string. It is
+    /// still consulted as an explicit user override for any provider, but new
+    /// configurations should place metadata under `[providers.<id>.models.*]`.
     #[serde(default)]
     pub models: BTreeMap<String, ModelConfig>,
+}
+
+/// One user-defined provider instance.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderProfileConfig {
+    #[serde(default)]
+    pub kind: ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// Symbolic credential reference: `env:NAME`, `file:NAME`, or `keyring:NAME`.
+    /// Secret material is never stored here or in the durable event log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub models: BTreeMap<String, ModelConfig>,
+    /// Reserved for optional remote model discovery. Never required at startup.
+    #[serde(default)]
+    pub model_discovery: bool,
+}
+
+/// Provider wire family. Adding a provider means adding an adapter variant, a
+/// capability descriptor, and (optionally) built-in model metadata; it never
+/// means adding conditionals to the TUI or the agent loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ProviderKind {
+    #[default]
+    #[serde(rename = "openai")]
+    OpenAi,
+    #[serde(rename = "anthropic")]
+    Anthropic,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
+    #[serde(rename = "opencode-go")]
+    OpenCodeGo,
+    #[serde(rename = "openai-compatible")]
+    OpenAiCompatible,
+}
+
+impl ProviderKind {
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+            Self::DeepSeek => "deepseek",
+            Self::OpenCodeGo => "opencode-go",
+            Self::OpenAiCompatible => "openai-compatible",
+        }
+    }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::OpenAi => "OpenAI",
+            Self::Anthropic => "Anthropic",
+            Self::DeepSeek => "DeepSeek",
+            Self::OpenCodeGo => "OpenCode Go",
+            Self::OpenAiCompatible => "Custom OpenAI-compatible",
+        }
+    }
+
+    #[must_use]
+    pub const fn default_credential(self) -> &'static str {
+        match self {
+            Self::OpenAi => "env:OPENAI_API_KEY",
+            Self::Anthropic => "env:ANTHROPIC_API_KEY",
+            Self::DeepSeek => "env:DEEPSEEK_API_KEY",
+            Self::OpenCodeGo => "env:OPENCODE_API_KEY",
+            Self::OpenAiCompatible => "env:OPENAI_API_KEY",
+        }
+    }
+
+    /// Parses legacy `provider.kind` strings and the canonical names. The
+    /// legacy `openai-compatible` kind with an OpenCode Go base URL migrates to
+    /// the explicit OpenCode Go profile.
+    #[must_use]
+    pub fn parse(raw: &str, base_url: Option<&str>) -> Option<Self> {
+        let kind = match raw.trim().to_ascii_lowercase().as_str() {
+            "openai" => Self::OpenAi,
+            "anthropic" => Self::Anthropic,
+            "deepseek" => Self::DeepSeek,
+            "opencode-go" | "opencode_go" | "opencode" => Self::OpenCodeGo,
+            "openai-compatible" | "openai_compatible" | "generic" | "custom" => {
+                if base_url.is_some_and(is_opencode_go_url) {
+                    Self::OpenCodeGo
+                } else {
+                    Self::OpenAiCompatible
+                }
+            }
+            _ => return None,
+        };
+        Some(kind)
+    }
+
+    #[must_use]
+    pub const fn default_base_url(self) -> &'static str {
+        match self {
+            Self::OpenAi => "https://api.openai.com/v1",
+            Self::Anthropic => "https://api.anthropic.com",
+            Self::DeepSeek => "https://api.deepseek.com",
+            Self::OpenCodeGo => "https://opencode.ai/zen/go",
+            Self::OpenAiCompatible => "",
+        }
+    }
+}
+
+#[must_use]
+pub fn is_opencode_go_url(base_url: &str) -> bool {
+    match base_url
+        .trim_end_matches('/')
+        .strip_prefix("https://opencode.ai/zen/go")
+    {
+        Some(rest) => rest.is_empty() || rest.starts_with('/'),
+        None => false,
+    }
+}
+
+/// Default inference profile selection in `[inference]`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InferenceConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: ReasoningEffort,
 }
 
 /// Product metadata for one model name, keyed by the provider model string.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<ModelPricing>,
     /// Provider context window in tokens. `None` uses the conservative
     /// [`DEFAULT_CONTEXT_WINDOW_TOKENS`] fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<usize>,
+    /// Explicit supported reasoning efforts. `Some(vec![])` means the model
+    /// exposes no configurable effort; `None` means "use the built-in
+    /// capability or the conservative default".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efforts: Option<Vec<ReasoningEffort>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<ReasoningEffort>,
+    /// Whether persisted assistant reasoning must be replayed to the provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_replay: Option<ReasoningReplayPolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+}
+
+/// Whether the provider requires persisted `reasoning_content` to be replayed
+/// verbatim. Kept provider-neutral at the configuration layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningReplayPolicy {
+    Replay,
+    Omit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +374,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             provider: ProviderConfig::default(),
+            providers: BTreeMap::new(),
+            inference: InferenceConfig::default(),
             default_mode: Mode::Work,
             state_dir: default_state_dir(),
             safety: SafetyConfig::default(),
@@ -260,11 +425,14 @@ impl Config {
             .min(window)
     }
 
+    /// The config file path `Config::load` would use.
+    #[must_use]
+    pub fn default_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|p| p.join("latch/config.toml"))
+    }
+
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        let Some(path) = path
-            .map(PathBuf::from)
-            .or_else(|| dirs::config_dir().map(|p| p.join("latch/config.toml")))
-        else {
+        let Some(path) = path.map(PathBuf::from).or_else(Self::default_path) else {
             return Ok(Self::default());
         };
         if !path.exists() {
@@ -274,6 +442,21 @@ impl Config {
             &std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
         )
         .with_context(|| format!("parse {}", path.display()))
+    }
+
+    /// Writes the canonical configuration representation atomically. Existing
+    /// legacy keys are superseded by the normalized `[providers.*]` tables; no
+    /// secret material is ever written here.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let text = toml::to_string_pretty(self).context("serialize config")?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        let temp = path.with_extension("toml.tmp");
+        std::fs::write(&temp, text).with_context(|| format!("write {}", temp.display()))?;
+        std::fs::rename(&temp, path).with_context(|| format!("replace {}", path.display()))?;
+        Ok(())
     }
 }
 

@@ -97,8 +97,11 @@ pub struct OpenAiProvider {
     base_url: String,
     api_key: String,
     model: String,
+    provider_id: String,
     session_id: Option<Uuid>,
     reasoning: ReasoningReplay,
+    effort: latch_protocol::ReasoningEffort,
+    supports_effort: bool,
 }
 impl OpenAiProvider {
     #[must_use]
@@ -108,9 +111,34 @@ impl OpenAiProvider {
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
             model: model.clone(),
+            provider_id: "openai".into(),
             session_id: None,
             reasoning: reasoning_replay_for(&base_url, &model),
+            effort: latch_protocol::ReasoningEffort::ProviderDefault,
+            supports_effort: false,
         }
+    }
+    /// Selects the configured provider identity reported in durable
+    /// provenance. The wire behavior stays provider-family-specific.
+    #[must_use]
+    pub fn with_identity(mut self, provider_id: impl Into<String>) -> Self {
+        self.provider_id = provider_id.into();
+        self
+    }
+    /// Applies the resolved capability: the effort the model supports and
+    /// whether persisted reasoning must be replayed. Unsupported effort values
+    /// are never emitted.
+    #[must_use]
+    pub fn with_reasoning(
+        mut self,
+        effort: latch_protocol::ReasoningEffort,
+        replay: ReasoningReplay,
+        supports_effort: bool,
+    ) -> Self {
+        self.effort = effort;
+        self.reasoning = replay;
+        self.supports_effort = supports_effort;
+        self
     }
     /// Tags requests with the durable Latch session id. OpenCode Go endpoints
     /// receive it as `x-opencode-session`; other OpenAI-compatible servers are
@@ -136,7 +164,7 @@ impl OpenAiProvider {
 #[async_trait]
 impl ModelProvider for OpenAiProvider {
     fn name(&self) -> &str {
-        "openai"
+        &self.provider_id
     }
     fn model(&self) -> &str {
         &self.model
@@ -147,8 +175,11 @@ impl ModelProvider for OpenAiProvider {
             base_url: self.base_url.clone(),
             api_key: self.api_key.clone(),
             model: self.model.clone(),
+            provider_id: self.provider_id.clone(),
             session_id: Some(session_id),
             reasoning: self.reasoning,
+            effort: self.effort,
+            supports_effort: self.supports_effort,
         }))
     }
     async fn stream(
@@ -157,7 +188,8 @@ impl ModelProvider for OpenAiProvider {
         cancel: CancellationToken,
         sink: StreamSink,
     ) -> Result<ModelResponse> {
-        let body = openai_request(&request, &self.model, self.reasoning);
+        let effort = self.supports_effort.then(|| self.effort.wire()).flatten();
+        let body = openai_request_with_effort(&request, &self.model, self.reasoning, effort);
         // The transport phase (connect + headers) obeys the same run
         // cancellation as the streaming loop, so Ctrl+C cannot hang on a
         // stalled connection.
@@ -171,7 +203,7 @@ impl ModelProvider for OpenAiProvider {
                     .json(&body)
                     .send()
                     .await?;
-                checked_response("openai-compatible", sent).await
+                checked_response_redacted("openai-compatible", sent, &self.api_key).await
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
         };
@@ -259,6 +291,7 @@ pub struct AnthropicProvider {
     base_url: String,
     api_key: String,
     model: String,
+    provider_id: String,
 }
 impl AnthropicProvider {
     #[must_use]
@@ -268,13 +301,20 @@ impl AnthropicProvider {
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
             model,
+            provider_id: "anthropic".into(),
         }
+    }
+    /// Selects the configured provider identity reported in durable provenance.
+    #[must_use]
+    pub fn with_identity(mut self, provider_id: impl Into<String>) -> Self {
+        self.provider_id = provider_id.into();
+        self
     }
 }
 #[async_trait]
 impl ModelProvider for AnthropicProvider {
     fn name(&self) -> &str {
-        "anthropic"
+        &self.provider_id
     }
     fn model(&self) -> &str {
         &self.model
@@ -285,6 +325,7 @@ impl ModelProvider for AnthropicProvider {
             base_url: self.base_url.clone(),
             api_key: self.api_key.clone(),
             model: self.model.clone(),
+            provider_id: self.provider_id.clone(),
         }))
     }
     async fn stream(
@@ -305,7 +346,7 @@ impl ModelProvider for AnthropicProvider {
                     .json(&anthropic_request(&request, &self.model))
                     .send()
                     .await?;
-                checked_response("anthropic", sent).await
+                checked_response_redacted("anthropic", sent, &self.api_key).await
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
         };
@@ -496,16 +537,24 @@ fn is_opencode_go_endpoint(base_url: &str) -> bool {
 /// Inspects the HTTP status before streaming. On failure the provider body is
 /// retained so callers get an actionable diagnostic instead of a bare status
 /// code. Only the status and body are surfaced; request headers (and therefore
-/// credentials) are never included.
-async fn checked_response(
+/// credentials) are never included. Any occurrence of the API key in the
+/// provider's error body is redacted before the error can reach a transcript
+/// or a log.
+async fn checked_response_redacted(
     provider: &str,
     response: reqwest::Response,
+    secret: &str,
 ) -> Result<reqwest::Response> {
     let status = response.status();
     if status.is_success() {
         return Ok(response);
     }
     let body = response.text().await.unwrap_or_default();
+    let body = if secret.is_empty() {
+        body
+    } else {
+        crate::credentials::redact(&body, &[secret])
+    };
     bail!(
         "{provider} request failed with HTTP {}: {}",
         status.as_u16(),
@@ -534,6 +583,20 @@ fn bound_error_body(body: &str) -> String {
 /// reasoning state.
 #[must_use]
 pub fn openai_request(request: &ModelRequest, model: &str, reasoning: ReasoningReplay) -> Value {
+    openai_request_with_effort(request, model, reasoning, None)
+}
+
+/// Like [`openai_request`], but emits `reasoning_effort` only when the resolved
+/// model capability selected a concrete effort value. A `None` effort never
+/// adds the field, so unsupported DeepSeek/OpenAI parameters can never leak to
+/// unrelated OpenAI-compatible endpoints.
+#[must_use]
+pub fn openai_request_with_effort(
+    request: &ModelRequest,
+    model: &str,
+    reasoning: ReasoningReplay,
+    effort: Option<&str>,
+) -> Value {
     let mut messages = vec![json!({"role":"system","content":request.system})];
     messages.extend(
         request
@@ -541,7 +604,11 @@ pub fn openai_request(request: &ModelRequest, model: &str, reasoning: ReasoningR
             .iter()
             .map(|message| openai_message(message, reasoning)),
     );
-    json!({"model":model,"messages":messages,"tools":request.tools.iter().map(|t|json!({"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.input_schema}})).collect::<Vec<_>>(),"stream":true,"stream_options":{"include_usage":true}})
+    let mut body = json!({"model":model,"messages":messages,"tools":request.tools.iter().map(|t|json!({"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.input_schema}})).collect::<Vec<_>>(),"stream":true,"stream_options":{"include_usage":true}});
+    if let Some(effort) = effort {
+        body["reasoning_effort"] = Value::String(effort.to_owned());
+    }
+    body
 }
 
 fn openai_message(message: &latch_protocol::ModelMessage, reasoning: ReasoningReplay) -> Value {
