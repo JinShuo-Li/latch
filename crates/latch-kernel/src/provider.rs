@@ -970,6 +970,39 @@ mod tests {
         assert_eq!(d.push(b"data: ok\r\n\r\n"), ["ok"]);
     }
     #[test]
+    fn reasoning_effort_is_only_emitted_when_selected() {
+        let request = ModelRequest {
+            system: "s".into(),
+            messages: vec![ModelMessage::text("user", "hi")],
+            tools: vec![],
+        };
+        for effort in ["low", "high", "max"] {
+            let body = openai_request_with_effort(
+                &request,
+                "deepseek-v4.1-flash",
+                ReasoningReplay::Replay,
+                Some(effort),
+            );
+            assert_eq!(
+                body["reasoning_effort"], effort,
+                "DeepSeek V4 emits the documented value"
+            );
+        }
+        // No selected effort: the field must not exist at all.
+        let body = openai_request_with_effort(
+            &request,
+            "deepseek-v4.1-flash",
+            ReasoningReplay::Replay,
+            None,
+        );
+        assert!(body.get("reasoning_effort").is_none());
+        // Generic OpenAI-compatible endpoints never receive the parameter.
+        let body =
+            openai_request_with_effort(&request, "custom-model", ReasoningReplay::Omit, None);
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
     fn generic_endpoints_send_only_the_user_agent() {
         let provider = OpenAiProvider::new(
             "https://api.openai.com/v1/".into(),

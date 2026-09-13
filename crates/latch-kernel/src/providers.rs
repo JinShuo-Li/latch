@@ -904,6 +904,102 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_v4_efforts_resolve_low_high_and_max() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.deepseek]
+            kind = "deepseek"
+            credential = "env:DEEPSEEK_API_KEY"
+            "#,
+        );
+        for effort in [
+            ReasoningEffort::Low,
+            ReasoningEffort::High,
+            ReasoningEffort::Max,
+        ] {
+            let (profile, descriptor) = registry
+                .resolve_profile(&InferenceProfile::new(
+                    "deepseek",
+                    "deepseek-v4.1-flash",
+                    effort,
+                ))
+                .unwrap();
+            assert_eq!(profile.effort, effort);
+            assert_eq!(
+                descriptor.effective_effort(effort),
+                effort,
+                "the selected effort reaches the wire unchanged"
+            );
+            assert_eq!(descriptor.reasoning_replay, ReasoningReplay::Replay);
+        }
+        // A model with no configurable effort clamps to provider default and
+        // never advertises a value.
+        let (profile, descriptor) = registry
+            .resolve_profile(&InferenceProfile::new(
+                "deepseek",
+                "deepseek-chat",
+                ReasoningEffort::Max,
+            ))
+            .unwrap();
+        assert_eq!(profile.effort, ReasoningEffort::ProviderDefault);
+        assert!(descriptor.supported_efforts.is_empty());
+    }
+
+    #[test]
+    fn opencode_go_capabilities_are_resolved_per_model() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.opencode-go]
+            kind = "opencode-go"
+            credential = "env:OPENCODE_API_KEY"
+            "#,
+        );
+        // A DeepSeek-family model keeps required reasoning replay and efforts.
+        let deepseek = registry
+            .model_descriptor("opencode-go", "deepseek-v4.1-flash")
+            .unwrap();
+        assert_eq!(deepseek.reasoning_replay, ReasoningReplay::Replay);
+        assert_eq!(deepseek.supported_efforts.len(), 3);
+        // An unknown model on the same endpoint is not assumed to be DeepSeek:
+        // no replay, no efforts, no invented metadata.
+        let other = registry
+            .model_descriptor("opencode-go", "gpt-5.6-terra")
+            .unwrap();
+        assert!(!other.known || other.reasoning_replay == ReasoningReplay::Omit);
+        assert_eq!(other.reasoning_replay, ReasoningReplay::Omit);
+        assert!(other.supported_efforts.is_empty());
+        assert!(other.context_window_tokens.is_none());
+        assert!(other.pricing.is_none());
+    }
+
+    #[test]
+    fn anthropic_models_are_selectable_without_wire_leakage() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.anthropic]
+            kind = "anthropic"
+            credential = "env:ANTHROPIC_API_KEY"
+            "#,
+        );
+        let (profile, descriptor) = registry
+            .resolve_profile(&InferenceProfile::new(
+                "anthropic",
+                "claude-sonnet-4-5",
+                ReasoningEffort::High,
+            ))
+            .unwrap();
+        assert_eq!(profile.model, "claude-sonnet-4-5");
+        assert_eq!(
+            registry.provider("anthropic").unwrap().kind,
+            ProviderKind::Anthropic
+        );
+        // Anthropic effort is not mapped yet: the selection clamps rather than
+        // sending an unsupported parameter.
+        assert_eq!(profile.effort, ReasoningEffort::ProviderDefault);
+        assert!(descriptor.supported_efforts.is_empty());
+    }
+
+    #[test]
     fn provider_entry_can_extend_the_builtin_catalog() {
         let (_config, registry) = registry(
             r#"
