@@ -1,4 +1,4 @@
-use crate::agents::{AgentSupervisor, ChildMailbox, WorkerSettings};
+use crate::agents::{AgentSupervisor, ChildMailbox, ProviderFactory, WorkerSettings};
 use crate::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS};
 use crate::continuity::{ContinuityEngine, MaterializeBudget};
 use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
@@ -258,6 +258,15 @@ impl Agent {
     /// root session carries the authoritative durable provenance.
     pub(crate) fn set_inherited_profile(&mut self, profile: InferenceProfile) {
         self.profile = profile;
+    }
+
+    /// Installs the factory used to rebuild pinned child sessions after a root
+    /// profile switch, a worker restart, or a process resume. It is the
+    /// default for future children and never mutates a running child.
+    pub fn set_provider_factory(&mut self, factory: ProviderFactory) {
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.set_provider_factory(Some(factory));
+        }
     }
 
     /// Switches the live provider, model, and reasoning effort without

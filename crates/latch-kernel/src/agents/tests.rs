@@ -981,3 +981,234 @@ async fn child_inherits_the_live_inference_profile() {
     assert_eq!(agent.profile().model, "inherited-model");
     agent.shutdown_extensions().await.unwrap();
 }
+
+/// Provider that always answers as its configured model, used to observe
+/// which profile a child session actually runs under.
+struct NamedProvider {
+    model: String,
+}
+
+#[async_trait]
+impl ModelProvider for NamedProvider {
+    fn name(&self) -> &str {
+        "named"
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
+    async fn stream(
+        &self,
+        _request: ModelRequest,
+        _cancel: CancellationToken,
+        sink: crate::provider::StreamSink,
+    ) -> Result<ModelResponse> {
+        let response = ModelResponse {
+            text: format!("{} answered", self.model),
+            tool_calls: Vec::new(),
+            stop_reason: "stop".into(),
+            usage: None,
+            reasoning_content: None,
+            reasoning: Vec::new(),
+        };
+        sink(StreamEvent::Completed(response.clone()));
+        Ok(response)
+    }
+}
+
+fn named_descriptor(model: &str) -> crate::providers::ModelDescriptor {
+    crate::providers::ModelDescriptor {
+        provider: latch_protocol::ProviderId::new("named"),
+        model: model.into(),
+        display_name: model.into(),
+        context_window_tokens: Some(64_000),
+        supported_efforts: vec![
+            latch_protocol::ReasoningEffort::Low,
+            latch_protocol::ReasoningEffort::High,
+        ],
+        default_effort: latch_protocol::ReasoningEffort::Low,
+        reasoning_replay: crate::provider::ReasoningReplay::Omit,
+        adaptive_thinking: false,
+        transport: crate::config::TransportKind::ChatCompletions,
+        pricing: None,
+        aliases: Vec::new(),
+        known: true,
+    }
+}
+
+fn named_factory() -> crate::agents::ProviderFactory {
+    Arc::new(|profile: &latch_protocol::InferenceProfile, _session| {
+        Ok(crate::agents::ProviderBuild {
+            provider: Arc::new(NamedProvider {
+                model: profile.model.clone(),
+            }),
+            descriptor: named_descriptor(&profile.model),
+        })
+    })
+}
+
+fn last_child_model(store: &EventStore, agent_id: uuid::Uuid) -> Option<String> {
+    store
+        .events(agent_id)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::ModelRequestStarted { model, .. } => Some(model.clone()),
+            _ => None,
+        })
+}
+
+#[tokio::test]
+async fn child_sessions_pin_their_spawn_profile_durably() {
+    let workspace = tempfile::tempdir().unwrap();
+    let db = workspace.path().join("state.sqlite3");
+    let store = EventStore::open(&db).unwrap();
+    let sid = store.create_session(workspace.path()).unwrap();
+    let policy = PolicyEngine::new(Mode::Work, workspace.path().into(), Default::default());
+    let tools = ToolExecutor::new(
+        workspace.path().into(),
+        workspace.path().join("artifacts"),
+        store.clone(),
+        sid,
+        policy,
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: workspace.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: Arc::new(NamedProvider {
+            model: "model-a".into(),
+        }),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), Default::default()),
+        retry_budget: 1,
+    });
+    agent.set_provider_factory(named_factory());
+    agent.set_context_budget(crate::config::ContextConfig::default(), 64_000);
+
+    let supervisor = agent.agent_supervisor().expect("root supervisor");
+    let child_a = supervisor
+        .spawn_agent(
+            "child-a".into(),
+            "task a".into(),
+            None,
+            DelegationContext::default(),
+        )
+        .await
+        .unwrap();
+    supervisor
+        .wait_agents(&[child_a.agent_id], Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        last_child_model(&store, child_a.agent_id).as_deref(),
+        Some("model-a"),
+        "the child inherits the profile at spawn"
+    );
+    // The durable pin is the first profile record in the child session.
+    let child_events = store.events(child_a.agent_id).unwrap();
+    assert_eq!(
+        crate::session::resumed_inference_profile(&child_events)
+            .map(|profile| profile.model)
+            .as_deref(),
+        Some("model-a")
+    );
+
+    // Root switches to profile B. The running child's provider must not move.
+    agent
+        .set_inference_profile(
+            Arc::new(NamedProvider {
+                model: "model-b".into(),
+            }),
+            latch_protocol::InferenceProfile::new(
+                "named",
+                "model-b",
+                latch_protocol::ReasoningEffort::High,
+            ),
+            &named_descriptor("model-b"),
+            crate::config::ContextConfig::default(),
+            "test switch",
+        )
+        .unwrap();
+    drop(agent); // ends the in-process supervisor and its workers
+    drop(store);
+
+    // Process-level resume: rebuild the root on B and continue the old child.
+    let store = EventStore::open(&db).unwrap();
+    let policy = PolicyEngine::new(Mode::Work, workspace.path().into(), Default::default());
+    let tools = ToolExecutor::new(
+        workspace.path().into(),
+        workspace.path().join("artifacts"),
+        store.clone(),
+        sid,
+        policy,
+    )
+    .unwrap();
+    let mut resumed = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: workspace.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: Arc::new(NamedProvider {
+            model: "model-b".into(),
+        }),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), Default::default()),
+        retry_budget: 1,
+    });
+    resumed.set_provider_factory(named_factory());
+    resumed.restore_inference_profile(
+        Arc::new(NamedProvider {
+            model: "model-b".into(),
+        }),
+        latch_protocol::InferenceProfile::new(
+            "named",
+            "model-b",
+            latch_protocol::ReasoningEffort::High,
+        ),
+        &named_descriptor("model-b"),
+        crate::config::ContextConfig::default(),
+    );
+    let supervisor = resumed.agent_supervisor().expect("root supervisor");
+    supervisor
+        .continue_agent(child_a.agent_id, "task a again".into())
+        .await
+        .unwrap();
+    supervisor
+        .wait_agents(&[child_a.agent_id], Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        last_child_model(&store, child_a.agent_id).as_deref(),
+        Some("model-a"),
+        "a rebuilt worker keeps the child's pinned profile"
+    );
+
+    // A genuinely new child uses the root's current profile.
+    let child_b = supervisor
+        .spawn_agent(
+            "child-b".into(),
+            "task b".into(),
+            None,
+            DelegationContext::default(),
+        )
+        .await
+        .unwrap();
+    supervisor
+        .wait_agents(&[child_b.agent_id], Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        last_child_model(&store, child_b.agent_id).as_deref(),
+        Some("model-b")
+    );
+    assert_eq!(
+        crate::session::resumed_inference_profile(&store.events(child_b.agent_id).unwrap())
+            .map(|profile| profile.model)
+            .as_deref(),
+        Some("model-b")
+    );
+    resumed.shutdown_extensions().await.unwrap();
+}

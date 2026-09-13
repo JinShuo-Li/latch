@@ -6,10 +6,11 @@ use crate::agent::Agent;
 use crate::config::ContextConfig;
 use crate::continuity::ContinuityEngine;
 use crate::provider::ModelProvider;
+use crate::providers::ModelDescriptor;
 use crate::store::{AgentSessionSpec, EventStore};
 use crate::tools::ToolExecutor;
-use anyhow::{Result, anyhow, bail};
-use latch_protocol::{AgentIdentity, AgentReport, AgentStatus, EventPayload};
+use anyhow::{Context, Result, anyhow, bail};
+use latch_protocol::{AgentIdentity, AgentReport, AgentStatus, EventPayload, InferenceProfile};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -21,6 +22,19 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 pub const DEFAULT_MAX_AGENT_DEPTH: u8 = 1;
+
+/// A provider adapter plus the descriptor that produced it. Returned by a
+/// [`ProviderFactory`] so a child can be rebuilt from its own durable profile.
+pub struct ProviderBuild {
+    pub provider: Arc<dyn ModelProvider>,
+    pub descriptor: ModelDescriptor,
+}
+
+/// Reconstructs a provider adapter for an exact inference profile. The CLI
+/// supplies one so a durable child session can be rebuilt on its pinned
+/// profile even after the root switched models or the process restarted.
+pub type ProviderFactory =
+    Arc<dyn Fn(&InferenceProfile, Uuid) -> Result<ProviderBuild> + Send + Sync>;
 
 #[derive(Debug, Clone)]
 pub struct WorkerSettings {
@@ -45,8 +59,12 @@ pub(super) struct SupervisorInner {
     pub workspace: PathBuf,
     pub store: EventStore,
     /// Live root provider. Replaced when the root switches inference profile so
-    /// subsequently spawned children inherit the new profile.
+    /// subsequently spawned children inherit the new profile. It is the
+    /// default for future children, never a live provider for existing ones.
     pub provider: RwLock<Arc<dyn ModelProvider>>,
+    /// Rebuilds a provider from a child's durable profile. `None` means the
+    /// process cannot reconstruct non-current profiles.
+    pub provider_factory: RwLock<Option<ProviderFactory>>,
     pub tools: ToolExecutor,
     pub settings: RwLock<WorkerSettings>,
     pub graph: Mutex<AgentGraph>,
@@ -134,6 +152,7 @@ impl AgentSupervisor {
                 workspace,
                 store,
                 provider: RwLock::new(provider),
+                provider_factory: RwLock::new(None),
                 tools,
                 settings: RwLock::new(settings),
                 graph: Mutex::new(graph),
@@ -161,6 +180,15 @@ impl AgentSupervisor {
             .provider
             .write()
             .unwrap_or_else(|e| e.into_inner()) = provider;
+    }
+
+    /// Installs (or clears) the factory used to rebuild pinned child profiles.
+    pub(crate) fn set_provider_factory(&self, factory: Option<ProviderFactory>) {
+        *self
+            .inner
+            .provider_factory
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = factory;
     }
 
     pub async fn spawn_agent(
@@ -200,6 +228,26 @@ impl AgentSupervisor {
             });
             identity
         };
+        // Pin the child's inference profile durably at spawn. Worker recreation
+        // and process resume rebuild the child from this record, never from the
+        // root's current profile.
+        {
+            let settings = self
+                .inner
+                .settings
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            self.inner.store.append(
+                identity.agent_id,
+                EventPayload::InferenceProfileChanged {
+                    provider: settings.profile.provider.clone(),
+                    model: settings.profile.model.clone(),
+                    effort: settings.profile.effort,
+                    reason: "inherited from root at spawn".into(),
+                },
+            )?;
+        }
         if let Err(error) = self.start_worker(identity.clone(), Some(brief)) {
             self.inner.store.append(
                 identity.agent_id,
@@ -484,15 +532,46 @@ impl AgentSupervisor {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let root_provider = self
-            .inner
-            .provider
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let provider = root_provider
-            .for_session(identity.agent_id)
-            .unwrap_or_else(|| root_provider.clone());
+        let events = self.inner.store.events(identity.agent_id)?;
+        // A child is permanently associated with the profile it was spawned
+        // under. The durable event written at spawn is the authority; the
+        // root's current profile is only a fallback for a child that has no
+        // durable profile yet.
+        let profile = crate::session::resumed_inference_profile(&events)
+            .unwrap_or_else(|| settings.profile.clone());
+        let pinned_to_current = profile == settings.profile;
+        let (provider, descriptor) = if pinned_to_current {
+            let root_provider = self
+                .inner
+                .provider
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            (
+                root_provider
+                    .for_session(identity.agent_id)
+                    .unwrap_or(root_provider),
+                None,
+            )
+        } else {
+            let factory = self
+                .inner
+                .provider_factory
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let Some(factory) = factory else {
+                bail!(
+                    "child {} is pinned to {} but no provider factory is available to rebuild it",
+                    identity.agent_id,
+                    profile
+                );
+            };
+            let build = factory(&profile, identity.agent_id).with_context(|| {
+                format!("rebuild child {} pinned to {}", identity.agent_id, profile)
+            })?;
+            (build.provider, Some(build.descriptor))
+        };
         let tools = self.inner.tools.for_child(identity.agent_id)?;
         let continuity = ContinuityEngine::for_model(
             self.inner.store.clone(),
@@ -514,9 +593,12 @@ impl AgentSupervisor {
         );
         agent.set_stagnation_budget(settings.stagnation_budget);
         agent.set_max_model_turns(settings.max_model_turns);
-        agent.set_context_budget(settings.context.clone(), settings.context_window_tokens);
-        agent.set_inherited_profile(settings.profile.clone());
-        let events = self.inner.store.events(identity.agent_id)?;
+        let window = descriptor
+            .as_ref()
+            .and_then(|descriptor| descriptor.context_window_tokens)
+            .unwrap_or(settings.context_window_tokens);
+        agent.set_context_budget(settings.context.clone(), window);
+        agent.set_inherited_profile(profile);
         if let Some(state) = events.iter().rev().find_map(|event| match &event.payload {
             EventPayload::TaskStateUpdated { state } => Some(state.clone()),
             _ => None,

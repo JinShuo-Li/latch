@@ -21,7 +21,7 @@ pub mod tokens;
 pub mod tools;
 
 pub use agent::{Agent, AgentEventSink, AgentRuntime};
-pub use agents::{AgentSnapshot, AgentSupervisor};
+pub use agents::{AgentSnapshot, AgentSupervisor, ProviderBuild, ProviderFactory};
 pub use config::Config;
 pub use continuity::{ContinuityEngine, MaterializeBudget, MaterializedContext};
 pub use credentials::{CredentialRef, CredentialStore};
