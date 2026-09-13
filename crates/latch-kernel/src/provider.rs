@@ -82,12 +82,15 @@ pub enum ReasoningReplay {
     Omit,
 }
 
+/// Conservative fallback for direct construction of [`OpenAiProvider`] with
+/// no resolved model capability. The registry always overrides this via
+/// `with_reasoning`, so catalog/user metadata wins. A base URL never implies
+/// a capability: only the model name and the OpenCode Go gateway (whose
+/// unknown models may be DeepSeek-family) are consulted.
 #[must_use]
-pub fn reasoning_replay_for(base_url: &str, model: &str) -> ReasoningReplay {
-    let base = base_url.to_ascii_lowercase();
+pub fn reasoning_replay_for(_base_url: &str, model: &str) -> ReasoningReplay {
     let model = model.to_ascii_lowercase();
-    if is_opencode_go_endpoint(base_url)
-        || base.contains("deepseek")
+    if is_opencode_go_endpoint(_base_url)
         || model.contains("deepseek")
         || model.contains("reasoner")
     {

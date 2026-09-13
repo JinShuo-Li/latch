@@ -173,11 +173,18 @@ fn conservative_replay(kind: ProviderKind, model: &str) -> ReasoningReplay {
 /// pricing is deliberately absent because Latch never invents prices.
 ///
 /// Sources (checked 2026-09):
-/// - OpenAI: developers.openai.com reasoning guide + models-manager reference
-///   (transport must be Responses for tool calling with reasoning effort).
+/// - OpenAI: developers.openai.com/api/docs/models (context windows and effort
+///   sets per model) and the reasoning guide. Context values are PUBLIC API
+///   model windows (currently 1,050,000 for the GPT-5.4+ generation), not the
+///   smaller Codex product/deployment input limits; do not copy a deployment
+///   limit into this table. The Responses transport is required for tool
+///   calling with reasoning effort on GPT-5.4 and later.
 /// - Anthropic: platform.claude.com models overview + effort/thinking docs.
-/// - DeepSeek: api-docs.deepseek.com (canonical `deepseek-flash` /
-///   `deepseek-v4-pro`; legacy names are accepted aliases).
+/// - DeepSeek: api-docs.deepseek.com/api/create-chat-completion lists the exact
+///   allowed `model` values `deepseek-flash` and `deepseek-v4-pro`, and
+///   /quick_start/pricing gives 1M context and the thinking/effort rules.
+///   Retired product names are accepted aliases only (see the footnote), never
+///   canonical IDs.
 /// - OpenCode Go: opencode.ai/v2/docs/console/go endpoint table, which lists a
 ///   transport per model (Chat Completions, Responses, or Messages).
 #[derive(Clone)]
@@ -200,20 +207,27 @@ const HIGH: ReasoningEffort = ReasoningEffort::High;
 const XHIGH: ReasoningEffort = ReasoningEffort::XHigh;
 const MAX: ReasoningEffort = ReasoningEffort::Max;
 
-/// Current OpenAI reasoning models. The Responses API is required for tool
+/// Current OpenAI API reasoning models. The Responses API is required for tool
 /// calling with reasoning effort on GPT-5.4 and later, so every built-in uses
-/// the Responses transport. Context windows come from the pinned Codex
-/// reference; effort sets are restricted to levels both OpenAI documents and
-/// the neutral enum can represent.
+/// the Responses transport. Context windows are the public API model windows
+/// (1,050,000 since the GPT-5.4 generation — deliberately not the 272K
+/// Codex/deployment input threshold, which also appears in pricing tiers).
+/// Effort sets and defaults follow each model's official page: Astra supports
+/// low..max (no `none`), the GPT-5.6 family supports none..max and defaults to
+/// medium, GPT-5.5 defaults to medium, and GPT-5.4 defaults to none.
+const OPENAI_PUBLIC_CONTEXT_WINDOW: usize = 1_050_000;
+
 fn builtin_openai() -> Vec<BuiltinModel> {
     let responses = TransportKind::Responses;
     vec![
         BuiltinModel {
             id: "gpt-6-astra",
             display_name: "GPT-6 Astra",
-            context_window_tokens: Some(272_000),
-            efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
-            default_effort: MEDIUM,
+            context_window_tokens: Some(OPENAI_PUBLIC_CONTEXT_WINDOW),
+            efforts: &[LOW, MEDIUM, HIGH, XHIGH, MAX],
+            // The model page does not state a default; omit the field and let
+            // the API decide rather than guessing.
+            default_effort: ReasoningEffort::ProviderDefault,
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
@@ -222,18 +236,18 @@ fn builtin_openai() -> Vec<BuiltinModel> {
         BuiltinModel {
             id: "gpt-5.6-sol",
             display_name: "GPT-5.6 Sol",
-            context_window_tokens: Some(272_000),
+            context_window_tokens: Some(OPENAI_PUBLIC_CONTEXT_WINDOW),
             efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
             default_effort: MEDIUM,
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
-            aliases: &[],
+            aliases: &["gpt-5.6"],
         },
         BuiltinModel {
             id: "gpt-5.6-terra",
             display_name: "GPT-5.6 Terra",
-            context_window_tokens: Some(272_000),
+            context_window_tokens: Some(OPENAI_PUBLIC_CONTEXT_WINDOW),
             efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
             default_effort: MEDIUM,
             transport: responses,
@@ -244,7 +258,7 @@ fn builtin_openai() -> Vec<BuiltinModel> {
         BuiltinModel {
             id: "gpt-5.6-luna",
             display_name: "GPT-5.6 Luna",
-            context_window_tokens: Some(272_000),
+            context_window_tokens: Some(OPENAI_PUBLIC_CONTEXT_WINDOW),
             efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
             default_effort: MEDIUM,
             transport: responses,
@@ -255,7 +269,7 @@ fn builtin_openai() -> Vec<BuiltinModel> {
         BuiltinModel {
             id: "gpt-5.5",
             display_name: "GPT-5.5",
-            context_window_tokens: Some(272_000),
+            context_window_tokens: Some(OPENAI_PUBLIC_CONTEXT_WINDOW),
             efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH],
             default_effort: MEDIUM,
             transport: responses,
@@ -266,9 +280,9 @@ fn builtin_openai() -> Vec<BuiltinModel> {
         BuiltinModel {
             id: "gpt-5.4",
             display_name: "GPT-5.4",
-            context_window_tokens: Some(272_000),
+            context_window_tokens: Some(OPENAI_PUBLIC_CONTEXT_WINDOW),
             efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH],
-            default_effort: MEDIUM,
+            default_effort: NONE,
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
@@ -355,10 +369,19 @@ fn builtin_anthropic() -> Vec<BuiltinModel> {
     models
 }
 
-/// Official DeepSeek API models. `deepseek-flash` is the canonical V4.1 Flash
-/// name; the legacy `deepseek-v4-flash`/vision names are accepted aliases that
-/// the provider routes to the same current model. Thinking is on by default
-/// and `reasoning_effort` accepts low/high/max.
+/// Official DeepSeek API models. The API reference
+/// (api-docs.deepseek.com/api/create-chat-completion) lists exactly two
+/// allowed `model` values: `deepseek-flash` and `deepseek-v4-pro`. The
+/// pricing-page footnote states that `deepseek-v4-flash` and
+/// `deepseek-v4-flash-vision-exp` are retired names whose requests are served
+/// by the same current DeepSeek-V4.1-Flash model (which supports vision), so
+/// aliasing them to `deepseek-flash` is semantically exact, not a collapse of
+/// two distinct model families. `deepseek-chat`/`deepseek-reasoner` and
+/// Latch-era `deepseek-v4.1*` names are kept only for existing configs.
+///
+/// Thinking is on by default (`thinking.type: enabled`), `reasoning_effort`
+/// accepts none/low/high/max, tools require full `reasoning_content` replay,
+/// and the context window is 1M.
 fn builtin_deepseek() -> Vec<BuiltinModel> {
     let chat = TransportKind::ChatCompletions;
     vec![
@@ -407,7 +430,10 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
         BuiltinModel {
             id: "gpt-5.6-luna",
             display_name: "GPT-5.6 Luna",
-            context_window_tokens: Some(272_000),
+            // OpenCode Go documents transport/endpoints but not context
+            // windows; leaving it unknown is honest and avoids copying the
+            // public-API or Codex deployment limits into a gateway.
+            context_window_tokens: None,
             efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
             default_effort: MEDIUM,
             transport: responses,
@@ -835,6 +861,7 @@ fn apply_user_metadata(descriptor: &mut ModelDescriptor, user: &ModelConfig) {
 }
 
 /// Central provider/model catalog.
+#[derive(Clone)]
 pub struct ProviderRegistry {
     profiles: BTreeMap<String, ProviderProfile>,
     /// The profile selected when the user has not chosen one.
@@ -1361,7 +1388,10 @@ mod tests {
         assert_eq!(luna.transport, TransportKind::Responses);
         assert_eq!(luna.reasoning_replay, ReasoningReplay::Omit);
         assert!(!luna.supported_efforts.is_empty());
-        assert_eq!(luna.context_window_tokens, Some(272_000));
+        assert_eq!(
+            luna.context_window_tokens, None,
+            "OpenCode Go does not document context windows"
+        );
         // Qwen/MiniMax models use the Anthropic Messages transport.
         let qwen = registry
             .model_descriptor("opencode-go", "qwen3.7-max")
@@ -1379,6 +1409,124 @@ mod tests {
         assert!(other.supported_efforts.is_empty());
         assert!(other.context_window_tokens.is_none());
         assert!(other.pricing.is_none());
+    }
+
+    #[test]
+    fn deepseek_catalog_matches_official_api_model_ids() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.deepseek]
+            kind = "deepseek"
+            credential = "env:DEEPSEEK_API_KEY"
+            "#,
+        );
+        let mut canonical: Vec<String> = registry
+            .available_models("deepseek")
+            .into_iter()
+            .map(|model| model.model)
+            .collect();
+        canonical.sort();
+        assert_eq!(
+            canonical,
+            vec!["deepseek-flash".to_owned(), "deepseek-v4-pro".to_owned()],
+            "the API reference lists exactly these allowed model values"
+        );
+        for model in registry.available_models("deepseek") {
+            assert_eq!(model.transport, TransportKind::ChatCompletions);
+            assert_eq!(model.reasoning_replay, ReasoningReplay::Replay);
+            assert_eq!(model.context_window_tokens, Some(1_048_576));
+            assert_eq!(
+                model.selectable_efforts(),
+                vec![
+                    ReasoningEffort::ProviderDefault,
+                    ReasoningEffort::None,
+                    ReasoningEffort::Low,
+                    ReasoningEffort::High,
+                    ReasoningEffort::Max,
+                ],
+                "{} effort set",
+                model.model
+            );
+            assert_eq!(model.default_effort, ReasoningEffort::High);
+        }
+    }
+
+    #[test]
+    fn deepseek_retired_names_are_aliases_not_distinct_models() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.deepseek]
+            kind = "deepseek"
+            credential = "env:DEEPSEEK_API_KEY"
+            "#,
+        );
+        // Retired names route to the same current V4.1-Flash model. The vision
+        // entry is a retired name for that same model per the official pricing
+        // footnote, so resolving it to deepseek-flash is exact.
+        for alias in [
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "deepseek-v4.1-flash",
+            "deepseek-chat",
+            "deepseek-reasoner",
+            "deepseek-v4.1",
+        ] {
+            let descriptor = registry.model_descriptor("deepseek", alias).unwrap();
+            assert_eq!(descriptor.model, "deepseek-flash", "alias {alias}");
+        }
+        // `deepseek-v4-pro` stays a distinct canonical model: no alias or
+        // heuristic may collapse it into Flash.
+        let pro = registry
+            .model_descriptor("deepseek", "deepseek-v4-pro")
+            .unwrap();
+        assert_eq!(pro.model, "deepseek-v4-pro");
+        assert_ne!(pro.model, "deepseek-flash");
+    }
+
+    #[test]
+    fn openai_catalog_uses_public_api_context_and_effort_sets() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.openai]
+            kind = "openai"
+            credential = "env:OPENAI_API_KEY"
+            "#,
+        );
+        let astra = registry.model_descriptor("openai", "gpt-6-astra").unwrap();
+        assert_eq!(astra.context_window_tokens, Some(1_050_000));
+        assert_eq!(astra.transport, TransportKind::Responses);
+        assert_eq!(
+            astra.supported_efforts,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::XHigh,
+                ReasoningEffort::Max,
+            ],
+            "Astra does not advertise `none`"
+        );
+        assert_eq!(astra.default_effort, ReasoningEffort::ProviderDefault);
+
+        // The documented `gpt-5.6` alias resolves to Sol.
+        let sol = registry.model_descriptor("openai", "gpt-5.6").unwrap();
+        assert_eq!(sol.model, "gpt-5.6-sol");
+        assert_eq!(sol.context_window_tokens, Some(1_050_000));
+        assert_eq!(sol.default_effort, ReasoningEffort::Medium);
+
+        let gpt54 = registry.model_descriptor("openai", "gpt-5.4").unwrap();
+        assert_eq!(gpt54.context_window_tokens, Some(1_050_000));
+        assert_eq!(gpt54.default_effort, ReasoningEffort::None);
+
+        for model in registry.available_models("openai") {
+            assert_eq!(
+                model.transport,
+                TransportKind::Responses,
+                "{} uses Responses",
+                model.model
+            );
+            assert_eq!(model.context_window_tokens, Some(1_050_000));
+        }
     }
 
     #[test]
