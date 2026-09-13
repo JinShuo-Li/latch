@@ -369,15 +369,18 @@ fn builtin_anthropic() -> Vec<BuiltinModel> {
     models
 }
 
-/// Official DeepSeek API models. The API reference
-/// (api-docs.deepseek.com/api/create-chat-completion) lists exactly two
-/// allowed `model` values: `deepseek-flash` and `deepseek-v4-pro`. The
-/// pricing-page footnote states that `deepseek-v4-flash` and
-/// `deepseek-v4-flash-vision-exp` are retired names whose requests are served
-/// by the same current DeepSeek-V4.1-Flash model (which supports vision), so
-/// aliasing them to `deepseek-flash` is semantically exact, not a collapse of
-/// two distinct model families. `deepseek-chat`/`deepseek-reasoner` and
-/// Latch-era `deepseek-v4.1*` names are kept only for existing configs.
+/// Official DeepSeek API models. The Chat Completions request schema
+/// (api-docs.deepseek.com/api/create-chat-completion) documents exactly two
+/// allowed `model` values: `deepseek-flash` and `deepseek-v4-pro`, and the
+/// `/models` response example lists the same two. The Models & Pricing
+/// footnote and the Vision guide state that the legacy names
+/// `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` are still accepted
+/// but their models have been retired: those requests are served by the
+/// current DeepSeek-V4.1-Flash model, which itself accepts images and is the
+/// canonical `deepseek-flash`. Aliasing them is therefore wire-exact, not a
+/// collapse of a separately selectable vision model. `deepseek-chat`/
+/// `deepseek-reasoner` and Latch-era `deepseek-v4.1*` names are kept only for
+/// existing configs.
 ///
 /// Thinking is on by default (`thinking.type: enabled`), `reasoning_effort`
 /// accepts none/low/high/max, tools require full `reasoning_content` replay,
@@ -1460,9 +1463,9 @@ mod tests {
             credential = "env:DEEPSEEK_API_KEY"
             "#,
         );
-        // Retired names route to the same current V4.1-Flash model. The vision
-        // entry is a retired name for that same model per the official pricing
-        // footnote, so resolving it to deepseek-flash is exact.
+        // Retired names route to the same current V4.1-Flash model. The Vision
+        // guide states the retired vision name is served by the latest Flash
+        // model too, so resolving it to deepseek-flash is wire-exact.
         for alias in [
             "deepseek-v4-flash",
             "deepseek-v4-flash-vision-exp",
@@ -1481,6 +1484,50 @@ mod tests {
             .unwrap();
         assert_eq!(pro.model, "deepseek-v4-pro");
         assert_ne!(pro.model, "deepseek-flash");
+    }
+
+    #[test]
+    fn deepseek_alias_entered_by_a_user_is_sent_as_the_canonical_wire_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut credentials = CredentialStore::open(dir.path().join("secrets.toml")).unwrap();
+        credentials.set("deepseek", "sk-test").unwrap();
+        let (_config, registry) = registry(
+            r#"
+            [providers.deepseek]
+            kind = "deepseek"
+            credential = "file:deepseek"
+            "#,
+        );
+        for (entered, wire) in [
+            ("deepseek-flash", "deepseek-flash"),
+            ("deepseek-v4-flash", "deepseek-flash"),
+            ("deepseek-v4-flash-vision-exp", "deepseek-flash"),
+            ("deepseek-v4-pro", "deepseek-v4-pro"),
+        ] {
+            let (profile, descriptor) = registry
+                .resolve_profile(&InferenceProfile::new(
+                    "deepseek",
+                    entered,
+                    ReasoningEffort::High,
+                ))
+                .unwrap();
+            let provider = registry
+                .build_provider(&profile, &descriptor, &credentials, Uuid::new_v4())
+                .unwrap();
+            assert_eq!(provider.model(), wire, "alias {entered}");
+            // The serialized request body carries the canonical wire ID, never
+            // the name the user originally typed.
+            let body = crate::provider::openai_request(
+                &latch_protocol::ModelRequest {
+                    system: "s".into(),
+                    messages: vec![],
+                    tools: vec![],
+                },
+                provider.model(),
+                descriptor.reasoning_replay,
+            );
+            assert_eq!(body["model"], wire, "request body for {entered}");
+        }
     }
 
     #[test]
