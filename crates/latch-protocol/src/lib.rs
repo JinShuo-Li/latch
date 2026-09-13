@@ -39,6 +39,155 @@ impl fmt::Display for Mode {
     }
 }
 
+/// Stable identity of a configured provider instance. A provider is a
+/// user-named entry in the provider registry (for example `opencode-go`,
+/// `deepseek`, or a custom name); it is not derived from a base URL.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct ProviderId(pub String);
+
+impl ProviderId {
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.trim().is_empty()
+    }
+}
+
+impl fmt::Display for ProviderId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for ProviderId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl From<String> for ProviderId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+/// Provider-neutral reasoning effort. `ProviderDefault` means Latch does not
+/// select a value and lets the model use its own default; the other variants
+/// are only ever emitted when the resolved model capability lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    #[default]
+    ProviderDefault,
+    Low,
+    High,
+    Max,
+}
+
+impl ReasoningEffort {
+    /// The exact value sent on the wire when this effort is selected. `None`
+    /// means the provider payload must not carry an effort field at all.
+    #[must_use]
+    pub const fn wire(self) -> Option<&'static str> {
+        match self {
+            Self::ProviderDefault => None,
+            Self::Low => Some("low"),
+            Self::High => Some("high"),
+            Self::Max => Some("max"),
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ProviderDefault => "provider default",
+            Self::Low => "low",
+            Self::High => "high",
+            Self::Max => "max",
+        }
+    }
+
+    #[must_use]
+    pub const fn short(self) -> &'static str {
+        match self {
+            Self::ProviderDefault => "default",
+            Self::Low => "low",
+            Self::High => "high",
+            Self::Max => "max",
+        }
+    }
+}
+
+impl fmt::Display for ReasoningEffort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+impl FromStr for ReasoningEffort {
+    type Err = String;
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "default" | "provider-default" | "provider_default" | "auto" => {
+                Ok(Self::ProviderDefault)
+            }
+            "low" | "minimal" => Ok(Self::Low),
+            "high" => Ok(Self::High),
+            "max" => Ok(Self::Max),
+            other => Err(format!("unknown reasoning effort {other:?}")),
+        }
+    }
+}
+
+/// The effective inference selection of a session: which configured provider,
+/// which model on that provider, and which reasoning effort. Credentials are
+/// deliberately not part of a profile; they are resolved separately so a
+/// resumed session never persists secret material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct InferenceProfile {
+    pub provider: ProviderId,
+    pub model: String,
+    pub effort: ReasoningEffort,
+}
+
+impl InferenceProfile {
+    #[must_use]
+    pub fn new(
+        provider: impl Into<ProviderId>,
+        model: impl Into<String>,
+        effort: ReasoningEffort,
+    ) -> Self {
+        Self {
+            provider: provider.into(),
+            model: model.into(),
+            effort,
+        }
+    }
+}
+
+impl fmt::Display for InferenceProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}/{} ({})",
+            self.provider,
+            self.model,
+            self.effort.label()
+        )
+    }
+}
+
 /// How cautious the kernel is when classifying a proposed capability. Mode is
 /// what kind of work is allowed; Safety decides Allow, Ask, or Deny. They are
 /// orthogonal: changing Safety never changes what Mode permits.
@@ -542,6 +691,17 @@ pub enum EventPayload {
     PermissionsChanged {
         mode: PermissionMode,
     },
+    /// The effective inference profile (provider, model, reasoning effort)
+    /// changed. Durable so `--resume` restores the profile the session ended
+    /// with. Credentials are never part of this event.
+    InferenceProfileChanged {
+        provider: ProviderId,
+        model: String,
+        #[serde(default)]
+        effort: ReasoningEffort,
+        #[serde(default)]
+        reason: String,
+    },
     /// The recent working set reached its budget and Latch advanced to a new
     /// append-only context epoch. Non-destructive: every earlier raw event
     /// remains durable and recallable. The new epoch starts at the event with
@@ -667,6 +827,19 @@ pub enum CompletionState {
     Blocked,
 }
 
+impl CompletionState {
+    /// Completion the model has landed on: the implementation claim is made and
+    /// no further kernel work is pending. `InProgress` is the only non-terminal
+    /// state. `Blocked` remains terminal for the current turn (the kernel has
+    /// recorded a required validation that could not run) but still requires
+    /// the model to report the blockage; callers decide whether to draw another
+    /// turn.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        !matches!(self, Self::InProgress)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Hypothesis {
     pub text: String,
@@ -751,6 +924,21 @@ pub struct ContextStats {
     pub state_tokens: usize,
     /// Verbatim recent transcript, protocol-atomic.
     pub recent_tokens: usize,
+    /// Visible user/assistant conversation text inside the recent window. A
+    /// partition of `recent_tokens`, never added to the total separately.
+    #[serde(default)]
+    pub conversation_tokens: usize,
+    /// Replayed assistant reasoning inside the recent window. A partition of
+    /// `recent_tokens`; it is what reasoning-replay costs on each request.
+    #[serde(default)]
+    pub reasoning_replay_tokens: usize,
+    /// Assistant tool-call names and arguments inside the recent window. A
+    /// partition of `recent_tokens`.
+    #[serde(default)]
+    pub tool_arguments_tokens: usize,
+    /// Tool results inside the recent window. A partition of `recent_tokens`.
+    #[serde(default)]
+    pub tool_result_tokens: usize,
     /// Recalled original events plus the scored episode index.
     pub recall_tokens: usize,
     /// Estimated tokens of the archival episode index alone. This is a subset
@@ -1033,6 +1221,14 @@ pub fn display_items(event: &Event) -> Vec<DisplayItem> {
         // Safety and permissions are chrome state, shown in the composer; they
         // do not belong in the durable transcript.
         EventPayload::SafetyChanged { .. } | EventPayload::PermissionsChanged { .. } => Vec::new(),
+        EventPayload::InferenceProfileChanged {
+            provider,
+            model,
+            effort,
+            ..
+        } => vec![DisplayItem::KernelNotice {
+            text: format!("inference profile: {provider}/{model} ({})", effort.label()),
+        }],
         EventPayload::ContextEpochStarted { .. } => vec![DisplayItem::KernelNotice {
             text: "cache epoch rotated; earlier events remain durable and searchable".into(),
         }],
@@ -1151,4 +1347,48 @@ pub fn compact_tool_target(arguments: &Value) -> String {
                 .map(|command| compact_detail(command, 56))
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_effort_parses_and_round_trips() {
+        for (raw, effort) in [
+            ("low", ReasoningEffort::Low),
+            ("high", ReasoningEffort::High),
+            ("max", ReasoningEffort::Max),
+            ("provider-default", ReasoningEffort::ProviderDefault),
+            ("provider_default", ReasoningEffort::ProviderDefault),
+            ("default", ReasoningEffort::ProviderDefault),
+        ] {
+            assert_eq!(raw.parse::<ReasoningEffort>().unwrap(), effort);
+        }
+        assert!("ultra".parse::<ReasoningEffort>().is_err());
+        assert_eq!(ReasoningEffort::Low.wire(), Some("low"));
+        assert_eq!(ReasoningEffort::ProviderDefault.wire(), None);
+        let json = serde_json::to_string(&ReasoningEffort::Max).unwrap();
+        assert_eq!(json, "\"max\"");
+    }
+
+    #[test]
+    fn inference_profile_is_provider_neutral_and_credential_free() {
+        let profile =
+            InferenceProfile::new("opencode-go", "deepseek-v4.1-flash", ReasoningEffort::Low);
+        let json = serde_json::to_string(&profile).unwrap();
+        assert!(json.contains("opencode-go"));
+        assert!(!json.contains("key"));
+        assert!(!json.contains("api"));
+        let back: InferenceProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, profile);
+    }
+
+    #[test]
+    fn completion_states_distinguish_terminal_from_in_progress() {
+        assert!(!CompletionState::InProgress.is_terminal());
+        assert!(CompletionState::ImplementedNotVerified.is_terminal());
+        assert!(CompletionState::Verified.is_terminal());
+        assert!(CompletionState::Blocked.is_terminal());
+    }
 }
