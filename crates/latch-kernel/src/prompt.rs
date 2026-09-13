@@ -72,7 +72,7 @@ impl PromptCompiler {
                 "core.tool_use",
                 60,
                 true,
-                "read_file returns a bounded window with the file hash and continuation offset; re-read only when code changed or evidence requires it. search and read_artifact return bounded pages. Prefer read_file, search, and git_diff over shell. Avoid `cd <workspace> &&`; `cd` into a subdirectory only for read-only inspection, and never `cd` outside the workspace. Use exec_start/exec_poll/exec_terminate for long commands. A failed tool call is evidence: change assumptions, do not retry unchanged.",
+                "read_file returns a bounded window with the file hash and continuation offset; re-read only when code changed or evidence requires it, and never re-read merely to confirm a successful guarded patch. search and read_artifact return bounded pages. Prefer read_file, search, and git_diff over shell. Avoid `cd <workspace> &&`; `cd` into a subdirectory only for read-only inspection, and never `cd` outside the workspace. Use exec_start/exec_poll/exec_terminate for long commands. A failed tool call is evidence: change assumptions, do not retry unchanged.",
             ),
             fragment(
                 "core.editing",
