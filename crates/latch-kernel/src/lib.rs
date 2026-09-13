@@ -28,7 +28,8 @@ pub use credentials::{CredentialRef, CredentialStore};
 pub use permissions::PermissionBroker;
 pub use progress::{ProgressSupervisor, StagnationDecision};
 pub use provider::{
-    AnthropicProvider, FakeProvider, ModelProvider, OpenAiProvider, ReasoningReplay,
+    AnthropicConfig, AnthropicProvider, FakeProvider, ModelProvider, OpenAiProvider,
+    OpenAiResponsesProvider, ReasoningReplay, ThinkingToggle,
 };
 pub use providers::{ModelDescriptor, ProviderCapabilities, ProviderProfile, ProviderRegistry};
 pub use state::{EvidenceLedger, FailureManager, TaskStateManager};

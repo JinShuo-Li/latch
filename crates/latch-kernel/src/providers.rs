@@ -18,10 +18,13 @@
 //! context window, pricing, cache semantics, or reasoning parameters.
 
 use crate::config::{
-    Config, ModelConfig, ProviderKind, ProviderProfileConfig, ReasoningReplayPolicy,
+    Config, ModelConfig, ProviderKind, ProviderProfileConfig, ReasoningReplayPolicy, TransportKind,
 };
 use crate::credentials::{CredentialRef, CredentialStore};
-use crate::provider::{AnthropicProvider, ModelProvider, OpenAiProvider, ReasoningReplay};
+use crate::provider::{
+    AnthropicProvider, ModelProvider, OpenAiProvider, OpenAiResponsesProvider, ReasoningReplay,
+    ThinkingToggle,
+};
 use anyhow::{Result, anyhow, bail};
 use latch_protocol::{InferenceProfile, ModelPricing, ProviderId, ReasoningEffort};
 use std::collections::BTreeMap;
@@ -68,8 +71,14 @@ pub struct ModelDescriptor {
     /// Efforts the model actually accepts. Empty means the only selectable
     /// state is [`ReasoningEffort::ProviderDefault`].
     pub supported_efforts: Vec<ReasoningEffort>,
+    /// The level the provider uses when no effort is sent. Display only; the
+    /// adapter still omits the field for [`ReasoningEffort::ProviderDefault`].
     pub default_effort: ReasoningEffort,
     pub reasoning_replay: ReasoningReplay,
+    /// Whether this model accepts Anthropic adaptive thinking plus an
+    /// `output_config.effort` control.
+    pub adaptive_thinking: bool,
+    pub transport: TransportKind,
     pub pricing: Option<ModelPricing>,
     pub aliases: Vec<String>,
     /// True when metadata comes from the built-in catalog or explicit user
@@ -96,16 +105,24 @@ impl ModelDescriptor {
         }
     }
 
-    /// Selectable efforts for the UI, ordered low to high, always including
-    /// provider default.
+    /// Effort highlighted when a model is first selected. The model default is
+    /// only highlightable when it is an explicit supported level; otherwise the
+    /// provider default is the safe starting point.
+    #[must_use]
+    pub fn preferred_effort(&self) -> ReasoningEffort {
+        match self.default_effort {
+            ReasoningEffort::ProviderDefault => ReasoningEffort::ProviderDefault,
+            explicit if self.supported_efforts.contains(&explicit) => explicit,
+            _ => ReasoningEffort::ProviderDefault,
+        }
+    }
+
+    /// Selectable efforts for the UI, ordered shallow to deep, always
+    /// including provider default.
     #[must_use]
     pub fn selectable_efforts(&self) -> Vec<ReasoningEffort> {
         let mut efforts = vec![ReasoningEffort::ProviderDefault];
-        for effort in [
-            ReasoningEffort::Low,
-            ReasoningEffort::High,
-            ReasoningEffort::Max,
-        ] {
+        for effort in ReasoningEffort::LEVELS {
             if self.supported_efforts.contains(&effort) {
                 efforts.push(effort);
             }
@@ -124,7 +141,9 @@ impl ModelDescriptor {
             context_window_tokens: None,
             supported_efforts: Vec::new(),
             default_effort: ReasoningEffort::ProviderDefault,
-            reasoning_replay: default_replay(kind, model),
+            reasoning_replay: conservative_replay(kind, model),
+            adaptive_thinking: false,
+            transport: kind.default_transport(),
             pricing: None,
             aliases: Vec::new(),
             known: false,
@@ -132,12 +151,15 @@ impl ModelDescriptor {
     }
 }
 
-fn default_replay(kind: ProviderKind, model: &str) -> ReasoningReplay {
+/// Conservative fallback for models the catalog does not know. This is the
+/// only place a broad family heuristic is allowed: explicit built-in or user
+/// metadata always wins over it.
+fn conservative_replay(kind: ProviderKind, model: &str) -> ReasoningReplay {
     let model = model.to_ascii_lowercase();
     match kind {
         ProviderKind::DeepSeek => ReasoningReplay::Replay,
         ProviderKind::OpenCodeGo => {
-            if model.contains("deepseek") || model.contains("reasoner") {
+            if model.contains("deepseek") {
                 ReasoningReplay::Replay
             } else {
                 ReasoningReplay::Omit
@@ -149,138 +171,441 @@ fn default_replay(kind: ProviderKind, model: &str) -> ReasoningReplay {
 
 /// One built-in model row. Only stable, publicly documented facts are listed;
 /// pricing is deliberately absent because Latch never invents prices.
+///
+/// Sources (checked 2026-09):
+/// - OpenAI: developers.openai.com reasoning guide + models-manager reference
+///   (transport must be Responses for tool calling with reasoning effort).
+/// - Anthropic: platform.claude.com models overview + effort/thinking docs.
+/// - DeepSeek: api-docs.deepseek.com (canonical `deepseek-flash` /
+///   `deepseek-v4-pro`; legacy names are accepted aliases).
+/// - OpenCode Go: opencode.ai/v2/docs/console/go endpoint table, which lists a
+///   transport per model (Chat Completions, Responses, or Messages).
+#[derive(Clone)]
 struct BuiltinModel {
     id: &'static str,
     display_name: &'static str,
     context_window_tokens: Option<usize>,
     efforts: &'static [ReasoningEffort],
     default_effort: ReasoningEffort,
+    transport: TransportKind,
+    adaptive_thinking: bool,
+    replay: ReasoningReplay,
+    aliases: &'static [&'static str],
 }
 
+const NONE: ReasoningEffort = ReasoningEffort::None;
 const LOW: ReasoningEffort = ReasoningEffort::Low;
+const MEDIUM: ReasoningEffort = ReasoningEffort::Medium;
 const HIGH: ReasoningEffort = ReasoningEffort::High;
+const XHIGH: ReasoningEffort = ReasoningEffort::XHigh;
 const MAX: ReasoningEffort = ReasoningEffort::Max;
 
-/// Models from the pinned Codex reference (`models-manager/models.json`).
-/// Supported efforts are restricted to the provider-neutral Latch set; a
-/// provider-default level that is not representable maps to
-/// `ProviderDefault` instead of a guessed value.
+/// Current OpenAI reasoning models. The Responses API is required for tool
+/// calling with reasoning effort on GPT-5.4 and later, so every built-in uses
+/// the Responses transport. Context windows come from the pinned Codex
+/// reference; effort sets are restricted to levels both OpenAI documents and
+/// the neutral enum can represent.
 fn builtin_openai() -> Vec<BuiltinModel> {
+    let responses = TransportKind::Responses;
     vec![
         BuiltinModel {
             id: "gpt-6-astra",
-            display_name: "GPT-6-Astra",
+            display_name: "GPT-6 Astra",
             context_window_tokens: Some(272_000),
-            efforts: &[LOW, HIGH, MAX],
-            default_effort: ReasoningEffort::ProviderDefault,
+            efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
+            default_effort: MEDIUM,
+            transport: responses,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
         },
         BuiltinModel {
             id: "gpt-5.6-sol",
-            display_name: "GPT-5.6-Sol",
+            display_name: "GPT-5.6 Sol",
             context_window_tokens: Some(272_000),
-            efforts: &[LOW, HIGH, MAX],
-            default_effort: ReasoningEffort::ProviderDefault,
+            efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
+            default_effort: MEDIUM,
+            transport: responses,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
         },
         BuiltinModel {
             id: "gpt-5.6-terra",
-            display_name: "GPT-5.6-Terra",
+            display_name: "GPT-5.6 Terra",
             context_window_tokens: Some(272_000),
-            efforts: &[LOW, HIGH, MAX],
-            default_effort: ReasoningEffort::ProviderDefault,
+            efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
+            default_effort: MEDIUM,
+            transport: responses,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
         },
         BuiltinModel {
             id: "gpt-5.6-luna",
-            display_name: "GPT-5.6-Luna",
+            display_name: "GPT-5.6 Luna",
             context_window_tokens: Some(272_000),
-            efforts: &[LOW, HIGH, MAX],
-            default_effort: ReasoningEffort::ProviderDefault,
+            efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
+            default_effort: MEDIUM,
+            transport: responses,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
         },
         BuiltinModel {
             id: "gpt-5.5",
             display_name: "GPT-5.5",
             context_window_tokens: Some(272_000),
-            efforts: &[LOW, HIGH],
-            default_effort: ReasoningEffort::ProviderDefault,
+            efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH],
+            default_effort: MEDIUM,
+            transport: responses,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
         },
         BuiltinModel {
             id: "gpt-5.4",
             display_name: "GPT-5.4",
             context_window_tokens: Some(272_000),
-            efforts: &[LOW, HIGH],
-            default_effort: ReasoningEffort::ProviderDefault,
+            efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH],
+            default_effort: MEDIUM,
+            transport: responses,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
         },
     ]
 }
 
+/// Current Anthropic models. Adaptive thinking plus `output_config.effort`
+/// covers Opus 5 / Sonnet 5 / Fable 5.1; Haiku 4.5 only supports manual
+/// extended thinking, which Latch does not configure, so it advertises no
+/// effort. Thinking blocks must be echoed back unchanged (the adapter does).
 fn builtin_anthropic() -> Vec<BuiltinModel> {
-    vec![
+    let messages = TransportKind::AnthropicMessages;
+    let thinking = [
         BuiltinModel {
-            id: "claude-sonnet-4-5",
-            display_name: "Claude Sonnet 4.5",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
+            id: "claude-fable-5-1",
+            display_name: "Claude Fable 5.1",
+            context_window_tokens: Some(1_000_000),
+            efforts: &[LOW, MEDIUM, HIGH, XHIGH, MAX],
+            default_effort: HIGH,
+            transport: messages,
+            adaptive_thinking: true,
+            replay: ReasoningReplay::Replay,
+            aliases: &[],
         },
         BuiltinModel {
-            id: "claude-opus-4-1",
-            display_name: "Claude Opus 4.1",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
+            id: "claude-opus-5",
+            display_name: "Claude Opus 5",
+            context_window_tokens: Some(1_000_000),
+            efforts: &[LOW, MEDIUM, HIGH, XHIGH, MAX],
+            default_effort: HIGH,
+            transport: messages,
+            adaptive_thinking: true,
+            replay: ReasoningReplay::Replay,
+            aliases: &[],
         },
-    ]
+        BuiltinModel {
+            id: "claude-sonnet-5",
+            display_name: "Claude Sonnet 5",
+            context_window_tokens: Some(1_000_000),
+            efforts: &[LOW, MEDIUM, HIGH, XHIGH, MAX],
+            default_effort: HIGH,
+            transport: messages,
+            adaptive_thinking: true,
+            replay: ReasoningReplay::Replay,
+            aliases: &[],
+        },
+    ];
+    let mut models = thinking.to_vec();
+    models.push(BuiltinModel {
+        id: "claude-opus-4-8",
+        display_name: "Claude Opus 4.8",
+        context_window_tokens: Some(1_000_000),
+        efforts: &[LOW, MEDIUM, HIGH, XHIGH, MAX],
+        default_effort: HIGH,
+        transport: messages,
+        adaptive_thinking: true,
+        replay: ReasoningReplay::Replay,
+        aliases: &[],
+    });
+    models.push(BuiltinModel {
+        id: "claude-sonnet-4-6",
+        display_name: "Claude Sonnet 4.6",
+        context_window_tokens: Some(1_000_000),
+        efforts: &[LOW, MEDIUM, HIGH, MAX],
+        default_effort: HIGH,
+        transport: messages,
+        adaptive_thinking: true,
+        replay: ReasoningReplay::Replay,
+        aliases: &[],
+    });
+    models.push(BuiltinModel {
+        id: "claude-haiku-4-5",
+        display_name: "Claude Haiku 4.5",
+        context_window_tokens: Some(200_000),
+        efforts: &[],
+        default_effort: ReasoningEffort::ProviderDefault,
+        transport: messages,
+        adaptive_thinking: false,
+        replay: ReasoningReplay::Replay,
+        aliases: &["claude-haiku-4-5-20251001"],
+    });
+    models
 }
 
+/// Official DeepSeek API models. `deepseek-flash` is the canonical V4.1 Flash
+/// name; the legacy `deepseek-v4-flash`/vision names are accepted aliases that
+/// the provider routes to the same current model. Thinking is on by default
+/// and `reasoning_effort` accepts low/high/max.
 fn builtin_deepseek() -> Vec<BuiltinModel> {
+    let chat = TransportKind::ChatCompletions;
     vec![
         BuiltinModel {
-            id: "deepseek-v4.1-flash",
-            display_name: "DeepSeek V4.1 Flash",
-            context_window_tokens: None,
-            efforts: &[LOW, HIGH, MAX],
-            default_effort: ReasoningEffort::ProviderDefault,
+            id: "deepseek-flash",
+            display_name: "DeepSeek Flash",
+            context_window_tokens: Some(1_048_576),
+            efforts: &[NONE, LOW, HIGH, MAX],
+            default_effort: HIGH,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Replay,
+            aliases: &[
+                "deepseek-v4-flash",
+                "deepseek-v4-flash-vision-exp",
+                "deepseek-v4.1-flash",
+                "deepseek-v4.1",
+                "deepseek-chat",
+                "deepseek-reasoner",
+            ],
         },
         BuiltinModel {
-            id: "deepseek-v4.1",
-            display_name: "DeepSeek V4.1",
-            context_window_tokens: None,
-            efforts: &[LOW, HIGH, MAX],
-            default_effort: ReasoningEffort::ProviderDefault,
-        },
-        BuiltinModel {
-            id: "deepseek-chat",
-            display_name: "DeepSeek Chat",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-        },
-        BuiltinModel {
-            id: "deepseek-reasoner",
-            display_name: "DeepSeek Reasoner",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
+            id: "deepseek-v4-pro",
+            display_name: "DeepSeek V4 Pro",
+            context_window_tokens: Some(1_048_576),
+            efforts: &[NONE, LOW, HIGH, MAX],
+            default_effort: HIGH,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Replay,
+            aliases: &[],
         },
     ]
 }
 
+/// OpenCode Go's documented catalog. Transport and capabilities are per model:
+/// GPT models use Responses, Claude/Qwen/MiniMax use the Messages API, and
+/// the rest use Chat Completions. DeepSeek models keep DeepSeek replay
+/// semantics; every other family does not inherit them. Effort levels are only
+/// advertised where the provider documents them.
 fn builtin_opencode_go() -> Vec<BuiltinModel> {
-    vec![
+    let chat = TransportKind::ChatCompletions;
+    let messages = TransportKind::AnthropicMessages;
+    let responses = TransportKind::Responses;
+    let mut models = vec![
         BuiltinModel {
-            id: "deepseek-v4.1-flash",
-            display_name: "DeepSeek V4.1 Flash",
-            context_window_tokens: None,
-            efforts: &[LOW, HIGH, MAX],
-            default_effort: ReasoningEffort::ProviderDefault,
+            id: "gpt-5.6-luna",
+            display_name: "GPT-5.6 Luna",
+            context_window_tokens: Some(272_000),
+            efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
+            default_effort: MEDIUM,
+            transport: responses,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
         },
         BuiltinModel {
-            id: "deepseek-v4.1",
-            display_name: "DeepSeek V4.1",
-            context_window_tokens: None,
-            efforts: &[LOW, HIGH, MAX],
-            default_effort: ReasoningEffort::ProviderDefault,
+            id: "deepseek-v4-pro",
+            display_name: "DeepSeek V4 Pro",
+            context_window_tokens: Some(1_048_576),
+            efforts: &[NONE, LOW, HIGH, MAX],
+            default_effort: HIGH,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Replay,
+            aliases: &[],
         },
-    ]
+        BuiltinModel {
+            id: "deepseek-v4-flash",
+            display_name: "DeepSeek V4 Flash",
+            context_window_tokens: Some(1_048_576),
+            efforts: &[NONE, LOW, HIGH, MAX],
+            default_effort: HIGH,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Replay,
+            aliases: &["deepseek-v4.1-flash", "deepseek-v4.1", "deepseek-flash"],
+        },
+        BuiltinModel {
+            id: "grok-4.5",
+            display_name: "Grok 4.5",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "glm-5.2",
+            display_name: "GLM-5.2",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "glm-5.1",
+            display_name: "GLM-5.1",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "kimi-k3",
+            display_name: "Kimi K3",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "kimi-k2.7-code",
+            display_name: "Kimi K2.7 Code",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "kimi-k2.6",
+            display_name: "Kimi K2.6",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "mimo-v2.5",
+            display_name: "MiMo-V2.5",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "mimo-v2.5-pro",
+            display_name: "MiMo-V2.5-Pro",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "hy3",
+            display_name: "Hy3",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: chat,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "minimax-m3",
+            display_name: "MiniMax M3",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: messages,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "minimax-m2.7",
+            display_name: "MiniMax M2.7",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: messages,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "qwen3.8-max",
+            display_name: "Qwen3.8 Max",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: messages,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "qwen3.7-max",
+            display_name: "Qwen3.7 Max",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: messages,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "qwen3.7-plus",
+            display_name: "Qwen3.7 Plus",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: messages,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+        BuiltinModel {
+            id: "qwen3.6-plus",
+            display_name: "Qwen3.6 Plus",
+            context_window_tokens: None,
+            efforts: &[],
+            default_effort: ReasoningEffort::ProviderDefault,
+            transport: messages,
+            adaptive_thinking: false,
+            replay: ReasoningReplay::Omit,
+            aliases: &[],
+        },
+    ];
+    // Keep the list stable and readable in UI order.
+    models.sort_by(|a, b| a.id.cmp(b.id));
+    models
 }
 
 fn builtin_models(kind: ProviderKind) -> Vec<BuiltinModel> {
@@ -293,25 +618,52 @@ fn builtin_models(kind: ProviderKind) -> Vec<BuiltinModel> {
     }
 }
 
+fn builtin_descriptor(
+    provider: &ProviderId,
+    kind: ProviderKind,
+    builtin: &BuiltinModel,
+) -> ModelDescriptor {
+    ModelDescriptor {
+        provider: provider.clone(),
+        model: builtin.id.to_owned(),
+        display_name: builtin.display_name.to_owned(),
+        context_window_tokens: builtin.context_window_tokens,
+        supported_efforts: builtin.efforts.to_vec(),
+        default_effort: builtin.default_effort,
+        reasoning_replay: builtin.replay,
+        adaptive_thinking: builtin.adaptive_thinking,
+        transport: builtin.transport,
+        pricing: None,
+        aliases: builtin
+            .aliases
+            .iter()
+            .map(|alias| (*alias).to_owned())
+            .collect(),
+        known: true,
+    }
+    .with_provider_defaults(kind)
+}
+
+impl ModelDescriptor {
+    /// Applies kind-level fallbacks without overriding explicit model facts.
+    fn with_provider_defaults(mut self, kind: ProviderKind) -> Self {
+        if self.transport == TransportKind::ChatCompletions && kind == ProviderKind::OpenAi {
+            // OpenAI custom/unknown models default to Responses; explicit
+            // catalog rows always carry their own transport.
+            self.transport = TransportKind::Responses;
+        }
+        self
+    }
+}
+
 /// The built-in catalog for one provider kind, independent of configuration.
 /// Used by `/setup` to offer a small, stable starting set of models.
 #[must_use]
 pub fn builtin_catalog(kind: ProviderKind) -> Vec<ModelDescriptor> {
     let provider = ProviderId::new(kind.id());
     builtin_models(kind)
-        .into_iter()
-        .map(|builtin| ModelDescriptor {
-            provider: provider.clone(),
-            model: builtin.id.to_owned(),
-            display_name: builtin.display_name.to_owned(),
-            context_window_tokens: builtin.context_window_tokens,
-            supported_efforts: builtin.efforts.to_vec(),
-            default_effort: builtin.default_effort,
-            reasoning_replay: default_replay(kind, builtin.id),
-            pricing: None,
-            aliases: Vec::new(),
-            known: true,
-        })
+        .iter()
+        .map(|builtin| builtin_descriptor(&provider, kind, builtin))
         .collect()
 }
 
@@ -360,18 +712,10 @@ impl ProviderProfile {
         let mut models: BTreeMap<String, ModelDescriptor> = BTreeMap::new();
         let mut aliases: BTreeMap<String, String> = BTreeMap::new();
         for builtin in builtin_models(kind) {
-            let descriptor = ModelDescriptor {
-                provider: provider_id.clone(),
-                model: builtin.id.to_owned(),
-                display_name: builtin.display_name.to_owned(),
-                context_window_tokens: builtin.context_window_tokens,
-                supported_efforts: builtin.efforts.to_vec(),
-                default_effort: builtin.default_effort,
-                reasoning_replay: default_replay(kind, builtin.id),
-                pricing: None,
-                aliases: Vec::new(),
-                known: true,
-            };
+            let descriptor = builtin_descriptor(&provider_id, kind, &builtin);
+            for alias in &descriptor.aliases {
+                aliases.insert(alias.clone(), builtin.id.to_owned());
+            }
             models.insert(builtin.id.to_owned(), descriptor);
         }
         // User entries can extend the catalog with models the built-in table
@@ -478,6 +822,12 @@ fn apply_user_metadata(descriptor: &mut ModelDescriptor, user: &ModelConfig) {
             ReasoningReplayPolicy::Replay => ReasoningReplay::Replay,
             ReasoningReplayPolicy::Omit => ReasoningReplay::Omit,
         };
+    }
+    if let Some(transport) = user.transport {
+        descriptor.transport = transport;
+    }
+    if let Some(adaptive) = user.adaptive_thinking {
+        descriptor.adaptive_thinking = adaptive;
     }
     if !user.aliases.is_empty() {
         descriptor.aliases = user.aliases.clone();
@@ -667,26 +1017,47 @@ impl ProviderRegistry {
             .ok_or_else(|| anyhow!("unknown provider {:?}", profile.provider))?;
         let api_key = credentials.require(&provider.credential)?;
         let effort = descriptor.effective_effort(profile.effort);
-        let provider_impl: Arc<dyn ModelProvider> = match provider.kind {
-            ProviderKind::Anthropic => Arc::new(
+        let supports_effort = !descriptor.supported_efforts.is_empty();
+        // DeepSeek-family reasoning is toggled explicitly: `provider default`
+        // omits the field, an explicit level enables thinking, and an explicit
+        // `none` disables it (DeepSeek's `reasoning_effort` has no `none`).
+        let thinking = if descriptor.reasoning_replay == ReasoningReplay::Replay
+            && descriptor.transport == TransportKind::ChatCompletions
+        {
+            match effort {
+                ReasoningEffort::ProviderDefault => ThinkingToggle::Default,
+                ReasoningEffort::None => ThinkingToggle::Disabled,
+                _ => ThinkingToggle::Enabled,
+            }
+        } else {
+            ThinkingToggle::Default
+        };
+        let provider_impl: Arc<dyn ModelProvider> = match descriptor.transport {
+            TransportKind::AnthropicMessages => Arc::new(
                 AnthropicProvider::new(
                     provider.base_url.clone(),
                     api_key,
                     descriptor.model.clone(),
                 )
-                .with_identity(provider.id.to_string()),
+                .with_identity(provider.id.to_string())
+                .with_reasoning(effort, supports_effort, descriptor.adaptive_thinking)
+                .with_session(session_id),
             ),
-            ProviderKind::OpenAi
-            | ProviderKind::OpenAiCompatible
-            | ProviderKind::DeepSeek
-            | ProviderKind::OpenCodeGo => Arc::new(
+            TransportKind::Responses => Arc::new(
+                OpenAiResponsesProvider::new(
+                    provider.base_url.clone(),
+                    api_key,
+                    descriptor.model.clone(),
+                )
+                .with_identity(provider.id.to_string())
+                .with_reasoning(effort, supports_effort)
+                .with_session(session_id),
+            ),
+            TransportKind::ChatCompletions => Arc::new(
                 OpenAiProvider::new(provider.base_url.clone(), api_key, descriptor.model.clone())
                     .with_identity(provider.id.to_string())
-                    .with_reasoning(
-                        effort,
-                        descriptor.reasoning_replay,
-                        !descriptor.supported_efforts.is_empty(),
-                    )
+                    .with_reasoning(effort, descriptor.reasoning_replay, supports_effort)
+                    .with_thinking(thinking)
                     .with_session(session_id),
             ),
         };
@@ -778,7 +1149,7 @@ mod tests {
             kind = "opencode-go"
             credential = "env:OPENCODE_API_KEY"
 
-            [providers.opencode-go.models."deepseek-v4.1-flash"]
+            [providers.opencode-go.models."deepseek-v4-flash"]
             display_name = "V4 Flash"
             context_window_tokens = 200000
             efforts = ["low", "high", "max"]
@@ -790,7 +1161,7 @@ mod tests {
 
             [inference]
             provider = "deepseek"
-            model = "deepseek-v4.1"
+            model = "deepseek-v4-pro"
             effort = "max"
             "#,
         );
@@ -801,18 +1172,23 @@ mod tests {
 
         // Explicit user metadata overrides the built-in row.
         let flash = registry
-            .model_descriptor("opencode-go", "deepseek-v4.1-flash")
+            .model_descriptor("opencode-go", "deepseek-v4-flash")
             .unwrap();
         assert_eq!(flash.display_name, "V4 Flash");
         assert_eq!(flash.context_window_tokens, Some(200_000));
         assert_eq!(flash.default_effort, ReasoningEffort::High);
 
-        // The other provider's model keeps the built-in default.
+        // The other provider's model keeps the built-in metadata.
         let plain = registry
+            .model_descriptor("deepseek", "deepseek-flash")
+            .unwrap();
+        assert_eq!(plain.display_name, "DeepSeek Flash");
+        assert_eq!(plain.context_window_tokens, Some(1_048_576));
+        // The retired DeepSeek name still resolves to the canonical row.
+        let legacy = registry
             .model_descriptor("deepseek", "deepseek-v4.1-flash")
             .unwrap();
-        assert_eq!(plain.display_name, "DeepSeek V4.1 Flash");
-        assert_eq!(plain.context_window_tokens, None);
+        assert_eq!(legacy.model, "deepseek-flash");
     }
 
     #[test]
@@ -856,7 +1232,8 @@ mod tests {
         assert_eq!(low.effort, ReasoningEffort::Low);
         assert!(descriptor.supports_effort(ReasoningEffort::Low));
 
-        // `max` is not advertised by gpt-5.5 and must never be emitted.
+        // `max` is not advertised by gpt-5.5; it clamps to the model default
+        // (medium) instead of being emitted.
         let (clamped, _) = registry
             .resolve_profile(&InferenceProfile::new(
                 "openai",
@@ -864,7 +1241,16 @@ mod tests {
                 ReasoningEffort::Max,
             ))
             .unwrap();
-        assert_eq!(clamped.effort, ReasoningEffort::ProviderDefault);
+        assert_eq!(clamped.effort, ReasoningEffort::Medium);
+        // `xhigh` is advertised and preserved.
+        let (xhigh, _) = registry
+            .resolve_profile(&InferenceProfile::new(
+                "openai",
+                "gpt-5.5",
+                ReasoningEffort::XHigh,
+            ))
+            .unwrap();
+        assert_eq!(xhigh.effort, ReasoningEffort::XHigh);
 
         // A model with no effort controls only ever selects provider default.
         let (chat, chat_descriptor) = registry
@@ -918,11 +1304,7 @@ mod tests {
             ReasoningEffort::Max,
         ] {
             let (profile, descriptor) = registry
-                .resolve_profile(&InferenceProfile::new(
-                    "deepseek",
-                    "deepseek-v4.1-flash",
-                    effort,
-                ))
+                .resolve_profile(&InferenceProfile::new("deepseek", "deepseek-flash", effort))
                 .unwrap();
             assert_eq!(profile.effort, effort);
             assert_eq!(
@@ -932,17 +1314,18 @@ mod tests {
             );
             assert_eq!(descriptor.reasoning_replay, ReasoningReplay::Replay);
         }
-        // A model with no configurable effort clamps to provider default and
-        // never advertises a value.
+        // The retired `deepseek-chat` name is an alias of the canonical Flash
+        // model and inherits its capabilities.
         let (profile, descriptor) = registry
             .resolve_profile(&InferenceProfile::new(
                 "deepseek",
                 "deepseek-chat",
-                ReasoningEffort::Max,
+                ReasoningEffort::High,
             ))
             .unwrap();
-        assert_eq!(profile.effort, ReasoningEffort::ProviderDefault);
-        assert!(descriptor.supported_efforts.is_empty());
+        assert_eq!(profile.model, "deepseek-flash");
+        assert_eq!(profile.effort, ReasoningEffort::High);
+        assert_eq!(descriptor.context_window_tokens, Some(1_048_576));
     }
 
     #[test]
@@ -954,18 +1337,44 @@ mod tests {
             credential = "env:OPENCODE_API_KEY"
             "#,
         );
-        // A DeepSeek-family model keeps required reasoning replay and efforts.
+        // A DeepSeek-family model keeps required reasoning replay and efforts,
+        // including the documented `none` toggle.
         let deepseek = registry
-            .model_descriptor("opencode-go", "deepseek-v4.1-flash")
+            .model_descriptor("opencode-go", "deepseek-v4-flash")
             .unwrap();
         assert_eq!(deepseek.reasoning_replay, ReasoningReplay::Replay);
-        assert_eq!(deepseek.supported_efforts.len(), 3);
+        assert_eq!(deepseek.transport, TransportKind::ChatCompletions);
+        assert_eq!(
+            deepseek.supported_efforts,
+            vec![
+                ReasoningEffort::None,
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max
+            ]
+        );
+        // A GPT model on the same endpoint uses the Responses transport and
+        // does not inherit DeepSeek replay.
+        let luna = registry
+            .model_descriptor("opencode-go", "gpt-5.6-luna")
+            .unwrap();
+        assert_eq!(luna.transport, TransportKind::Responses);
+        assert_eq!(luna.reasoning_replay, ReasoningReplay::Omit);
+        assert!(!luna.supported_efforts.is_empty());
+        assert_eq!(luna.context_window_tokens, Some(272_000));
+        // Qwen/MiniMax models use the Anthropic Messages transport.
+        let qwen = registry
+            .model_descriptor("opencode-go", "qwen3.7-max")
+            .unwrap();
+        assert_eq!(qwen.transport, TransportKind::AnthropicMessages);
+        assert_eq!(qwen.reasoning_replay, ReasoningReplay::Omit);
+        assert!(qwen.supported_efforts.is_empty());
         // An unknown model on the same endpoint is not assumed to be DeepSeek:
         // no replay, no efforts, no invented metadata.
         let other = registry
-            .model_descriptor("opencode-go", "gpt-5.6-terra")
+            .model_descriptor("opencode-go", "mystery-model")
             .unwrap();
-        assert!(!other.known || other.reasoning_replay == ReasoningReplay::Omit);
+        assert!(!other.known);
         assert_eq!(other.reasoning_replay, ReasoningReplay::Omit);
         assert!(other.supported_efforts.is_empty());
         assert!(other.context_window_tokens.is_none());

@@ -6,10 +6,9 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Legacy single-provider table. Still read and migrated into
-    /// [`Self::providers`] when no explicit `[providers.*]` entries exist, so
-    /// existing configs keep working without manual migration.
-    #[serde(default)]
+    /// Legacy single-provider table. Read for backward compatibility and
+    /// migrated into [`Self::providers`] on save; never serialized again.
+    #[serde(default, skip_serializing)]
     pub provider: ProviderConfig,
     /// User-defined provider instances, keyed by stable provider id.
     #[serde(default)]
@@ -31,11 +30,38 @@ pub struct Config {
     pub failure: FailureConfig,
     #[serde(default)]
     pub extensions: Vec<ExtensionConfig>,
-    /// Legacy global per-model metadata keyed by provider model string. It is
-    /// still consulted as an explicit user override for any provider, but new
-    /// configurations should place metadata under `[providers.<id>.models.*]`.
-    #[serde(default)]
+    /// Legacy global per-model metadata. Still read as an explicit user
+    /// override for any provider; folded into each provider entry on save and
+    /// never serialized again.
+    #[serde(default, skip_serializing)]
     pub models: BTreeMap<String, ModelConfig>,
+}
+
+/// Wire transport used for one model. Providers can expose several transports
+/// at once (OpenCode Go serves GPT models over Responses, Claude/Qwen/MiniMax
+/// over Messages, and the rest over Chat Completions), so transport is a model
+/// capability, not a provider-wide constant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportKind {
+    /// `POST {base}/chat/completions` (OpenAI-compatible chat completions).
+    #[default]
+    ChatCompletions,
+    /// `POST {base}/responses` (OpenAI Responses API).
+    Responses,
+    /// `POST {base}/messages` (Anthropic Messages API).
+    AnthropicMessages,
+}
+
+impl TransportKind {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "chat completions",
+            Self::Responses => "responses",
+            Self::AnthropicMessages => "messages",
+        }
+    }
 }
 
 /// One user-defined provider instance.
@@ -144,6 +170,20 @@ impl ProviderKind {
             Self::OpenAiCompatible => "",
         }
     }
+
+    /// Default wire transport for models on this provider kind. Current OpenAI
+    /// reasoning models require the Responses API for tool calling with
+    /// reasoning effort; other families keep their native transport.
+    #[must_use]
+    pub const fn default_transport(self) -> TransportKind {
+        match self {
+            Self::OpenAi => TransportKind::Responses,
+            Self::Anthropic => TransportKind::AnthropicMessages,
+            Self::DeepSeek | Self::OpenCodeGo | Self::OpenAiCompatible => {
+                TransportKind::ChatCompletions
+            }
+        }
+    }
 }
 
 #[must_use]
@@ -189,6 +229,14 @@ pub struct ModelConfig {
     /// Whether persisted assistant reasoning must be replayed to the provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_replay: Option<ReasoningReplayPolicy>,
+    /// Wire transport override. `None` uses the built-in model capability or
+    /// the provider-kind default. Useful for proxies that emulate one API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<TransportKind>,
+    /// Anthropic adaptive thinking override. `None` uses the built-in model
+    /// capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_thinking: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
 }
@@ -447,8 +495,63 @@ impl Config {
     /// Writes the canonical configuration representation atomically. Existing
     /// legacy keys are superseded by the normalized `[providers.*]` tables; no
     /// secret material is ever written here.
+    /// Migrates legacy configuration into the canonical multi-provider shape.
+    ///
+    /// - `[provider]` becomes a `[providers.<kind>]` entry (named by kind) and
+    ///   seeds `[inference]` when it is unset.
+    /// - global `[models.*]` metadata is folded into every configured provider
+    ///   without overriding provider-specific entries.
+    ///
+    /// Semantics are preserved; formatting and comments are not (see the
+    /// canonical-write note in the docs).
+    pub fn normalize(&mut self) {
+        if self.providers.is_empty()
+            && let Some(kind) =
+                ProviderKind::parse(&self.provider.kind, self.provider.base_url.as_deref())
+        {
+            let credential = self
+                .provider
+                .api_key_env
+                .clone()
+                .map(|env| format!("env:{env}"))
+                .unwrap_or_else(|| kind.default_credential().to_owned());
+            self.providers.insert(
+                kind.id().to_owned(),
+                ProviderProfileConfig {
+                    kind,
+                    display_name: None,
+                    base_url: self.provider.base_url.clone(),
+                    credential: Some(credential),
+                    default_model: Some(self.provider.model.clone()),
+                    models: BTreeMap::new(),
+                    model_discovery: false,
+                },
+            );
+            if self.inference.provider.is_none() {
+                self.inference.provider = Some(kind.id().to_owned());
+            }
+            if self.inference.model.is_none() {
+                self.inference.model = Some(self.provider.model.clone());
+            }
+        }
+        if !self.models.is_empty() {
+            let legacy = std::mem::take(&mut self.models);
+            for entry in self.providers.values_mut() {
+                for (name, meta) in &legacy {
+                    entry
+                        .models
+                        .entry(name.clone())
+                        .or_insert_with(|| meta.clone());
+                }
+            }
+        }
+        self.provider = ProviderConfig::default();
+    }
+
     pub fn save(&self, path: &Path) -> Result<()> {
-        let text = toml::to_string_pretty(self).context("serialize config")?;
+        let mut canonical = self.clone();
+        canonical.normalize();
+        let text = toml::to_string_pretty(&canonical).context("serialize config")?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
@@ -479,6 +582,64 @@ mod tests {
             DEFAULT_CONTEXT_WINDOW_TOKENS - config.reserve_tokens()
         );
         assert!(config.models.is_empty(), "pricing is optional");
+    }
+
+    #[test]
+    fn legacy_config_saves_to_canonical_providers_without_legacy_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [provider]
+            kind = "openai-compatible"
+            model = "custom-model"
+            base_url = "https://example.com/v1"
+            api_key_env = "CUSTOM_KEY"
+
+            [models.custom-model]
+            context_window_tokens = 123456
+
+            [models.custom-model.pricing]
+            input_per_million = 1.0
+            "#,
+        )
+        .unwrap();
+        let config = Config::load(Some(&path)).unwrap();
+        config.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !saved.contains("[provider]"),
+            "legacy table is gone: {saved}"
+        );
+        assert!(
+            !saved.contains("[models."),
+            "legacy global models table is folded into providers: {saved}"
+        );
+        assert!(saved.contains("[providers.openai-compatible]"), "{saved}");
+        assert!(saved.contains("credential = \"env:CUSTOM_KEY\""), "{saved}");
+        assert!(saved.contains("[inference]"), "{saved}");
+
+        // The saved canonical config reloads with identical semantics.
+        let reloaded = Config::load(Some(&path)).unwrap();
+        let registry = crate::providers::ProviderRegistry::from_config(&reloaded).unwrap();
+        let descriptor = registry
+            .model_descriptor("openai-compatible", "custom-model")
+            .unwrap();
+        assert_eq!(descriptor.context_window_tokens, Some(123_456));
+        assert_eq!(
+            descriptor
+                .pricing
+                .as_ref()
+                .and_then(|pricing| pricing.input_per_million),
+            Some(1.0)
+        );
+        assert_eq!(
+            registry.default_provider().credential.display(),
+            "env:CUSTOM_KEY"
+        );
+        let (profile, _) = registry.default_profile(&reloaded).unwrap();
+        assert_eq!(profile.model, "custom-model");
     }
 
     #[test]

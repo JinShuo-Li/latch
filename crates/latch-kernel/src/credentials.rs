@@ -42,7 +42,29 @@ impl CredentialRef {
             Self::Env(name) | Self::File(name) | Self::Keyring(name) => name,
         }
     }
+
+    /// The scheme prefix, for capability reporting.
+    #[must_use]
+    pub const fn scheme(&self) -> &'static str {
+        match self {
+            Self::Env(_) => "env",
+            Self::File(_) => "file",
+            Self::Keyring(_) => "keyring",
+        }
+    }
+
+    /// Whether this build can actually resolve the reference. `keyring:` is
+    /// parsed for forward compatibility but not implemented, so the UI must
+    /// not advertise it as a working choice.
+    #[must_use]
+    pub const fn is_available(&self) -> bool {
+        !matches!(self, Self::Keyring(_))
+    }
 }
+
+/// Credential backends this build can resolve. Surfaced so setup UI and
+/// diagnostics never present an unavailable scheme as a real option.
+pub const SUPPORTED_CREDENTIAL_BACKENDS: &[&str] = &["env", "file"];
 
 impl std::fmt::Display for CredentialRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -333,6 +355,19 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let error = CredentialStore::open(&path).unwrap_err().to_string();
         assert!(error.contains("chmod 600"), "{error}");
+    }
+
+    #[test]
+    fn keyring_is_parsed_but_marked_unavailable() {
+        let reference = "keyring:deepseek".parse::<CredentialRef>().unwrap();
+        assert!(!reference.is_available());
+        assert_eq!(reference.scheme(), "keyring");
+        assert!(CredentialRef::Env("X".into()).is_available());
+        assert_eq!(SUPPORTED_CREDENTIAL_BACKENDS, &["env", "file"]);
+        let dir = tempfile::tempdir().unwrap();
+        let store = CredentialStore::open(dir.path().join("secrets.toml")).unwrap();
+        let error = store.require(&reference).unwrap_err().to_string();
+        assert!(error.contains("not available in this build"), "{error}");
     }
 
     #[test]
