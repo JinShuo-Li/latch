@@ -68,7 +68,9 @@ Reasoning effort is a model capability, not a provider-wide constant. The
 neutral set is `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`, and each
 model exposes only its documented subset: OpenAI models use the Responses
 transport (required for tool calling with reasoning effort on GPT-5.4 and
-later) with 1,050,000-token public API context windows; Anthropic models use
+later) with 1,050,000-token public API context windows and encrypted
+reasoning captured from the stream for exactly-once stateless replay;
+Anthropic models use
 adaptive thinking with exact thinking/redacted-block replay; DeepSeek's
 canonical API models are `deepseek-flash` and `deepseek-v4-pro` (Chat
 Completions, `none`/`low`/`high`/`max`, required `reasoning_content` replay,

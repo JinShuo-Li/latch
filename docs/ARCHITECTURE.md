@@ -78,12 +78,13 @@ effort field.
 
 Transport is a per-model capability: OpenAI reasoning models use the
 Responses API (stateless `store: false` replay with
-`reasoning.encrypted_content`), Anthropic models use Messages with adaptive
-thinking and exact thinking/redacted-block replay, DeepSeek uses Chat
-Completions with explicit `reasoning_effort` and the `thinking` toggle, and
-OpenCode Go resolves transport per model. Run boundaries are durable
-(`RunStarted`/`RunCompleted`), so per-run accounting is explicit while
-session totals remain cumulative.
+`reasoning.encrypted_content`, captured from the response stream into the
+durable assistant event and echoed back exactly once), Anthropic models use
+Messages with adaptive thinking and exact thinking/redacted-block replay,
+DeepSeek uses Chat Completions with explicit `reasoning_effort` and the
+`thinking` toggle, and OpenCode Go resolves transport per model. Run
+boundaries are durable (`RunStarted`/`RunCompleted`), so per-run accounting is
+explicit while session totals remain cumulative.
 
 The TUI consumes a provider-neutral catalog from the CLI for `/model` and
 `/setup`; it never inspects base URLs, model families, or wire parameters.
