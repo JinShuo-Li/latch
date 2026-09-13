@@ -27,7 +27,9 @@ tools       0
 in          428.6k
 out         31.4k
 cache       286.1k read · 142.5k miss
-replay      0
+replay      0 cumulative · 0 last
+tool args   0 cumulative · 0 last
+tool result 0 cumulative · 0 last
 files       0 read · 2 changed
 validations 0
 

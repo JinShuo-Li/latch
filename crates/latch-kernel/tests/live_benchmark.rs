@@ -37,8 +37,13 @@ struct RunMetrics {
     output_tokens: u64,
     cache_read_tokens: Option<u64>,
     cache_miss_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
+    reasoning_tokens: Option<u64>,
+    /// Cumulative over every request in the run.
     reasoning_replay_tokens: usize,
+    tool_argument_tokens: usize,
     tool_result_tokens: usize,
+    last_reasoning_replay_tokens: usize,
     files_read: u64,
     files_changed: u64,
     validation_commands: u64,
@@ -89,8 +94,11 @@ async fn live_trivial_fix_by_effort() {
         "generated_at": chrono::Utc::now().to_rfc3339(),
         "runs": reports,
     });
-    let dir = Path::new("target/live-benchmark");
-    std::fs::create_dir_all(dir).unwrap();
+    // Reports land in the workspace target directory regardless of the
+    // package-relative test working directory.
+    let dir =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/live-benchmark");
+    std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!(
         "bench-{}.json",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
@@ -215,10 +223,17 @@ async fn run_once(
                 usage.output_tokens = usage.output_tokens.saturating_add(item.output_tokens);
                 usage.cache_read_tokens = sum_opt(usage.cache_read_tokens, item.cache_read_tokens);
                 usage.cache_miss_tokens = sum_opt(usage.cache_miss_tokens, item.cache_miss_tokens);
+                usage.cache_write_tokens =
+                    sum_opt(usage.cache_write_tokens, item.cache_write_tokens);
+                usage.reasoning_tokens = sum_opt(usage.reasoning_tokens, item.reasoning_tokens);
             }
             EventPayload::ContextMaterialized { stats } => {
-                metrics.reasoning_replay_tokens = stats.reasoning_replay_tokens;
-                metrics.tool_result_tokens = stats.tool_result_tokens;
+                // One event per request: accumulate run totals, keep the last
+                // request visible separately.
+                metrics.reasoning_replay_tokens += stats.reasoning_replay_tokens;
+                metrics.tool_argument_tokens += stats.tool_arguments_tokens;
+                metrics.tool_result_tokens += stats.tool_result_tokens;
+                metrics.last_reasoning_replay_tokens = stats.reasoning_replay_tokens;
             }
             _ => {}
         }
@@ -227,6 +242,8 @@ async fn run_once(
     metrics.output_tokens = usage.output_tokens;
     metrics.cache_read_tokens = usage.cache_read_tokens;
     metrics.cache_miss_tokens = usage.cache_miss_tokens;
+    metrics.cache_write_tokens = usage.cache_write_tokens;
+    metrics.reasoning_tokens = usage.reasoning_tokens;
     let fixed = std::fs::read_to_string(workspace.join("calc.py"))?.contains("a + b");
     metrics.verify_failed = !fixed || metrics.tool_calls == 0;
     Ok(metrics)

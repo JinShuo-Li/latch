@@ -119,9 +119,14 @@ pub struct RunTotals {
     pub files_changed: u32,
     pub validations: u32,
     pub usage: UsageTotals,
+    /// Cumulative across every provider request in this run.
     pub reasoning_replay_tokens: usize,
     pub tool_argument_tokens: usize,
     pub tool_result_tokens: usize,
+    /// Breakdown of only the most recent request (`ContextMaterialized`).
+    pub last_reasoning_replay_tokens: usize,
+    pub last_tool_argument_tokens: usize,
+    pub last_tool_result_tokens: usize,
 }
 
 impl RunTotals {
@@ -496,9 +501,24 @@ impl SidebarModel {
         }
         match &event.payload {
             EventPayload::ContextMaterialized { stats } => {
-                self.run.reasoning_replay_tokens = stats.reasoning_replay_tokens;
-                self.run.tool_argument_tokens = stats.tool_arguments_tokens;
-                self.run.tool_result_tokens = stats.tool_result_tokens;
+                // One event per provider request: accumulate the run totals and
+                // keep the latest request separate. Deterministic under replay
+                // because the reducer sees each event exactly once.
+                self.run.reasoning_replay_tokens = self
+                    .run
+                    .reasoning_replay_tokens
+                    .saturating_add(stats.reasoning_replay_tokens);
+                self.run.tool_argument_tokens = self
+                    .run
+                    .tool_argument_tokens
+                    .saturating_add(stats.tool_arguments_tokens);
+                self.run.tool_result_tokens = self
+                    .run
+                    .tool_result_tokens
+                    .saturating_add(stats.tool_result_tokens);
+                self.run.last_reasoning_replay_tokens = stats.reasoning_replay_tokens;
+                self.run.last_tool_argument_tokens = stats.tool_arguments_tokens;
+                self.run.last_tool_result_tokens = stats.tool_result_tokens;
                 self.context = Some(stats.clone());
             }
             EventPayload::TaskStateUpdated { state } => self.task = Some(state.clone()),
@@ -980,8 +1000,10 @@ impl SidebarModel {
             .unwrap_or_else(|| "…".to_owned());
         if detail {
             let row = |label: &str, value: String| {
+                // 11-column label plus an explicit separator so longer labels
+                // (for example "tool result") never collide with the value.
                 Line::from(vec![
-                    Span::styled(format!("{label:<12}"), dim()),
+                    Span::styled(format!("{label:<11} "), dim()),
                     Span::raw(fit(&value, width.saturating_sub(12))),
                 ])
             };
@@ -998,7 +1020,27 @@ impl SidebarModel {
             lines.push(row("cache", cache));
             lines.push(row(
                 "replay",
-                format_tokens(self.run.reasoning_replay_tokens as u64),
+                format!(
+                    "{} cumulative · {} last",
+                    format_tokens(self.run.reasoning_replay_tokens as u64),
+                    format_tokens(self.run.last_reasoning_replay_tokens as u64)
+                ),
+            ));
+            lines.push(row(
+                "tool args",
+                format!(
+                    "{} cumulative · {} last",
+                    format_tokens(self.run.tool_argument_tokens as u64),
+                    format_tokens(self.run.last_tool_argument_tokens as u64)
+                ),
+            ));
+            lines.push(row(
+                "tool result",
+                format!(
+                    "{} cumulative · {} last",
+                    format_tokens(self.run.tool_result_tokens as u64),
+                    format_tokens(self.run.last_tool_result_tokens as u64)
+                ),
             ));
             if self.run.files_changed > 0 || self.run.files_read > 0 {
                 lines.push(row(
@@ -1591,6 +1633,55 @@ mod tests {
         // Session totals stay cumulative across both runs.
         assert_eq!(model.usage().input, Some(300));
         assert_eq!(model.turns(), 2);
+    }
+
+    #[test]
+    fn run_cost_components_accumulate_and_last_request_stays_separate() {
+        let request_stats = |replay: usize| {
+            let mut stats = stats();
+            stats.reasoning_replay_tokens = replay;
+            stats.tool_arguments_tokens = 100;
+            stats.tool_result_tokens = 300;
+            stats
+        };
+        let events = vec![
+            event(EventPayload::RunStarted {
+                run_id: Uuid::new_v4(),
+                prompt: "task".into(),
+            }),
+            event(EventPayload::ContextMaterialized {
+                stats: request_stats(400),
+            }),
+            event(EventPayload::ContextMaterialized {
+                stats: request_stats(900),
+            }),
+        ];
+        let mut model = SidebarModel::new(session());
+        for event in &events {
+            model.apply_event(event);
+        }
+        // Two requests in one run: cumulative totals are sums, the last-request
+        // values describe only the final request.
+        assert_eq!(model.run().reasoning_replay_tokens, 1_300);
+        assert_eq!(model.run().tool_argument_tokens, 200);
+        assert_eq!(model.run().tool_result_tokens, 600);
+        assert_eq!(model.run().last_reasoning_replay_tokens, 900);
+        assert_eq!(model.run().last_tool_argument_tokens, 100);
+        assert_eq!(model.run().last_tool_result_tokens, 300);
+
+        // Replaying the durable events once reconstructs identical totals.
+        let replayed = SidebarModel::from_events(session(), &events);
+        assert_eq!(replayed.run(), model.run());
+
+        // A new run resets both cumulative and last-request values while the
+        // session context view stays available.
+        model.apply_event(&event(EventPayload::RunStarted {
+            run_id: Uuid::new_v4(),
+            prompt: "next".into(),
+        }));
+        assert_eq!(model.run().reasoning_replay_tokens, 0);
+        assert_eq!(model.run().last_reasoning_replay_tokens, 0);
+        assert!(model.context().is_some());
     }
 
     #[test]
