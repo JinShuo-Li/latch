@@ -590,13 +590,13 @@ fn palette_opens_completes_and_closes() {
     // Typing again reopens; selection can move.
     app.input.set_text("");
     app.input.insert('/');
-    app.input.insert('m');
+    app.input.insert('c');
     app.input.insert('o');
-    app.input.insert('d');
+    app.input.insert('n');
     assert!(app.palette.active(&app.input));
     app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(matches!(action, Some(Action::Submit(ref text)) if text.trim() == "/model"));
+    assert!(matches!(action, Some(Action::Submit(ref text)) if text.trim() == "/checkpoint"));
 }
 
 #[test]
@@ -1653,6 +1653,8 @@ fn header_pricing_reaches_the_sidebar() {
     app.output(Output::Header {
         model: "deepseek-flash".into(),
         provider: "OpenCode Go".into(),
+        provider_id: "opencode-go".into(),
+        effort: latch_protocol::ReasoningEffort::Low,
         workspace: "/tmp/latch".into(),
         branch: "main".into(),
         resumed: false,
@@ -1809,6 +1811,8 @@ fn app_with_header(model: &str, workspace: &str) -> App {
     app.output(Output::Header {
         model: model.into(),
         provider: "OpenCode Go".into(),
+        provider_id: "opencode-go".into(),
+        effort: latch_protocol::ReasoningEffort::Low,
         workspace: workspace.into(),
         branch: "main".into(),
         resumed: false,
@@ -2502,4 +2506,164 @@ fn terminal_screen_commands_toggle_bracketed_paste_symmetrically() {
     assert_eq!(left.matches("\u{1b}[?2004l").count(), 1);
     assert!(!entered.contains("\u{1b}[?2004l"));
     assert!(!left.contains("\u{1b}[?2004h"));
+}
+
+fn profile_catalog() -> InferenceCatalog {
+    InferenceCatalog {
+        providers: vec![
+            CatalogProvider {
+                id: "opencode-go".into(),
+                display_name: "OpenCode Go".into(),
+                models: vec![CatalogModel {
+                    id: "deepseek-v4.1-flash".into(),
+                    display_name: "DeepSeek V4.1 Flash".into(),
+                    efforts: vec![
+                        latch_protocol::ReasoningEffort::Low,
+                        latch_protocol::ReasoningEffort::High,
+                        latch_protocol::ReasoningEffort::Max,
+                    ],
+                    default_effort: latch_protocol::ReasoningEffort::Low,
+                }],
+            },
+            CatalogProvider {
+                id: "anthropic".into(),
+                display_name: "Anthropic".into(),
+                models: vec![CatalogModel {
+                    id: "claude-sonnet-4-5".into(),
+                    display_name: "Claude Sonnet 4.5".into(),
+                    efforts: vec![],
+                    default_effort: latch_protocol::ReasoningEffort::ProviderDefault,
+                }],
+            },
+        ],
+    }
+}
+
+fn profile_app() -> App {
+    let mut app = App::default();
+    app.output(Output::InferenceCatalog(profile_catalog()));
+    app.output(Output::Header {
+        model: "deepseek-v4.1-flash".into(),
+        provider: "OpenCode Go".into(),
+        provider_id: "opencode-go".into(),
+        effort: latch_protocol::ReasoningEffort::Low,
+        workspace: "/tmp/latch".into(),
+        branch: "main".into(),
+        resumed: false,
+        pricing: None,
+    });
+    app
+}
+
+#[test]
+fn model_command_opens_a_provider_model_effort_selector() {
+    let mut app = profile_app();
+    app.input.set_text("/model");
+    assert!(app.submit_action().is_none());
+    assert!(app.profile_selector.is_some());
+    // Provider step: choose the highlighted current provider.
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    // Model step: choose the highlighted model.
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    // Effort step: move down and confirm.
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(
+        action,
+        Some(Action::SetInferenceProfile {
+            ref provider,
+            ref model,
+            effort: latch_protocol::ReasoningEffort::Low,
+        }) if provider == "opencode-go" && model == "deepseek-v4.1-flash"
+    ));
+    assert!(app.profile_selector.is_none());
+}
+
+#[test]
+fn escape_cancels_the_model_selector_without_changing_the_profile() {
+    let mut app = profile_app();
+    app.input.set_text("/model");
+    app.submit_action();
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    let action = app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(action.is_none());
+    assert!(app.profile_selector.is_none());
+    assert_eq!(app.model, "deepseek-v4.1-flash");
+    assert_eq!(app.provider_id, "opencode-go");
+    assert_eq!(app.effort, latch_protocol::ReasoningEffort::Low);
+}
+
+#[test]
+fn model_and_setup_commands_are_unavailable_during_a_live_turn() {
+    let mut app = profile_app();
+    app.busy = true;
+    app.input.set_text("/model");
+    assert!(app.submit_action().is_none());
+    assert!(app.profile_selector.is_none());
+    app.input.set_text("/setup");
+    assert!(app.submit_action().is_none());
+    assert!(app.setup.is_none());
+}
+
+#[test]
+fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
+    let mut app = App::default();
+    app.output(Output::SetupCatalog(vec![SetupKind {
+        kind: "openai".into(),
+        label: "OpenAI".into(),
+        default_base_url: "https://api.openai.com/v1".into(),
+        credential_label: "env:OPENAI_API_KEY".into(),
+        default_model: "gpt-5.5".into(),
+        models: vec![CatalogModel {
+            id: "gpt-5.5".into(),
+            display_name: "GPT-5.5".into(),
+            efforts: vec![latch_protocol::ReasoningEffort::High],
+            default_effort: latch_protocol::ReasoningEffort::ProviderDefault,
+        }],
+    }]));
+    app.input.set_text("/setup");
+    assert!(app.submit_action().is_none());
+    // Kind -> endpoint capture, prefilled with the catalog default.
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.capture.is_some());
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    // Credential list: choose "Enter API key securely".
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.capture.as_ref().is_some_and(|capture| capture.spec.masked));
+    for ch in "sk-live-secret".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    let rendered = render_to_text(&mut app, 100, 30);
+    assert!(
+        !rendered.contains("sk-live-secret"),
+        "a secret value must never render: {rendered}"
+    );
+    assert!(rendered.contains("••"), "masked capture renders bullets");
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    // Model and effort steps.
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    let rendered = render_to_text(&mut app, 100, 30);
+    assert!(rendered.contains("secure local storage (value hidden)"), "{rendered}");
+    assert!(!rendered.contains("sk-live-secret"));
+    let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(
+        action,
+        Some(Action::SetupApply(SetupPlan::Apply {
+            ref provider_kind,
+            credential: SetupCredential::Secret(ref secret),
+            ..
+        })) if provider_kind == "openai" && secret == "sk-live-secret"
+    ));
+}
+
+#[test]
+fn composer_metadata_always_shows_model_and_effort_adjacent() {
+    let mut app = profile_app();
+    let text = render_to_text(&mut app, 120, 24);
+    assert!(
+        text.contains("deepseek-v4.1-flash/low"),
+        "footer shows model and effort together: {text}"
+    );
 }

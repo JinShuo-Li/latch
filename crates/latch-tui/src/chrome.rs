@@ -260,11 +260,121 @@ pub(super) fn hint_spans(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
 pub(super) fn action_surface_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     if let Some(prompt) = &app.permission {
         approval_surface_lines(prompt, width)
+    } else if let Some(capture) = &app.capture {
+        capture_surface_lines(capture, width)
+    } else if let Some(flow) = &app.setup {
+        setup_surface_lines(flow, width)
+    } else if let Some(selector) = &app.profile_selector {
+        profile_surface_lines(selector, width)
     } else if let Some(selector) = app.selector {
         selector_surface_lines(app, selector, width)
     } else {
         Vec::new()
     }
+}
+
+/// Render one generic choice surface with an optional review block.
+fn choice_surface_lines(
+    title: String,
+    rows: &[ChoiceRow],
+    hint: &str,
+    review: &[(String, String)],
+    width: usize,
+) -> Vec<Line<'static>> {
+    let palette = crate::theme::palette();
+    let mut lines = vec![surface_blank(width)];
+    lines.push(surface_text(title, palette.attention(), width, 2));
+    lines.push(surface_blank(width));
+    for row in rows {
+        let marker = if row.selected { "› " } else { "  " };
+        let label_style = if row.selected {
+            palette.selected()
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+        let mut spans = vec![
+            Span::raw("  "),
+            Span::styled(marker.to_owned(), label_style),
+            Span::styled(row.label.clone(), label_style),
+        ];
+        if row.current {
+            spans.push(Span::styled("  (current)".to_owned(), notice_style()));
+        }
+        if !row.description.is_empty() {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(row.description.clone(), notice_style()));
+        }
+        lines.push(surface_row(spans, width));
+    }
+    if !review.is_empty() {
+        lines.push(surface_blank(width));
+        for (key, value) in review {
+            lines.push(surface_row(
+                vec![
+                    Span::raw("  "),
+                    Span::styled(format!("{key:<11}"), notice_style()),
+                    Span::styled(value.clone(), Style::default()),
+                ],
+                width,
+            ));
+        }
+    }
+    lines.push(surface_blank(width));
+    lines.push(surface_text(hint.to_owned(), notice_style(), width, 2));
+    lines
+}
+
+fn profile_surface_lines(selector: &ProfileSelector, width: usize) -> Vec<Line<'static>> {
+    choice_surface_lines(
+        selector.title(),
+        &selector.rows(),
+        selector.hint(),
+        &[],
+        width,
+    )
+}
+
+fn setup_surface_lines(flow: &SetupFlow, width: usize) -> Vec<Line<'static>> {
+    let review = if flow.step() == SetupStep::Review {
+        flow.review_lines()
+    } else {
+        Vec::new()
+    };
+    choice_surface_lines(flow.title(), &flow.rows(), flow.hint(), &review, width)
+}
+
+fn capture_surface_lines(capture: &CaptureState, width: usize) -> Vec<Line<'static>> {
+    let palette = crate::theme::palette();
+    let mut lines = vec![surface_blank(width)];
+    lines.push(surface_text(
+        format!("Setup · {}", capture.spec.label),
+        palette.attention(),
+        width,
+        2,
+    ));
+    lines.push(surface_blank(width));
+    let shown = capture.display_value();
+    let value_style = if shown.is_empty() {
+        notice_style().add_modifier(Modifier::ITALIC)
+    } else {
+        Style::default()
+    };
+    let shown = if shown.is_empty() {
+        "(type a value)".to_owned()
+    } else {
+        shown
+    };
+    for line in wrap_surface_text(&shown, width.saturating_sub(4).max(1), 2) {
+        lines.push(surface_text(line, value_style, width, 2));
+    }
+    lines.push(surface_blank(width));
+    lines.push(surface_text(
+        "enter confirm · esc cancel".to_owned(),
+        notice_style(),
+        width,
+        2,
+    ));
+    lines
 }
 
 /// One padded full-width row on a neutral action surface.
@@ -697,7 +807,12 @@ pub(super) fn composer_meta_line(app: &App, width: usize, sidebar_shown: bool) -
     let mode_width = display_width(&mode_text);
     let mut fields: Vec<(String, Style)> = Vec::new();
     if !app.model.is_empty() {
-        fields.push((app.model.clone(), muted_style()));
+        // Model and effort are always adjacent so the active inference profile
+        // is visible at a glance, never on a second row.
+        fields.push((
+            format!("{}/{}", app.model, app.effort.short()),
+            muted_style(),
+        ));
     }
     if !app.branch.is_empty() && app.branch != "-" {
         fields.push((app.branch.clone(), notice_style()));

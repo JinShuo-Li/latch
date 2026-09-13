@@ -23,7 +23,7 @@ use futures::StreamExt;
 #[cfg(test)]
 use latch_protocol::DisplayItem;
 use latch_protocol::{
-    Event as DurableEvent, Mode, PermissionMode, Safety, ToolResult, ToolRunStatus,
+    Event as DurableEvent, Mode, PermissionMode, ReasoningEffort, Safety, ToolResult, ToolRunStatus,
 };
 use ratatui::{
     Terminal,
@@ -40,6 +40,7 @@ mod agents;
 mod composer;
 mod diff;
 mod presentation;
+mod profile;
 mod session_picker;
 mod sidebar;
 use composer::display_width;
@@ -47,6 +48,10 @@ pub use composer::{Composer, VisualRow};
 pub use diff::{DiffDocument, DiffFile, DiffHunk, DiffLine, DiffLineKind, parse_unified_diff};
 pub use presentation::{
     AgentOperation, Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel,
+};
+pub use profile::{
+    CaptureSpec, CatalogModel, CatalogProvider, ChoiceRow, InferenceCatalog, ProfileSelector,
+    SetupCredential, SetupFlow, SetupKind, SetupPlan, SetupStep, SetupStepOutcome,
 };
 pub use session_picker::{PickerSelection, SessionItem, SessionPreviewLine, run_session_picker};
 pub use sidebar::{Pricing, SidebarModel, SidebarSession};
@@ -80,6 +85,14 @@ pub enum Input {
     SetSafety(Safety),
     /// A selector choice for the durable permission resolver.
     SetPermissions(PermissionMode),
+    /// The live inference-profile selector chose a provider/model/effort.
+    SetInferenceProfile {
+        provider: String,
+        model: String,
+        effort: ReasoningEffort,
+    },
+    /// The `/setup` flow completed and should be persisted and applied.
+    SetupApply(SetupPlan),
 }
 #[derive(Debug, Clone)]
 pub enum Output {
@@ -99,6 +112,10 @@ pub enum Output {
         model: String,
         /// Friendly provider label, for example `OpenCode Go` or `Anthropic`.
         provider: String,
+        /// Stable configured provider id, for example `opencode-go`.
+        provider_id: String,
+        /// Effective reasoning effort of the session.
+        effort: ReasoningEffort,
         /// Session workspace, shown in the welcome state and composer footer.
         workspace: String,
         branch: String,
@@ -112,6 +129,23 @@ pub enum Output {
     /// Submitted prompts from the durable session, seeding prompt history on
     /// resume without a second history database.
     History(Vec<String>),
+    /// Provider-neutral catalog for the live `/model` selector.
+    InferenceCatalog(InferenceCatalog),
+    /// Provider kinds and built-in models available to `/setup`.
+    SetupCatalog(Vec<SetupKind>),
+    /// The effective profile changed; update model/effort chrome.
+    Inference {
+        provider_id: String,
+        provider_label: String,
+        model: String,
+        effort: ReasoningEffort,
+    },
+    /// A symbolic credential reference for a configured provider, used by
+    /// `/setup` to prefill without ever exposing a value.
+    CredentialLabel {
+        provider_id: String,
+        label: String,
+    },
 }
 
 /// One slash command: the single source of truth shared by the palette and
@@ -141,7 +175,11 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/model",
-        description: "Show the configured provider model",
+        description: "Select provider, model, and reasoning effort",
+    },
+    SlashCommand {
+        name: "/setup",
+        description: "Configure a provider and credential",
     },
     SlashCommand {
         name: "/context",
@@ -303,6 +341,20 @@ struct App {
     selector: Option<PolicySelector>,
     model: String,
     provider: String,
+    /// Stable configured provider id of the effective profile.
+    provider_id: String,
+    /// Effective reasoning effort of the effective profile.
+    effort: ReasoningEffort,
+    /// Provider-neutral catalog for `/model`, sent by the CLI at startup.
+    inference_catalog: InferenceCatalog,
+    /// Open live inference-profile selector.
+    profile_selector: Option<ProfileSelector>,
+    /// Provider kinds available to `/setup`.
+    setup_catalog: Vec<SetupKind>,
+    /// Open guided setup flow.
+    setup: Option<SetupFlow>,
+    /// A composer text capture opened by the setup flow.
+    capture: Option<CaptureState>,
     workspace: String,
     branch: String,
     resumed: bool,
@@ -343,8 +395,7 @@ struct App {
 
 /// Human-visible form of a `PermissionRequested` event.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PermissionPrompt {
-    pub request_id: uuid::Uuid,
+pub struct PermissionPrompt {    pub request_id: uuid::Uuid,
     pub tool: String,
     /// Full argument payload, retained verbatim so the human can inspect
     /// exactly what is being approved instead of a truncated preview.
@@ -367,6 +418,32 @@ pub(crate) struct ActionOption {
     pub(crate) description: &'static str,
     pub(crate) action: Action,
 }
+
+/// An open composer text capture opened by the setup flow. Masked captures
+/// never render their value and are only sent to the CLI on submit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureState {
+    pub spec: CaptureSpec,
+    pub value: String,
+}
+
+impl CaptureState {
+    #[must_use]
+    pub fn new(spec: CaptureSpec) -> Self {
+        let value = spec.initial.clone();
+        Self { spec, value }
+    }
+
+    #[must_use]
+    pub fn display_value(&self) -> String {
+        if self.spec.masked {
+            "•".repeat(self.value.chars().count().min(64))
+        } else {
+            self.value.clone()
+        }
+    }
+}
+
 impl Default for App {
     fn default() -> Self {
         Self {
@@ -381,6 +458,13 @@ impl Default for App {
             selector: None,
             model: String::new(),
             provider: String::new(),
+            provider_id: String::new(),
+            effort: ReasoningEffort::default(),
+            inference_catalog: InferenceCatalog::default(),
+            profile_selector: None,
+            setup_catalog: Vec::new(),
+            setup: None,
+            capture: None,
             workspace: String::new(),
             branch: String::new(),
             resumed: false,
@@ -502,6 +586,8 @@ impl App {
             Output::Header {
                 model,
                 provider,
+                provider_id,
+                effort,
                 workspace,
                 branch,
                 resumed,
@@ -509,6 +595,8 @@ impl App {
             } => {
                 self.model = model.clone();
                 self.provider = provider;
+                self.provider_id = provider_id;
+                self.effort = effort;
                 self.workspace = workspace;
                 self.branch = branch.clone();
                 self.resumed = resumed;
@@ -521,6 +609,23 @@ impl App {
             }
             Output::Diff(raw) => self.open_diff(raw),
             Output::History(history) => self.input.seed_history(history),
+            Output::InferenceCatalog(catalog) => self.inference_catalog = catalog,
+            Output::SetupCatalog(kinds) => self.setup_catalog = kinds,
+            Output::Inference {
+                provider_id,
+                provider_label,
+                model,
+                effort,
+            } => {
+                self.provider_id = provider_id;
+                self.provider = provider_label;
+                self.model = model.clone();
+                self.effort = effort;
+                let mut session = self.sidebar.session().clone();
+                session.model = model;
+                self.sidebar.set_session(session);
+            }
+            Output::CredentialLabel { .. } => {}
         }
     }
 
@@ -739,7 +844,118 @@ impl App {
                 return None;
             }
         }
-        if self.diff_overlay.is_some()
+        // Setup text capture owns the keyboard until submitted or cancelled.
+        if self.capture.is_some() {
+            let mut submit = false;
+            let mut cancel = false;
+            {
+                let capture = self.capture.as_mut().expect("checked above");
+                match key.code {
+                    KeyCode::Esc => cancel = true,
+                    KeyCode::Enter => submit = true,
+                    KeyCode::Backspace => {
+                        capture.value.pop();
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        capture.value.clear();
+                    }
+                    KeyCode::Char(ch)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        capture.value.push(ch);
+                    }
+                    _ => {}
+                }
+            }
+            if cancel {
+                self.capture = None;
+                self.setup = None;
+            } else if submit {
+                let finished = self.capture.take().expect("checked above");
+                if let Some(flow) = self.setup.as_mut() {
+                    flow.submit_capture(finished.value);
+                }
+            }
+            return None;
+        }
+        // The guided `/setup` flow.
+        if self.setup.is_some() {
+            let outcome = {
+                let flow = self.setup.as_mut().expect("checked above");
+                match key.code {
+                    KeyCode::Esc => Some(SetupStepOutcome::Cancel),
+                    KeyCode::Backspace => {
+                        flow.back();
+                        None
+                    }
+                    KeyCode::Up => {
+                        flow.up();
+                        None
+                    }
+                    KeyCode::Down => {
+                        flow.down();
+                        None
+                    }
+                    KeyCode::Enter => Some(flow.confirm()),
+                    _ => None,
+                }
+            };
+            if let Some(outcome) = outcome {
+                match outcome {
+                    SetupStepOutcome::None => {}
+                    SetupStepOutcome::Capture(spec) => {
+                        self.capture = Some(CaptureState::new(spec));
+                    }
+                    SetupStepOutcome::Apply(plan) => {
+                        self.setup = None;
+                        return Some(Action::SetupApply(plan));
+                    }
+                    SetupStepOutcome::Cancel => self.setup = None,
+                }
+            }
+            return None;
+        }
+        // The live inference-profile selector.
+        if self.profile_selector.is_some() {
+            let outcome = {
+                let selector = self.profile_selector.as_mut().expect("checked above");
+                match key.code {
+                    KeyCode::Esc => Err(()),
+                    KeyCode::Backspace => {
+                        if selector.back() { Ok(None) } else { Err(()) }
+                    }
+                    KeyCode::Up => {
+                        selector.up();
+                        Ok(None)
+                    }
+                    KeyCode::Down => {
+                        selector.down();
+                        Ok(None)
+                    }
+                    KeyCode::Enter => Ok(selector.confirm()),
+                    _ => Ok(None),
+                }
+            };
+            match outcome {
+                Err(()) => {
+                    self.profile_selector = None;
+                    self.presentation
+                        .push_notice("inference profile unchanged");
+                }
+                Ok(Some((provider, model, effort))) => {
+                    self.profile_selector = None;
+                    return Some(Action::SetInferenceProfile {
+                        provider,
+                        model,
+                        effort,
+                    });
+                }
+                Ok(None) => {}
+            }
+            return None;
+        }        if self.diff_overlay.is_some()
             && !(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
         {
             return self.on_diff_key(key);
@@ -1022,6 +1238,12 @@ pub(crate) enum Action {
     },
     SetSafety(Safety),
     SetPermissions(PermissionMode),
+    SetInferenceProfile {
+        provider: String,
+        model: String,
+        effort: ReasoningEffort,
+    },
+    SetupApply(SetupPlan),
 }
 
 /// Which policy selector is open above the composer.
@@ -1141,6 +1363,39 @@ impl App {
                 kind: SelectorKind::Permissions,
                 selected: SelectorKind::Permissions.current(self),
             });
+            return None;
+        }
+        if command == "/model" {
+            if self.busy {
+                self.presentation
+                    .push_notice("finish or cancel the active turn before switching model");
+                return None;
+            }
+            if self.inference_catalog.providers.is_empty() {
+                self.presentation
+                    .push_notice("no provider catalog is available; run /setup");
+                return None;
+            }
+            self.profile_selector = Some(ProfileSelector::new(
+                self.inference_catalog.clone(),
+                &self.provider_id,
+                &self.model,
+                self.effort,
+            ));
+            return None;
+        }
+        if command == "/setup" {
+            if self.busy {
+                self.presentation
+                    .push_notice("finish or cancel the active turn before setup");
+                return None;
+            }
+            if self.setup_catalog.is_empty() {
+                self.presentation
+                    .push_notice("provider setup is unavailable in this session");
+                return None;
+            }
+            self.setup = Some(SetupFlow::new(self.setup_catalog.clone()));
             return None;
         }
         if !slash_command {

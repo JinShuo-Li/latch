@@ -102,6 +102,18 @@ pub async fn run(
                 Some(Action::SetPermissions(mode)) => {
                     input_tx.send(Input::SetPermissions(mode)).await?;
                 }
+                Some(Action::SetInferenceProfile { provider, model, effort }) => {
+                    input_tx
+                        .send(Input::SetInferenceProfile {
+                            provider,
+                            model,
+                            effort,
+                        })
+                        .await?;
+                }
+                Some(Action::SetupApply(plan)) => {
+                    input_tx.send(Input::SetupApply(plan)).await?;
+                }
                 None => {}
             },
             Some(Event::Mouse(mouse)) => {

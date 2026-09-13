@@ -1,14 +1,24 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{Context, Result, anyhow, bail};
+use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use latch_kernel::{
-    Agent, AgentRuntime, AnthropicProvider, Config, ContinuityEngine, EventStore, ModelProvider,
-    OpenAiProvider, PolicyEngine, ToolExecutor, agent::SteeringSubmission, prompt::PromptCompiler,
+    Agent, AgentRuntime, Config, ContinuityEngine, CredentialRef, CredentialStore, EventStore,
+    ModelDescriptor, ModelProvider, PolicyEngine, ProviderRegistry, ToolExecutor,
+    agent::{AgentOutput, SteeringSubmission},
+    config::{InferenceConfig, ProviderKind, ProviderProfileConfig},
+    prompt::PromptCompiler,
+    provider::StreamSink,
     session,
 };
-use latch_protocol::{EventPayload, Mode, ModelPricing, StreamEvent};
-use latch_tui::{Input, Output, SLASH_COMMANDS};
+use latch_protocol::{
+    EventPayload, InferenceProfile, Mode, ProviderId, ReasoningEffort, StreamEvent,
+};
+use latch_tui::{
+    CatalogModel, CatalogProvider, InferenceCatalog, Input, Output, SLASH_COMMANDS, SetupCredential,
+    SetupKind, SetupPlan,
+};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -36,6 +46,15 @@ struct Args {
     latest: bool,
     #[arg(long,value_parser=parse_mode)]
     mode: Option<Mode>,
+    /// Override the configured provider for this invocation.
+    #[arg(long)]
+    provider: Option<String>,
+    /// Override the configured model for this invocation.
+    #[arg(long)]
+    model: Option<String>,
+    /// Override the reasoning effort for this invocation.
+    #[arg(long)]
+    effort: Option<String>,
     #[arg(short = 'p', long)]
     prompt: Option<String>,
     #[arg(long)]
@@ -86,18 +105,19 @@ async fn main() -> Result<()> {
         ResumeChoice::Fresh => None,
         ResumeChoice::Exit => return Ok(()),
     };
-    let (mut agent, mut model, mut session, mut pricing) =
-        build_agent(&workspace, &config, args.mode, selected).await?;
+    let interactive = args.prompt.is_none()
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal();
+    let mut built = build_agent(&workspace, &config, &args, selected, interactive).await?;
     if let Some(prompt) = args.prompt {
-        return one_shot(&mut agent, &prompt).await;
+        return one_shot(&mut built.agent, &prompt).await;
     }
     loop {
-        match interactive(
-            agent,
-            model,
-            session,
-            pricing,
-            provider_label(&config),
+        match interactive_session(
+            built.agent,
+            built.info,
+            built.context,
+            built.restored,
             workspace.clone(),
         )
         .await?
@@ -112,24 +132,128 @@ async fn main() -> Result<()> {
                     ResumeChoice::Fresh => None,
                     ResumeChoice::Exit => return Ok(()),
                 };
-                (agent, model, session, pricing) =
-                    build_agent(&workspace, &config, args.mode, selected).await?;
+                built = build_agent(&workspace, &config, &args, selected, true).await?;
             }
         }
     }
 }
 
-/// Friendly provider label for the composer metadata, derived from the
-/// configured endpoint and kind.
-fn provider_label(config: &Config) -> String {
-    let base = config.provider.base_url.as_deref().unwrap_or("");
-    if base.contains("opencode.ai/zen/go") {
-        "OpenCode Go".into()
-    } else if config.provider.kind == "anthropic" {
-        "Anthropic".into()
-    } else {
-        "OpenAI-compatible".into()
+/// Everything needed to resolve and switch inference profiles at runtime.
+struct InferenceContext {
+    registry: ProviderRegistry,
+    credentials: CredentialStore,
+    context: latch_kernel::config::ContextConfig,
+    config: Config,
+    config_path: Option<PathBuf>,
+}
+
+impl InferenceContext {
+    fn new(config: Config, config_path: Option<PathBuf>) -> Result<Self> {
+        let registry = ProviderRegistry::from_config(&config)?;
+        let credentials = CredentialStore::open(CredentialStore::default_path(&config.state_dir))?;
+        let context = config.context.clone();
+        Ok(Self {
+            registry,
+            credentials,
+            context,
+            config,
+            config_path,
+        })
     }
+
+    fn resolve(&self, requested: &InferenceProfile) -> Result<(InferenceProfile, ModelDescriptor)> {
+        self.registry.resolve_profile(requested)
+    }
+
+    fn build(
+        &self,
+        profile: &InferenceProfile,
+        descriptor: &ModelDescriptor,
+        session_id: Uuid,
+    ) -> Result<Arc<dyn ModelProvider>> {
+        self.registry
+            .build_provider(profile, descriptor, &self.credentials, session_id)
+    }
+
+    fn provider_label(&self, id: &str) -> String {
+        self.registry
+            .provider(id)
+            .map(|profile| profile.display_name.clone())
+            .unwrap_or_else(|| id.to_owned())
+    }
+
+    /// Provider-neutral catalog for the live `/model` selector.
+    fn catalog(&self) -> InferenceCatalog {
+        InferenceCatalog {
+            providers: self
+                .registry
+                .available_providers()
+                .into_iter()
+                .map(|provider| CatalogProvider {
+                    id: provider.id.to_string(),
+                    display_name: provider.display_name.clone(),
+                    models: provider
+                        .available_models()
+                        .into_iter()
+                        .map(catalog_model)
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Provider kinds and built-in models available to `/setup`.
+    fn setup_catalog(&self) -> Vec<SetupKind> {
+        [
+            ProviderKind::OpenCodeGo,
+            ProviderKind::DeepSeek,
+            ProviderKind::OpenAi,
+            ProviderKind::Anthropic,
+            ProviderKind::OpenAiCompatible,
+        ]
+        .into_iter()
+        .map(|kind| SetupKind {
+            kind: kind.id().to_owned(),
+            label: kind.display_name().to_owned(),
+            default_base_url: kind.default_base_url().to_owned(),
+            credential_label: kind.default_credential().to_owned(),
+            default_model: latch_kernel::providers::builtin_catalog(kind)
+                .first()
+                .map(|descriptor| descriptor.model.clone())
+                .unwrap_or_default(),
+            models: latch_kernel::providers::builtin_catalog(kind)
+                .iter()
+                .map(catalog_model_ref)
+                .collect(),
+        })
+        .collect()
+    }
+}
+
+fn catalog_model(descriptor: &ModelDescriptor) -> CatalogModel {
+    catalog_model_ref(descriptor)
+}
+
+fn catalog_model_ref(descriptor: &ModelDescriptor) -> CatalogModel {
+    CatalogModel {
+        id: descriptor.model.clone(),
+        display_name: descriptor.display_name.clone(),
+        efforts: descriptor.supported_efforts.clone(),
+        default_effort: descriptor.default_effort,
+    }
+}
+
+/// One resolved session plus everything the interactive layer needs.
+struct SessionInfo {
+    profile: InferenceProfile,
+    descriptor: ModelDescriptor,
+}
+
+struct BuiltSession {
+    agent: Agent,
+    info: SessionInfo,
+    context: InferenceContext,
+    restored: Option<Restored>,
 }
 
 enum ResumeChoice {
@@ -280,9 +404,10 @@ struct Restored {
 async fn build_agent(
     workspace: &Path,
     config: &Config,
-    cli_mode: Option<Mode>,
+    args: &Args,
     resume_session: Option<Uuid>,
-) -> Result<(Agent, String, Option<Restored>, Option<ModelPricing>)> {
+    interactive: bool,
+) -> Result<BuiltSession> {
     let db = config.state_dir.join("latch.sqlite3");
     let store = EventStore::open(&db)?;
     let mut restored = None;
@@ -324,9 +449,50 @@ async fn build_agent(
     let events = store.events(session_id)?;
     // Mode precedence (both fresh and resumed): explicit CLI --mode > the
     // session's durable mode history > configured default.
-    let mode = session::resumed_mode(&events, cli_mode, config.default_mode);
-    let provider = provider(config, session_id)?;
-    let model = provider.model().to_string();
+    let mode = session::resumed_mode(&events, args.mode, config.default_mode);
+
+    // Inference profile precedence: explicit CLI override > the session's own
+    // durable profile > configured default. Credentials are resolved fresh
+    // from the environment/local store at this moment and are never persisted.
+    let context = InferenceContext::new(config.clone(), args.config.clone())?;
+    let (default_profile, _default_descriptor) = context.registry.default_profile(config)?;
+    let resumed_profile = resume
+        .then(|| session::resumed_inference_profile(&events))
+        .flatten();
+    let mut requested = resumed_profile.clone().unwrap_or_default();
+    if !resume || resumed_profile.is_none() {
+        requested = default_profile.clone();
+    }
+    let mut overridden = false;
+    if let Some(provider) = &args.provider {
+        requested.provider = ProviderId::new(provider.clone());
+        requested.model.clear();
+        requested.effort = ReasoningEffort::ProviderDefault;
+        overridden = true;
+    }
+    if let Some(model) = &args.model {
+        requested.model = model.clone();
+        overridden = true;
+    }
+    if let Some(effort) = &args.effort {
+        requested.effort = effort
+            .parse::<ReasoningEffort>()
+            .map_err(anyhow::Error::msg)?;
+        overridden = true;
+    }
+    let (profile, descriptor) = context.resolve(&requested)?;
+    let provider = match context.build(&profile, &descriptor, session_id) {
+        Ok(provider) => provider,
+        Err(error) if interactive => {
+            // First-run UX: rather than failing before the TUI can offer
+            // /setup, start the session with an actionable stub provider.
+            tracing::warn!("{error:#}");
+            Arc::new(UnconfiguredProvider {
+                message: format!("{error:#}"),
+            })
+        }
+        Err(error) => return Err(error),
+    };
     let policy = PolicyEngine::with_defaults(
         mode,
         workspace.to_path_buf(),
@@ -349,20 +515,38 @@ async fn build_agent(
         let count = tools.restore_ownership().await?;
         tracing::info!("restored {count} owned change records");
     }
-    let continuity = ContinuityEngine::for_model(store.clone(), config.context.clone(), &model);
+    let continuity =
+        ContinuityEngine::for_model(store.clone(), config.context.clone(), &profile.model);
     let mut agent = Agent::new(AgentRuntime {
         session_id,
         workspace: workspace.to_path_buf(),
         mode,
         store: store.clone(),
-        provider,
+        provider: provider.clone(),
         tools,
         continuity,
         retry_budget: config.failure.retry_budget,
     });
     agent.set_stagnation_budget(config.failure.stagnation_budget);
     agent.set_max_model_turns(config.failure.max_model_turns);
-    agent.set_context_budget(config.context.clone(), config.context_window_for(&model));
+    if overridden {
+        // A command-line override is durable provenance so a later resume
+        // keeps the profile the user actually selected.
+        agent.set_inference_profile(
+            provider,
+            profile.clone(),
+            &descriptor,
+            config.context.clone(),
+            "command line override",
+        )?;
+    } else {
+        agent.restore_inference_profile(
+            provider,
+            profile.clone(),
+            &descriptor,
+            config.context.clone(),
+        );
+    }
     for extension in config
         .extensions
         .iter()
@@ -401,43 +585,39 @@ async fn build_agent(
         agent.restore_failures()?;
         agent.restore_progress()?;
     }
-    // Pricing is optional and user-configured; it is resolved for the exact
-    // provider model name and passed to the display layer only.
-    let pricing = config.pricing_for(&model).cloned();
-    Ok((agent, model, restored, pricing))
+    Ok(BuiltSession {
+        agent,
+        info: SessionInfo {
+            profile,
+            descriptor,
+        },
+        context,
+        restored,
+    })
 }
 
-fn provider(config: &Config, session_id: Uuid) -> Result<Arc<dyn ModelProvider>> {
-    let p = &config.provider;
-    match p.kind.as_str() {
-        "openai" | "openai-compatible" => {
-            let env = p.api_key_env.as_deref().unwrap_or("OPENAI_API_KEY");
-            let key = std::env::var(env)
-                .with_context(|| format!("set {env} or configure provider.api_key_env"))?;
-            Ok(Arc::new(
-                OpenAiProvider::new(
-                    p.base_url
-                        .clone()
-                        .unwrap_or_else(|| "https://api.openai.com/v1".into()),
-                    key,
-                    p.model.clone(),
-                )
-                .with_session(session_id),
-            ))
-        }
-        "anthropic" => {
-            let env = p.api_key_env.as_deref().unwrap_or("ANTHROPIC_API_KEY");
-            let key = std::env::var(env)
-                .with_context(|| format!("set {env} or configure provider.api_key_env"))?;
-            Ok(Arc::new(AnthropicProvider::new(
-                p.base_url
-                    .clone()
-                    .unwrap_or_else(|| "https://api.anthropic.com".into()),
-                key,
-                p.model.clone(),
-            )))
-        }
-        other => bail!("unsupported provider {other}; expected openai-compatible or anthropic"),
+/// Stand-in provider used when no credential is configured and Latch is
+/// interactive: the session starts so `/setup` can run, and any attempt to
+/// use the model fails with the actionable configuration error.
+struct UnconfiguredProvider {
+    message: String,
+}
+
+#[async_trait]
+impl ModelProvider for UnconfiguredProvider {
+    fn name(&self) -> &str {
+        "unconfigured"
+    }
+    fn model(&self) -> &str {
+        "unconfigured"
+    }
+    async fn stream(
+        &self,
+        _request: latch_protocol::ModelRequest,
+        _cancel: CancellationToken,
+        _sink: StreamSink,
+    ) -> Result<latch_protocol::ModelResponse> {
+        bail!("{}", self.message)
     }
 }
 
@@ -458,12 +638,11 @@ enum InteractiveOutcome {
     Resume,
 }
 
-async fn interactive(
+async fn interactive_session(
     mut agent: Agent,
-    model: String,
+    info: SessionInfo,
+    mut context: InferenceContext,
     restored: Option<Restored>,
-    pricing: Option<ModelPricing>,
-    provider: String,
     workspace: PathBuf,
 ) -> Result<InteractiveOutcome> {
     // The TUI is the only path that can approve `Ask` policy decisions.
@@ -481,19 +660,26 @@ async fn interactive(
         input_tx,
         output_rx,
         start_mode,
-        model.clone(),
+        info.profile.model.clone(),
         replay,
         history,
     ));
+    send_profile_header(
+        &context,
+        &output_tx,
+        &workspace,
+        resumed,
+        &info.profile,
+        &info.descriptor,
+    )
+    .await?;
+    // Provider-neutral catalogs for the TUI selectors. The TUI never sees base
+    // URLs, model families, or wire parameters.
     output_tx
-        .send(Output::Header {
-            model,
-            provider,
-            workspace: workspace.display().to_string(),
-            branch: git_branch().unwrap_or_else(|_| "-".into()),
-            resumed,
-            pricing,
-        })
+        .send(Output::InferenceCatalog(context.catalog()))
+        .await?;
+    output_tx
+        .send(Output::SetupCatalog(context.setup_catalog()))
         .await?;
     // Policy chrome state, restored from durable events on resume.
     output_tx.send(Output::Safety(agent.safety())).await?;
@@ -534,6 +720,34 @@ async fn interactive(
                 agent.set_permissions(mode)?;
                 output_tx.send(Output::Permissions(mode)).await?;
             }
+            Input::SetInferenceProfile {
+                provider,
+                model,
+                effort,
+            } => {
+                apply_live_profile(
+                    &mut agent,
+                    &context,
+                    provider,
+                    model,
+                    effort,
+                    &output_tx,
+                    &workspace,
+                    resumed,
+                )
+                .await?;
+            }
+            Input::SetupApply(plan) => {
+                apply_setup(
+                    &mut agent,
+                    &mut context,
+                    plan,
+                    &output_tx,
+                    &workspace,
+                    resumed,
+                )
+                .await?;
+            }
             Input::Submit(text) => {
                 if is_slash_command_input(&text) {
                     handle_command(&mut agent, &text, &output_tx).await?;
@@ -541,15 +755,15 @@ async fn interactive(
                 }
                 let active = CancellationToken::new();
                 let tx = output_tx.clone();
-                let sink = Arc::new(move |event: latch_kernel::agent::AgentOutput| {
+                let sink = Arc::new(move |event: AgentOutput| {
                     let outputs: Vec<Output> = match event {
-                        latch_kernel::agent::AgentOutput::Transient(StreamEvent::TextDelta(t)) => {
+                        AgentOutput::Transient(StreamEvent::TextDelta(t)) => {
                             vec![Output::AssistantDelta(t)]
                         }
-                        latch_kernel::agent::AgentOutput::Durable(e) => {
+                        AgentOutput::Durable(e) => {
                             vec![Output::Event(e)]
                         }
-                        latch_kernel::agent::AgentOutput::ToolResult(result) => {
+                        AgentOutput::ToolResult(result) => {
                             vec![Output::ToolResult(result)]
                         }
                         _ => vec![],
@@ -574,7 +788,9 @@ async fn interactive(
                             Some(Input::Permission { request_id, approved }) => { broker.resolve(request_id, approved).await; }
                             Some(Input::Quit) | None => { active.cancel(); let _ = (&mut running).await; break 'session; }
                             Some(Input::Resume) => { output_tx.send(Output::Notice("cancel the active turn before resuming another session".into())).await?; }
-                            Some(Input::SetSafety(_)) | Some(Input::SetPermissions(_)) => { output_tx.send(Output::Notice("finish or cancel the active turn before changing safety or permissions".into())).await?; }
+                            Some(Input::SetSafety(_)) | Some(Input::SetPermissions(_)) | Some(Input::SetInferenceProfile { .. }) | Some(Input::SetupApply(_)) => {
+                                output_tx.send(Output::Notice("finish or cancel the active turn before changing the inference profile".into())).await?;
+                            }
                             Some(Input::Submit(text)) => {
                                 if is_slash_command_input(&text) {
                                     output_tx.send(Output::Notice("finish or cancel the active turn before running commands".into())).await?;
@@ -605,6 +821,129 @@ async fn interactive(
     tui.await??;
     agent.shutdown_extensions().await?;
     Ok(outcome)
+}
+
+/// Resolves and applies a live profile change, then refreshes the chrome.
+async fn apply_live_profile(
+    agent: &mut Agent,
+    context: &InferenceContext,
+    provider: String,
+    model: String,
+    effort: ReasoningEffort,
+    tx: &mpsc::Sender<Output>,
+    workspace: &Path,
+    resumed: bool,
+) -> Result<()> {
+    let requested = InferenceProfile::new(provider, model, effort);
+    let (profile, descriptor) = context.resolve(&requested)?;
+    let provider = match context.build(&profile, &descriptor, agent.session_id) {
+        Ok(provider) => provider,
+        Err(error) => {
+            tx.send(Output::Notice(format!("error: {error:#}"))).await?;
+            return Ok(());
+        }
+    };
+    agent.set_inference_profile(
+        provider,
+        profile.clone(),
+        &descriptor,
+        context.context.clone(),
+        "selected with /model",
+    )?;
+    send_profile_header(context, tx, workspace, resumed, &profile, &descriptor).await
+}
+
+/// Persists a `/setup` plan, resolves the new provider, and switches live.
+async fn apply_setup(
+    agent: &mut Agent,
+    context: &mut InferenceContext,
+    plan: SetupPlan,
+    tx: &mpsc::Sender<Output>,
+    workspace: &Path,
+    resumed: bool,
+) -> Result<()> {
+    let SetupPlan::Apply {
+        provider_kind,
+        base_url,
+        credential,
+        model,
+        effort,
+    } = plan;
+    let kind = ProviderKind::parse(&provider_kind, base_url.as_deref())
+        .ok_or_else(|| anyhow!("unknown provider kind {provider_kind:?}"))?;
+    let provider_id = kind.id().to_owned();
+    // Secret values only ever travel TUI -> CLI -> 0600 local store. They are
+    // never written to config.toml, the event log, or the transcript.
+    let credential_ref = match credential {
+        SetupCredential::Env(name) => CredentialRef::Env(name),
+        SetupCredential::Secret(secret) => {
+            context.credentials.set(&provider_id, &secret)?;
+            CredentialRef::File(provider_id.clone())
+        }
+    };
+    context.config.providers.insert(
+        provider_id.clone(),
+        ProviderProfileConfig {
+            kind,
+            display_name: None,
+            base_url,
+            credential: Some(credential_ref.display()),
+            default_model: Some(model.clone()),
+            models: std::collections::BTreeMap::new(),
+            model_discovery: false,
+        },
+    );
+    context.config.inference = InferenceConfig {
+        provider: Some(provider_id.clone()),
+        model: Some(model.clone()),
+        effort,
+    };
+    if let Some(path) = context.config_path.clone().or_else(Config::default_path) {
+        context.config.save(&path)?;
+    }
+    // Rebuild the registry from the persisted configuration so resolution
+    // matches what the next process will load.
+    context.registry = ProviderRegistry::from_config(&context.config)?;
+    let requested = InferenceProfile::new(provider_id, model, effort);
+    let (profile, descriptor) = context.resolve(&requested)?;
+    let provider = context.build(&profile, &descriptor, agent.session_id)?;
+    agent.set_inference_profile(
+        provider,
+        profile.clone(),
+        &descriptor,
+        context.context.clone(),
+        "configured with /setup",
+    )?;
+    tx.send(Output::Notice(format!(
+        "configured {} · {} ({}) — saved",
+        context.provider_label(profile.provider.as_str()),
+        profile.model,
+        profile.effort.label()
+    )))
+    .await?;
+    send_profile_header(context, tx, workspace, resumed, &profile, &descriptor).await
+}
+
+async fn send_profile_header(
+    context: &InferenceContext,
+    tx: &mpsc::Sender<Output>,
+    workspace: &Path,
+    resumed: bool,
+    profile: &InferenceProfile,
+    descriptor: &ModelDescriptor,
+) -> Result<()> {
+    tx.send(Output::Header {
+        model: profile.model.clone(),
+        provider: context.provider_label(profile.provider.as_str()),
+        provider_id: profile.provider.to_string(),
+        effort: profile.effort,
+        workspace: workspace.display().to_string(),
+        branch: git_branch().unwrap_or_else(|_| "-".into()),
+        resumed,
+        pricing: descriptor.pricing.clone(),
+    })
+    .await?;
+    Ok(())
 }
 
 fn is_slash_command_input(text: &str) -> bool {
@@ -651,9 +990,10 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
             let c = agent.context(None)?;
             let s = &c.stats;
             tx.send(Output::Notice(format!(
-                "context ≈{} / {} tok ({}; estimated) | system {} | state {} | recent {} | recall {} | tools {} | ext {} | reserve {} | headroom {} | {} events | {}/{} episodes",
+                "context ≈{} / {} tok ({}; estimated) | system {} | state {} | conversation {} | reasoning {} | tool-args {} | tool-results {} | recall {} | tools {} | ext {} | reserve {} | headroom {} | {} events | {}/{} episodes",
                 s.total_tokens, s.window_tokens, s.status, s.instructions_tokens, s.state_tokens,
-                s.recent_tokens, s.recall_tokens, s.tools_tokens, s.extension_tokens,
+                s.conversation_tokens, s.reasoning_replay_tokens, s.tool_arguments_tokens,
+                s.tool_result_tokens, s.recall_tokens, s.tools_tokens, s.extension_tokens,
                 s.reserve_tokens, s.headroom_tokens, s.durable_events, s.selected_episodes, s.episodes
             ))).await?;
         }
@@ -661,8 +1001,16 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
         "/diff" => send_tool(agent, "git_diff", tx).await?,
         "/checkpoint" => send_tool(agent, "checkpoint", tx).await?,
         "/undo" => send_tool(agent, "undo", tx).await?,
-        "/model" => tx.send(Output::Notice("model changes require config and a new invocation; durable sessions remain provider-independent".into())).await?,
-        "/help" => {
+        "/model" => {
+            let profile = agent.profile();
+            tx.send(Output::Notice(format!(
+                "inference profile: {} · {} ({}) — use /model to change",
+                profile.provider,
+                profile.model,
+                profile.effort.label()
+            )))
+            .await?;
+        }        "/help" => {
             let commands = SLASH_COMMANDS.iter().map(|c| format!("{}  {}", c.name, c.description)).collect::<Vec<_>>().join("\n");
             tx.send(Output::Notice(format!(
                 "modes: /mode ask|plan|work (WORK mutates; ASK/PLAN are read-only)\n\

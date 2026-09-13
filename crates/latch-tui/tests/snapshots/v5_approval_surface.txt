@@ -25,6 +25,6 @@
                                                                                                     
                                                                                                     
                                                                                                     
-  WORK · deepseek-flash · main · std · ask                                                          
+  WORK · deepseek-flash/low · main · std · ask                                                      
                                                                                                     
 /tmp/latch-ui                                                                           latch v0.2.0
