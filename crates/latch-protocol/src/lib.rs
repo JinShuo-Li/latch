@@ -515,7 +515,7 @@ impl Usage {
 /// byte-for-byte when the provider requires it (DeepSeek `reasoning_content`,
 /// OpenAI encrypted reasoning items, Anthropic thinking/redacted-thinking
 /// blocks). It is durable and replayable but never rendered as assistant text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReasoningArtifact {
     /// Plain reasoning text with no replay requirement beyond the text itself
@@ -543,6 +543,33 @@ pub enum ReasoningArtifact {
         #[serde(default)]
         data: String,
     },
+}
+
+impl std::fmt::Debug for ReasoningArtifact {
+    /// Debug is redacted: encrypted and redacted payloads are opaque provider
+    /// state and a signature authenticates a block, so logs must never expose
+    /// them. Sizes stay visible for diagnostics.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text { text } => f.debug_struct("Text").field("text", text).finish(),
+            Self::Encrypted { data } => f
+                .debug_struct("Encrypted")
+                .field("data", &format_args!("<redacted {} bytes>", data.len()))
+                .finish(),
+            Self::Thinking { text, signature } => f
+                .debug_struct("Thinking")
+                .field("text", text)
+                .field(
+                    "signature",
+                    &format_args!("<redacted {} bytes>", signature.len()),
+                )
+                .finish(),
+            Self::Redacted { data } => f
+                .debug_struct("Redacted")
+                .field("data", &format_args!("<redacted {} bytes>", data.len()))
+                .finish(),
+        }
+    }
 }
 
 impl ReasoningArtifact {
@@ -1533,6 +1560,37 @@ mod tests {
         assert_eq!(back, artifacts);
         assert_eq!(artifacts[0].replay_text(), "deepseek reasoning");
         assert_eq!(artifacts[3].replay_text(), "redacted");
+    }
+
+    #[test]
+    fn opaque_reasoning_artifacts_have_redacted_debug_output() {
+        let encrypted = ReasoningArtifact::Encrypted {
+            data: "opaque-ciphertext".into(),
+        };
+        let redacted = ReasoningArtifact::Redacted {
+            data: "redacted-ciphertext".into(),
+        };
+        let thinking = ReasoningArtifact::Thinking {
+            text: "summary".into(),
+            signature: "opaque-signature".into(),
+        };
+        for (artifact, secret) in [
+            (&encrypted, "opaque-ciphertext"),
+            (&redacted, "redacted-ciphertext"),
+            (&thinking, "opaque-signature"),
+        ] {
+            let debug = format!("{artifact:?}");
+            assert!(
+                !debug.contains(secret),
+                "debug output leaked opaque provider data: {debug}"
+            );
+            assert!(debug.contains("redacted"), "debug output: {debug}");
+        }
+        // Readable reasoning text stays diagnosable.
+        let text = ReasoningArtifact::Text {
+            text: "visible reasoning".into(),
+        };
+        assert!(format!("{text:?}").contains("visible reasoning"));
     }
 
     #[test]
