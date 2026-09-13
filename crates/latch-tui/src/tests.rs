@@ -2636,7 +2636,10 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     assert!(app.capture.is_some());
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     // Name -> endpoint capture, prefilled with the catalog default.
-    assert!(matches!(app.setup.as_ref().map(SetupFlow::step), Some(SetupStep::Endpoint)));
+    assert!(matches!(
+        app.setup.as_ref().map(SetupFlow::step),
+        Some(SetupStep::Endpoint)
+    ));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.capture.is_some());
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
