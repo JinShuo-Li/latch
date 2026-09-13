@@ -169,7 +169,11 @@ impl ProfileSelector {
         }
     }
 
-    fn efforts_for(catalog: &InferenceCatalog, provider: usize, model: usize) -> Vec<ReasoningEffort> {
+    fn efforts_for(
+        catalog: &InferenceCatalog,
+        provider: usize,
+        model: usize,
+    ) -> Vec<ReasoningEffort> {
         catalog
             .providers
             .get(provider)
@@ -278,9 +282,7 @@ impl ProfileSelector {
     fn row_count(&self) -> usize {
         match self.phase {
             ProfilePhase::Provider => self.catalog.providers.len(),
-            ProfilePhase::Model => self
-                .current_provider()
-                .map_or(0, |p| p.models.len() + 1),
+            ProfilePhase::Model => self.current_provider().map_or(0, |p| p.models.len() + 1),
             ProfilePhase::Effort => self.effort_values.len(),
         }
     }
@@ -351,7 +353,9 @@ impl ProfileSelector {
             ProfilePhase::Effort => {
                 let provider = self.current_provider()?.id.clone();
                 let model = self.current_model()?.id.clone();
-                self.effort = self.selected.min(self.effort_values.len().saturating_sub(1));
+                self.effort = self
+                    .selected
+                    .min(self.effort_values.len().saturating_sub(1));
                 let effort = self.effort_values.get(self.effort).copied()?;
                 Some((provider, model, effort))
             }
@@ -479,7 +483,12 @@ impl SetupFlow {
                         .unwrap_or_default(),
                     self.use_env,
                 ),
-                row(1, "Enter API key securely".to_owned(), "stored 0600 locally".to_owned(), !self.use_env),
+                row(
+                    1,
+                    "Enter API key securely".to_owned(),
+                    "stored 0600 locally".to_owned(),
+                    !self.use_env,
+                ),
             ],
             SetupStep::Model => self
                 .current_kind()
@@ -488,7 +497,12 @@ impl SetupFlow {
                 .iter()
                 .enumerate()
                 .map(|(index, model)| {
-                    row(index, model.label().to_owned(), model.id.clone(), index == self.model)
+                    row(
+                        index,
+                        model.label().to_owned(),
+                        model.id.clone(),
+                        index == self.model,
+                    )
                 })
                 .collect(),
             SetupStep::Effort => self
@@ -498,11 +512,21 @@ impl SetupFlow {
                 .iter()
                 .enumerate()
                 .map(|(index, effort)| {
-                    row(index, effort.label().to_owned(), String::new(), index == self.effort)
+                    row(
+                        index,
+                        effort.label().to_owned(),
+                        String::new(),
+                        index == self.effort,
+                    )
                 })
                 .collect(),
             SetupStep::Review => vec![
-                row(0, "Apply & save".to_owned(), String::new(), self.selected == 0),
+                row(
+                    0,
+                    "Apply & save".to_owned(),
+                    String::new(),
+                    self.selected == 0,
+                ),
                 row(1, "Cancel".to_owned(), String::new(), self.selected == 1),
             ],
             SetupStep::Endpoint | SetupStep::EnvName | SetupStep::Secret => Vec::new(),
@@ -526,7 +550,9 @@ impl SetupFlow {
             ("Endpoint".to_owned(), self.endpoint.clone()),
             (
                 "Model".to_owned(),
-                self.current_model().map(|m| m.id.clone()).unwrap_or_default(),
+                self.current_model()
+                    .map(|m| m.id.clone())
+                    .unwrap_or_default(),
             ),
             (
                 "Effort".to_owned(),
@@ -650,11 +676,7 @@ impl SetupFlow {
                     if self.env_name.is_empty() {
                         self.env_name = self
                             .current_kind()
-                            .map(|kind| {
-                                kind.credential_label
-                                    .trim_start_matches("env:")
-                                    .to_owned()
-                            })
+                            .map(|kind| kind.credential_label.trim_start_matches("env:").to_owned())
                             .unwrap_or_default();
                     }
                     self.step = SetupStep::EnvName;
@@ -683,9 +705,7 @@ impl SetupFlow {
                 masked: true,
             }),
             SetupStep::Model => {
-                let count = self
-                    .current_kind()
-                    .map_or(0, |kind| kind.models.len());
+                let count = self.current_kind().map_or(0, |kind| kind.models.len());
                 if count == 0 {
                     return SetupStepOutcome::Cancel;
                 }
@@ -748,7 +768,11 @@ mod tests {
                     models: vec![CatalogModel {
                         id: "deepseek-v4.1-flash".into(),
                         display_name: "DeepSeek V4.1 Flash".into(),
-                        efforts: vec![ReasoningEffort::Low, ReasoningEffort::High, ReasoningEffort::Max],
+                        efforts: vec![
+                            ReasoningEffort::Low,
+                            ReasoningEffort::High,
+                            ReasoningEffort::Max,
+                        ],
                         default_effort: ReasoningEffort::Low,
                     }],
                 },
@@ -795,7 +819,12 @@ mod tests {
 
     #[test]
     fn profile_selector_offers_provider_change_from_model_step() {
-        let mut selector = ProfileSelector::new(catalog(), "opencode-go", "deepseek-v4.1-flash", ReasoningEffort::ProviderDefault);
+        let mut selector = ProfileSelector::new(
+            catalog(),
+            "opencode-go",
+            "deepseek-v4.1-flash",
+            ReasoningEffort::ProviderDefault,
+        );
         selector.confirm(); // provider
         // Move to the trailing "Change provider…" row.
         selector.down();
@@ -805,12 +834,22 @@ mod tests {
 
     #[test]
     fn back_tracks_steps_and_never_changes_the_profile_by_itself() {
-        let mut selector = ProfileSelector::new(catalog(), "anthropic", "claude-sonnet-4-5", ReasoningEffort::ProviderDefault);
+        let mut selector = ProfileSelector::new(
+            catalog(),
+            "anthropic",
+            "claude-sonnet-4-5",
+            ReasoningEffort::ProviderDefault,
+        );
         assert!(selector.confirm().is_none()); // model step
         assert!(selector.back()); // provider step
         assert!(!selector.back()); // at the first step
         // The model with no effort support offers only provider default.
-        let mut selector = ProfileSelector::new(catalog(), "anthropic", "claude-sonnet-4-5", ReasoningEffort::Max);
+        let mut selector = ProfileSelector::new(
+            catalog(),
+            "anthropic",
+            "claude-sonnet-4-5",
+            ReasoningEffort::Max,
+        );
         selector.confirm();
         selector.confirm();
         let rows = selector.rows();
@@ -829,7 +868,11 @@ mod tests {
             models: vec![CatalogModel {
                 id: "deepseek-v4.1-flash".into(),
                 display_name: "DeepSeek V4.1 Flash".into(),
-                efforts: vec![ReasoningEffort::Low, ReasoningEffort::High, ReasoningEffort::Max],
+                efforts: vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::High,
+                    ReasoningEffort::Max,
+                ],
                 default_effort: ReasoningEffort::Low,
             }],
         }];
@@ -847,8 +890,11 @@ mod tests {
         assert_eq!(flow.confirm(), SetupStepOutcome::None);
         assert_eq!(flow.step(), SetupStep::Review);
         let lines = flow.review_lines();
-        assert!(lines.iter().any(|(key, value)| key == "Credential"
-            && value.contains("DEEPSEEK_API_KEY")));
+        assert!(
+            lines
+                .iter()
+                .any(|(key, value)| key == "Credential" && value.contains("DEEPSEEK_API_KEY"))
+        );
         assert!(lines.iter().all(|(_, value)| !value.contains("sk-")));
         let outcome = flow.confirm();
         let SetupStepOutcome::Apply(SetupPlan::Apply {
@@ -891,11 +937,12 @@ mod tests {
         flow.confirm(); // model
         flow.confirm(); // effort
         let review = flow.review_lines();
-        assert!(review
-            .iter()
-            .all(|(key, value)| !(key == "Credential" && value.contains("sk-live-secret"))));
-        let SetupStepOutcome::Apply(SetupPlan::Apply { credential, .. }) = flow.confirm()
-        else {
+        assert!(
+            review
+                .iter()
+                .all(|(key, value)| !(key == "Credential" && value.contains("sk-live-secret")))
+        );
+        let SetupStepOutcome::Apply(SetupPlan::Apply { credential, .. }) = flow.confirm() else {
             panic!("expected apply");
         };
         assert_eq!(credential, SetupCredential::Secret("sk-live-secret".into()));

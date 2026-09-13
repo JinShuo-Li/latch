@@ -395,7 +395,8 @@ struct App {
 
 /// Human-visible form of a `PermissionRequested` event.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PermissionPrompt {    pub request_id: uuid::Uuid,
+pub struct PermissionPrompt {
+    pub request_id: uuid::Uuid,
     pub tool: String,
     /// Full argument payload, retained verbatim so the human can inspect
     /// exactly what is being approved instead of a truncated preview.
@@ -924,7 +925,11 @@ impl App {
                 match key.code {
                     KeyCode::Esc => Err(()),
                     KeyCode::Backspace => {
-                        if selector.back() { Ok(None) } else { Err(()) }
+                        if selector.back() {
+                            Ok(None)
+                        } else {
+                            Err(())
+                        }
                     }
                     KeyCode::Up => {
                         selector.up();
@@ -941,8 +946,7 @@ impl App {
             match outcome {
                 Err(()) => {
                     self.profile_selector = None;
-                    self.presentation
-                        .push_notice("inference profile unchanged");
+                    self.presentation.push_notice("inference profile unchanged");
                 }
                 Ok(Some((provider, model, effort))) => {
                     self.profile_selector = None;
@@ -955,7 +959,8 @@ impl App {
                 Ok(None) => {}
             }
             return None;
-        }        if self.diff_overlay.is_some()
+        }
+        if self.diff_overlay.is_some()
             && !(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
         {
             return self.on_diff_key(key);
