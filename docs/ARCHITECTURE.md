@@ -37,15 +37,35 @@ flowchart LR
 ## Prompt architecture
 
 `PromptCompiler` assembles the model-facing system prompt from prioritized
-fragments. Stable coding-agent behavior comes first: identity, execution
-(default to action, the implementation loop, completion discipline),
-inspection focus, scope discipline, decision-making, tool semantics,
-communication style, and the validation/stale/reground policies. Mode text
-follows, then per-session context (canonical task state, workspace, repository
-instructions). Only the stable fragments are marked cacheable; dynamic context
-is never mixed into them. The compiled prompt is intentionally bounded and
-covered by tests that pin the fragment order, forbid obsolete policy text, keep
-Latch-specific tool/runtime guidance, and cap its size.
+fragments. The architecture follows publicly documented Codex CLI prompt
+structure (small behavioral core, explicit autonomy-and-persistence and
+validation sections) and Anthropic's official proportional-effort guidance
+(skip planning for straightforward work, verify with the narrowest meaningful
+check, delegate only parallelizable work).
+
+The stable prefix is a small behavioral core, in order: `core.identity`,
+`core.general`, `core.effort`, `core.scope`, `core.planning`, `core.tool_use`,
+`core.editing`, `core.validation`, and `core.communication`. Latch kernel
+semantics follow: `latch.kernel_truth`, `latch.context_and_staleness`,
+`latch.permissions`, and `latch.subagents`. Mode text (`mode.ask`,
+`mode.plan`, `mode.work`) and per-session context (`environment.workspace`,
+`environment.instructions.*`) come last.
+
+Effort is proportional. Simple, local work inspects only what it touches, makes
+the smallest coherent change, runs the narrowest meaningful check, and stops
+once the requested behavior is directly demonstrated. Standard work completes
+the requested scope with targeted validation and broadens only on evidence.
+Complex or long-horizon work may plan, inspect dependencies, validate broadly,
+and delegate independent work. The stopping rule is explicit: stop at direct,
+relevant evidence instead of searching for extra confidence, unrelated defects,
+or cleanup. The continue-until-done rule lives in exactly one fragment
+(`core.effort`) so persistence never competes with the stop rule.
+
+Only the stable fragments are cacheable; dynamic context is never mixed into
+them. The compiled prompt is intentionally bounded and covered by tests that
+pin the fragment order, forbid obsolete blanket-persistence text, keep
+Latch-specific tool/runtime guidance and kernel semantics, and cap its size
+(the static prefix must stay within 1,220 estimated tokens).
 
 ## Live steering
 
@@ -228,8 +248,8 @@ reason, and the tokens retained by that rotation.
 
 ### Prompt cache layout
 
-The compiled system prompt is session-stable by construction: core
-instructions, policy, mode, workspace identity, and repository instructions.
+The compiled system prompt is session-stable by construction: behavioral core,
+Latch kernel semantics, mode, workspace identity, and repository instructions.
 Canonical task state is rendered exactly once by continuity and travels as a
 final kernel-context user turn together with recalled originals and extension
 context, so frequently changing state/evidence never invalidates the reusable

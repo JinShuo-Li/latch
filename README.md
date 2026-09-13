@@ -200,7 +200,9 @@ raw event log. Completion states: `InProgress`, `ImplementedNotVerified`,
 The root model has seven stable control tools: `spawn_agent`,
 `send_agent_message`, `continue_agent`, `wait_agents`, `list_agents`,
 `interrupt_agent`, and `close_agent`. Spawning returns immediately and runs a
-real child session asynchronously. The child starts with a compact delegation
+real child session asynchronously. Delegation is proportional: children are for
+parallelizable, isolated, or independent workstreams, never simple, sequential,
+or tightly coupled work. The child starts with a compact delegation
 brief plus the workspace's normal repository instructions, not a copy of the
 parent transcript. The first release permits depth 1 only; children see the
 same fixed schema but the kernel rejects agent control from a child.

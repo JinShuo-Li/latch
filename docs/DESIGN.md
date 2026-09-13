@@ -4,6 +4,21 @@ Latch keeps its default surface quiet: transcript, compact lifecycle rows, and a
 bottom input. Detail is requested rather than continuously printed. Simple tasks
 do not acquire ceremonial plans.
 
+## Proportional effort
+
+The system prompt is a small behavioral core, not a persistence manifesto. It
+asks for the smallest amount of inspection, implementation, reasoning, and
+validation that solves the actual task, and it stops at direct, relevant
+evidence instead of searching for extra confidence, unrelated defects, or
+cleanup. Simple local work needs no plan and a narrow check is sufficient
+completion evidence for a narrow change; broader validation is reserved for
+cross-cutting changes; planning is reserved for genuinely multi-step, ambiguous,
+or long-horizon work; child agents are reserved for parallelizable, isolated
+workstreams. The continue-until-done rule lives in exactly one prompt module,
+so it never overrides the stopping rule. Kernel semantics are unchanged: the
+model chooses strategy, the kernel owns facts. See
+[`ARCHITECTURE.md`](ARCHITECTURE.md#prompt-architecture).
+
 The model chooses investigation and debugging strategy. The kernel owns facts:
 event order, file versions, process results, validation outcomes, evidence
 provenance, policy decisions, mutations, cancellation, and durable state.
