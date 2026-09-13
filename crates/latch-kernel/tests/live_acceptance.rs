@@ -14,12 +14,12 @@
 //! invariant suite; this harness answers whether an actual model can complete
 //! real coding tasks under the real policy, tools, and validation loop.
 
-use latch_kernel::config::{ContextConfig, PermissionConfig};
+use latch_kernel::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS, PermissionConfig};
 use latch_kernel::{
-    Agent, AgentRuntime, AnthropicProvider, Config, ContinuityEngine, EventStore, ModelProvider,
-    OpenAiProvider, PolicyEngine, ToolExecutor,
+    Agent, AgentRuntime, Config, ContinuityEngine, CredentialStore, EventStore, ModelDescriptor,
+    ModelProvider, PolicyEngine, ProviderRegistry, ToolExecutor,
 };
-use latch_protocol::{CompletionState, Event, EventPayload, Mode, Usage};
+use latch_protocol::{CompletionState, Event, EventPayload, InferenceProfile, Mode, Usage};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,35 +40,23 @@ fn live_config() -> Config {
     Config::load(None).expect("config")
 }
 
-fn provider(config: &Config, session: uuid::Uuid) -> Arc<dyn ModelProvider> {
-    let p = &config.provider;
-    match p.kind.as_str() {
-        "anthropic" => {
-            let key = std::env::var(p.api_key_env.as_deref().unwrap_or("ANTHROPIC_API_KEY"))
-                .expect("anthropic api key");
-            Arc::new(AnthropicProvider::new(
-                p.base_url
-                    .clone()
-                    .unwrap_or_else(|| "https://api.anthropic.com".into()),
-                key,
-                p.model.clone(),
-            ))
-        }
-        _ => {
-            let key = std::env::var(p.api_key_env.as_deref().unwrap_or("OPENAI_API_KEY"))
-                .expect("openai api key");
-            Arc::new(
-                OpenAiProvider::new(
-                    p.base_url
-                        .clone()
-                        .unwrap_or_else(|| "https://api.openai.com/v1".into()),
-                    key,
-                    p.model.clone(),
-                )
-                .with_session(session),
-            )
-        }
-    }
+/// Resolves the live provider, profile, and descriptor through the same
+/// registry the CLI uses, so the acceptance harness can never drift from the
+/// production provider construction path.
+fn live_provider(
+    config: &Config,
+    session: uuid::Uuid,
+) -> (Arc<dyn ModelProvider>, InferenceProfile, ModelDescriptor) {
+    let registry = ProviderRegistry::from_config(config).expect("provider registry");
+    let credentials = CredentialStore::open(CredentialStore::default_path(&config.state_dir))
+        .expect("credential store");
+    let (profile, descriptor) = registry
+        .default_profile(config)
+        .expect("default inference profile");
+    let provider = registry
+        .build_provider(&profile, &descriptor, &credentials, session)
+        .expect("provider");
+    (provider, profile, descriptor)
 }
 
 /// Metrics recorded for one live scenario.
@@ -189,17 +177,18 @@ async fn live_agent(workspace: PathBuf, artifacts: PathBuf, mode: Mode) -> LiveR
         PolicyEngine::new(mode, workspace.clone(), PermissionConfig::default()),
     )
     .unwrap();
+    let (provider, profile, descriptor) = live_provider(&config, session);
     let mut agent = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.clone(),
         mode,
         store: store.clone(),
-        provider: provider(&config, session),
+        provider,
         tools,
         continuity: ContinuityEngine::for_model(
             store.clone(),
             ContextConfig::default(),
-            &config.provider.model,
+            &profile.model,
         ),
         retry_budget: config.failure.retry_budget,
     });
@@ -207,7 +196,9 @@ async fn live_agent(workspace: PathBuf, artifacts: PathBuf, mode: Mode) -> LiveR
     agent.set_max_model_turns(config.failure.max_model_turns);
     agent.set_context_budget(
         ContextConfig::default(),
-        config.context_window_for(&config.provider.model),
+        descriptor
+            .context_window_tokens
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS),
     );
     LiveRun {
         store,
@@ -581,23 +572,26 @@ async fn live_interrupt_and_resume() {
         ),
     )
     .unwrap();
+    let (provider, profile, descriptor) = live_provider(&config, session);
     let mut agent = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.path().into(),
         mode: Mode::Work,
         store: store.clone(),
-        provider: provider(&config, session),
+        provider,
         tools,
         continuity: ContinuityEngine::for_model(
             store.clone(),
             ContextConfig::default(),
-            &config.provider.model,
+            &profile.model,
         ),
         retry_budget: config.failure.retry_budget,
     });
     agent.set_context_budget(
         ContextConfig::default(),
-        config.context_window_for(&config.provider.model),
+        descriptor
+            .context_window_tokens
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS),
     );
     let started = Instant::now();
     let cancel = CancellationToken::new();
@@ -637,23 +631,26 @@ async fn live_interrupt_and_resume() {
         ),
     )
     .unwrap();
+    let (provider, profile, descriptor) = live_provider(&config, session);
     let mut resumed = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.path().into(),
         mode: Mode::Work,
         store: resumed_store.clone(),
-        provider: provider(&config, session),
+        provider,
         tools,
         continuity: ContinuityEngine::for_model(
             resumed_store.clone(),
             ContextConfig::default(),
-            &config.provider.model,
+            &profile.model,
         ),
         retry_budget: config.failure.retry_budget,
     });
     resumed.set_context_budget(
         ContextConfig::default(),
-        config.context_window_for(&config.provider.model),
+        descriptor
+            .context_window_tokens
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS),
     );
     // Reconstruct durable state exactly like the CLI resume path.
     let durable = resumed_store.events(session).unwrap();
@@ -732,23 +729,26 @@ async fn live_long_horizon_over_100_turns() {
         ),
     )
     .unwrap();
+    let (provider, profile, descriptor) = live_provider(&config, session);
     let mut agent = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.path().into(),
         mode: Mode::Work,
         store: store.clone(),
-        provider: provider(&config, session),
+        provider,
         tools,
         continuity: ContinuityEngine::for_model(
             store.clone(),
             ContextConfig::default(),
-            &config.provider.model,
+            &profile.model,
         ),
         retry_budget: config.failure.retry_budget,
     });
     agent.set_context_budget(
         ContextConfig::default(),
-        config.context_window_for(&config.provider.model),
+        descriptor
+            .context_window_tokens
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS),
     );
     let started = Instant::now();
     // 40 small increments; each typically needs 2-4 model turns.
