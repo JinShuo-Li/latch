@@ -5,7 +5,7 @@ use latch_protocol::{ModelRequest, ModelResponse, StreamEvent, ToolCall, Usage};
 use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -462,12 +462,17 @@ impl ModelProvider for OpenAiResponsesProvider {
 }
 
 /// Incremental Responses stream state. Kept separate from the transport so
-/// event mapping is unit-testable without network access.
+/// event mapping is unit-testable without network access. Encrypted reasoning
+/// items are captured wherever the stream reports them (`output_item.added`,
+/// `output_item.done`, or the terminal `response.completed.output`) and
+/// deduplicated by item id so a stateless replay sends each blob exactly once.
 #[derive(Default)]
 struct ResponsesStreamState {
     text: String,
     summary: String,
     calls: BTreeMap<String, (String, String, String)>,
+    reasoning: Vec<latch_protocol::ReasoningArtifact>,
+    seen_reasoning: BTreeSet<String>,
     usage: Option<Usage>,
 }
 
@@ -495,7 +500,7 @@ impl ResponsesStreamState {
                     self.calls.entry(key).or_default().2.push_str(delta);
                 }
             }
-            "response.output_item.done" | "response.completed" => {
+            "response.output_item.added" | "response.output_item.done" | "response.completed" => {
                 let items: Vec<&Value> = if let Some(item) = v.get("item") {
                     vec![item]
                 } else {
@@ -505,25 +510,46 @@ impl ResponsesStreamState {
                         .unwrap_or_default()
                 };
                 for item in items {
-                    if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                        let key = item
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .or_else(|| item.get("call_id").and_then(Value::as_str))
-                            .unwrap_or_default()
-                            .to_owned();
-                        let entry = self.calls.entry(key).or_default();
-                        if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
-                            entry.0 = call_id.to_owned();
+                    match item.get("type").and_then(Value::as_str) {
+                        Some("function_call") => {
+                            let key = item
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .or_else(|| item.get("call_id").and_then(Value::as_str))
+                                .unwrap_or_default()
+                                .to_owned();
+                            let entry = self.calls.entry(key).or_default();
+                            if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
+                                entry.0 = call_id.to_owned();
+                            }
+                            if let Some(name) = item.get("name").and_then(Value::as_str) {
+                                entry.1 = name.to_owned();
+                            }
+                            if let Some(arguments) = item.get("arguments").and_then(Value::as_str)
+                                && !arguments.is_empty()
+                            {
+                                entry.2 = arguments.to_owned();
+                            }
                         }
-                        if let Some(name) = item.get("name").and_then(Value::as_str) {
-                            entry.1 = name.to_owned();
+                        Some("reasoning") => {
+                            if let Some(data) =
+                                item.get("encrypted_content").and_then(Value::as_str)
+                                && !data.is_empty()
+                            {
+                                let key = item.get("id").and_then(Value::as_str).map_or_else(
+                                    || format!("data:{data}"),
+                                    |id| format!("id:{id}"),
+                                );
+                                if self.seen_reasoning.insert(key) {
+                                    self.reasoning.push(
+                                        latch_protocol::ReasoningArtifact::Encrypted {
+                                            data: data.to_owned(),
+                                        },
+                                    );
+                                }
+                            }
                         }
-                        if let Some(arguments) = item.get("arguments").and_then(Value::as_str)
-                            && !arguments.is_empty()
-                        {
-                            entry.2 = arguments.to_owned();
-                        }
+                        _ => {}
                     }
                 }
                 if v.get("type").and_then(Value::as_str) == Some("response.completed") {
@@ -573,7 +599,7 @@ impl ResponsesStreamState {
             stop_reason: "completed".to_owned(),
             usage: self.usage,
             reasoning_content: (!self.summary.is_empty()).then_some(self.summary),
-            reasoning: Vec::new(),
+            reasoning: self.reasoning,
         }
     }
 }
@@ -1907,6 +1933,178 @@ mod tests {
         assert_eq!(usage.cache_read_tokens, Some(80));
         assert_eq!(usage.cache_miss_tokens, Some(20));
         assert_eq!(usage.reasoning_tokens, Some(25));
+    }
+
+    #[test]
+    fn responses_stream_captures_encrypted_reasoning_once() {
+        let mut state = ResponsesStreamState::default();
+        // Visible summary and opaque encrypted content are separate: only the
+        // summary may ever surface as reasoning text.
+        state
+            .apply(&json!({"type":"response.reasoning_summary_text.delta","delta":"plan"}))
+            .unwrap();
+        // The same reasoning item may be reported by several event shapes.
+        state
+            .apply(&json!({
+                "type":"response.output_item.added",
+                "item":{"id":"rs_1","type":"reasoning","encrypted_content":"opaque-ciphertext"}
+            }))
+            .unwrap();
+        state
+            .apply(&json!({
+                "type":"response.output_item.done",
+                "item":{"id":"rs_1","type":"reasoning","encrypted_content":"opaque-ciphertext"}
+            }))
+            .unwrap();
+        state
+            .apply(&json!({
+                "type":"response.completed",
+                "response":{
+                    "output":[{"id":"rs_1","type":"reasoning","encrypted_content":"opaque-ciphertext"}],
+                    "usage":null
+                }
+            }))
+            .unwrap();
+        let response = state.finish();
+        assert_eq!(response.reasoning_content.as_deref(), Some("plan"));
+        assert_eq!(
+            response.reasoning,
+            vec![latch_protocol::ReasoningArtifact::Encrypted {
+                data: "opaque-ciphertext".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn responses_stateless_tool_loop_replays_parser_encrypted_reasoning_once() {
+        // Request 1: decode the Responses events exactly as the streaming
+        // transport does. The artifact must come from the parser, never from a
+        // hand-built `ModelResponse`.
+        let mut state = ResponsesStreamState::default();
+        state
+            .apply(&json!({
+                "type":"response.output_item.done",
+                "item":{"id":"rs_1","type":"reasoning","encrypted_content":"opaque-ciphertext"}
+            }))
+            .unwrap();
+        state
+            .apply(&json!({
+                "type":"response.function_call_arguments.delta",
+                "item_id":"fc_1",
+                "delta":"{\"path\":\"calc.py\"}"
+            }))
+            .unwrap();
+        state
+            .apply(&json!({
+                "type":"response.output_item.done",
+                "item":{"id":"fc_1","type":"function_call","call_id":"call-1","name":"read_file"}
+            }))
+            .unwrap();
+        let first = state.finish();
+        let encrypted = latch_protocol::ReasoningArtifact::Encrypted {
+            data: "opaque-ciphertext".into(),
+        };
+        assert_eq!(first.reasoning, vec![encrypted.clone()]);
+
+        // Persist through the real durable store exactly as the agent does,
+        // then reopen the file to simulate a process/session resume.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.sqlite3");
+        let session;
+        {
+            let store = crate::store::EventStore::open(&db).unwrap();
+            session = store.create_session(dir.path()).unwrap();
+            store
+                .append(
+                    session,
+                    latch_protocol::EventPayload::UserMessage {
+                        text: "Fix the bug in calc.py and verify it.".into(),
+                    },
+                )
+                .unwrap();
+            store
+                .append(
+                    session,
+                    latch_protocol::EventPayload::AssistantMessageCompleted {
+                        text: first.text.clone(),
+                        tool_calls: first.tool_calls.clone(),
+                        reasoning_content: first.reasoning_content.clone(),
+                        reasoning: first.reasoning.clone(),
+                    },
+                )
+                .unwrap();
+            store
+                .append(
+                    session,
+                    latch_protocol::EventPayload::ToolCompleted {
+                        result: latch_protocol::ToolResult {
+                            call_id: "call-1".into(),
+                            name: "read_file".into(),
+                            output: "def add(a, b):\n    return a - b".into(),
+                            is_error: false,
+                            artifact_id: None,
+                        },
+                    },
+                )
+                .unwrap();
+        }
+        let resumed = crate::store::EventStore::open(&db).unwrap();
+        let ctx = crate::continuity::MaterializedContext {
+            system: String::new(),
+            canonical: String::new(),
+            recalled: String::new(),
+            recent: resumed.events(session).unwrap(),
+            bridge: crate::continuity::ConversationBridge::default(),
+            episodes: vec![],
+            stats: latch_protocol::ContextStats::default(),
+        };
+        let request = ModelRequest {
+            system: "stable".into(),
+            messages: crate::agent::request::context_messages(&ctx),
+            tools: vec![],
+        };
+        // Reconstruction is exact: the durable assistant turn rebuilds the
+        // parser-produced artifact without modification.
+        let assistant = request
+            .messages
+            .iter()
+            .find(|message| message.role == "assistant")
+            .unwrap();
+        assert_eq!(assistant.reasoning, vec![encrypted]);
+
+        // Request 2 replays exactly one encrypted item, before the function
+        // call it belongs to, followed by the tool output.
+        let body = responses_request(&request, "gpt-6-astra", Some("high"));
+        assert_eq!(body["store"], false);
+        assert!(
+            body["include"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str() == Some("reasoning.encrypted_content"))
+        );
+        let input = body["input"].as_array().unwrap();
+        let occurrences = input
+            .iter()
+            .filter(|item| item["encrypted_content"] == "opaque-ciphertext")
+            .count();
+        assert_eq!(
+            occurrences, 1,
+            "encrypted reasoning must be replayed exactly once"
+        );
+        let reasoning = input
+            .iter()
+            .position(|item| item["type"] == "reasoning")
+            .unwrap();
+        let call = input
+            .iter()
+            .position(|item| item["type"] == "function_call")
+            .unwrap();
+        let output = input
+            .iter()
+            .position(|item| item["type"] == "function_call_output")
+            .unwrap();
+        assert!(reasoning < call && call < output);
     }
 
     #[test]

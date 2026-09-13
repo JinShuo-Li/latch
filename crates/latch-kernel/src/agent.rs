@@ -35,7 +35,7 @@ mod agent_controls;
 mod dispatch;
 mod kernel_tools;
 mod permissions;
-mod request;
+pub(crate) mod request;
 mod steering;
 mod supervision;
 mod validation;

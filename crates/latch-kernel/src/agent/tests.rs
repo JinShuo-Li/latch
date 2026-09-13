@@ -689,6 +689,75 @@ async fn context_stats_cover_the_complete_request_in_tokens() {
 }
 
 #[tokio::test]
+async fn encrypted_reasoning_survives_durable_persistence_and_resume_materialization() {
+    let d = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let sid = store.create_session(d.path()).unwrap();
+    let encrypted = latch_protocol::ReasoningArtifact::Encrypted {
+        data: "opaque-ciphertext".into(),
+    };
+    let responses = vec![ModelResponse {
+        text: "done".into(),
+        tool_calls: vec![],
+        stop_reason: "stop".into(),
+        usage: None,
+        reasoning_content: None,
+        reasoning: vec![encrypted.clone()],
+    }];
+    let tools = ToolExecutor::new(
+        d.path().into(),
+        d.path().join("art"),
+        store.clone(),
+        sid,
+        PolicyEngine::new(Mode::Ask, d.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: d.path().into(),
+        mode: Mode::Ask,
+        store: store.clone(),
+        provider: Arc::new(FakeProvider::scripted(responses)),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    agent.set_context_budget(ContextConfig::default(), 128_000);
+    agent
+        .run("inspect", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    // The agent copied `ModelResponse.reasoning` into the durable event.
+    let events = store.events(sid).unwrap();
+    let durable = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::AssistantMessageCompleted { reasoning, .. } => Some(reasoning.clone()),
+            _ => None,
+        })
+        .expect("assistant event");
+    assert_eq!(durable, vec![encrypted.clone()]);
+
+    // Resume materialization rebuilds the artifact unchanged.
+    let ctx = crate::continuity::MaterializedContext {
+        system: String::new(),
+        canonical: String::new(),
+        recalled: String::new(),
+        recent: events,
+        bridge: crate::continuity::ConversationBridge::default(),
+        episodes: vec![],
+        stats: latch_protocol::ContextStats::default(),
+    };
+    let messages = context_messages(&ctx);
+    let assistant = messages
+        .iter()
+        .find(|message| message.role == "assistant")
+        .unwrap();
+    assert_eq!(assistant.reasoning, vec![encrypted]);
+}
+
+#[tokio::test]
 async fn approved_outside_write_executes_and_denied_write_does_not() {
     use crate::config::OutsidePolicy;
     let workspace_dir = tempdir().unwrap();

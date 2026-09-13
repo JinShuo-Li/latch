@@ -88,7 +88,7 @@ pub(super) fn common_prefix_bytes(a: &str, b: &str) -> usize {
     shared
 }
 
-pub(super) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMessage> {
+pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> Vec<ModelMessage> {
     let raw = ctx
         .recent
         .iter()
