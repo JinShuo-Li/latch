@@ -7,7 +7,7 @@ use latch_kernel::{
     Agent, AgentRuntime, Config, ContinuityEngine, CredentialRef, CredentialStore, EventStore,
     ModelDescriptor, ModelProvider, PolicyEngine, ProviderRegistry, ToolExecutor,
     agent::{AgentOutput, SteeringSubmission},
-    config::{InferenceConfig, ProviderKind, ProviderProfileConfig},
+    config::{InferenceConfig, ProviderKind},
     prompt::PromptCompiler,
     provider::StreamSink,
     session,
@@ -329,7 +329,15 @@ async fn pick_session(workspace: &Path, config: &Config) -> Result<ResumeChoice>
             mode: session
                 .mode
                 .map_or_else(|| config.default_mode.to_string(), |mode| mode.to_string()),
-            model: session.model.unwrap_or_else(|| "—".into()),
+            model: match (&session.model, session.effort) {
+                (Some(model), Some(effort))
+                    if !matches!(effort, ReasoningEffort::ProviderDefault) =>
+                {
+                    format!("{model} · {}", effort.short())
+                }
+                (Some(model), _) => model.clone(),
+                (None, _) => "—".into(),
+            },
             prompt: session
                 .prompt_preview
                 .unwrap_or_else(|| "No user prompt".into()),
@@ -855,6 +863,7 @@ fn persist_setup(
     plan: &SetupPlan,
 ) -> Result<(String, String, ReasoningEffort)> {
     let SetupPlan::Apply {
+        name,
         provider_kind,
         base_url,
         credential,
@@ -863,7 +872,13 @@ fn persist_setup(
     } = plan.clone();
     let kind = ProviderKind::parse(&provider_kind, base_url.as_deref())
         .ok_or_else(|| anyhow!("unknown provider kind {provider_kind:?}"))?;
-    let provider_id = kind.id().to_owned();
+    // Provider id is instance identity. The setup flow defaults it to the kind
+    // id but users may name multiple instances of one kind.
+    let provider_id = if name.trim().is_empty() {
+        kind.id().to_owned()
+    } else {
+        name.trim().to_owned()
+    };
     let credential_ref = match credential {
         SetupCredential::Env(name) => CredentialRef::Env(name),
         SetupCredential::Secret(secret) => {
@@ -871,18 +886,21 @@ fn persist_setup(
             CredentialRef::File(provider_id.clone())
         }
     };
-    context.config.providers.insert(
-        provider_id.clone(),
-        ProviderProfileConfig {
-            kind,
-            display_name: None,
-            base_url,
-            credential: Some(credential_ref.display()),
-            default_model: Some(model.clone()),
-            models: std::collections::BTreeMap::new(),
-            model_discovery: false,
-        },
-    );
+    // Semantic update: an existing entry keeps its model metadata, display
+    // name, and discovery flag; only the fields the flow owns are replaced.
+    let entry = context
+        .config
+        .providers
+        .entry(provider_id.clone())
+        .or_default();
+    if entry.kind != kind {
+        // A kind change invalidates kind-specific built-in model overrides.
+        entry.models.clear();
+    }
+    entry.kind = kind;
+    entry.base_url = base_url;
+    entry.credential = Some(credential_ref.display());
+    entry.default_model = Some(model.clone());
     context.config.inference = InferenceConfig {
         provider: Some(provider_id.clone()),
         model: Some(model.clone()),
@@ -1188,6 +1206,7 @@ mod tests {
         };
         let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
         let plan = SetupPlan::Apply {
+            name: "deepseek".into(),
             provider_kind: "deepseek".into(),
             base_url: Some("https://api.deepseek.com".into()),
             credential: SetupCredential::Secret("sk-super-secret".into()),
@@ -1222,6 +1241,104 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    fn setup_plan(
+        name: &str,
+        kind: &str,
+        credential: SetupCredential,
+        model: &str,
+        effort: ReasoningEffort,
+    ) -> SetupPlan {
+        SetupPlan::Apply {
+            name: name.into(),
+            provider_kind: kind.into(),
+            base_url: None,
+            credential,
+            model: model.into(),
+            effort,
+        }
+    }
+
+    #[test]
+    fn setup_preserves_model_metadata_and_allows_multiple_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let state_dir = dir.path().join("state");
+        let config = Config {
+            state_dir: state_dir.clone(),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "openai-main",
+                "openai",
+                SetupCredential::Secret("sk-1".into()),
+                "gpt-5.5",
+                ReasoningEffort::Medium,
+            ),
+        )
+        .unwrap();
+        assert!(
+            std::fs::read_to_string(&config_path)
+                .unwrap()
+                .contains("[providers.openai-main]")
+        );
+
+        // Simulate user metadata added to the provider table by hand.
+        context
+            .config
+            .providers
+            .get_mut("openai-main")
+            .unwrap()
+            .models
+            .insert(
+                "gpt-5.5".into(),
+                latch_kernel::config::ModelConfig {
+                    context_window_tokens: Some(4_242),
+                    ..Default::default()
+                },
+            );
+
+        // Editing the same instance updates credential/effort but keeps the
+        // model metadata it did not own.
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "openai-main",
+                "openai",
+                SetupCredential::Env("OPENAI_API_KEY".into()),
+                "gpt-5.5",
+                ReasoningEffort::High,
+            ),
+        )
+        .unwrap();
+        let entry = context.config.providers.get("openai-main").unwrap();
+        assert_eq!(
+            entry
+                .models
+                .get("gpt-5.5")
+                .and_then(|model| model.context_window_tokens),
+            Some(4_242)
+        );
+        assert_eq!(entry.credential.as_deref(), Some("env:OPENAI_API_KEY"));
+
+        // A second instance of the same kind coexists with a stable id.
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "openai-proxy",
+                "openai",
+                SetupCredential::Env("PROXY_KEY".into()),
+                "gpt-5.5",
+                ReasoningEffort::Low,
+            ),
+        )
+        .unwrap();
+        assert_eq!(context.config.providers.len(), 2);
+        assert!(context.config.providers.contains_key("openai-proxy"));
     }
 
     #[test]

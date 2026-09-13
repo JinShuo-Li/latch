@@ -11,11 +11,11 @@
                                                                                                                                                             │✓ audit-locks [explorer]                   
                                                                                                                                                             │  Found two unsynchronized locks.          
                                                                                                                                                             │                                           
-                                                                                                                                                            │USAGE                                      
+                                                                                                                                                            │RUN                                        
+                                                                                                                                                            │                                           
+                                                                                                                                                            │SESSION                                    
                                                                                                                                                             │                                           
                                                                                                                                                             │CHANGES                                    
-                                                                                                                                                            │                                           
-                                                                                                                                                            │                                           
                                                                                                                                                             │                                           
                                                                                                                                                             │                                           
                                                                                                                                                                                                         

@@ -20,17 +20,17 @@ TTL cache implementation
 ● Implementing
 Validations  0 / 2
 
-USAGE
-last  in 428.6k · out 31.4k
+RUN
+time        …
+requests    1
+tools       0
 in          428.6k
 out         31.4k
-cache read  286.1k
-cache write —
-run         1 req · 0 tools · 12m30s
-replay      reasoning 0 · tool args 0 · results 0
-est. cost   $0.06
+cache       286.1k read · 142.5k miss
+replay      0
+files       0 read · 2 changed
+validations 0
 
-CHANGES
-Latch      1 file  +53 −7
-Shell      1 file  +2 −0
-External   1 file
+SESSION
+in 428.6k · out 31.4k
+est. cost   $0.06

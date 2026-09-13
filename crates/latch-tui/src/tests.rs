@@ -2573,8 +2573,8 @@ fn model_command_opens_a_provider_model_effort_selector() {
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     // Model step: choose the highlighted model.
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    // Effort step: move down and confirm.
-    app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    // Effort step preserves the current effort, so confirming immediately
+    // keeps it.
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(matches!(
         action,
@@ -2631,7 +2631,12 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     }]));
     app.input.set_text("/setup");
     assert!(app.submit_action().is_none());
-    // Kind -> endpoint capture, prefilled with the catalog default.
+    // Kind -> provider name capture, prefilled with the kind id.
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.capture.is_some());
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    // Name -> endpoint capture, prefilled with the catalog default.
+    assert!(matches!(app.setup.as_ref().map(SetupFlow::step), Some(SetupStep::Endpoint)));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.capture.is_some());
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
@@ -2717,7 +2722,9 @@ fn snapshot_setup_review_surface_masks_the_credential() {
     }]));
     app.input.set_text("/setup");
     app.submit_action();
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // kind -> endpoint capture
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // kind -> name capture
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // accept default name
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // endpoint capture
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // accept default endpoint
     app.on_key(key(KeyCode::Down, KeyModifiers::NONE)); // choose secure entry
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));

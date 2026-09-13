@@ -6,11 +6,11 @@
                              ███    ██  ██   ██   ██     ██  ██                             │                           
                              ██████ ██  ██   ██    █████ ██  ██                             │TASK                       
                                 a quiet terminal coding agent                               │                           
-                                                                                            │USAGE                      
+                                                                                            │RUN                        
              Ask Latch to inspect, change, or verify code. /help lists commands.            │                           
+                                                                                            │SESSION                    
+                                                                                            │                           
                                                                                             │CHANGES                    
-                                                                                            │                           
-                                                                                            │                           
                                                                                                                         
   Inference profile · OpenCode Go                                                                                       
                                                                                                                         

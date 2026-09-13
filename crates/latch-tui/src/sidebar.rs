@@ -105,6 +105,35 @@ impl UsageTotals {
     }
 }
 
+/// Explicit per-run totals. A run is one root user-request execution: it
+/// starts at `RunStarted` and ends at `RunCompleted`, so counters reset per
+/// task while `UsageTotals` remains the cumulative session view.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunTotals {
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub outcome: Option<String>,
+    pub requests: u32,
+    pub tool_calls: u32,
+    pub files_read: u32,
+    pub files_changed: u32,
+    pub validations: u32,
+    pub usage: UsageTotals,
+    pub reasoning_replay_tokens: usize,
+    pub tool_argument_tokens: usize,
+    pub tool_result_tokens: usize,
+}
+
+impl RunTotals {
+    #[must_use]
+    pub fn elapsed_seconds(&self) -> Option<i64> {
+        let (Some(started), Some(ended)) = (self.started_at, self.ended_at) else {
+            return None;
+        };
+        Some((ended - started).num_seconds().max(0))
+    }
+}
+
 fn accumulate(slot: &mut Option<u64>, partial: &mut bool, value: Option<u64>) {
     match value {
         Some(value) => *slot = Some(slot.unwrap_or(0).saturating_add(value)),
@@ -277,6 +306,8 @@ pub struct SidebarModel {
     last_usage: Option<Usage>,
     /// Provider requests and tool calls observed in the durable stream.
     tool_calls: u32,
+    /// Current or most recent explicit run, reset at each `RunStarted`.
+    run: RunTotals,
     changes: ChangeView,
     stall: Option<StagnationView>,
     /// Root-visible child sessions; the child transcripts stay separate.
@@ -297,6 +328,7 @@ impl SidebarModel {
             usage: UsageTotals::default(),
             last_usage: None,
             tool_calls: 0,
+            run: RunTotals::default(),
             changes: ChangeView::default(),
             stall: None,
             subagents: SubagentModel::default(),
@@ -341,6 +373,11 @@ impl SidebarModel {
     #[must_use]
     pub fn usage(&self) -> &UsageTotals {
         &self.usage
+    }
+
+    #[must_use]
+    pub fn run(&self) -> &RunTotals {
+        &self.run
     }
 
     #[must_use]
@@ -458,7 +495,12 @@ impl SidebarModel {
             self.stall = None;
         }
         match &event.payload {
-            EventPayload::ContextMaterialized { stats } => self.context = Some(stats.clone()),
+            EventPayload::ContextMaterialized { stats } => {
+                self.run.reasoning_replay_tokens = stats.reasoning_replay_tokens;
+                self.run.tool_argument_tokens = stats.tool_arguments_tokens;
+                self.run.tool_result_tokens = stats.tool_result_tokens;
+                self.context = Some(stats.clone());
+            }
             EventPayload::TaskStateUpdated { state } => self.task = Some(state.clone()),
             EventPayload::CompletionChanged { completion } => {
                 let mut task = self.task.clone().unwrap_or_default();
@@ -473,10 +515,33 @@ impl SidebarModel {
             }
             EventPayload::ModelUsage { usage } => {
                 self.usage.add(usage);
+                self.run.usage.add(usage);
                 self.last_usage = Some(usage.clone());
             }
-            EventPayload::ModelRequestStarted { .. } => self.turns += 1,
-            EventPayload::ToolRequested { .. } => self.tool_calls += 1,
+            EventPayload::RunStarted { .. } => {
+                self.run = RunTotals {
+                    started_at: Some(event.timestamp),
+                    ..RunTotals::default()
+                };
+            }
+            EventPayload::RunCompleted { outcome, .. } => {
+                self.run.ended_at = Some(event.timestamp);
+                self.run.outcome = Some(outcome.clone());
+            }
+            EventPayload::ModelRequestStarted { .. } => {
+                self.turns += 1;
+                self.run.requests += 1;
+            }
+            EventPayload::ToolRequested { call } => {
+                self.tool_calls += 1;
+                self.run.tool_calls += 1;
+                if call.name == "read_file" {
+                    self.run.files_read += 1;
+                }
+                if call.name == "validate" {
+                    self.run.validations += 1;
+                }
+            }
             EventPayload::GitStateObserved { dirty_paths, .. } => {
                 self.changes.preexisting(dirty_paths)
             }
@@ -486,13 +551,16 @@ impl SidebarModel {
                 additions,
                 deletions,
                 ..
-            } => self.changes.record(
-                after.path.clone(),
-                owner.clone(),
-                after.content_hash.clone(),
-                *additions,
-                *deletions,
-            ),
+            } => {
+                self.run.files_changed += 1;
+                self.changes.record(
+                    after.path.clone(),
+                    owner.clone(),
+                    after.content_hash.clone(),
+                    *additions,
+                    *deletions,
+                )
+            }
             EventPayload::ChangeReverted { path, content_hash } => {
                 self.changes.revert(path, content_hash)
             }
@@ -575,6 +643,10 @@ impl SidebarModel {
                 self.task_lines(width, false),
             ]),
             (!self.subagents.is_empty()).then(|| vec![self.children_lines(width)]),
+            Some(vec![
+                self.run_lines(width, true),
+                self.run_lines(width, false),
+            ]),
             Some(vec![
                 self.usage_lines(width, true),
                 self.usage_lines(width, false),
@@ -896,11 +968,75 @@ impl SidebarModel {
         lines
     }
 
+    fn run_lines(&self, width: usize, detail: bool) -> Vec<Line<'static>> {
+        let mut lines = vec![section_title("RUN")];
+        if self.run.started_at.is_none() && self.run.requests == 0 {
+            return lines;
+        }
+        let elapsed = self
+            .run
+            .elapsed_seconds()
+            .map(format_duration)
+            .unwrap_or_else(|| "…".to_owned());
+        if detail {
+            let row = |label: &str, value: String| {
+                Line::from(vec![
+                    Span::styled(format!("{label:<12}"), dim()),
+                    Span::raw(fit(&value, width.saturating_sub(12))),
+                ])
+            };
+            lines.push(row("time", elapsed));
+            lines.push(row("requests", self.run.requests.to_string()));
+            lines.push(row("tools", format!("{}", self.run.tool_calls)));
+            lines.push(row("in", option_tokens(self.run.usage.input)));
+            lines.push(row("out", option_tokens(self.run.usage.output)));
+            let cache = format!(
+                "{} read · {} miss",
+                option_tokens(self.run.usage.cache_read),
+                option_tokens(self.run.usage.cache_miss)
+            );
+            lines.push(row("cache", cache));
+            lines.push(row(
+                "replay",
+                format_tokens(self.run.reasoning_replay_tokens as u64),
+            ));
+            if self.run.files_changed > 0 || self.run.files_read > 0 {
+                lines.push(row(
+                    "files",
+                    format!(
+                        "{} read · {} changed",
+                        self.run.files_read, self.run.files_changed
+                    ),
+                ));
+            }
+            lines.push(row("validations", self.run.validations.to_string()));
+            if let Some(outcome) = &self.run.outcome {
+                lines.push(row("outcome", outcome.clone()));
+            }
+        } else {
+            lines.push(Line::styled(
+                fit(
+                    &format!(
+                        "{} req · {} tools · {} · in {} out {}",
+                        self.run.requests,
+                        self.run.tool_calls,
+                        elapsed,
+                        option_tokens(self.run.usage.input),
+                        option_tokens(self.run.usage.output)
+                    ),
+                    width,
+                ),
+                Style::default(),
+            ));
+        }
+        lines
+    }
+
     fn usage_lines(&self, width: usize, detail: bool) -> Vec<Line<'static>> {
         if self.usage.is_empty() && self.last_usage.is_none() {
-            return vec![section_title("USAGE")];
+            return vec![section_title("SESSION")];
         }
-        let mut lines = vec![section_title("USAGE")];
+        let mut lines = vec![section_title("SESSION")];
         if detail {
             if let Some(last) = &self.last_usage {
                 lines.push(Line::from(vec![
@@ -1159,7 +1295,17 @@ fn trim_decimal(value: f64) -> String {
 }
 
 #[must_use]
-pub fn format_age(age: Duration) -> String {
+pub fn format_duration(seconds: i64) -> String {
+    if seconds >= 3600 {
+        format!("{}h{}m", seconds / 3600, (seconds % 3600) / 60)
+    } else if seconds >= 60 {
+        format!("{}m{}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}.0s")
+    }
+}
+
+fn format_age(age: Duration) -> String {
     let seconds = age.num_seconds().max(0);
     if seconds < 60 {
         format!("{seconds}s")
@@ -1385,6 +1531,66 @@ mod tests {
         let rendered = render(&model, 40, 60);
         assert!(rendered.contains("VERIFIED"));
         assert!(rendered.contains("1 / 2"));
+    }
+
+    #[test]
+    fn run_totals_reset_per_run_and_session_totals_accumulate() {
+        let mut model = SidebarModel::new(session());
+        let usage = |input: u64| EventPayload::ModelUsage {
+            usage: Usage {
+                input_tokens: input,
+                output_tokens: 5,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                cache_miss_tokens: None,
+                reasoning_tokens: None,
+            },
+        };
+        model.apply_event(&event(EventPayload::RunStarted {
+            run_id: Uuid::new_v4(),
+            prompt: "first task".into(),
+        }));
+        model.apply_event(&event(EventPayload::ModelRequestStarted {
+            provider: "deepseek".into(),
+            model: "deepseek-flash".into(),
+        }));
+        model.apply_event(&event(EventPayload::ToolRequested {
+            call: latch_protocol::ToolCall {
+                id: "c1".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": "a"}),
+            },
+        }));
+        model.apply_event(&event(usage(100)));
+        model.apply_event(&event(EventPayload::RunCompleted {
+            run_id: Uuid::new_v4(),
+            outcome: "completed".into(),
+        }));
+        assert_eq!(model.run().requests, 1);
+        assert_eq!(model.run().tool_calls, 1);
+        assert_eq!(model.run().files_read, 1);
+        assert_eq!(model.run().usage.input, Some(100));
+        assert!(model.run().elapsed_seconds().is_some());
+        assert_eq!(model.run().outcome.as_deref(), Some("completed"));
+
+        // A second run resets run counters but not session totals.
+        model.apply_event(&event(EventPayload::RunStarted {
+            run_id: Uuid::new_v4(),
+            prompt: "second task".into(),
+        }));
+        assert_eq!(model.run().requests, 0);
+        assert!(model.run().usage.is_empty());
+        assert_eq!(model.run().elapsed_seconds(), None);
+        model.apply_event(&event(EventPayload::ModelRequestStarted {
+            provider: "deepseek".into(),
+            model: "deepseek-flash".into(),
+        }));
+        model.apply_event(&event(usage(200)));
+        assert_eq!(model.run().requests, 1);
+        assert_eq!(model.run().usage.input, Some(200));
+        // Session totals stay cumulative across both runs.
+        assert_eq!(model.usage().input, Some(300));
+        assert_eq!(model.turns(), 2);
     }
 
     #[test]

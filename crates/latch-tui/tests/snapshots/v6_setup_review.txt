@@ -5,9 +5,9 @@
                              ███    ██  ██   ██   ██     ██  ██                             │                           
                              ██████ ██  ██   ██    █████ ██  ██                             │TASK                       
                                 a quiet terminal coding agent                               │                           
-                                                                                            │USAGE                      
+                                                                                            │RUN                        
              Ask Latch to inspect, change, or verify code. /help lists commands.            │                           
-                                                                                            │CHANGES                    
+                                                                                            │SESSION                    
                                                                                             │                           
                                                                                                                         
   Setup · review                                                                                                        
@@ -15,7 +15,7 @@
   › Apply & save  (current)                                                                                             
     Cancel                                                                                                              
                                                                                                                         
-  Provider   OpenAI                                                                                                     
+  Provider   OpenAI (openai)                                                                                            
   Endpoint   https://api.openai.com/v1                                                                                  
   Model      gpt-5.5                                                                                                    
   Effort     provider default                                                                                           
