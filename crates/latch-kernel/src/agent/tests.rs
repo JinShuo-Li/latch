@@ -635,6 +635,23 @@ async fn context_stats_cover_the_complete_request_in_tokens() {
         stats.headroom_tokens,
         stats.budget_tokens.saturating_sub(sum)
     );
+    // The request breakdown partitions the recent window; partitions are
+    // informational and must never be added to the total a second time.
+    let partition = stats.conversation_tokens
+        + stats.reasoning_replay_tokens
+        + stats.tool_arguments_tokens
+        + stats.tool_result_tokens;
+    assert!(
+        partition <= stats.recent_tokens,
+        "partition {partition} exceeds recent {}",
+        stats.recent_tokens
+    );
+    assert!(stats.conversation_tokens > 0, "visible text is accounted");
+    assert!(
+        stats.tool_arguments_tokens > 0,
+        "tool-call arguments are accounted"
+    );
+    assert!(stats.tool_result_tokens > 0, "tool results are accounted");
 }
 
 #[tokio::test]
