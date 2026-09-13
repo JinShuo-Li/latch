@@ -59,10 +59,28 @@ receive invented context windows, pricing, cache semantics, or reasoning
 parameters, and unsupported effort values are never sent on the wire.
 
 Per-invocation overrides: `latch --provider opencode-go --model
-deepseek-v4.1-flash --effort high`. Precedence is CLI override > durable
+deepseek-v4-flash --effort high`. Precedence is CLI override > durable
 session profile > config `[inference]` > built-in default. A resumed session
 restores its profile and resolves credentials freshly from the environment or
 local store.
+
+Reasoning effort is a model capability, not a provider-wide constant. The
+built-in catalog follows current official documentation: OpenAI models use the
+Responses transport (required for tool calling with reasoning effort on
+GPT-5.4 and later) and support `none`/`low`/`medium`/`high`/`xhigh` (plus
+`max` where advertised); Anthropic models use adaptive thinking with
+`low`/`medium`/`high`/`xhigh`/`max`; DeepSeek Flash/Pro use Chat Completions
+with `none`/`low`/`high`/`max` and required `reasoning_content` replay; and
+OpenCode Go resolves transport and capabilities per model (GPT over Responses,
+Claude/Qwen/MiniMax over Messages, the rest over Chat Completions). Unknown
+models stay conservative: provider-default effort only, no replay assumption,
+no invented context window or pricing. Advanced users can override context
+window, efforts, default effort, replay policy, aliases, pricing, transport,
+and adaptive thinking per model under `[providers.<id>.models.<id>]`.
+
+`keyring:NAME` credentials parse for forward compatibility but are not
+available in this build; `/setup` offers environment variables and the 0600
+local secret store only.
 
 Run one prompt without the TUI with `latch -p "Explain this repository"`.
 Resume with `latch --resume`. One matching workspace session resumes directly;

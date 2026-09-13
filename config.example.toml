@@ -10,16 +10,20 @@ default_mode = "WORK"
 #
 # [providers.opencode-go]
 # kind = "opencode-go"                  # openai | anthropic | deepseek | opencode-go | openai-compatible
-# credential = "env:OPENCODE_API_KEY"  # env:NAME | file:NAME (0600 local store) | keyring:NAME
+# credential = "env:OPENCODE_API_KEY"  # env:NAME | file:NAME (0600 local store).
+# keyring:NAME parses for forward compatibility but is not available in this
+# build and is never advertised by /setup.
 # default_model = "deepseek-v4.1-flash"
 # base_url = "https://opencode.ai/zen/go"   # optional override
 #
-# [providers.opencode-go.models."deepseek-v4.1-flash"]
-# display_name = "DeepSeek V4.1 Flash"
-# context_window_tokens = 131072
-# efforts = ["low", "high", "max"]
-# default_effort = "low"
+# [providers.opencode-go.models."deepseek-v4-flash"]
+# display_name = "DeepSeek V4 Flash"
+# context_window_tokens = 1048576
+# efforts = ["none", "low", "high", "max"]
+# default_effort = "high"
 # reasoning_replay = "replay"
+# transport = "chat_completions"   # chat_completions | responses | anthropic_messages
+# adaptive_thinking = false        # Anthropic adaptive thinking
 # aliases = ["flash"]
 # [providers.opencode-go.models."deepseek-v4.1-flash".pricing]
 # input_per_million = 0.28
