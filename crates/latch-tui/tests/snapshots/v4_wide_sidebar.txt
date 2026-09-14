@@ -37,4 +37,4 @@
   WORK · deepseek-flash/low · main · std · ask                                                                                                                                                     ready
                                                                                                                                                                                                         
 enter send  ctrl+j newline  ctrl+p commands                                                                                                                                                             
-/tmp/latch-ui                                                                                                                                                                               latch v0.2.0
+/tmp/latch-ui                                                                                                                                                                               latch v0.2.1

@@ -26,7 +26,7 @@ Invocation uses `tool.execute` with `{name, arguments}`. Shutdown is a `shutdown
 request followed by `exit`. Observe, transform, and guard remain separate; there
 is no universal hook.
 
-Extension declarations remain a cooperative auditing contract, but v0.2.0
+Extension declarations remain a cooperative auditing contract, but v0.2.1
 changes the process boundary: Latch starts the extension host inside the same
 mandatory Bubblewrap sandbox as every other command, with a read-only
 workspace, masked home credentials and sockets, and network access for protocol

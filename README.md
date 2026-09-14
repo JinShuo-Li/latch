@@ -1,7 +1,7 @@
 # Latch
 
 Latch is a quiet, programmable terminal coding agent built around explicit state,
-evidence, controlled execution, and continuous long-session memory. V0.2.0 is a
+evidence, controlled execution, and continuous long-session memory. V0.2.1 is a
 Linux-first Rust implementation with a native streamed tool loop, durable SQLite
 sessions, OpenAI-compatible and Anthropic providers, kernel-owned validation
 evidence, guarded coding tools, three orthogonal Mode/Safety/Permissions
@@ -51,7 +51,7 @@ Credentials are symbolic (`env:NAME`, `file:NAME`, or `keyring:NAME`) and are
 never stored in the config, the durable event log, the transcript, or logs.
 The legacy single `[provider]` table (and global `[models.*]` metadata) still
 loads and migrates automatically, so existing configs keep working. Provider
-requests identify as `latch/0.2.0`; OpenCode Go endpoints additionally receive
+requests identify as `latch/0.2.1`; OpenCode Go endpoints additionally receive
 a stable `x-opencode-session` header carrying the durable session id, so
 `--resume` keeps the same value. Model metadata precedence is explicit user
 configuration > built-in catalog > conservative default; unknown models never
@@ -533,7 +533,7 @@ provider-reported usage, validation outcomes, completion, and elapsed time.
 
 Extensions are explicitly configured executables speaking JSON-RPC 2.0 over
 LSP-style framed stdio. See [docs/PROTOCOL.md](docs/PROTOCOL.md), the minimal
-TypeScript SDK under `sdk/typescript`, and `extensions/example-ts`. V0.2.0 runs
+TypeScript SDK under `sdk/typescript`, and `extensions/example-ts`. V0.2.1 runs
 the extension host inside the mandatory sandbox (read-only workspace, masked
 home, network for protocol work); extension tool arguments remain a cooperative
 audit contract, and no syscall isolation is claimed inside the host.
@@ -547,5 +547,5 @@ cargo run -p latch-kernel --example extension_probe -- \
   extensions/example-ts/dist/index.js
 ```
 
-Latch v0.2.0 supports Linux terminals only and requires the system `bwrap` binary. It has no daemon, browser automation,
+Latch v0.2.1 supports Linux terminals only and requires the system `bwrap` binary. It has no daemon, browser automation,
 remote execution, MCP, IDE integration, automatic commits, or automatic pushes.
