@@ -2034,6 +2034,7 @@ mod tests {
         let mut model = SidebarModel::new(session());
         let mut first = event(EventPayload::UserMessage {
             text: "a very long goal 你好世界 ".repeat(20),
+            media: vec![],
         });
         first.timestamp = start;
         model.apply_event(&first);

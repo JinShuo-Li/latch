@@ -58,7 +58,7 @@ pub(super) fn cell_lines(
             .collect();
     }
     match cell {
-        Cell::User { text } => user_lines(text, width, band),
+        Cell::User { text, media } => user_lines(text, media, width, band),
         Cell::Assistant { text } => {
             let body = render_markdown_at(text, width.saturating_sub(MESSAGE_GUTTER).max(1));
             prefix_message_lines(body)
@@ -173,8 +173,14 @@ pub(super) fn activity_lines(
 /// visual row keeps the surface, including soft-wrapped continuations, because
 /// the rows are wrapped and padded here rather than left to the paragraph
 /// wrapper. `band = false` emits the same gutter and text with no padding for
-/// copy-friendly export.
-pub(super) fn user_lines(text: &str, width: usize, band: bool) -> Vec<Line<'static>> {
+/// copy-friendly export. Attached images render as compact metadata lines
+/// after the text; their bytes are never rendered.
+pub(super) fn user_lines(
+    text: &str,
+    media: &[latch_protocol::MediaRef],
+    width: usize,
+    band: bool,
+) -> Vec<Line<'static>> {
     let palette = crate::theme::palette();
     let style = palette.user_message();
     let content_width = width.saturating_sub(MESSAGE_GUTTER).max(1);
@@ -183,21 +189,27 @@ pub(super) fn user_lines(text: &str, width: usize, band: bool) -> Vec<Line<'stat
         rows.push(Line::styled(" ".repeat(width.max(1)), style));
     }
     let mut first = true;
+    let push_row = |visual: String, first: &mut bool, rows: &mut Vec<Line<'static>>| {
+        let gutter = if *first { "› " } else { "  " };
+        *first = false;
+        let mut spans = vec![Span::styled(
+            gutter.to_owned(),
+            notice_style().add_modifier(Modifier::BOLD),
+        )];
+        spans.push(Span::styled(visual, Style::default()));
+        let used: usize = spans.iter().map(|span| display_width(&span.content)).sum();
+        if band && used < width {
+            spans.push(Span::raw(" ".repeat(width - used)));
+        }
+        rows.push(Line::from(spans).style(style));
+    };
     for logical in text.split('\n') {
         for visual in wrap_message_row(logical, content_width) {
-            let gutter = if first { "› " } else { "  " };
-            first = false;
-            let mut spans = vec![Span::styled(
-                gutter.to_owned(),
-                notice_style().add_modifier(Modifier::BOLD),
-            )];
-            spans.push(Span::styled(visual, Style::default()));
-            let used: usize = spans.iter().map(|span| display_width(&span.content)).sum();
-            if band && used < width {
-                spans.push(Span::raw(" ".repeat(width - used)));
-            }
-            rows.push(Line::from(spans).style(style));
+            push_row(visual, &mut first, &mut rows);
         }
+    }
+    for media_ref in media {
+        push_row(media_ref.compact_label(), &mut first, &mut rows);
     }
     if band {
         rows.push(Line::styled(" ".repeat(width.max(1)), style));

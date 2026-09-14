@@ -404,6 +404,7 @@ mod tests {
                 output: output.into(),
                 is_error: false,
                 artifact_id: None,
+                media: Vec::new(),
             },
         })
     }

@@ -1166,6 +1166,10 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let action_rows = (action_lines.len() as u16).min(area.height / 2);
     let status_line = active_status_line(app);
     let status_rows = u16::from(status_line.is_some());
+    // Pending image attachments sit directly above the composer, in the same
+    // restrained metadata language as the transcript summary.
+    let attachment_line = app.attachment_summary();
+    let attachment_rows = u16::from(attachment_line.is_some());
     let chrome = ComposerChrome::responsive(area.height, content_rows);
     // The approval surface carries its own hints; drop the composer hint row
     // so no contradictory shortcut row sits underneath it.
@@ -1181,6 +1185,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             Constraint::Length(action_rows),
             Constraint::Length(palette_rows),
             Constraint::Length(status_rows),
+            Constraint::Length(attachment_rows),
             Constraint::Length(
                 chrome.spacer + chrome.top + chrome.body + chrome.gap + chrome.meta + chrome.rule,
             ),
@@ -1192,9 +1197,10 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let action_area = chunks[1];
     let palette_area = chunks[2];
     let status_area = chunks[3];
-    let composer_area = chunks[4];
-    let hints_area = chunks[5];
-    let footer_area = chunks[6];
+    let attachment_area = chunks[4];
+    let composer_area = chunks[5];
+    let hints_area = chunks[6];
+    let footer_area = chunks[7];
 
     if request_open {
         draw_request_overlay(frame, app, transcript_area);
@@ -1246,6 +1252,15 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     }
     if let Some(status) = status_line {
         frame.render_widget(Paragraph::new(status), status_area);
+    }
+    if let Some(summary) = attachment_line {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                format!(" attachments: {summary}"),
+                notice_style(),
+            )),
+            attachment_area,
+        );
     }
     draw_palette(frame, app, palette_area, &candidates);
     draw_composer(

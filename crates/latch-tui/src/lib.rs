@@ -23,7 +23,8 @@ use futures::StreamExt;
 #[cfg(test)]
 use latch_protocol::DisplayItem;
 use latch_protocol::{
-    Event as DurableEvent, Mode, PermissionMode, ReasoningEffort, Safety, ToolResult, ToolRunStatus,
+    Event as DurableEvent, MediaRef, Mode, PermissionMode, ReasoningEffort, Safety, ToolResult,
+    ToolRunStatus,
 };
 use ratatui::{
     Terminal,
@@ -72,7 +73,14 @@ const MAX_PALETTE_ROWS: usize = 6;
 
 #[derive(Debug)]
 pub enum Input {
-    Submit(String),
+    Submit {
+        text: String,
+        media: Vec<MediaRef>,
+    },
+    /// Ask the kernel to validate and ingest one image path as a pending
+    /// attachment. The kernel owns artifact ingestion; the TUI never reads
+    /// image bytes itself.
+    Attach(String),
     Cancel,
     Resume,
     Quit,
@@ -129,6 +137,9 @@ pub enum Output {
     /// Submitted prompts from the durable session, seeding prompt history on
     /// resume without a second history database.
     History(Vec<String>),
+    /// One validated image attachment, ingested by the kernel into immutable
+    /// artifact storage. The composer shows it as a pending attachment.
+    Attachment(MediaRef),
     /// Provider-neutral catalog for the live `/model` selector.
     InferenceCatalog(InferenceCatalog),
     /// Provider kinds and built-in models available to `/setup`.
@@ -157,6 +168,18 @@ pub struct SlashCommand {
 }
 
 pub const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        name: "/attach",
+        description: "Attach an image file to the next prompt",
+    },
+    SlashCommand {
+        name: "/attachments",
+        description: "List pending image attachments",
+    },
+    SlashCommand {
+        name: "/detach",
+        description: "Remove a pending attachment by index, or all",
+    },
     SlashCommand {
         name: "/mode",
         description: "show or switch ASK/PLAN/WORK",
@@ -355,6 +378,9 @@ struct App {
     setup: Option<SetupFlow>,
     /// A composer text capture opened by the setup flow.
     capture: Option<CaptureState>,
+    /// Images validated and ingested by the kernel, waiting to be sent with
+    /// the next user turn. Metadata only; bytes stay in artifact storage.
+    attachments: Vec<MediaRef>,
     workspace: String,
     branch: String,
     resumed: bool,
@@ -466,6 +492,7 @@ impl Default for App {
             setup_catalog: Vec::new(),
             setup: None,
             capture: None,
+            attachments: Vec::new(),
             workspace: String::new(),
             branch: String::new(),
             resumed: false,
@@ -610,6 +637,9 @@ impl App {
             }
             Output::Diff(raw) => self.open_diff(raw),
             Output::History(history) => self.input.seed_history(history),
+            Output::Attachment(media) => {
+                self.attachments.push(media);
+            }
             Output::InferenceCatalog(catalog) => self.inference_catalog = catalog,
             Output::SetupCatalog(kinds) => self.setup_catalog = kinds,
             Output::Inference {
@@ -633,7 +663,7 @@ impl App {
     #[cfg(test)]
     fn apply_item(&mut self, item: DisplayItem) {
         match item {
-            DisplayItem::UserMessage { text } => self.items.push(TranscriptItem::User { text }),
+            DisplayItem::UserMessage { text, .. } => self.items.push(TranscriptItem::User { text }),
             DisplayItem::AssistantMessage { text } => self.items.push(TranscriptItem::Assistant {
                 text,
                 streaming: false,
@@ -1233,7 +1263,11 @@ impl App {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Action {
-    Submit(String),
+    Submit {
+        text: String,
+        media: Vec<MediaRef>,
+    },
+    Attach(String),
     Cancel,
     Resume,
     Quit,
@@ -1334,29 +1368,126 @@ impl SelectorKind {
 }
 
 impl App {
-    fn submit_action(&mut self) -> Option<Action> {
-        self.palette.forced = false;
-        let text = self.input.take_for_submit();
-        let command = text.trim();
-        let slash_command = !text.contains(['\n', '\r']) && command.starts_with('/');
-        if command.is_empty() {
+    /// Whether the currently selected model accepts image input, when the
+    /// catalog knows the model. `None` means unknown; the kernel re-checks
+    /// every request, so this is only an early, friendlier rejection.
+    fn current_model_supports_images(&self) -> Option<bool> {
+        let provider = self
+            .inference_catalog
+            .providers
+            .iter()
+            .find(|provider| provider.id == self.provider_id)?;
+        let model = provider
+            .models
+            .iter()
+            .find(|model| model.id == self.model)?;
+        Some(model.supports_image_input())
+    }
+
+    /// Compact single-line pending-attachment summary for the composer.
+    fn attachment_summary(&self) -> Option<String> {
+        if self.attachments.is_empty() {
             return None;
         }
+        Some(
+            self.attachments
+                .iter()
+                .map(MediaRef::compact_label)
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    }
+
+    /// Handles the local `/attach`, `/attachments`, and `/detach` commands.
+    /// `/attach` is delegated to the kernel (which validates and ingests);
+    /// listing and removal are pure composer state. All three work while a run
+    /// is active so an image can be attached to a steering message.
+    fn attachment_command(&mut self, command: &str) -> Option<Option<Action>> {
+        if command == "/attach" {
+            self.presentation
+                .push_notice("usage: /attach <path> (PNG, JPEG, or WebP)");
+            return Some(None);
+        }
+        if let Some(path) = command.strip_prefix("/attach ") {
+            let path = path.trim().trim_matches(['"', '\'']);
+            if path.is_empty() {
+                self.presentation
+                    .push_notice("usage: /attach <path> (PNG, JPEG, or WebP)");
+                return Some(None);
+            }
+            return Some(Some(Action::Attach(path.to_owned())));
+        }
+        if command == "/attachments" {
+            let message = match self.attachment_summary() {
+                Some(summary) => format!("pending attachments: {summary}"),
+                None => "no pending attachments".to_owned(),
+            };
+            self.presentation.push_notice(message);
+            return Some(None);
+        }
+        if command == "/detach" {
+            self.presentation.push_notice("usage: /detach <index|all>");
+            return Some(None);
+        }
+        if let Some(argument) = command.strip_prefix("/detach ") {
+            let argument = argument.trim();
+            if argument.eq_ignore_ascii_case("all") {
+                let removed = self.attachments.len();
+                self.attachments.clear();
+                self.presentation
+                    .push_notice(format!("detached {removed} image(s)"));
+                return Some(None);
+            }
+            match argument.parse::<usize>() {
+                Ok(index) if index >= 1 && index <= self.attachments.len() => {
+                    let removed = self.attachments.remove(index - 1);
+                    self.presentation
+                        .push_notice(format!("detached {}", removed.compact_label()));
+                }
+                _ => {
+                    let count = self.attachments.len();
+                    self.presentation
+                        .push_notice(format!("no attachment {argument:?} (1..={count})"));
+                }
+            }
+            return Some(None);
+        }
+        None
+    }
+
+    fn submit_action(&mut self) -> Option<Action> {
+        self.palette.forced = false;
+        let text = self.input.text();
+        let command = text.trim();
+        let slash_command = !text.contains(['\n', '\r']) && command.starts_with('/');
+        if command.is_empty() && self.attachments.is_empty() {
+            self.input.take_for_submit();
+            return None;
+        }
+        if slash_command && let Some(action) = self.attachment_command(command) {
+            self.input.take_for_submit();
+            return action;
+        }
         if matches!(command, "/quit" | "/exit") {
+            self.input.take_for_submit();
             return Some(Action::Quit);
         }
         if command == "/resume" && !self.busy {
+            self.input.take_for_submit();
             return Some(Action::Resume);
         }
         if command == "/raw" {
+            self.input.take_for_submit();
             self.detail = !self.detail;
             return None;
         }
         if command == "/sidebar" {
+            self.input.take_for_submit();
             self.toggle_sidebar();
             return None;
         }
         if command == "/safety" {
+            self.input.take_for_submit();
             self.selector = Some(PolicySelector {
                 kind: SelectorKind::Safety,
                 selected: SelectorKind::Safety.current(self),
@@ -1364,6 +1495,7 @@ impl App {
             return None;
         }
         if command == "/permissions" {
+            self.input.take_for_submit();
             self.selector = Some(PolicySelector {
                 kind: SelectorKind::Permissions,
                 selected: SelectorKind::Permissions.current(self),
@@ -1371,6 +1503,7 @@ impl App {
             return None;
         }
         if command == "/model" {
+            self.input.take_for_submit();
             if self.busy {
                 self.presentation
                     .push_notice("finish or cancel the active turn before switching model");
@@ -1390,6 +1523,7 @@ impl App {
             return None;
         }
         if command == "/setup" {
+            self.input.take_for_submit();
             if self.busy {
                 self.presentation
                     .push_notice("finish or cancel the active turn before setup");
@@ -1413,10 +1547,24 @@ impl App {
                 Some(SetupFlow::new(self.setup_catalog.clone()).with_providers(configured));
             return None;
         }
+        // A pending image must never be silently dropped for a model the
+        // catalog knows is text-only; keep the prompt and attachments intact so
+        // the user can switch models. The kernel re-checks authoritatively.
+        if !slash_command
+            && !self.attachments.is_empty()
+            && self.current_model_supports_images() == Some(false)
+        {
+            self.presentation.push_notice(
+                "Current model does not accept image input. Choose a vision-capable model with /model.",
+            );
+            return None;
+        }
+        let text = self.input.take_for_submit();
+        let media = std::mem::take(&mut self.attachments);
         if !slash_command {
             self.busy = true;
         }
-        Some(Action::Submit(text))
+        Some(Action::Submit { text, media })
     }
 
     /// Completes the palette selection in the input. A trailing space is added

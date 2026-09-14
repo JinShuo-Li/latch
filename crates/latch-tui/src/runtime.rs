@@ -89,7 +89,10 @@ pub async fn run(
          Some(out)=output_rx.recv()=>app.output(out),
          maybe=events.next()=>match maybe.transpose()?{
             Some(Event::Key(key)) if key.kind==KeyEventKind::Press => match app.on_key(key) {
-                Some(Action::Submit(text)) => input_tx.send(Input::Submit(text)).await?,
+                Some(Action::Submit { text, media }) => {
+                    input_tx.send(Input::Submit { text, media }).await?
+                }
+                Some(Action::Attach(path)) => input_tx.send(Input::Attach(path)).await?,
                 Some(Action::Cancel) => input_tx.send(Input::Cancel).await?,
                 Some(Action::Resume) => { input_tx.send(Input::Resume).await?; break; }
                 Some(Action::Quit) => { input_tx.send(Input::Quit).await?; break; }

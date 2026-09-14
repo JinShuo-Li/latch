@@ -4,16 +4,18 @@ use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use latch_kernel::{
-    Agent, AgentRuntime, Config, ContinuityEngine, CredentialRef, CredentialStore, EventStore,
-    ModelDescriptor, ModelProvider, PolicyEngine, ProviderRegistry, ToolExecutor,
+    Agent, AgentRuntime, ArtifactMediaStore, Config, ContinuityEngine, CredentialRef,
+    CredentialStore, EventStore, ModelDescriptor, ModelProvider, PolicyEngine, ProviderRegistry,
+    ToolExecutor,
     agent::{AgentOutput, SteeringSubmission},
     config::{InferenceConfig, ProviderKind},
     prompt::PromptCompiler,
-    provider::StreamSink,
+    provider::{MediaStore, StreamSink},
     session,
 };
 use latch_protocol::{
-    EventPayload, InferenceProfile, Mode, ProviderId, ReasoningEffort, StreamEvent,
+    EventPayload, InferenceProfile, MediaRef, Mode, ProviderId, ReasoningEffort, StreamEvent,
+    UserInput,
 };
 use latch_tui::{
     CatalogModel, CatalogProvider, InferenceCatalog, Input, Output, SLASH_COMMANDS,
@@ -57,6 +59,10 @@ struct Args {
     effort: Option<String>,
     #[arg(short = 'p', long)]
     prompt: Option<String>,
+    /// Attach an image (PNG, JPEG, or WebP) to the prompt. Repeatable. The
+    /// same ingestion path is used by the TUI's `/attach`.
+    #[arg(long = "attach", visible_alias = "image")]
+    attach: Vec<PathBuf>,
     #[arg(long)]
     config: Option<PathBuf>,
     #[command(subcommand)]
@@ -109,15 +115,18 @@ async fn main() -> Result<()> {
         args.prompt.is_none() && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let mut built = build_agent(&workspace, &config, &args, selected, interactive).await?;
     if let Some(prompt) = args.prompt {
-        return one_shot(&mut built.agent, &prompt).await;
+        let media = ingest_attachments(&config, built.agent.session_id, &args.attach)?;
+        return one_shot(&mut built.agent, &UserInput::new(prompt, media)).await;
     }
     loop {
+        let attachments = ingest_attachments(&config, built.agent.session_id, &args.attach)?;
         match interactive_session(
             built.agent,
             built.info,
             built.context,
             built.restored,
             workspace.clone(),
+            attachments,
         )
         .await?
         {
@@ -170,8 +179,17 @@ impl InferenceContext {
         descriptor: &ModelDescriptor,
         session_id: Uuid,
     ) -> Result<Arc<dyn ModelProvider>> {
-        self.registry
-            .build_provider(profile, descriptor, &self.credentials, session_id)
+        let media: MediaStore = Arc::new(ArtifactMediaStore::new(artifact_root(
+            &self.config,
+            session_id,
+        )));
+        self.registry.build_provider(
+            profile,
+            descriptor,
+            &self.credentials,
+            session_id,
+            Some(media),
+        )
     }
 
     /// Snapshot factory used to rebuild a child session pinned to a profile
@@ -180,10 +198,18 @@ impl InferenceContext {
     fn provider_factory(&self) -> latch_kernel::ProviderFactory {
         let registry = Arc::new(self.registry.clone());
         let credentials = Arc::new(self.credentials.clone());
+        let state_dir = self.config.state_dir.clone();
         Arc::new(move |profile: &InferenceProfile, session_id: Uuid| {
             let (resolved, descriptor) = registry.resolve_profile(profile)?;
-            let provider =
-                registry.build_provider(&resolved, &descriptor, &credentials, session_id)?;
+            let root = state_dir.join("artifacts").join(session_id.to_string());
+            let media: MediaStore = Arc::new(ArtifactMediaStore::new(root));
+            let provider = registry.build_provider(
+                &resolved,
+                &descriptor,
+                &credentials,
+                session_id,
+                Some(media),
+            )?;
             Ok(latch_kernel::ProviderBuild {
                 provider,
                 descriptor,
@@ -257,6 +283,7 @@ fn catalog_model_ref(descriptor: &ModelDescriptor) -> CatalogModel {
         display_name: descriptor.display_name.clone(),
         efforts: descriptor.supported_efforts.clone(),
         default_effort: descriptor.default_effort,
+        input_modalities: descriptor.input_modalities.clone(),
     }
 }
 
@@ -524,10 +551,7 @@ async fn build_agent(
         config.permissions.clone(),
         config.safety.level,
     );
-    let artifacts = config
-        .state_dir
-        .join("artifacts")
-        .join(session_id.to_string());
+    let artifacts = artifact_root(config, session_id);
     let tools = ToolExecutor::new(
         workspace.to_path_buf(),
         artifacts.clone(),
@@ -647,13 +671,50 @@ impl ModelProvider for UnconfiguredProvider {
     }
 }
 
-async fn one_shot(agent: &mut Agent, prompt: &str) -> Result<()> {
+/// One session's immutable artifact store, shared by tool ingestion and the
+/// provider media resolver.
+fn artifact_root(config: &Config, session_id: Uuid) -> PathBuf {
+    config
+        .state_dir
+        .join("artifacts")
+        .join(session_id.to_string())
+}
+
+/// Validates and ingests CLI `--attach` images through exactly the same
+/// kernel path the TUI uses. Identical bytes deduplicate by content hash.
+fn ingest_attachments(
+    config: &Config,
+    session_id: Uuid,
+    paths: &[PathBuf],
+) -> Result<Vec<MediaRef>> {
+    let root = artifact_root(config, session_id);
+    let mut media = Vec::new();
+    for path in paths {
+        let metadata =
+            std::fs::metadata(path).with_context(|| format!("read {}", path.display()))?;
+        latch_kernel::media::ensure_size(metadata.len())
+            .with_context(|| format!("attach {}", path.display()))?;
+        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let reference = latch_kernel::ingest_image_bytes(&root, &bytes, Some(name))
+            .with_context(|| format!("attach {}", path.display()))?;
+        media.push(reference);
+    }
+    Ok(media)
+}
+
+async fn one_shot(agent: &mut Agent, input: &UserInput) -> Result<()> {
     let sink = Arc::new(|event: latch_kernel::agent::AgentOutput| {
         if let latch_kernel::agent::AgentOutput::Transient(StreamEvent::TextDelta(text)) = event {
             print!("{text}");
         }
     });
-    agent.run(prompt, CancellationToken::new(), sink).await?;
+    agent
+        .run(input.clone(), CancellationToken::new(), sink)
+        .await?;
     println!();
     agent.shutdown_extensions().await?;
     Ok(())
@@ -670,11 +731,13 @@ async fn interactive_session(
     mut context: InferenceContext,
     restored: Option<Restored>,
     workspace: PathBuf,
+    initial_attachments: Vec<MediaRef>,
 ) -> Result<InteractiveOutcome> {
     // The TUI is the only path that can approve `Ask` policy decisions.
     agent.enable_interactive_permissions();
     let broker = agent.permission_broker();
     let steering = agent.steering_handle();
+    let session_id = agent.session_id;
     let (input_tx, mut input_rx) = mpsc::channel(16);
     let (output_tx, output_rx) = mpsc::channel(512);
     let start_mode = agent.mode();
@@ -712,14 +775,19 @@ async fn interactive_session(
     output_tx
         .send(Output::Permissions(agent.permissions()))
         .await?;
+    // CLI `--attach` images were ingested through the same kernel path as
+    // `/attach`; they become pending TUI attachments for the first prompt.
+    for media in &initial_attachments {
+        output_tx.send(Output::Attachment(media.clone())).await?;
+    }
     let mut outcome = InteractiveOutcome::Exit;
     // A steer that races the end of a run is handed back by the kernel. It is
     // surfaced as the next ordinary request instead of lingering in a queue
     // that no run will consume.
-    let mut carry: Option<String> = None;
+    let mut carry: Option<(String, Vec<MediaRef>)> = None;
     'session: loop {
         let input = match carry.take() {
-            Some(text) => Input::Submit(text),
+            Some((text, media)) => Input::Submit { text, media },
             None => match input_rx.recv().await {
                 Some(input) => input,
                 None => break,
@@ -772,7 +840,21 @@ async fn interactive_session(
                 )
                 .await?;
             }
-            Input::Submit(text) => {
+            Input::Attach(path) => {
+                match ingest_attachments(&context.config, session_id, &[PathBuf::from(path)]) {
+                    Ok(mut media) => {
+                        if let Some(media) = media.pop() {
+                            output_tx.send(Output::Attachment(media)).await?;
+                        }
+                    }
+                    Err(error) => {
+                        output_tx
+                            .send(Output::Notice(format!("error: {error:#}")))
+                            .await?;
+                    }
+                }
+            }
+            Input::Submit { text, media } => {
                 if is_slash_command_input(&text) {
                     handle_command(&mut agent, &text, &output_tx).await?;
                     continue;
@@ -796,7 +878,7 @@ async fn interactive_session(
                         let _ = tx.try_send(output);
                     }
                 });
-                let running = agent.run(&text, active.clone(), sink);
+                let running = agent.run(UserInput::new(text, media), active.clone(), sink);
                 tokio::pin!(running);
                 loop {
                     tokio::select! {
@@ -815,7 +897,19 @@ async fn interactive_session(
                             Some(Input::SetSafety(_)) | Some(Input::SetPermissions(_)) | Some(Input::SetInferenceProfile { .. }) | Some(Input::SetupApply(_)) => {
                                 output_tx.send(Output::Notice("finish or cancel the active turn before changing the inference profile".into())).await?;
                             }
-                            Some(Input::Submit(text)) => {
+                            Some(Input::Attach(path)) => {
+                                match ingest_attachments(&context.config, session_id, &[PathBuf::from(path)]) {
+                                    Ok(mut media) => {
+                                        if let Some(media) = media.pop() {
+                                            output_tx.send(Output::Attachment(media)).await?;
+                                        }
+                                    }
+                                    Err(error) => {
+                                        output_tx.send(Output::Notice(format!("error: {error:#}"))).await?;
+                                    }
+                                }
+                            }
+                            Some(Input::Submit { text, media }) => {
                                 if is_slash_command_input(&text) {
                                     output_tx.send(Output::Notice("finish or cancel the active turn before running commands".into())).await?;
                                 } else {
@@ -824,13 +918,13 @@ async fn interactive_session(
                                     // run has closed. A rejected message is
                                     // immediately re-sent as a new request so
                                     // no user input is silently dropped.
-                                    match steering.push(text.clone()) {
+                                    match steering.push(UserInput::new(text.clone(), media.clone())) {
                                         SteeringSubmission::Accepted => {
                                             output_tx.send(Output::Notice("steering queued".into())).await?;
                                         }
                                         SteeringSubmission::Closed => {
                                             output_tx.send(Output::Notice("run finished; sending as a new request".into())).await?;
-                                            carry = Some(text);
+                                            carry = Some((text, media));
                                         }
                                     }
                                 }
@@ -1117,11 +1211,12 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
             let c = agent.context(None)?;
             let s = &c.stats;
             tx.send(Output::Notice(format!(
-                "context ≈{} / {} tok ({}; estimated) | system {} | state {} | conversation {} | reasoning {} | tool-args {} | tool-results {} | recall {} | tools {} | ext {} | reserve {} | headroom {} | {} events | {}/{} episodes",
+                "context ≈{} / {} tok ({}; estimated) | system {} | state {} | conversation {} | images {} ({} tok) | reasoning {} | tool-args {} | tool-results {} | recall {} | tools {} | ext {} | reserve {} | headroom {} | {} events | {}/{} episodes",
                 s.total_tokens, s.window_tokens, s.status, s.instructions_tokens, s.state_tokens,
-                s.conversation_tokens, s.reasoning_replay_tokens, s.tool_arguments_tokens,
-                s.tool_result_tokens, s.recall_tokens, s.tools_tokens, s.extension_tokens,
-                s.reserve_tokens, s.headroom_tokens, s.durable_events, s.selected_episodes, s.episodes
+                s.conversation_tokens, s.image_count, s.image_tokens, s.reasoning_replay_tokens,
+                s.tool_arguments_tokens, s.tool_result_tokens, s.recall_tokens, s.tools_tokens,
+                s.extension_tokens, s.reserve_tokens, s.headroom_tokens, s.durable_events,
+                s.selected_episodes, s.episodes
             ))).await?;
         }
         "/compact" => {

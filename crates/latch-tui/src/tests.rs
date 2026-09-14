@@ -192,7 +192,10 @@ fn tool_activity_upserts_one_row_by_call_id() {
 #[test]
 fn display_items_map_to_typed_rows() {
     let mut app = App::default();
-    app.apply_item(DisplayItem::UserMessage { text: "hi".into() });
+    app.apply_item(DisplayItem::UserMessage {
+        text: "hi".into(),
+        media: vec![],
+    });
     app.apply_item(DisplayItem::AssistantMessage {
         text: "hello".into(),
     });
@@ -586,7 +589,7 @@ fn palette_opens_completes_and_closes() {
     assert!(app.palette.active(&app.input));
     // Enter dispatches the selected command directly.
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(matches!(action, Some(Action::Submit(ref text)) if text.trim() == "/mode"));
+    assert!(matches!(action, Some(Action::Submit { ref text, .. }) if text.trim() == "/mode"));
     // Typing again reopens; selection can move.
     app.input.set_text("");
     app.input.insert('/');
@@ -596,7 +599,9 @@ fn palette_opens_completes_and_closes() {
     assert!(app.palette.active(&app.input));
     app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(matches!(action, Some(Action::Submit(ref text)) if text.trim() == "/checkpoint"));
+    assert!(
+        matches!(action, Some(Action::Submit { ref text, .. }) if text.trim() == "/checkpoint")
+    );
 }
 
 #[test]
@@ -658,7 +663,7 @@ fn palette_does_not_capture_when_text_has_a_space() {
     assert!(!app.palette.active(&app.input));
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
-        matches!(action, Some(Action::Submit(ref text)) if text == "/mode work"),
+        matches!(action, Some(Action::Submit { ref text, .. }) if text == "/mode work"),
         "submitted, not completed"
     );
 }
@@ -682,7 +687,7 @@ fn normal_prompt_is_not_echoed_by_the_tui() {
         app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
     }
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(matches!(action, Some(Action::Submit(ref text)) if text == "inspect this"));
+    assert!(matches!(action, Some(Action::Submit { ref text, .. }) if text == "inspect this"));
     assert!(
         app.items.is_empty(),
         "normal prompts render from the durable UserMessage event, not a local echo"
@@ -691,6 +696,7 @@ fn normal_prompt_is_not_echoed_by_the_tui() {
     // one authoritative display path: exactly one visible item.
     app.apply_item(DisplayItem::UserMessage {
         text: "inspect this".into(),
+        media: vec![],
     });
     assert_eq!(app.items.len(), 1);
 }
@@ -704,14 +710,17 @@ fn two_identical_normal_prompts_stay_two_visible_items() {
         }
         let before = app.items.len();
         let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(action, Some(Action::Submit(_))));
+        assert!(matches!(action, Some(Action::Submit { .. })));
         assert_eq!(
             app.items.len(),
             before,
             "no local echo for normal prompts; durable event is pending"
         );
         // One durable UserMessage event per submission.
-        app.apply_item(DisplayItem::UserMessage { text: text.into() });
+        app.apply_item(DisplayItem::UserMessage {
+            text: text.into(),
+            media: vec![],
+        });
     }
     assert_eq!(app.items.len(), 2);
     assert!(matches!(
@@ -732,7 +741,7 @@ fn slash_command_echoes_exactly_once() {
         app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
     }
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(matches!(action, Some(Action::Submit(ref text)) if text.trim() == "/diff"));
+    assert!(matches!(action, Some(Action::Submit { ref text, .. }) if text.trim() == "/diff"));
     assert_eq!(
         app.items.len(),
         0,
@@ -762,6 +771,7 @@ fn replay_items_rebuild_transcript_without_hidden_data() {
     };
     for item in latch_protocol::display_items(&event(EventPayload::UserMessage {
         text: "fix bug".into(),
+        media: vec![],
     })) {
         app.apply_item(item);
     }
@@ -955,7 +965,7 @@ fn paste_never_submits_and_slash_text_waits_for_enter() {
     assert!(app.presentation.cells().is_empty());
     assert!(app.items.is_empty());
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(matches!(action, Some(Action::Submit(ref text)) if text == "/help"));
+    assert!(matches!(action, Some(Action::Submit { ref text, .. }) if text == "/help"));
 }
 
 #[test]
@@ -969,7 +979,7 @@ fn multiline_slash_paste_is_one_prompt_and_one_history_entry() {
         "paste must not create a transcript item"
     );
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(matches!(action, Some(Action::Submit(ref text)) if text == prompt));
+    assert!(matches!(action, Some(Action::Submit { ref text, .. }) if text == prompt));
     assert_eq!(app.input.history, vec![prompt]);
     assert!(
         app.on_key(key(KeyCode::Enter, KeyModifiers::NONE))
@@ -1222,7 +1232,7 @@ fn steering_submit_keeps_running_while_ctrl_c_still_cancels() {
     app.input.insert_text("change direction");
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
-        matches!(action, Some(Action::Submit(ref text)) if text == "change direction"),
+        matches!(action, Some(Action::Submit { ref text, .. }) if text == "change direction"),
         "submitting while running is steering, not a no-op"
     );
     assert!(app.busy, "steering never cancels the active task");
@@ -1270,7 +1280,7 @@ fn safety_and_permissions_selectors_change_the_policy() {
     // An explicit argument still travels to the CLI as a command.
     app.input.set_text("/safety strict");
     let action = app.submit_action();
-    assert!(matches!(action, Some(Action::Submit(ref text)) if text == "/safety strict"));
+    assert!(matches!(action, Some(Action::Submit { ref text, .. }) if text == "/safety strict"));
 
     // Chrome state arrives through the same Output path replay uses.
     app.output(Output::Safety(Safety::Strict));
@@ -1697,6 +1707,7 @@ fn user_messages_render_on_a_neutral_band_with_a_gutter() {
     let lines = cell_lines(
         &Cell::User {
             text: "fix the parser".into(),
+            media: Vec::new(),
         },
         false,
         40,
@@ -1728,7 +1739,15 @@ fn user_messages_render_on_a_neutral_band_with_a_gutter() {
 #[test]
 fn wrapped_user_messages_keep_the_band_on_every_visual_row() {
     let text = "word ".repeat(30);
-    let lines = cell_lines(&Cell::User { text }, false, 24, true);
+    let lines = cell_lines(
+        &Cell::User {
+            text,
+            media: Vec::new(),
+        },
+        false,
+        24,
+        true,
+    );
     let band = crate::theme::palette().user_message().bg;
     assert!(lines.len() > 4, "long text wraps into several rows");
     for line in &lines {
@@ -1758,6 +1777,7 @@ fn plain_export_keeps_user_and_assistant_text_clean() {
     let cells = vec![
         Cell::User {
             text: "hello".into(),
+            media: Vec::new(),
         },
         Cell::Assistant {
             text: "world".into(),
@@ -1841,6 +1861,7 @@ fn transcript_fixture(app: &mut App) {
     for payload in [
         latch_protocol::EventPayload::UserMessage {
             text: "Fix the failing test.".into(),
+            media: vec![],
         },
         latch_protocol::EventPayload::ToolRequested {
             call: latch_protocol::ToolCall {
@@ -1856,6 +1877,7 @@ fn transcript_fixture(app: &mut App) {
                 output: "exit code 1\nassertion failed".into(),
                 is_error: true,
                 artifact_id: None,
+                media: Vec::new(),
             },
         },
         latch_protocol::EventPayload::AssistantMessageCompleted {
@@ -1876,6 +1898,7 @@ fn patch_preview_fixture(app: &mut App) {
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::UserMessage {
             text: "Fix the calculation.".into(),
+            media: vec![],
         },
     ))));
     app.output(Output::Event(Box::new(presentation_event(
@@ -1914,6 +1937,7 @@ fn patch_preview_fixture(app: &mut App) {
         output: "updated src/calc.rs @ h1".into(),
         is_error: false,
         artifact_id: None,
+        media: Vec::new(),
     }));
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::ToolRequested {
@@ -1950,6 +1974,7 @@ fn patch_preview_fixture(app: &mut App) {
         output: "updated tests/calc.rs @ h2".into(),
         is_error: false,
         artifact_id: None,
+        media: Vec::new(),
     }));
 }
 
@@ -2098,6 +2123,7 @@ fn snapshot_user_and_assistant_message_hierarchy() {
     for payload in [
         latch_protocol::EventPayload::UserMessage {
             text: "Fix the failing test without changing the public API.".into(),
+        media: vec![],
         },
         latch_protocol::EventPayload::AssistantMessageCompleted {
             text: "I'll inspect the failing case and patch it.\n\n- read the parser\n- keep the API stable".into(),
@@ -2121,6 +2147,7 @@ fn snapshot_narrow_user_message_keeps_the_band() {
         latch_protocol::EventPayload::UserMessage {
             text: "Please wrap this long user message across several narrow visual rows and keep the surface intact."
                 .into(),
+        media: vec![],
         },
     ))));
     assert_snapshot("v5_message_narrow.txt", &render_to_text(&mut app, 48, 16));
@@ -2199,6 +2226,7 @@ fn snapshot_subagent_status_and_sidebar() {
                     .into(),
                 is_error: false,
                 artifact_id: None,
+            media: Vec::new(),
             },
         },
     ))));
@@ -2242,6 +2270,7 @@ fn snapshot_workspace_diff_cell() {
                     .into(),
                 is_error: false,
                 artifact_id: None,
+                media: Vec::new(),
             },
         },
     ))));
@@ -2493,6 +2522,7 @@ fn child_agent_activity_reaches_the_status_row_and_sidebar() {
                     .into(),
                 is_error: false,
                 artifact_id: None,
+            media: Vec::new(),
             },
         },
     ))));
@@ -2532,6 +2562,7 @@ fn profile_catalog() -> InferenceCatalog {
                         latch_protocol::ReasoningEffort::Max,
                     ],
                     default_effort: latch_protocol::ReasoningEffort::Low,
+                    input_modalities: vec![],
                 }],
             },
             CatalogProvider {
@@ -2543,6 +2574,7 @@ fn profile_catalog() -> InferenceCatalog {
                     display_name: "Claude Sonnet 4.5".into(),
                     efforts: vec![],
                     default_effort: latch_protocol::ReasoningEffort::ProviderDefault,
+                    input_modalities: vec![],
                 }],
             },
         ],
@@ -2629,6 +2661,7 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
             display_name: "GPT-5.5".into(),
             efforts: vec![latch_protocol::ReasoningEffort::High],
             default_effort: latch_protocol::ReasoningEffort::ProviderDefault,
+            input_modalities: vec![],
         }],
     }]));
     app.input.set_text("/setup");
@@ -2723,6 +2756,7 @@ fn snapshot_setup_review_surface_masks_the_credential() {
             display_name: "GPT-5.5".into(),
             efforts: vec![latch_protocol::ReasoningEffort::High],
             default_effort: latch_protocol::ReasoningEffort::ProviderDefault,
+            input_modalities: vec![],
         }],
     }]));
     app.input.set_text("/setup");
@@ -2742,4 +2776,192 @@ fn snapshot_setup_review_surface_masks_the_credential() {
     let text = render_to_text(&mut app, 120, 34);
     assert!(!text.contains("sk-hidden"), "{text}");
     assert_snapshot("v6_setup_review.txt", &text);
+}
+
+// ---- multimodal image attachments ----
+
+fn media_ref() -> latch_protocol::MediaRef {
+    latch_protocol::MediaRef {
+        id: "abcdef".into(),
+        kind: latch_protocol::MediaKind::Image,
+        mime_type: "image/png".into(),
+        artifact_path: "media/abcdef.png".into(),
+        sha256: "abcdef".into(),
+        byte_len: 2048,
+        width: Some(1440),
+        height: Some(900),
+        display_name: Some("screenshot.png".into()),
+    }
+}
+
+fn catalog_for(model: &str, image: bool) -> InferenceCatalog {
+    let modalities = if image {
+        vec![
+            latch_protocol::InputModality::Text,
+            latch_protocol::InputModality::Image,
+        ]
+    } else {
+        vec![latch_protocol::InputModality::Text]
+    };
+    InferenceCatalog {
+        providers: vec![CatalogProvider {
+            id: "custom".into(),
+            display_name: "Custom".into(),
+            default_model: model.into(),
+            models: vec![CatalogModel {
+                id: model.into(),
+                display_name: model.into(),
+                efforts: vec![],
+                default_effort: ReasoningEffort::ProviderDefault,
+                input_modalities: modalities,
+            }],
+        }],
+    }
+}
+
+fn submit_text(app: &mut App, text: &str) -> Option<Action> {
+    app.input.set_text(text);
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE))
+}
+
+#[test]
+fn attach_command_delegates_ingestion_to_the_kernel() {
+    let mut app = App::default();
+    let action = submit_text(&mut app, "/attach shots/regression.png");
+    assert!(
+        matches!(action, Some(Action::Attach(ref path)) if path == "shots/regression.png"),
+        "{action:?}"
+    );
+    assert!(
+        app.attachments.is_empty(),
+        "the kernel confirms ingestion before the attachment is pending"
+    );
+    // Quoted paths are accepted.
+    let action = submit_text(&mut app, "/attach \"my shot.png\"");
+    assert!(matches!(action, Some(Action::Attach(ref path)) if path == "my shot.png"));
+    // A bare /attach explains usage instead of sending it to the model.
+    let action = submit_text(&mut app, "/attach");
+    assert!(action.is_none());
+}
+
+#[test]
+fn attachments_lists_and_detaches_pending_images() {
+    let mut app = App::default();
+    app.output(Output::Attachment(media_ref()));
+    assert_eq!(
+        app.attachment_summary().as_deref(),
+        Some("[image: screenshot.png · 1440×900]")
+    );
+
+    // /attachments reports the compact metadata without rendering bytes.
+    app.output(Output::Attachment(media_ref()));
+    assert!(submit_text(&mut app, "/attachments").is_none());
+    let notices = format!("{:?}", app.presentation.cells());
+    assert_eq!(notices.matches("screenshot.png").count(), 2, "{notices}");
+    assert!(!notices.contains("iVBOR"), "no encoded bytes in the UI");
+
+    // /detach removes by 1-based index; invalid indexes are rejected.
+    assert!(submit_text(&mut app, "/detach 1").is_none());
+    assert_eq!(app.attachments.len(), 1);
+    assert!(submit_text(&mut app, "/detach 9").is_none());
+    assert_eq!(app.attachments.len(), 1);
+    assert!(submit_text(&mut app, "/detach all").is_none());
+    assert!(app.attachments.is_empty());
+    assert!(app.attachment_summary().is_none());
+}
+
+#[test]
+fn submitting_carries_pending_attachments_and_clears_them() {
+    let mut app = App::default();
+    app.output(Output::Attachment(media_ref()));
+    let action = submit_text(&mut app, "inspect this UI regression");
+    match action {
+        Some(Action::Submit { text, media }) => {
+            assert_eq!(text, "inspect this UI regression");
+            assert_eq!(media.len(), 1);
+            assert_eq!(
+                media[0].compact_label(),
+                "[image: screenshot.png · 1440×900]"
+            );
+        }
+        other => panic!("unexpected action {other:?}"),
+    }
+    assert!(app.attachments.is_empty(), "attachments move with the turn");
+
+    // An image can be sent without text.
+    app.output(Output::Attachment(media_ref()));
+    let action = submit_text(&mut app, "");
+    assert!(
+        matches!(action, Some(Action::Submit { ref text, ref media })
+        if text.is_empty() && media.len() == 1)
+    );
+}
+
+#[test]
+fn text_only_model_keeps_pending_attachments_until_the_model_changes() {
+    let mut app = App {
+        provider_id: "custom".into(),
+        model: "text-only".into(),
+        inference_catalog: catalog_for("text-only", false),
+        ..Default::default()
+    };
+    app.output(Output::Attachment(media_ref()));
+    let action = submit_text(&mut app, "look");
+    assert!(
+        action.is_none(),
+        "a known text-only model rejects locally instead of dropping the image"
+    );
+    assert_eq!(app.attachments.len(), 1);
+    assert!(
+        format!("{:?}", app.presentation.cells()).contains("does not accept image input"),
+        "the composer explains the rejection"
+    );
+    // Selecting a vision model allows the same pending attachment to send.
+    app.model = "vision-model".into();
+    app.inference_catalog = catalog_for("vision-model", true);
+    let action = submit_text(&mut app, "look");
+    assert!(matches!(action, Some(Action::Submit { ref media, .. }) if media.len() == 1));
+}
+
+#[test]
+fn unknown_model_capability_does_not_block_submission() {
+    let mut app = App {
+        provider_id: "custom".into(),
+        model: "mystery".into(),
+        ..Default::default()
+    };
+    app.output(Output::Attachment(media_ref()));
+    // The kernel re-checks authoritatively, so an unknown catalog entry is
+    // passed through rather than guessed at.
+    let action = submit_text(&mut app, "look");
+    assert!(matches!(action, Some(Action::Submit { ref media, .. }) if media.len() == 1));
+}
+
+#[test]
+fn user_transcript_renders_compact_attachment_metadata_without_bytes() {
+    let mut app = App::default();
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::UserMessage {
+            text: "inspect this UI regression".into(),
+            media: vec![media_ref()],
+        },
+    ))));
+    let rendered = render_to_text(&mut app, 80, 16);
+    assert!(
+        rendered.contains("inspect this UI regression"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("[image: screenshot.png · 1440×900]"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("iVBOR"), "no base64 in the transcript");
+
+    // The palette advertises the new commands and /help lists them.
+    for command in ["/attach", "/attachments", "/detach"] {
+        assert!(
+            SLASH_COMMANDS.iter().any(|entry| entry.name == command),
+            "missing {command}"
+        );
+    }
 }

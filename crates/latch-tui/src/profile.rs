@@ -4,7 +4,7 @@
 //! CLI sends a provider-neutral catalog; these machines turn keyboard input
 //! into a profile selection or a setup plan.
 
-use latch_protocol::ReasoningEffort;
+use latch_protocol::{InputModality, ReasoningEffort};
 
 /// One selectable model as presented by the CLI catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,6 +13,9 @@ pub struct CatalogModel {
     pub display_name: String,
     pub efforts: Vec<ReasoningEffort>,
     pub default_effort: ReasoningEffort,
+    /// Provider-neutral input modalities. Image input is explicit capability
+    /// metadata, never inferred by the TUI from the model name.
+    pub input_modalities: Vec<InputModality>,
 }
 
 impl CatalogModel {
@@ -38,12 +41,25 @@ impl CatalogModel {
         }
     }
 
+    /// Whether this model accepts image input.
     #[must_use]
-    pub fn label(&self) -> &str {
-        if self.display_name.trim().is_empty() {
-            &self.id
+    pub fn supports_image_input(&self) -> bool {
+        self.input_modalities.contains(&InputModality::Image)
+    }
+
+    /// Restrained display label with a compact `vision` indicator for
+    /// image-capable models.
+    #[must_use]
+    pub fn label(&self) -> String {
+        let base = if self.display_name.trim().is_empty() {
+            self.id.as_str()
         } else {
-            &self.display_name
+            self.display_name.as_str()
+        };
+        if self.supports_image_input() {
+            format!("{base} · vision")
+        } else {
+            base.to_owned()
         }
     }
 }
@@ -234,7 +250,7 @@ impl ProfileSelector {
                 "Inference profile · {}",
                 self.current_model()
                     .map(CatalogModel::label)
-                    .unwrap_or("model")
+                    .unwrap_or_else(|| "model".to_owned())
             ),
         }
     }
@@ -284,12 +300,7 @@ impl ProfileSelector {
                     .iter()
                     .enumerate()
                     .map(|(index, model)| {
-                        row(
-                            index,
-                            model.label().to_owned(),
-                            model.id.clone(),
-                            index == self.model,
-                        )
+                        row(index, model.label(), model.id.clone(), index == self.model)
                     })
                     .collect();
                 rows.push(row(
@@ -645,12 +656,7 @@ impl SetupFlow {
                     .iter()
                     .enumerate()
                     .map(|(index, model)| {
-                        row(
-                            index,
-                            model.label().to_owned(),
-                            model.id.clone(),
-                            index == self.model,
-                        )
+                        row(index, model.label(), model.id.clone(), index == self.model)
                     })
                     .collect();
                 rows.push(row(
@@ -1071,6 +1077,7 @@ mod tests {
                             ReasoningEffort::Max,
                         ],
                         default_effort: ReasoningEffort::Low,
+                        input_modalities: vec![InputModality::Text],
                     }],
                 },
                 CatalogProvider {
@@ -1082,6 +1089,7 @@ mod tests {
                         display_name: "Claude Sonnet 4.5".into(),
                         efforts: vec![],
                         default_effort: ReasoningEffort::ProviderDefault,
+                        input_modalities: vec![InputModality::Text],
                     }],
                 },
             ],
@@ -1133,6 +1141,7 @@ mod tests {
                 ReasoningEffort::Max,
             ],
             default_effort: ReasoningEffort::High,
+            input_modalities: vec![InputModality::Text],
         });
         let mut selector = ProfileSelector::new(
             catalog,
@@ -1207,6 +1216,7 @@ mod tests {
                     ReasoningEffort::Max,
                 ],
                 default_effort: ReasoningEffort::Low,
+                input_modalities: vec![InputModality::Text],
             }],
         }];
         let mut flow = SetupFlow::new(kinds);
@@ -1263,6 +1273,7 @@ mod tests {
                 display_name: "DeepSeek Flash".into(),
                 efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
                 default_effort: ReasoningEffort::High,
+                input_modalities: vec![InputModality::Text],
             }],
         }
     }
@@ -1387,6 +1398,7 @@ mod tests {
                 display_name: "GPT-5.5".into(),
                 efforts: vec![ReasoningEffort::High],
                 default_effort: ReasoningEffort::ProviderDefault,
+                input_modalities: vec![InputModality::Text],
             }],
         }];
         let mut flow = SetupFlow::new(kinds);

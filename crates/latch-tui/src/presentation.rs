@@ -6,7 +6,9 @@
 
 use crate::agents::is_agent_control;
 use crate::diff::{DiffDocument, parse_unified_diff};
-use latch_protocol::{AgentStatus, ChangeOwner, Event, EventPayload, ToolCall, ToolResult};
+use latch_protocol::{
+    AgentStatus, ChangeOwner, Event, EventPayload, MediaRef, ToolCall, ToolResult,
+};
 use serde_json::Value;
 
 const DEFAULT_OUTPUT_LINES: usize = 8;
@@ -59,6 +61,7 @@ pub struct PatchFile {
 pub enum Cell {
     User {
         text: String,
+        media: Vec<MediaRef>,
     },
     Assistant {
         text: String,
@@ -122,7 +125,14 @@ impl Cell {
     #[must_use]
     pub fn raw_text(&self) -> String {
         match self {
-            Self::User { text } => format!("user: {text}"),
+            Self::User { text, media } => {
+                let mut rendered = format!("user: {text}");
+                for media_ref in media {
+                    rendered.push('\n');
+                    rendered.push_str(&media_ref.compact_label());
+                }
+                rendered
+            }
             Self::Assistant { text } => format!("assistant: {text}"),
             Self::Exploration { operations } => operations
                 .iter()
@@ -195,9 +205,10 @@ impl PresentationModel {
 
     pub fn apply_event(&mut self, event: &Event) {
         match &event.payload {
-            EventPayload::UserMessage { text } => {
-                self.cells.push(Cell::User { text: text.clone() })
-            }
+            EventPayload::UserMessage { text, media } => self.cells.push(Cell::User {
+                text: text.clone(),
+                media: media.clone(),
+            }),
             EventPayload::AssistantMessageCompleted { text, .. } if !text.trim().is_empty() => {
                 self.cells.push(Cell::Assistant { text: text.clone() });
             }
@@ -1049,6 +1060,7 @@ mod tests {
                     output: output.into(),
                     is_error: true,
                     artifact_id: None,
+                    media: Vec::new(),
                 },
             }
         } else {
@@ -1059,6 +1071,7 @@ mod tests {
                     output: output.into(),
                     is_error: false,
                     artifact_id: None,
+                    media: Vec::new(),
                 },
             }
         })
@@ -1323,6 +1336,7 @@ mod tests {
         let events = vec![
             event(EventPayload::UserMessage {
                 text: "fix it".into(),
+                media: vec![],
             }),
             request("a", "read_file", json!({"path":"src/lib.rs"})),
             result("a", "read_file", "hash: abc\ntext", false),
@@ -1496,6 +1510,7 @@ mod tests {
         let cells = vec![
             Cell::User {
                 text: "修复 failing test".into(),
+                media: Vec::new(),
             },
             Cell::Command {
                 call_id: "c".into(),
