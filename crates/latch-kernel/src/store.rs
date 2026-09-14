@@ -1,10 +1,82 @@
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use latch_protocol::{AgentIdentity, CompletionState, Event, EventPayload, MemoryRecord, Mode};
-use rusqlite::{Connection, OptionalExtension, params};
+use latch_protocol::{
+    AgentGroupIdentity, AgentIdentity, CompletionState, Event, EventPayload, GroupMessage,
+    GroupMessageTarget, GroupTask, GroupTaskStatus, MemoryRecord, Mode,
+};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use uuid::Uuid;
+
+/// Event kinds that make up the durable agent-group domain. The SQLite
+/// projection tables below are a pure cache over exactly these events and are
+/// rebuilt from them at open; no group truth exists only in the projection.
+pub const GROUP_EVENT_KINDS: &[&str] = &[
+    "agent_group_created",
+    "agent_group_member_joined",
+    "group_task_created",
+    "group_task_claimed",
+    "group_task_status_changed",
+    "group_task_released",
+    "group_message_queued",
+    "group_message_delivered",
+];
+
+#[must_use]
+pub fn is_group_event(payload: &EventPayload) -> bool {
+    matches!(
+        payload,
+        EventPayload::AgentGroupCreated { .. }
+            | EventPayload::AgentGroupMemberJoined { .. }
+            | EventPayload::GroupTaskCreated { .. }
+            | EventPayload::GroupTaskClaimed { .. }
+            | EventPayload::GroupTaskStatusChanged { .. }
+            | EventPayload::GroupTaskReleased { .. }
+            | EventPayload::GroupMessageQueued { .. }
+            | EventPayload::GroupMessageDelivered { .. }
+    )
+}
+
+/// Result of one atomic task claim attempt. Only `Claimed` means this caller
+/// owns the task.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GroupClaimOutcome {
+    Claimed(Box<Event>),
+    Missing,
+    NotPending {
+        status: GroupTaskStatus,
+        assignee: Option<Uuid>,
+    },
+    DependenciesIncomplete {
+        incomplete: Vec<Uuid>,
+    },
+}
+
+/// Result of one guarded task transition.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GroupTransitionOutcome {
+    Updated(Box<Event>),
+    Missing,
+    NotOwner { assignee: Option<Uuid> },
+    NotAllowed { status: GroupTaskStatus },
+}
+
+/// Description of one guarded transition. Kept as a plain struct so the store
+/// performs the compare-and-set inside a single immediate transaction.
+#[derive(Debug, Clone)]
+pub struct GroupTaskTransition {
+    pub allowed_from: Vec<GroupTaskStatus>,
+    pub to: GroupTaskStatus,
+    /// When true the current assignee must equal `actor`.
+    pub require_owner: bool,
+    /// New owner when the transition changes assignment (reassignment).
+    pub assignee: Option<Uuid>,
+    pub summary: Option<String>,
+    pub reason: Option<String>,
+    pub findings: Vec<String>,
+    pub touched_files: Vec<String>,
+}
 
 #[derive(Clone)]
 pub struct EventStore {
@@ -96,7 +168,73 @@ impl EventStore {
             CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, originating_event TEXT NOT NULL, created_at TEXT NOT NULL, validity TEXT NOT NULL, json TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS memory_session ON memory(session_id, created_at);
             CREATE VIRTUAL TABLE IF NOT EXISTS event_search USING fts5(session_id UNINDEXED, event_id UNINDEXED, text);
-            CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL);")?;
+            CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS agent_groups(group_id TEXT PRIMARY KEY, root_session_id TEXT NOT NULL UNIQUE, json TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS group_members(root_session_id TEXT NOT NULL, agent_id TEXT NOT NULL, PRIMARY KEY(root_session_id, agent_id));
+            CREATE TABLE IF NOT EXISTS group_tasks(root_session_id TEXT NOT NULL, task_id TEXT PRIMARY KEY, group_id TEXT NOT NULL, status TEXT NOT NULL, assignee TEXT, required INTEGER NOT NULL DEFAULT 1, dependencies TEXT NOT NULL, updated_at TEXT NOT NULL, json TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS group_tasks_root_status ON group_tasks(root_session_id, status);
+            CREATE TABLE IF NOT EXISTS group_messages(root_session_id TEXT NOT NULL, message_id TEXT PRIMARY KEY, group_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_agent TEXT, created_at TEXT NOT NULL, json TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS group_messages_group ON group_messages(group_id, created_at);
+            CREATE TABLE IF NOT EXISTS group_message_deliveries(message_id TEXT NOT NULL, agent_id TEXT NOT NULL, delivered_at TEXT NOT NULL, PRIMARY KEY(message_id, agent_id));")?;
+        // The projection is derived state; rebuilding it at open guarantees it
+        // can never drift from the durable group events.
+        self.rebuild_group_projection()?;
+        Ok(())
+    }
+
+    /// Rebuilds every agent-group projection table from the durable events.
+    /// Events are applied in global insertion order, which is the exact order
+    /// the durable log committed them.
+    pub fn rebuild_group_projection(&self) -> Result<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM agent_groups", [])?;
+        tx.execute("DELETE FROM group_members", [])?;
+        tx.execute("DELETE FROM group_tasks", [])?;
+        tx.execute("DELETE FROM group_messages", [])?;
+        tx.execute("DELETE FROM group_message_deliveries", [])?;
+        let placeholders = (0..GROUP_EVENT_KINDS.len())
+            .map(|index| format!("?{}", index + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT sequence,id,parent_id,timestamp,session_id,payload FROM events \
+             WHERE kind IN ({placeholders}) ORDER BY rowid"
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(GROUP_EVENT_KINDS.len());
+        for kind in GROUP_EVENT_KINDS {
+            params.push(kind);
+        }
+        let events = {
+            let mut statement = tx.prepare(&sql)?;
+            statement
+                .query_map(params.as_slice(), |row| {
+                    Ok((
+                        row.get::<_, u64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                })?
+                .map(|row| {
+                    let (sequence, id, parent, timestamp, session, payload) = row?;
+                    Ok(Event {
+                        id: Uuid::parse_str(&id)?,
+                        session_id: Uuid::parse_str(&session)?,
+                        sequence,
+                        timestamp: timestamp.parse()?,
+                        parent_id: parent.map(|value| Uuid::parse_str(&value)).transpose()?,
+                        payload: serde_json::from_str(&payload)?,
+                    })
+                })
+                .collect::<Result<Vec<Event>>>()?
+        };
+        for event in &events {
+            apply_group_event(&tx, event)?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -346,40 +484,407 @@ impl EventStore {
         }
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        let sequence: u64 = tx.query_row(
-            "SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE session_id=?1",
-            [session_id.to_string()],
-            |r| r.get(0),
-        )?;
-        let parent_id: Option<String> = tx
-            .query_row(
-                "SELECT id FROM events WHERE session_id=?1 ORDER BY sequence DESC LIMIT 1",
-                [session_id.to_string()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let event = Event {
-            id: Uuid::new_v4(),
-            session_id,
-            sequence,
-            timestamp: Utc::now(),
-            parent_id: parent_id.map(|s| Uuid::parse_str(&s)).transpose()?,
-            payload,
-        };
-        let kind = event_kind(&event.payload)?;
-        let json = serde_json::to_string(&event.payload)?;
-        let searchable = searchable_text(&event.payload)?;
-        tx.execute("INSERT INTO events(session_id,sequence,id,parent_id,timestamp,kind,payload) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![session_id.to_string(),sequence,event.id.to_string(),event.parent_id.map(|v|v.to_string()),event.timestamp.to_rfc3339(),kind,json])?;
-        tx.execute(
-            "INSERT INTO event_search(session_id,event_id,text) VALUES(?1,?2,?3)",
-            params![session_id.to_string(), event.id.to_string(), searchable],
-        )?;
-        tx.execute(
-            "UPDATE sessions SET updated_at=?2 WHERE id=?1",
-            params![session_id.to_string(), event.timestamp.to_rfc3339()],
-        )?;
+        let event = append_in_tx(&tx, session_id, payload)?;
         tx.commit()?;
         Ok(event)
+    }
+
+    /// Creates (or returns) the root-scoped agent group. The check and the
+    /// `AgentGroupCreated` append commit in one immediate transaction, so
+    /// concurrent first uses cannot create two groups for one root.
+    pub fn create_agent_group(
+        &self,
+        root_session_id: Uuid,
+        name: &str,
+    ) -> Result<AgentGroupIdentity> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT json FROM agent_groups WHERE root_session_id=?1",
+                [root_session_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(json) = existing {
+            let identity: AgentGroupIdentity = serde_json::from_str(&json)?;
+            tx.commit()?;
+            return Ok(identity);
+        }
+        let identity = AgentGroupIdentity {
+            group_id: Uuid::new_v4(),
+            root_session_id,
+            name: name.to_owned(),
+            created_at: Utc::now(),
+        };
+        append_in_tx(
+            &tx,
+            root_session_id,
+            EventPayload::AgentGroupCreated {
+                identity: identity.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(identity)
+    }
+
+    pub fn agent_group_identity(
+        &self,
+        root_session_id: Uuid,
+    ) -> Result<Option<AgentGroupIdentity>> {
+        let json: Option<String> = self
+            .conn()?
+            .query_row(
+                "SELECT json FROM agent_groups WHERE root_session_id=?1",
+                [root_session_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        json.map(|json| serde_json::from_str(&json).context("invalid agent group identity"))
+            .transpose()
+    }
+
+    /// Durable, idempotent membership join. Returns the join event only when
+    /// the agent was not already a member.
+    pub fn join_agent_group(
+        &self,
+        root_session_id: Uuid,
+        group_id: Uuid,
+        agent_id: Uuid,
+    ) -> Result<Option<Event>> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let group: Option<String> = tx
+            .query_row(
+                "SELECT group_id FROM agent_groups WHERE root_session_id=?1",
+                [root_session_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match group {
+            Some(existing) if existing == group_id.to_string() => {}
+            _ => bail!("agent group {group_id} does not belong to root {root_session_id}"),
+        }
+        let member: Option<String> = tx
+            .query_row(
+                "SELECT agent_id FROM group_members WHERE root_session_id=?1 AND agent_id=?2",
+                params![root_session_id.to_string(), agent_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if member.is_some() {
+            tx.commit()?;
+            return Ok(None);
+        }
+        let event = append_in_tx(
+            &tx,
+            root_session_id,
+            EventPayload::AgentGroupMemberJoined { group_id, agent_id },
+        )?;
+        tx.commit()?;
+        Ok(Some(event))
+    }
+
+    /// Creates a group task. Dependencies must already exist and form a DAG;
+    /// the full-graph validation happens in the kernel group reducer, which
+    /// reads the same projection this append updates.
+    pub fn create_group_task(
+        &self,
+        root_session_id: Uuid,
+        group_id: Uuid,
+        task: GroupTask,
+    ) -> Result<GroupTask> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let group: Option<String> = tx
+            .query_row(
+                "SELECT group_id FROM agent_groups WHERE root_session_id=?1",
+                [root_session_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match group {
+            Some(existing) if existing == group_id.to_string() => {}
+            _ => bail!("agent group {group_id} does not belong to root {root_session_id}"),
+        }
+        if tx
+            .query_row(
+                "SELECT task_id FROM group_tasks WHERE task_id=?1",
+                [task.task_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .is_some()
+        {
+            bail!("group task {} already exists", task.task_id);
+        }
+        append_in_tx(
+            &tx,
+            root_session_id,
+            EventPayload::GroupTaskCreated { task: task.clone() },
+        )?;
+        tx.commit()?;
+        Ok(task)
+    }
+
+    /// Atomic claim: read the projection and append `GroupTaskClaimed` in one
+    /// immediate transaction. Exactly one concurrent claimer can win.
+    pub fn claim_group_task(
+        &self,
+        root_session_id: Uuid,
+        group_id: Uuid,
+        task_id: Uuid,
+        agent_id: Uuid,
+    ) -> Result<GroupClaimOutcome> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(String, String, Option<String>, String)> = tx
+            .query_row(
+                "SELECT group_id,status,assignee,dependencies FROM group_tasks \
+                 WHERE task_id=?1 AND root_session_id=?2",
+                params![task_id.to_string(), root_session_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let Some((task_group, status, assignee, dependencies)) = row else {
+            return Ok(GroupClaimOutcome::Missing);
+        };
+        if task_group != group_id.to_string() {
+            return Ok(GroupClaimOutcome::Missing);
+        }
+        let status = parse_task_status(&status)?;
+        let assignee = assignee
+            .map(|value| Uuid::parse_str(&value))
+            .transpose()
+            .context("invalid group task assignee")?;
+        if status != GroupTaskStatus::Pending || assignee.is_some() {
+            return Ok(GroupClaimOutcome::NotPending { status, assignee });
+        }
+        let dependencies: Vec<Uuid> = serde_json::from_str(&dependencies)?;
+        let mut incomplete = Vec::new();
+        for dependency in dependencies {
+            let dep_status: Option<String> = tx
+                .query_row(
+                    "SELECT status FROM group_tasks WHERE task_id=?1",
+                    [dependency.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if !matches!(dep_status.as_deref(), Some("completed")) {
+                incomplete.push(dependency);
+            }
+        }
+        if !incomplete.is_empty() {
+            return Ok(GroupClaimOutcome::DependenciesIncomplete { incomplete });
+        }
+        let event = append_in_tx(
+            &tx,
+            root_session_id,
+            EventPayload::GroupTaskClaimed { task_id, agent_id },
+        )?;
+        tx.commit()?;
+        Ok(GroupClaimOutcome::Claimed(Box::new(event)))
+    }
+
+    /// Guarded task transition. Ownership and allowed source states are
+    /// compared inside the same immediate transaction that appends the event.
+    pub fn transition_group_task(
+        &self,
+        root_session_id: Uuid,
+        task_id: Uuid,
+        actor: Uuid,
+        transition: GroupTaskTransition,
+    ) -> Result<GroupTransitionOutcome> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT status,assignee FROM group_tasks WHERE task_id=?1 AND root_session_id=?2",
+                params![task_id.to_string(), root_session_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((status, assignee)) = row else {
+            return Ok(GroupTransitionOutcome::Missing);
+        };
+        let status = parse_task_status(&status)?;
+        let assignee = assignee
+            .map(|value| Uuid::parse_str(&value))
+            .transpose()
+            .context("invalid group task assignee")?;
+        if !transition.allowed_from.contains(&status) {
+            return Ok(GroupTransitionOutcome::NotAllowed { status });
+        }
+        if transition.require_owner && assignee != Some(actor) {
+            return Ok(GroupTransitionOutcome::NotOwner { assignee });
+        }
+        let event = append_in_tx(
+            &tx,
+            root_session_id,
+            EventPayload::GroupTaskStatusChanged {
+                task_id,
+                status: transition.to,
+                actor,
+                assignee: transition.assignee,
+                summary: transition.summary,
+                reason: transition.reason,
+                findings: transition.findings,
+                touched_files: transition.touched_files,
+            },
+        )?;
+        tx.commit()?;
+        Ok(GroupTransitionOutcome::Updated(Box::new(event)))
+    }
+
+    /// Explicit release by the current assignee. The transaction that appends
+    /// `GroupTaskReleased` also verifies ownership, so a release can never race
+    /// a completed task back into the pool.
+    pub fn release_group_task(
+        &self,
+        root_session_id: Uuid,
+        task_id: Uuid,
+        agent_id: Uuid,
+    ) -> Result<GroupTransitionOutcome> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT status,assignee FROM group_tasks WHERE task_id=?1 AND root_session_id=?2",
+                params![task_id.to_string(), root_session_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((status, assignee)) = row else {
+            return Ok(GroupTransitionOutcome::Missing);
+        };
+        let status = parse_task_status(&status)?;
+        let assignee = assignee
+            .map(|value| Uuid::parse_str(&value))
+            .transpose()
+            .context("invalid group task assignee")?;
+        if !status.is_active() || assignee != Some(agent_id) {
+            return if status.is_active() || status == GroupTaskStatus::Pending {
+                Ok(GroupTransitionOutcome::NotOwner { assignee })
+            } else {
+                Ok(GroupTransitionOutcome::NotAllowed { status })
+            };
+        }
+        let event = append_in_tx(
+            &tx,
+            root_session_id,
+            EventPayload::GroupTaskReleased { task_id, agent_id },
+        )?;
+        tx.commit()?;
+        Ok(GroupTransitionOutcome::Updated(Box::new(event)))
+    }
+
+    /// Messages addressed to one recipient that have no delivery marker yet, in
+    /// durable FIFO order.
+    pub fn group_pending_messages(
+        &self,
+        group_id: Uuid,
+        recipient: Uuid,
+        is_root: bool,
+    ) -> Result<Vec<GroupMessage>> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT m.json FROM group_messages m
+             WHERE m.group_id=?1
+               AND NOT EXISTS (SELECT 1 FROM group_message_deliveries d
+                               WHERE d.message_id=m.message_id AND d.agent_id=?2)
+               AND (m.target_kind='group'
+                    OR (m.target_kind='agent' AND m.target_agent=?2)
+                    OR (m.target_kind='root' AND ?3=1))
+             ORDER BY m.rowid",
+        )?;
+        let rows = statement.query_map(
+            params![
+                group_id.to_string(),
+                recipient.to_string(),
+                i64::from(is_root)
+            ],
+            |row| row.get::<_, String>(0),
+        )?;
+        rows.map(|row| {
+            let json = row?;
+            serde_json::from_str(&json).context("invalid durable group message")
+        })
+        .collect()
+    }
+
+    /// Atomically delivers one queued message to one recipient by appending
+    /// `GroupMessageDelivered` to the recipient's own session and recording the
+    /// delivery marker in the same transaction. Returns `None` when the
+    /// delivery marker already exists (exactly-once).
+    pub fn deliver_group_message(
+        &self,
+        recipient: Uuid,
+        message: GroupMessage,
+    ) -> Result<Option<Event>> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT agent_id FROM group_message_deliveries WHERE message_id=?1 AND agent_id=?2",
+                params![message.message_id.to_string(), recipient.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if existing.is_some() {
+            tx.commit()?;
+            return Ok(None);
+        }
+        let event = append_in_tx(
+            &tx,
+            recipient,
+            EventPayload::GroupMessageDelivered {
+                message: message.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(Some(event))
+    }
+
+    /// All durable group events, in global commit order. Used by the kernel
+    /// group reducer so live and resumed state come from the same stream.
+    pub fn group_events(&self) -> Result<Vec<Event>> {
+        let placeholders = (0..GROUP_EVENT_KINDS.len())
+            .map(|index| format!("?{}", index + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT sequence,id,parent_id,timestamp,session_id,payload FROM events \
+             WHERE kind IN ({placeholders}) ORDER BY rowid"
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(GROUP_EVENT_KINDS.len());
+        for kind in GROUP_EVENT_KINDS {
+            params.push(kind);
+        }
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(&sql)?;
+        statement
+            .query_map(params.as_slice(), |row| {
+                Ok((
+                    row.get::<_, u64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .map(|row| {
+                let (sequence, id, parent, timestamp, session, payload) = row?;
+                Ok(Event {
+                    id: Uuid::parse_str(&id)?,
+                    session_id: Uuid::parse_str(&session)?,
+                    sequence,
+                    timestamp: timestamp.parse()?,
+                    parent_id: parent.map(|value| Uuid::parse_str(&value)).transpose()?,
+                    payload: serde_json::from_str(&payload)?,
+                })
+            })
+            .collect()
     }
 
     /// Number of durable events for a session. Used to avoid materializing the
@@ -652,6 +1157,14 @@ impl EventStore {
                         | EventPayload::AgentInterrupted { .. }
                         | EventPayload::AgentCloseRequested
                         | EventPayload::AgentClosed
+                        | EventPayload::AgentGroupCreated { .. }
+                        | EventPayload::AgentGroupMemberJoined { .. }
+                        | EventPayload::GroupTaskCreated { .. }
+                        | EventPayload::GroupTaskClaimed { .. }
+                        | EventPayload::GroupTaskStatusChanged { .. }
+                        | EventPayload::GroupTaskReleased { .. }
+                        | EventPayload::GroupMessageQueued { .. }
+                        | EventPayload::GroupMessageDelivered { .. }
                 )
             })
             .collect())
@@ -751,6 +1264,215 @@ fn event_kind(p: &EventPayload) -> Result<String> {
         .and_then(|value| value.as_str())
         .map(str::to_owned)
         .ok_or_else(|| anyhow::anyhow!("event payload has no type tag"))
+}
+
+/// Appends one event to a session inside an existing transaction and keeps the
+/// group projection exactly in step with the durable log.
+fn append_in_tx(tx: &Connection, session_id: Uuid, payload: EventPayload) -> Result<Event> {
+    let sequence: u64 = tx.query_row(
+        "SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE session_id=?1",
+        [session_id.to_string()],
+        |r| r.get(0),
+    )?;
+    let parent_id: Option<String> = tx
+        .query_row(
+            "SELECT id FROM events WHERE session_id=?1 ORDER BY sequence DESC LIMIT 1",
+            [session_id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let event = Event {
+        id: Uuid::new_v4(),
+        session_id,
+        sequence,
+        timestamp: Utc::now(),
+        parent_id: parent_id.map(|s| Uuid::parse_str(&s)).transpose()?,
+        payload,
+    };
+    let kind = event_kind(&event.payload)?;
+    let json = serde_json::to_string(&event.payload)?;
+    let searchable = searchable_text(&event.payload)?;
+    tx.execute("INSERT INTO events(session_id,sequence,id,parent_id,timestamp,kind,payload) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![session_id.to_string(),sequence,event.id.to_string(),event.parent_id.map(|v|v.to_string()),event.timestamp.to_rfc3339(),kind,json])?;
+    if is_group_event(&event.payload) {
+        apply_group_event(tx, &event)?;
+    }
+    tx.execute(
+        "INSERT INTO event_search(session_id,event_id,text) VALUES(?1,?2,?3)",
+        params![session_id.to_string(), event.id.to_string(), searchable],
+    )?;
+    tx.execute(
+        "UPDATE sessions SET updated_at=?2 WHERE id=?1",
+        params![session_id.to_string(), event.timestamp.to_rfc3339()],
+    )?;
+    Ok(event)
+}
+
+/// Applies one durable group event to the rebuildable projection tables. Any
+/// failure aborts the surrounding transaction, so the projection can never
+/// commit ahead of (or behind) the event that explains it.
+fn apply_group_event(conn: &Connection, event: &Event) -> Result<()> {
+    match &event.payload {
+        EventPayload::AgentGroupCreated { identity } => {
+            conn.execute(
+                "INSERT INTO agent_groups(group_id,root_session_id,json) VALUES(?1,?2,?3)
+                 ON CONFLICT(root_session_id) DO UPDATE SET group_id=excluded.group_id, json=excluded.json",
+                params![
+                    identity.group_id.to_string(),
+                    identity.root_session_id.to_string(),
+                    serde_json::to_string(identity)?
+                ],
+            )?;
+        }
+        EventPayload::AgentGroupMemberJoined { group_id, agent_id } => {
+            let root = group_root(conn, *group_id)?;
+            conn.execute(
+                "INSERT OR IGNORE INTO group_members(root_session_id,agent_id) VALUES(?1,?2)",
+                params![root.to_string(), agent_id.to_string()],
+            )?;
+        }
+        EventPayload::GroupTaskCreated { task } => {
+            write_group_task(conn, task)?;
+        }
+        EventPayload::GroupTaskClaimed { task_id, agent_id } => {
+            let mut task = load_group_task(conn, *task_id)?
+                .ok_or_else(|| anyhow::anyhow!("group task {task_id} missing before claim"))?;
+            task.status = GroupTaskStatus::Claimed;
+            task.assignee = Some(*agent_id);
+            task.updated_at = event.timestamp;
+            write_group_task(conn, &task)?;
+        }
+        EventPayload::GroupTaskStatusChanged {
+            task_id,
+            status,
+            assignee,
+            summary,
+            reason,
+            findings,
+            touched_files,
+            ..
+        } => {
+            let mut task = load_group_task(conn, *task_id)?
+                .ok_or_else(|| anyhow::anyhow!("group task {task_id} missing before transition"))?;
+            task.status = *status;
+            if let Some(assignee) = assignee {
+                task.assignee = Some(*assignee);
+            }
+            if status == &GroupTaskStatus::Pending {
+                task.assignee = None;
+            }
+            if summary.is_some() {
+                task.summary = summary.clone();
+            }
+            if reason.is_some() {
+                task.reason = reason.clone();
+            }
+            if !findings.is_empty() {
+                task.findings = findings.clone();
+            }
+            if !touched_files.is_empty() {
+                task.touched_files = touched_files.clone();
+            }
+            task.updated_at = event.timestamp;
+            write_group_task(conn, &task)?;
+        }
+        EventPayload::GroupTaskReleased { task_id, .. } => {
+            let mut task = load_group_task(conn, *task_id)?
+                .ok_or_else(|| anyhow::anyhow!("group task {task_id} missing before release"))?;
+            task.status = GroupTaskStatus::Pending;
+            task.assignee = None;
+            task.updated_at = event.timestamp;
+            write_group_task(conn, &task)?;
+        }
+        EventPayload::GroupMessageQueued { message } => {
+            insert_group_message(conn, message)?;
+        }
+        EventPayload::GroupMessageDelivered { message } => {
+            insert_group_message(conn, message)?;
+            conn.execute(
+                "INSERT OR IGNORE INTO group_message_deliveries(message_id,agent_id,delivered_at) VALUES(?1,?2,?3)",
+                params![
+                    message.message_id.to_string(),
+                    event.session_id.to_string(),
+                    event.timestamp.to_rfc3339()
+                ],
+            )?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn group_root(conn: &Connection, group_id: Uuid) -> Result<Uuid> {
+    let root: Option<String> = conn
+        .query_row(
+            "SELECT root_session_id FROM agent_groups WHERE group_id=?1",
+            [group_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let root = root.ok_or_else(|| anyhow::anyhow!("unknown agent group {group_id}"))?;
+    Uuid::parse_str(&root).context("invalid agent group root session")
+}
+
+fn load_group_task(conn: &Connection, task_id: Uuid) -> Result<Option<GroupTask>> {
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT json FROM group_tasks WHERE task_id=?1",
+            [task_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    json.map(|json| serde_json::from_str(&json).context("invalid durable group task"))
+        .transpose()
+}
+
+fn write_group_task(conn: &Connection, task: &GroupTask) -> Result<()> {
+    conn.execute(
+        "INSERT INTO group_tasks(root_session_id,task_id,group_id,status,assignee,required,dependencies,updated_at,json)
+         VALUES((SELECT root_session_id FROM agent_groups WHERE group_id=?1),?2,?1,?3,?4,?5,?6,?7,?8)
+         ON CONFLICT(task_id) DO UPDATE SET status=excluded.status, assignee=excluded.assignee,
+             required=excluded.required, dependencies=excluded.dependencies,
+             updated_at=excluded.updated_at, json=excluded.json",
+        params![
+            task.group_id.to_string(),
+            task.task_id.to_string(),
+            task.status.label(),
+            task.assignee.map(|value| value.to_string()),
+            i64::from(task.required),
+            serde_json::to_string(&task.dependencies)?,
+            task.updated_at.to_rfc3339(),
+            serde_json::to_string(task)?
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_group_message(conn: &Connection, message: &GroupMessage) -> Result<()> {
+    let (target_kind, target_agent) = match message.to {
+        GroupMessageTarget::Agent(agent) => ("agent", Some(agent.to_string())),
+        GroupMessageTarget::Root => ("root", None),
+        GroupMessageTarget::Group => ("group", None),
+    };
+    let root = group_root(conn, message.group_id)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO group_messages(root_session_id,message_id,group_id,target_kind,target_agent,created_at,json)
+         VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        params![
+            root.to_string(),
+            message.message_id.to_string(),
+            message.group_id.to_string(),
+            target_kind,
+            target_agent,
+            message.created_at.to_rfc3339(),
+            serde_json::to_string(message)?
+        ],
+    )?;
+    Ok(())
+}
+
+fn parse_task_status(value: &str) -> Result<GroupTaskStatus> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned()))
+        .with_context(|| format!("invalid durable group task status {value:?}"))
 }
 fn searchable_text(p: &EventPayload) -> Result<String> {
     Ok(serde_json::to_string(p)?)
@@ -1073,5 +1795,349 @@ mod tests {
         );
         resumed.mark_operation_reported(operation).unwrap();
         assert!(resumed.interrupted_operations(session).unwrap().is_empty());
+    }
+
+    fn group_task_fixture(
+        group_id: Uuid,
+        root: Uuid,
+        title: &str,
+        dependencies: Vec<Uuid>,
+    ) -> GroupTask {
+        GroupTask {
+            task_id: Uuid::new_v4(),
+            group_id,
+            title: title.into(),
+            description: String::new(),
+            status: GroupTaskStatus::Pending,
+            dependencies,
+            assignee: None,
+            required: true,
+            created_by: root,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            summary: None,
+            findings: vec![],
+            expected_paths: vec![],
+            touched_files: vec![],
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn group_claim_race_has_exactly_one_winner() {
+        let store = EventStore::open_memory().unwrap();
+        let root = store.create_session(Path::new("/tmp/group-race")).unwrap();
+        let identity = store.create_agent_group(root, "race").unwrap();
+        let task = store
+            .create_group_task(
+                root,
+                identity.group_id,
+                group_task_fixture(identity.group_id, root, "only-one", vec![]),
+            )
+            .unwrap();
+        let outcomes = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for index in 0..32 {
+                let store = store.clone();
+                let outcomes = &outcomes;
+                let group_id = identity.group_id;
+                let task_id = task.task_id;
+                scope.spawn(move || {
+                    let agent = Uuid::from_u128(index as u128 + 1);
+                    let outcome = store
+                        .claim_group_task(root, group_id, task_id, agent)
+                        .unwrap();
+                    outcomes.lock().unwrap().push((agent, outcome));
+                });
+            }
+        });
+        let outcomes = outcomes.into_inner().unwrap();
+        let winners = outcomes
+            .iter()
+            .filter(|(_, outcome)| matches!(outcome, GroupClaimOutcome::Claimed(_)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            winners.len(),
+            1,
+            "exactly one claimer may win: {outcomes:?}"
+        );
+        for (agent, outcome) in &outcomes {
+            match outcome {
+                GroupClaimOutcome::Claimed(_) => {}
+                GroupClaimOutcome::NotPending { assignee, .. } => {
+                    assert_eq!(
+                        *assignee,
+                        Some(winners[0].0),
+                        "losers must observe the single winner, not a second owner"
+                    );
+                    assert_ne!(*agent, winners[0].0);
+                }
+                other => panic!("unexpected claim outcome {other:?}"),
+            }
+        }
+        // Durable truth agrees with the in-memory winner, and a rebuild keeps
+        // exactly one assignment.
+        assert_eq!(
+            store
+                .events_of_kinds(root, &["group_task_claimed"])
+                .unwrap()
+                .len(),
+            1
+        );
+        store.rebuild_group_projection().unwrap();
+        let resumed = store
+            .claim_group_task(root, identity.group_id, task.task_id, Uuid::new_v4())
+            .unwrap();
+        assert!(matches!(
+            resumed,
+            GroupClaimOutcome::NotPending {
+                assignee: Some(assignee),
+                ..
+            } if assignee == winners[0].0
+        ));
+    }
+
+    #[test]
+    fn dependent_task_claim_races_dependency_completion_safely() {
+        let store = EventStore::open_memory().unwrap();
+        let root = store
+            .create_session(Path::new("/tmp/group-dep-race"))
+            .unwrap();
+        let identity = store.create_agent_group(root, "dep").unwrap();
+        let foundation = store
+            .create_group_task(
+                root,
+                identity.group_id,
+                group_task_fixture(identity.group_id, root, "foundation", vec![]),
+            )
+            .unwrap();
+        let dependent = store
+            .create_group_task(
+                root,
+                identity.group_id,
+                group_task_fixture(
+                    identity.group_id,
+                    root,
+                    "dependent",
+                    vec![foundation.task_id],
+                ),
+            )
+            .unwrap();
+        // Before the dependency completes, the claim cannot win.
+        let early = store
+            .claim_group_task(root, identity.group_id, dependent.task_id, Uuid::new_v4())
+            .unwrap();
+        assert!(matches!(
+            early,
+            GroupClaimOutcome::DependenciesIncomplete { .. }
+        ));
+        let owner = Uuid::new_v4();
+        assert!(matches!(
+            store
+                .claim_group_task(root, identity.group_id, foundation.task_id, owner)
+                .unwrap(),
+            GroupClaimOutcome::Claimed(_)
+        ));
+        assert!(matches!(
+            store
+                .transition_group_task(
+                    root,
+                    foundation.task_id,
+                    owner,
+                    GroupTaskTransition {
+                        allowed_from: vec![GroupTaskStatus::Claimed],
+                        to: GroupTaskStatus::Completed,
+                        require_owner: true,
+                        assignee: None,
+                        summary: Some("done".into()),
+                        reason: None,
+                        findings: vec![],
+                        touched_files: vec![],
+                    },
+                )
+                .unwrap(),
+            GroupTransitionOutcome::Updated(_)
+        ));
+        // After completion commits, the dependent task is claimable.
+        assert!(matches!(
+            store
+                .claim_group_task(root, identity.group_id, dependent.task_id, Uuid::new_v4())
+                .unwrap(),
+            GroupClaimOutcome::Claimed(_)
+        ));
+    }
+
+    #[test]
+    fn release_then_reclaim_is_unambiguous() {
+        let store = EventStore::open_memory().unwrap();
+        let root = store
+            .create_session(Path::new("/tmp/group-release"))
+            .unwrap();
+        let identity = store.create_agent_group(root, "release").unwrap();
+        let task = store
+            .create_group_task(
+                root,
+                identity.group_id,
+                group_task_fixture(identity.group_id, root, "handoff", vec![]),
+            )
+            .unwrap();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        assert!(matches!(
+            store
+                .claim_group_task(root, identity.group_id, task.task_id, first)
+                .unwrap(),
+            GroupClaimOutcome::Claimed(_)
+        ));
+        // A sibling cannot release what it does not own.
+        assert!(matches!(
+            store
+                .release_group_task(root, task.task_id, second)
+                .unwrap(),
+            GroupTransitionOutcome::NotOwner { .. }
+        ));
+        assert!(matches!(
+            store.release_group_task(root, task.task_id, first).unwrap(),
+            GroupTransitionOutcome::Updated(_)
+        ));
+        assert!(matches!(
+            store
+                .claim_group_task(root, identity.group_id, task.task_id, second)
+                .unwrap(),
+            GroupClaimOutcome::Claimed(_)
+        ));
+        // The durable order is exactly claim, release, claim.
+        let events = store
+            .events_of_kinds(root, &["group_task_claimed", "group_task_released"])
+            .unwrap();
+        let kinds = events
+            .iter()
+            .map(|event| match event.payload {
+                EventPayload::GroupTaskClaimed { agent_id, .. } => {
+                    format!("claim:{agent_id}")
+                }
+                EventPayload::GroupTaskReleased { agent_id, .. } => {
+                    format!("release:{agent_id}")
+                }
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                format!("claim:{first}"),
+                format!("release:{first}"),
+                format!("claim:{second}")
+            ]
+        );
+    }
+
+    #[test]
+    fn group_delivery_is_exactly_once_under_concurrency() {
+        let store = EventStore::open_memory().unwrap();
+        let root = store
+            .create_session(Path::new("/tmp/group-delivery-race"))
+            .unwrap();
+        let recipient = store
+            .create_session(Path::new("/tmp/group-delivery-race"))
+            .unwrap();
+        let identity = store.create_agent_group(root, "delivery").unwrap();
+        let message = GroupMessage {
+            message_id: Uuid::new_v4(),
+            group_id: identity.group_id,
+            from_agent: root,
+            to: GroupMessageTarget::Agent(recipient),
+            text: "once".into(),
+            created_at: Utc::now(),
+        };
+        store
+            .append(
+                root,
+                EventPayload::GroupMessageQueued {
+                    message: message.clone(),
+                },
+            )
+            .unwrap();
+        let successes = std::sync::Mutex::new(0usize);
+        std::thread::scope(|scope| {
+            for _ in 0..16 {
+                let store = store.clone();
+                let message = message.clone();
+                let successes = &successes;
+                scope.spawn(move || {
+                    if store
+                        .deliver_group_message(recipient, message)
+                        .unwrap()
+                        .is_some()
+                    {
+                        *successes.lock().unwrap() += 1;
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            *successes.lock().unwrap(),
+            1,
+            "exactly one delivery commits"
+        );
+        assert_eq!(
+            store
+                .events_of_kinds(recipient, &["group_message_delivered"])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .group_pending_messages(identity.group_id, recipient, false)
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn group_projection_is_rebuildable_from_events_after_corruption() {
+        let store = EventStore::open_memory().unwrap();
+        let root = store
+            .create_session(Path::new("/tmp/group-rebuild"))
+            .unwrap();
+        let agent = Uuid::new_v4();
+        let identity = store.create_agent_group(root, "rebuild").unwrap();
+        store
+            .join_agent_group(root, identity.group_id, agent)
+            .unwrap();
+        let task = store
+            .create_group_task(
+                root,
+                identity.group_id,
+                group_task_fixture(identity.group_id, root, "durable", vec![]),
+            )
+            .unwrap();
+        store
+            .claim_group_task(root, identity.group_id, task.task_id, agent)
+            .unwrap();
+        // Simulate a lost projection: drop every row without touching events.
+        {
+            let conn = store.conn().unwrap();
+            conn.execute("DELETE FROM group_tasks", []).unwrap();
+            conn.execute("DELETE FROM group_members", []).unwrap();
+            conn.execute("DELETE FROM agent_groups", []).unwrap();
+        }
+        store.rebuild_group_projection().unwrap();
+        assert_eq!(
+            store.agent_group_identity(root).unwrap().unwrap().group_id,
+            identity.group_id
+        );
+        let outcome = store
+            .claim_group_task(root, identity.group_id, task.task_id, Uuid::new_v4())
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            GroupClaimOutcome::NotPending {
+                assignee: Some(assignee),
+                status: GroupTaskStatus::Claimed
+            } if assignee == agent
+        ));
     }
 }

@@ -841,6 +841,7 @@ fn is_model_visible_event(payload: &EventPayload) -> bool {
             | EventPayload::RegroundRequested { .. }
             | EventPayload::KernelContext { .. }
             | EventPayload::AgentNotificationDelivered { .. }
+            | EventPayload::GroupMessageDelivered { .. }
     )
 }
 
@@ -1517,6 +1518,10 @@ fn render_event(e: &Event) -> String {
         EventPayload::AgentNotificationDelivered { report } => format!(
             "kernel child report {} {:?}: {}",
             report.task_name, report.status, report.summary
+        ),
+        EventPayload::GroupMessageDelivered { message } => format!(
+            "kernel group message from {}: {}",
+            message.from_agent, message.text
         ),
         _ => format!(
             "event {} #{}: {}",
