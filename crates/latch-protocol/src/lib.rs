@@ -391,6 +391,126 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+/// Provider-neutral input modality. Every model accepts text; image input is an
+/// explicit capability and is never inferred from a model name. The enum is
+/// small on purpose so another modality can be added without another
+/// architectural change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputModality {
+    Text,
+    Image,
+}
+
+impl InputModality {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+        }
+    }
+}
+
+impl fmt::Display for InputModality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Kind of durable media attached to a message or tool result. Only images
+/// exist in this version; the field keeps the door open for later modalities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    Image,
+}
+
+impl MediaKind {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+        }
+    }
+}
+
+/// Compact, durable reference to one immutable media artifact in Latch's
+/// session artifact store.
+///
+/// The bytes live only in artifact storage; events, messages, logs, and
+/// transcripts carry this metadata alone. `id` and `sha256` are the content
+/// hash, so re-ingesting identical bytes deduplicates to one artifact.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaRef {
+    /// Content-addressed identity (`sha256` hex).
+    pub id: String,
+    pub kind: MediaKind,
+    /// Detected media type, for example `image/png`. Never trusted from the
+    /// file name alone.
+    pub mime_type: String,
+    /// Immutable artifact path, relative to the session artifact store.
+    pub artifact_path: String,
+    pub sha256: String,
+    pub byte_len: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// Original user-facing name (for example the workspace-relative path or
+    /// the attached file name). Presentation only; never a security boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+impl std::fmt::Debug for MediaRef {
+    /// Media metadata is safe to log; the bytes themselves never live in a
+    /// `MediaRef`, so nothing here can leak image content.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaRef")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("mime_type", &self.mime_type)
+            .field("artifact_path", &self.artifact_path)
+            .field("sha256", &self.sha256)
+            .field("byte_len", &self.byte_len)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("display_name", &self.display_name)
+            .finish()
+    }
+}
+
+impl MediaRef {
+    /// Human-facing name, falling back to the content id.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        self.display_name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(&self.id)
+    }
+
+    /// `WIDTHxHEIGHT` when dimensions are known.
+    #[must_use]
+    pub fn dimensions(&self) -> Option<String> {
+        match (self.width, self.height) {
+            (Some(width), Some(height)) => Some(format!("{width}×{height}")),
+            _ => None,
+        }
+    }
+
+    /// Compact single-line description for composers and transcripts. Carries
+    /// metadata only, never encoded bytes.
+    #[must_use]
+    pub fn compact_label(&self) -> String {
+        match self.dimensions() {
+            Some(dimensions) => format!("[{}: {} · {dimensions}]", self.kind.label(), self.label()),
+            None => format!("[{}: {}]", self.kind.label(), self.label()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolResult {
     pub call_id: String,
@@ -398,6 +518,10 @@ pub struct ToolResult {
     pub output: String,
     pub is_error: bool,
     pub artifact_id: Option<String>,
+    /// Images the tool produced (for example `read_image`). Empty for every
+    /// existing text-only tool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<MediaRef>,
 }
 
 /// Durable lifecycle state for a child Latch session. `Interrupted` keeps the
@@ -672,6 +796,10 @@ pub enum EventPayload {
     },
     UserMessage {
         text: String,
+        /// Images attached by the user. Empty for text-only traffic, which is
+        /// therefore structurally unchanged on the wire and in SQLite.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        media: Vec<MediaRef>,
     },
     /// One root user-request execution began. Run boundaries are explicit and
     /// durable so per-run accounting never has to infer duration or totals
@@ -1077,6 +1205,15 @@ pub struct ContextStats {
     /// Tool results inside the recent window. A partition of `recent_tokens`.
     #[serde(default)]
     pub tool_result_tokens: usize,
+    /// Images visible in the current provider-visible epoch. Counts image
+    /// inputs, including images returned by tools.
+    #[serde(default)]
+    pub image_count: usize,
+    /// Estimated visual/input tokens for those images. A partition of
+    /// `recent_tokens` (and therefore of `cache_epoch_tokens`), never added to
+    /// the total separately. Provider-reported usage remains authoritative.
+    #[serde(default)]
+    pub image_tokens: usize,
     /// Recalled original events plus the scored episode index.
     pub recall_tokens: usize,
     /// Estimated tokens of the archival episode index alone. This is a subset
@@ -1197,6 +1334,11 @@ pub struct ModelMessage {
     /// (Anthropic thinking/redacted blocks, OpenAI encrypted reasoning).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning: Vec<ReasoningArtifact>,
+    /// Images carried by this message. The references are provider-neutral and
+    /// content-addressed; provider adapters resolve them to inline bytes at
+    /// the wire boundary. Text-only messages keep this empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<MediaRef>,
 }
 
 impl ModelMessage {
@@ -1209,7 +1351,59 @@ impl ModelMessage {
             tool_call_id: None,
             reasoning_content: None,
             reasoning: Vec::new(),
+            media: Vec::new(),
         }
+    }
+
+    /// True when the message carries any media, regardless of kind.
+    #[must_use]
+    pub fn has_media(&self) -> bool {
+        !self.media.is_empty()
+    }
+}
+
+/// One structured user input: text plus zero or more durable image references.
+/// Used for the initial prompt and for mid-run steering, so image input is not
+/// limited to the first request of a session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserInput {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<MediaRef>,
+}
+
+impl UserInput {
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            media: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn new(text: impl Into<String>, media: Vec<MediaRef>) -> Self {
+        Self {
+            text: text.into(),
+            media,
+        }
+    }
+
+    #[must_use]
+    pub fn has_media(&self) -> bool {
+        !self.media.is_empty()
+    }
+}
+
+impl From<&str> for UserInput {
+    fn from(text: &str) -> Self {
+        Self::text(text)
+    }
+}
+
+impl From<String> for UserInput {
+    fn from(text: String) -> Self {
+        Self::text(text)
     }
 }
 
@@ -1287,6 +1481,10 @@ pub enum ToolRunStatus {
 pub enum DisplayItem {
     UserMessage {
         text: String,
+        /// Attached images in compact metadata form. The transcript never
+        /// renders bytes, only names and dimensions.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        media: Vec<MediaRef>,
     },
     AssistantMessage {
         text: String,
@@ -1333,7 +1531,10 @@ fn compact_detail(text: &str, limit: usize) -> String {
 #[must_use]
 pub fn display_items(event: &Event) -> Vec<DisplayItem> {
     match &event.payload {
-        EventPayload::UserMessage { text } => vec![DisplayItem::UserMessage { text: text.clone() }],
+        EventPayload::UserMessage { text, media } => vec![DisplayItem::UserMessage {
+            text: text.clone(),
+            media: media.clone(),
+        }],
         EventPayload::AssistantMessageCompleted { text, .. } => {
             vec![DisplayItem::AssistantMessage { text: text.clone() }]
         }
@@ -1611,5 +1812,165 @@ mod tests {
         assert!(CompletionState::ImplementedNotVerified.is_terminal());
         assert!(CompletionState::Verified.is_terminal());
         assert!(CompletionState::Blocked.is_terminal());
+    }
+
+    fn image_ref() -> MediaRef {
+        MediaRef {
+            id: "abc123".into(),
+            kind: MediaKind::Image,
+            mime_type: "image/png".into(),
+            artifact_path: "media/abc123.png".into(),
+            sha256: "abc123".into(),
+            byte_len: 2048,
+            width: Some(1440),
+            height: Some(900),
+            display_name: Some("screenshot.png".into()),
+        }
+    }
+
+    #[test]
+    fn media_ref_round_trips_without_encoded_bytes() {
+        let media = image_ref();
+        let json = serde_json::to_string(&media).unwrap();
+        assert!(json.contains("\"kind\":\"image\""));
+        assert!(json.contains("\"artifact_path\":\"media/abc123.png\""));
+        assert!(
+            !json.contains("base64") && !json.contains("data:image"),
+            "durable media metadata must never carry encoded bytes: {json}"
+        );
+        let back: MediaRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, media);
+        assert_eq!(media.label(), "screenshot.png");
+        assert_eq!(media.dimensions().as_deref(), Some("1440×900"));
+        assert_eq!(media.compact_label(), "[image: screenshot.png · 1440×900]");
+        // Debug output is metadata-only and cannot leak image content.
+        let debug = format!("{media:?}");
+        assert!(debug.contains("screenshot.png"));
+        assert!(!debug.contains("2048:"));
+    }
+
+    #[test]
+    fn legacy_text_only_events_deserialize_with_empty_media() {
+        // Exact legacy shape: no `media` key at all.
+        let legacy_user = r#"{"type":"user_message","data":{"text":"fix it"}}"#;
+        let payload: EventPayload = serde_json::from_str(legacy_user).unwrap();
+        match payload {
+            EventPayload::UserMessage { text, media } => {
+                assert_eq!(text, "fix it");
+                assert!(media.is_empty());
+            }
+            other => panic!("unexpected payload {other:?}"),
+        }
+        let legacy_tool = r#"{"type":"tool_completed","data":{"result":{"call_id":"c1","name":"read_file","output":"ok","is_error":false,"artifact_id":null}}}"#;
+        let payload: EventPayload = serde_json::from_str(legacy_tool).unwrap();
+        match payload {
+            EventPayload::ToolCompleted { result } => {
+                assert!(result.media.is_empty());
+            }
+            other => panic!("unexpected payload {other:?}"),
+        }
+        // Text-only serialization stays structurally cheap: no empty `media`
+        // arrays are written.
+        let payload = EventPayload::UserMessage {
+            text: "plain".into(),
+            media: vec![],
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(!json.contains("media"), "{json}");
+        let message = ModelMessage::text("user", "plain");
+        let json = serde_json::to_string(&message).unwrap();
+        assert!(!json.contains("media"), "{json}");
+        assert!(!message.has_media());
+        let result = ToolResult {
+            call_id: "c".into(),
+            name: "read_file".into(),
+            output: "ok".into(),
+            is_error: false,
+            artifact_id: None,
+            media: vec![],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("media"), "{json}");
+    }
+
+    #[test]
+    fn media_flows_through_messages_tool_results_and_display_items() {
+        let media = vec![image_ref()];
+        let message = ModelMessage {
+            role: "user".into(),
+            content: "look".into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+            reasoning_content: None,
+            reasoning: vec![],
+            media: media.clone(),
+        };
+        assert!(message.has_media());
+        let round: ModelMessage =
+            serde_json::from_str(&serde_json::to_string(&message).unwrap()).unwrap();
+        assert_eq!(round, message);
+
+        let result = ToolResult {
+            call_id: "call-1".into(),
+            name: "read_image".into(),
+            output: "image.png".into(),
+            is_error: false,
+            artifact_id: None,
+            media: media.clone(),
+        };
+        let event = Event {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            sequence: 1,
+            timestamp: Utc::now(),
+            parent_id: None,
+            payload: EventPayload::ToolCompleted {
+                result: result.clone(),
+            },
+        };
+        let round: Event = serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+        assert_eq!(round, event);
+        let items = display_items(&round);
+        assert!(
+            matches!(&items[0], DisplayItem::ToolActivity { verb, .. } if verb == "read_image")
+        );
+
+        let user = Event {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            sequence: 2,
+            timestamp: Utc::now(),
+            parent_id: None,
+            payload: EventPayload::UserMessage {
+                text: "inspect".into(),
+                media,
+            },
+        };
+        let items = display_items(&user);
+        match &items[0] {
+            DisplayItem::UserMessage { text, media } => {
+                assert_eq!(text, "inspect");
+                assert_eq!(
+                    media[0].compact_label(),
+                    "[image: screenshot.png · 1440×900]"
+                );
+            }
+            other => panic!("unexpected item {other:?}"),
+        }
+    }
+
+    #[test]
+    fn input_modalities_are_provider_neutral_and_parse_from_config() {
+        assert_eq!(
+            serde_json::to_string(&InputModality::Text).unwrap(),
+            "\"text\""
+        );
+        assert_eq!(
+            serde_json::to_string(&InputModality::Image).unwrap(),
+            "\"image\""
+        );
+        let modalities: Vec<InputModality> = serde_json::from_str(r#"["text","image"]"#).unwrap();
+        assert_eq!(modalities, vec![InputModality::Text, InputModality::Image]);
+        assert!(serde_json::from_str::<InputModality>("\"audio\"").is_err());
     }
 }
