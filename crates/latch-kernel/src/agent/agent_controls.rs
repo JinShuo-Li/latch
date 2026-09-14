@@ -72,6 +72,14 @@ impl Agent {
                     .get("agent_type")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned);
+                let task_id = call
+                    .arguments
+                    .get("task_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|raw| {
+                        Uuid::parse_str(raw).map_err(|error| anyhow!("invalid task_id: {error}"))
+                    })
+                    .transpose()?;
                 let user_constraints = self
                     .store
                     .memories(self.session_id)?
@@ -83,7 +91,7 @@ impl Agent {
                     .map(|memory| memory.content)
                     .collect();
                 let child = supervisor
-                    .spawn_agent(
+                    .spawn_agent_with_task(
                         task_name,
                         message,
                         agent_type,
@@ -91,6 +99,7 @@ impl Agent {
                             constraints: user_constraints,
                             decisions: self.state.state().decisions.clone(),
                         },
+                        task_id,
                     )
                     .await?;
                 Ok(serde_json::to_string(&child)?)

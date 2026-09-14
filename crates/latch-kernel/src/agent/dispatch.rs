@@ -186,6 +186,8 @@ impl Agent {
                 }
                 if super::agent_controls::is_agent_control(&call.name) {
                     batch.push(self.execute_agent_control(&call, &cancel, sink).await?);
+                } else if super::group_tools::is_group_tool(&call.name) {
+                    batch.push(self.execute_group_tool(&call, sink)?);
                 } else if matches!(
                     call.name.as_str(),
                     "task_update" | "record_evidence" | "complete"
@@ -258,6 +260,11 @@ impl Agent {
     /// treated as side-effecting because the kernel does not inspect them.
     fn call_is_side_effecting(&self, call: &ToolCall) -> bool {
         if self.extensions.owner_for_tool(&call.name).is_some() {
+            return true;
+        }
+        // Group tools mutate durable coordination state even though they touch
+        // no OS capability.
+        if super::group_tools::is_group_tool(&call.name) {
             return true;
         }
         let classification = self.tools.classify_call(&call.name, &call.arguments);

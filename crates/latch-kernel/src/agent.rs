@@ -1,4 +1,6 @@
-use crate::agents::{AgentSupervisor, ChildMailbox, ProviderFactory, WorkerSettings};
+use crate::agents::{
+    AgentSupervisor, ChildMailbox, GroupCoordinator, ProviderFactory, WorkerSettings,
+};
 use crate::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS};
 use crate::continuity::{ContinuityEngine, MaterializeBudget};
 use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
@@ -33,6 +35,7 @@ use uuid::Uuid;
 
 mod agent_controls;
 mod dispatch;
+mod group_tools;
 mod kernel_tools;
 mod permissions;
 pub(crate) mod request;
@@ -103,6 +106,10 @@ pub struct Agent {
     /// Present only on the root agent. Child workers are independently owned
     /// by this supervisor and cannot control or recursively spawn agents.
     supervisor: Option<AgentSupervisor>,
+    /// Root-scoped coordination overlay, present on the root and on every
+    /// child so participants can claim tasks and exchange durable messages.
+    /// The group never owns workers: execution stays with the supervisor.
+    group: Option<GroupCoordinator>,
     agent_depth: u8,
 }
 pub struct AgentRuntime {
@@ -163,6 +170,7 @@ impl Agent {
         );
         let progress =
             ProgressSupervisor::new(DEFAULT_STAGNATION_BUDGET, runtime.workspace.clone());
+        let group = supervisor.as_ref().map(AgentSupervisor::group);
         Self {
             session_id: runtime.session_id,
             workspace: runtime.workspace,
@@ -193,6 +201,7 @@ impl Agent {
             interactive_permissions: false,
             last_completion: None,
             supervisor,
+            group,
             agent_depth,
         }
     }
@@ -485,6 +494,18 @@ impl Agent {
     #[must_use]
     pub fn agent_supervisor(&self) -> Option<AgentSupervisor> {
         self.supervisor.clone()
+    }
+
+    /// Installs the root-scoped group coordinator on any agent (root or child).
+    pub(crate) fn set_group(&mut self, group: Option<GroupCoordinator>) {
+        self.group = group;
+    }
+
+    /// The durable coordination overlay this agent participates in, when one
+    /// has been provisioned by the root supervisor.
+    #[must_use]
+    pub fn group(&self) -> Option<GroupCoordinator> {
+        self.group.clone()
     }
 
     pub(crate) fn agent_report(
@@ -808,6 +829,9 @@ impl Agent {
                 );
             }
             self.deliver_agent_notifications(&sink)?;
+            // Group messages are delivered at the same safe boundary as child
+            // reports: never between an assistant tool call and its results.
+            self.deliver_group_messages(&sink)?;
             let query = steer_query
                 .take()
                 .or_else(|| (turns == 1).then(|| effective_user_text.clone()));
@@ -948,7 +972,12 @@ impl Agent {
                     );
                 }
                 let notifications = self.deliver_agent_notifications(&sink)?;
-                if late.is_empty() && agent_messages.is_empty() && notifications == 0 {
+                let group_messages = self.deliver_group_messages(&sink)?;
+                if late.is_empty()
+                    && agent_messages.is_empty()
+                    && notifications == 0
+                    && group_messages == 0
+                {
                     break;
                 }
                 if !late.is_empty() {
@@ -991,7 +1020,12 @@ impl Agent {
                     );
                 }
                 let notifications = self.deliver_agent_notifications(&sink)?;
-                if late.is_empty() && agent_messages.is_empty() && notifications == 0 {
+                let group_messages = self.deliver_group_messages(&sink)?;
+                if late.is_empty()
+                    && agent_messages.is_empty()
+                    && notifications == 0
+                    && group_messages == 0
+                {
                     break;
                 }
                 if !late.is_empty() {

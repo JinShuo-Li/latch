@@ -116,6 +116,12 @@ impl PromptCompiler {
                 true,
                 "Delegate only parallelizable, isolated, or independent workstreams where a child saves context or time; never spawn children for simple, sequential, or tightly coupled work. Children are independent sessions whose evidence never certifies root completion.",
             ),
+            fragment(
+                "latch.agent_group",
+                145,
+                true,
+                "When participating in an Agent Group: use group_status and group_task when coordination state matters; claim work atomically before treating it as yours; do not duplicate another agent's claimed work; send concise group messages for dependencies or useful findings; mark a claimed task completed, blocked, or released accurately.",
+            ),
         ];
         let mode_text = match mode {
             Mode::Ask => {
@@ -227,6 +233,7 @@ mod tests {
                 "latch.context_and_staleness",
                 "latch.permissions",
                 "latch.subagents",
+                "latch.agent_group",
                 "mode.work",
                 "environment.workspace",
             ]
@@ -463,19 +470,19 @@ mod tests {
             .sum();
         // Proportional-effort architecture: the always-on stable prefix is a
         // small behavioral core plus kernel semantics. The cap is deliberately
-        // just above today's size so accidental growth fails loudly. The
-        // image-input guidance raised it once, deliberately, for the vision
-        // capability.
+        // just above today's size so accidental growth fails loudly. It was
+        // raised once for image-input guidance and once, deliberately, for the
+        // short agent-group coordination policy.
         assert!(
-            static_tokens <= 1_300,
+            static_tokens <= 1_380,
             "static coding prompt grew to {static_tokens} tokens"
         );
         assert!(
-            p.approximate_tokens() <= 1_440,
+            p.approximate_tokens() <= 1_520,
             "compiled prompt grew to {} tokens",
             p.approximate_tokens()
         );
-        assert_eq!(p.fragments.len(), 15);
+        assert_eq!(p.fragments.len(), 16);
         let core = p
             .fragments
             .iter()
@@ -486,6 +493,6 @@ mod tests {
             .iter()
             .filter(|f| f.id.starts_with("latch."))
             .count();
-        assert_eq!((core, latch), (9, 4), "module split stays as designed");
+        assert_eq!((core, latch), (9, 5), "module split stays as designed");
     }
 }

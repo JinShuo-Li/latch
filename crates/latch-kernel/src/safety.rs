@@ -113,7 +113,8 @@ pub fn classify(tool: &str, args: &Value, context: Context<'_>) -> Classificatio
         // Kernel-owned bookkeeping tools never touch the OS; they are always
         // available in every mode and safety profile.
         "task_update" | "record_evidence" | "complete" | "spawn_agent" | "send_agent_message"
-        | "continue_agent" | "wait_agents" | "list_agents" | "interrupt_agent" | "close_agent" => {
+        | "continue_agent" | "wait_agents" | "list_agents" | "interrupt_agent" | "close_agent"
+        | "group_task" | "group_message" | "group_status" => {
             Classification::allow(CapabilitySet::new(), format!("{tool} (kernel state)"))
         }
         "read_file" | "read_image" | "search" | "read_artifact" | "git_status" | "git_diff"

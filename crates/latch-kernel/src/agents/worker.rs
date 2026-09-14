@@ -25,11 +25,27 @@ pub(super) async fn run_worker(
     for message in restored_messages {
         child_mailbox.push(message);
     }
-    if let Some(brief) = initial
-        && !run_turn(&inner, &identity, agent, &mut receiver, brief, &lifetime).await
-    {
-        return;
+    if let Some(brief) = initial {
+        if !run_turn(&inner, &identity, agent, &mut receiver, brief, &lifetime).await {
+            return;
+        }
+        if !drain_follow_ups(
+            &inner,
+            &identity,
+            agent,
+            &mut receiver,
+            &child_mailbox,
+            &lifetime,
+        )
+        .await
+        {
+            return;
+        }
     }
+    // A worker rebuilt after a process restart restores queued messages and
+    // waits: a restored follow-up is consumed by the next explicit continue,
+    // which carries the same durable message, exactly like the pre-restart
+    // turn would have been.
     loop {
         let command = tokio::select! {
             () = lifetime.cancelled() => WorkerCommand::Close,
@@ -44,6 +60,18 @@ pub(super) async fn run_worker(
                 let prompt = message.text.clone();
                 child_mailbox.push(message);
                 if !run_turn(&inner, &identity, agent, &mut receiver, prompt, &lifetime).await {
+                    return;
+                }
+                if !drain_follow_ups(
+                    &inner,
+                    &identity,
+                    agent,
+                    &mut receiver,
+                    &child_mailbox,
+                    &lifetime,
+                )
+                .await
+                {
                     return;
                 }
             }
@@ -67,6 +95,30 @@ pub(super) async fn run_worker(
                 close(&inner, identity.agent_id);
                 return;
             }
+        }
+    }
+}
+
+/// A continue command accepted while a turn is finishing can land in the
+/// mailbox after that turn's last safe-boundary drain. It must still start a
+/// turn: an accepted follow-up is never silently stranded, and information-only
+/// messages continue to wait for the next boundary without waking the child.
+async fn drain_follow_ups(
+    inner: &Weak<SupervisorInner>,
+    identity: &AgentIdentity,
+    agent: &mut Agent,
+    receiver: &mut mpsc::Receiver<WorkerCommand>,
+    mailbox: &super::mailbox::ChildMailbox,
+    lifetime: &CancellationToken,
+) -> bool {
+    loop {
+        if !mailbox.has_follow_up() {
+            return true;
+        }
+        // The prompt is intentionally empty: the child loop drains the mailbox
+        // itself, so the queued follow-up is the turn's user input.
+        if !run_turn(inner, identity, agent, receiver, String::new(), lifetime).await {
+            return false;
         }
     }
 }

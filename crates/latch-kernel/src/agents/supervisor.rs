@@ -1,4 +1,5 @@
 use super::graph::{AgentGraph, AgentNode};
+use super::group::GroupCoordinator;
 use super::mailbox::NotificationMailbox;
 use super::profile::{DelegationContext, delegation_brief};
 use super::worker::{WorkerCommand, run_worker};
@@ -10,7 +11,9 @@ use crate::providers::ModelDescriptor;
 use crate::store::{AgentSessionSpec, EventStore};
 use crate::tools::ToolExecutor;
 use anyhow::{Context, Result, anyhow, bail};
-use latch_protocol::{AgentIdentity, AgentReport, AgentStatus, EventPayload, InferenceProfile};
+use latch_protocol::{
+    AgentIdentity, AgentReport, AgentStatus, EventPayload, GroupTaskStatus, InferenceProfile,
+};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -68,6 +71,9 @@ pub(super) struct SupervisorInner {
     pub tools: ToolExecutor,
     pub settings: RwLock<WorkerSettings>,
     pub graph: Mutex<AgentGraph>,
+    /// Root-scoped coordination overlay. Separate from the graph (topology)
+    /// and from worker execution; it never owns children.
+    pub group: GroupCoordinator,
     workers: Mutex<HashMap<Uuid, WorkerHandle>>,
     pub notifications: NotificationMailbox,
     activity: Notify,
@@ -146,6 +152,12 @@ impl AgentSupervisor {
                 notifications.push(report);
             }
         }
+        let group_name = workspace
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "group".into());
+        let group = GroupCoordinator::new(store.clone(), root_session_id, group_name)?;
         Ok(Self {
             inner: Arc::new(SupervisorInner {
                 root_session_id,
@@ -156,12 +168,19 @@ impl AgentSupervisor {
                 tools,
                 settings: RwLock::new(settings),
                 graph: Mutex::new(graph),
+                group,
                 workers: Mutex::new(HashMap::new()),
                 notifications,
                 activity: Notify::new(),
                 shutdown: CancellationToken::new(),
             }),
         })
+    }
+
+    /// The root's durable coordination overlay.
+    #[must_use]
+    pub fn group(&self) -> GroupCoordinator {
+        self.inner.group.clone()
     }
 
     pub(crate) fn update_settings(&self, update: impl FnOnce(&mut WorkerSettings)) {
@@ -198,11 +217,87 @@ impl AgentSupervisor {
         agent_type: Option<String>,
         context: DelegationContext,
     ) -> Result<AgentSnapshot> {
+        self.spawn_agent_with_task(task_name, message, agent_type, context, None)
+            .await
+    }
+
+    /// Spawns a child and, when `task_id` is supplied, atomically assigns that
+    /// shared group task to the new child. The task must already exist and be
+    /// ready; the claim itself remains a compare-and-set in the store, so two
+    /// concurrent spawns can never own the same task.
+    pub async fn spawn_agent_with_task(
+        &self,
+        task_name: String,
+        message: String,
+        agent_type: Option<String>,
+        context: DelegationContext,
+        task_id: Option<Uuid>,
+    ) -> Result<AgentSnapshot> {
         let task_name = task_name.trim().to_owned();
         if task_name.is_empty() || message.trim().is_empty() {
             bail!("task_name and message must be non-empty");
         }
-        let brief = delegation_brief(&task_name, &message, &self.inner.workspace, &context);
+        // Validate the delegated task before creating any durable child state.
+        let group_task = match task_id {
+            Some(task_id) => {
+                let state = self.inner.group.snapshot();
+                let task = state
+                    .task(task_id)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("unknown group task {task_id}"))?;
+                if task.status != GroupTaskStatus::Pending {
+                    bail!(
+                        "group task {task_id} is {} (assignee {}), not delegated as a fresh claim",
+                        task.status,
+                        task.assignee
+                            .map(|assignee| assignee.to_string())
+                            .unwrap_or_else(|| "none".into())
+                    );
+                }
+                if !task.is_ready(state.tasks()) {
+                    let incomplete = task
+                        .dependencies
+                        .iter()
+                        .filter(|dependency| {
+                            state.task(**dependency).is_none_or(|dependency| {
+                                dependency.status != GroupTaskStatus::Completed
+                            })
+                        })
+                        .map(Uuid::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    bail!(
+                        "group task {task_id} is not ready; incomplete dependencies: {incomplete}"
+                    );
+                }
+                Some(task)
+            }
+            None => None,
+        };
+        let delegation = match &group_task {
+            Some(task) => format!(
+                "{message}\n\nAgent group task {} `{}` ({}, depends on: {}):\n{}",
+                task.task_id,
+                task.title,
+                if task.required {
+                    "required"
+                } else {
+                    "optional"
+                },
+                if task.dependencies.is_empty() {
+                    "none".to_owned()
+                } else {
+                    task.dependencies
+                        .iter()
+                        .map(|dependency| dependency.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+                task.description
+            ),
+            None => message,
+        };
+        let brief = delegation_brief(&task_name, &delegation, &self.inner.workspace, &context);
         let identity = {
             let mut graph = self.inner.graph.lock().unwrap_or_else(|e| e.into_inner());
             if graph.snapshots().iter().any(|node| {
@@ -247,6 +342,25 @@ impl AgentSupervisor {
                     reason: "inherited from root at spawn".into(),
                 },
             )?;
+        }
+        // Explicit, durable membership plus the atomic claim when this child
+        // was spawned for a specific task.
+        if let Some(task) = &group_task {
+            self.inner.group.join(identity.agent_id)?;
+            if let Err(error) = self.inner.group.claim(task.task_id, identity.agent_id) {
+                self.inner.store.append(
+                    identity.agent_id,
+                    EventPayload::AgentStatusChanged {
+                        status: AgentStatus::Failed,
+                        reason: Some(format!("group task assignment failed: {error}")),
+                    },
+                )?;
+                self.set_status(identity.agent_id, AgentStatus::Failed, None);
+                return Err(error.context(format!(
+                    "could not assign group task {} to child {}",
+                    task.task_id, identity.agent_id
+                )));
+            }
         }
         if let Err(error) = self.start_worker(identity.clone(), Some(brief)) {
             self.inner.store.append(
@@ -593,6 +707,7 @@ impl AgentSupervisor {
         );
         agent.set_stagnation_budget(settings.stagnation_budget);
         agent.set_max_model_turns(settings.max_model_turns);
+        agent.set_group(Some(self.inner.group.clone()));
         let window = descriptor
             .as_ref()
             .and_then(|descriptor| descriptor.context_window_tokens)

@@ -17,6 +17,7 @@ impl Agent {
             },
             sink,
         )?;
+        let mut state_updated = call.name == "task_update";
         let result = match call.name.as_str() {
             "task_update" => match serde_json::from_value::<StateUpdate>(call.arguments.clone()) {
                 Ok(update) => {
@@ -90,29 +91,44 @@ impl Agent {
                     .get("implementation_done")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
-                self.state.set_implementation_done(implemented);
-                self.sync_completion(sink)?;
-                // The model claimed completion and the kernel derived a
-                // terminal, verified-or-implemented state. The loop may exit in
-                // this same turn; `Blocked` still earns a reporting turn.
-                if matches!(
-                    self.state.state().completion,
-                    CompletionState::Verified | CompletionState::ImplementedNotVerified
-                ) {
-                    self.terminal_complete = true;
-                }
-                tool_ok(
-                    call,
-                    format!(
-                        "implementation claim recorded; kernel-derived completion: {:?}\n{}",
+                // Kernel truth gate: the root may not terminally complete while
+                // the active group still holds required unfinished work. The
+                // gate never applies to optional or cancelled tasks, and it
+                // never applies to a child's own turn completion.
+                if implemented
+                    && self.agent_depth == 0
+                    && let Some(blocker) = self.group_completion_blocker()
+                {
+                    tool_error(
+                        call,
+                        format!("terminal completion denied by the agent-group gate: {blocker}"),
+                    )
+                } else {
+                    self.state.set_implementation_done(implemented);
+                    self.sync_completion(sink)?;
+                    // The model claimed completion and the kernel derived a
+                    // terminal, verified-or-implemented state. The loop may exit
+                    // in this same turn; `Blocked` still earns a reporting turn.
+                    if matches!(
                         self.state.state().completion,
-                        summarize_state(self.state.state())
-                    ),
-                )
+                        CompletionState::Verified | CompletionState::ImplementedNotVerified
+                    ) {
+                        self.terminal_complete = true;
+                    }
+                    state_updated = true;
+                    tool_ok(
+                        call,
+                        format!(
+                            "implementation claim recorded; kernel-derived completion: {:?}\n{}",
+                            self.state.state().completion,
+                            summarize_state(self.state.state())
+                        ),
+                    )
+                }
             }
             _ => tool_error(call, "unknown kernel tool".into()),
         };
-        if call.name == "task_update" || call.name == "complete" {
+        if state_updated {
             self.emit(
                 EventPayload::TaskStateUpdated {
                     state: self.state.state().clone(),
