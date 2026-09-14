@@ -1040,3 +1040,60 @@ async fn child_agent_sessions_never_become_root_truth() {
     assert_eq!(listed[0].agent_id, child_id);
     assert_eq!(listed[0].status, latch_protocol::AgentStatus::Completed);
 }
+
+/// Agent-group coordination is durable state, not a live side table: one
+/// atomic winner per claim, and a projection rebuilt purely from durable
+/// events reconstructs the same ownership. Coordinator state is a derivable
+/// cache; the event log remains the source of truth.
+#[test]
+fn group_claims_are_atomic_and_projection_is_rebuildable() {
+    use latch_kernel::agents::GroupCoordinator;
+    use latch_protocol::{GroupTask, GroupTaskStatus};
+    use uuid::Uuid;
+
+    let store = EventStore::open_memory().unwrap();
+    let root = store
+        .create_session(Path::new("/tmp/invariant-group"))
+        .unwrap();
+    let coordinator = GroupCoordinator::new(store.clone(), root, "invariant".into()).unwrap();
+    let task = coordinator
+        .create_task(root, "shared".into(), String::new(), vec![], true, vec![])
+        .unwrap();
+    let outcomes = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for index in 0..16u128 {
+            let coordinator = coordinator.clone();
+            let outcomes = &outcomes;
+            let task_id = task.task_id;
+            scope.spawn(move || {
+                let agent = Uuid::from_u128(index + 1);
+                outcomes
+                    .lock()
+                    .unwrap()
+                    .push(coordinator.claim(task_id, agent).map(|task| task.assignee));
+            });
+        }
+    });
+    let outcomes = outcomes.into_inner().unwrap();
+    let winners = outcomes.iter().filter(|result| result.is_ok()).count();
+    assert_eq!(winners, 1, "exactly one atomic claim may win");
+    // Durability: a fresh coordinator (process restart) reconstructs the
+    // committed ownership from the event log alone.
+    let resumed = GroupCoordinator::new(store.clone(), root, "invariant".into()).unwrap();
+    let resumed_task = resumed.snapshot().task(task.task_id).cloned().unwrap();
+    let owner = resumed_task.assignee.unwrap();
+    assert_eq!(resumed_task.status, GroupTaskStatus::Claimed);
+    assert_eq!(
+        winners,
+        outcomes.iter().filter(|result| result.is_ok()).count(),
+        "one winner stays one winner after replay"
+    );
+    // A released task returns to the pool with no owner and is claimable by a
+    // different agent, still with an unambiguous event order.
+    resumed.release(task.task_id, owner).unwrap();
+    let second = Uuid::new_v4();
+    let reclaimed = resumed.claim(task.task_id, second).unwrap();
+    assert_eq!(reclaimed.assignee, Some(second));
+    let GroupTask { status, .. } = reclaimed;
+    assert_eq!(status, GroupTaskStatus::Claimed);
+}

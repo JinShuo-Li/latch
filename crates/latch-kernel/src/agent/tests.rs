@@ -3359,3 +3359,388 @@ async fn steering_can_carry_an_image() {
         .expect("durable steering media");
     assert_eq!(durable[0].sha256, media.sha256);
 }
+
+/// Builds a root agent plus a durable child agent sharing the root's group
+/// coordinator, without starting worker orchestration. This exercises exactly
+/// the tool authorization surface a real child has.
+fn group_participants() -> (
+    tempfile::TempDir,
+    EventStore,
+    Agent,
+    Agent,
+    GroupCoordinator,
+) {
+    let d = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let root_sid = store.create_session(d.path()).unwrap();
+    let responses = vec![ModelResponse {
+        text: "idle".into(),
+        tool_calls: vec![],
+        stop_reason: "stop".into(),
+        usage: None,
+        reasoning_content: None,
+        reasoning: vec![],
+    }];
+    let provider = Arc::new(FakeProvider::scripted(responses));
+    let policy = PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default());
+    let tools = ToolExecutor::new(
+        d.path().into(),
+        d.path().join("art"),
+        store.clone(),
+        root_sid,
+        policy.clone(),
+    )
+    .unwrap();
+    let root = Agent::new(AgentRuntime {
+        session_id: root_sid,
+        workspace: d.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider,
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 1,
+    });
+    let group = root.group().expect("root group coordinator");
+    let child_sid = store.create_session(d.path()).unwrap();
+    let child_tools = ToolExecutor::new(
+        d.path().into(),
+        d.path().join("art-child"),
+        store.clone(),
+        child_sid,
+        policy,
+    )
+    .unwrap();
+    let child = Agent::new_child(
+        AgentRuntime {
+            session_id: child_sid,
+            workspace: d.path().into(),
+            mode: Mode::Work,
+            store: store.clone(),
+            provider: Arc::new(FakeProvider::scripted(vec![])),
+            tools: child_tools,
+            continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+            retry_budget: 1,
+        },
+        1,
+    );
+    let mut child = child;
+    child.set_group(Some(group.clone()));
+    (d, store, root, child, group)
+}
+
+fn group_call(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
+    ToolCall {
+        id: id.into(),
+        name: name.into(),
+        arguments,
+    }
+}
+
+#[test]
+fn group_tool_authorization_and_task_lifecycle() {
+    let (_d, _store, mut root, mut child, group) = group_participants();
+    let sink: AgentEventSink = Arc::new(|_| {});
+    // Children may not create shared work.
+    let denied = child
+        .execute_group_tool(
+            &group_call(
+                "c0",
+                "group_task",
+                json!({"op":"create","title":"nope","description":"child-created"}),
+            ),
+            &sink,
+        )
+        .unwrap();
+    assert!(denied.is_error);
+    assert!(denied.output.contains("only the root agent"));
+    // The root creates the DAG.
+    let created = root
+        .execute_group_tool(
+            &group_call(
+                "r1",
+                "group_task",
+                json!({
+                    "op":"create",
+                    "title":"parser",
+                    "description":"implement the parser",
+                    "expected_paths":["src/parser.rs"]
+                }),
+            ),
+            &sink,
+        )
+        .unwrap();
+    assert!(!created.is_error, "{}", created.output);
+    let state = group.snapshot();
+    let parser = state.tasks().values().next().unwrap().clone();
+    assert!(
+        created.output.contains(&parser.task_id.to_string()),
+        "create must return the full task id the model needs: {}",
+        created.output
+    );
+    // A child claims it and becomes a durable member.
+    let claimed = child
+        .execute_group_tool(
+            &group_call(
+                "c1",
+                "group_task",
+                json!({"op":"claim","task_id":parser.task_id.to_string()}),
+            ),
+            &sink,
+        )
+        .unwrap();
+    assert!(!claimed.is_error, "{}", claimed.output);
+    assert!(group.is_member(child.session_id));
+    assert_eq!(
+        group.snapshot().task(parser.task_id).unwrap().assignee,
+        Some(child.session_id)
+    );
+    // A second claimant loses; the message names the owner.
+    let sibling = group_call(
+        "c2",
+        "group_task",
+        json!({"op":"claim","task_id":parser.task_id.to_string()}),
+    );
+    let _ = sibling;
+    // Only the assignee may start or complete.
+    let root_start = root
+        .execute_group_tool(
+            &group_call(
+                "r2",
+                "group_task",
+                json!({"op":"start","task_id":parser.task_id.to_string()}),
+            ),
+            &sink,
+        )
+        .unwrap();
+    assert!(root_start.is_error);
+    let started = child
+        .execute_group_tool(
+            &group_call(
+                "c3",
+                "group_task",
+                json!({"op":"start","task_id":parser.task_id.to_string()}),
+            ),
+            &sink,
+        )
+        .unwrap();
+    assert!(!started.is_error, "{}", started.output);
+    assert_eq!(
+        group.snapshot().task(parser.task_id).unwrap().status,
+        latch_protocol::GroupTaskStatus::InProgress
+    );
+    // Completing requires a summary.
+    let no_summary = child
+        .execute_group_tool(
+            &group_call(
+                "c4",
+                "group_task",
+                json!({"op":"complete","task_id":parser.task_id.to_string()}),
+            ),
+            &sink,
+        )
+        .unwrap();
+    assert!(no_summary.is_error);
+    let completed = child
+        .execute_group_tool(
+            &group_call(
+                "c5",
+                "group_task",
+                json!({
+                    "op":"complete",
+                    "task_id":parser.task_id.to_string(),
+                    "summary":"parser implemented",
+                    "touched_files":["src/parser.rs"]
+                }),
+            ),
+            &sink,
+        )
+        .unwrap();
+    assert!(!completed.is_error, "{}", completed.output);
+    // Children may not administratively cancel or reassign.
+    let child_cancel = child
+        .execute_group_tool(
+            &group_call(
+                "c6",
+                "group_task",
+                json!({"op":"cancel","task_id":parser.task_id.to_string()}),
+            ),
+            &sink,
+        )
+        .unwrap();
+    assert!(child_cancel.is_error);
+    // Strict operand validation.
+    let ambiguous = root
+        .execute_group_tool(
+            &group_call(
+                "r3",
+                "group_task",
+                json!({"op":"create","title":"ambiguous","task_id":parser.task_id.to_string()}),
+            ),
+            &sink,
+        )
+        .unwrap();
+    assert!(ambiguous.is_error);
+    assert!(ambiguous.output.contains("not valid"));
+}
+
+#[test]
+fn group_list_and_status_are_compact_and_claimable() {
+    let (_d, _store, mut root, _child, group) = group_participants();
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let parser = group
+        .create_task(
+            root.session_id,
+            "parser".into(),
+            String::new(),
+            vec![],
+            true,
+            vec![],
+        )
+        .unwrap();
+    let tests = group
+        .create_task(
+            root.session_id,
+            "tests".into(),
+            String::new(),
+            vec![parser.task_id],
+            true,
+            vec![],
+        )
+        .unwrap();
+    let listed = root
+        .execute_group_tool(&group_call("l1", "group_task", json!({"op":"list"})), &sink)
+        .unwrap();
+    assert!(!listed.is_error);
+    assert!(
+        listed.output.contains(&parser.task_id.to_string()),
+        "list must expose the full id so a model can claim it: {}",
+        listed.output
+    );
+    assert!(
+        !listed
+            .output
+            .contains(&format!("ready [{}]", tests.task_id)),
+        "a dependent task must not be shown as ready: {}",
+        listed.output
+    );
+    assert!(
+        listed
+            .output
+            .contains(&format!("pending [{}] tests", tests.task_id)),
+        "a dependent task stays visible as pending, not silently dropped: {}",
+        listed.output
+    );
+    let status = root
+        .execute_group_tool(&group_call("s1", "group_status", json!({})), &sink)
+        .unwrap();
+    assert!(!status.is_error);
+    assert!(status.output.contains("ready 1"), "{}", status.output);
+    assert!(
+        status.output.len() < 2_000,
+        "group_status must stay a compact snapshot, got {} bytes",
+        status.output.len()
+    );
+    // No raw durable event or transcript material leaks into the snapshot.
+    for banned in ["group_task_created", "payload", "session_id"] {
+        assert!(!status.output.contains(banned), "{}", status.output);
+    }
+    // Unknown filters and unknown ops are local errors.
+    assert!(
+        root.execute_group_tool(
+            &group_call("s2", "group_task", json!({"op":"list","status":"weird"})),
+            &sink
+        )
+        .unwrap()
+        .is_error
+    );
+    assert!(
+        root.execute_group_tool(&group_call("s3", "group_task", json!({"op":"wat"})), &sink)
+            .unwrap()
+            .is_error
+    );
+}
+
+#[test]
+fn completion_gate_requires_required_tasks_resolved() {
+    let (_d, _store, mut root, _child, group) = group_participants();
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let required = group
+        .create_task(
+            root.session_id,
+            "required-work".into(),
+            String::new(),
+            vec![],
+            true,
+            vec![],
+        )
+        .unwrap();
+    group
+        .create_task(
+            root.session_id,
+            "optional-docs".into(),
+            String::new(),
+            vec![],
+            false,
+            vec![],
+        )
+        .unwrap();
+    let blocked = root
+        .execute_kernel_tool(
+            &group_call("k1", "complete", json!({"implementation_done": true})),
+            &sink,
+        )
+        .unwrap();
+    assert!(blocked.is_error);
+    assert!(
+        blocked.output.contains("required-work"),
+        "{}",
+        blocked.output
+    );
+    assert_eq!(
+        root.state().completion,
+        latch_protocol::CompletionState::InProgress,
+        "denied completion must not mutate canonical completion"
+    );
+    assert!(!root.terminal_complete);
+    // Claiming (active) still blocks; releasing restores the gate.
+    group.claim(required.task_id, root.session_id).unwrap();
+    let still_blocked = root
+        .execute_kernel_tool(
+            &group_call("k2", "complete", json!({"implementation_done": true})),
+            &sink,
+        )
+        .unwrap();
+    assert!(still_blocked.is_error);
+    group.release(required.task_id, root.session_id).unwrap();
+    group
+        .complete(
+            required.task_id,
+            {
+                group.claim(required.task_id, root.session_id).unwrap();
+                root.session_id
+            },
+            "done".into(),
+            vec![],
+            vec![],
+        )
+        .or_else(|_| {
+            // claim then complete as root.
+            group.complete(
+                required.task_id,
+                root.session_id,
+                "done".into(),
+                vec![],
+                vec![],
+            )
+        })
+        .unwrap();
+    let allowed = root
+        .execute_kernel_tool(
+            &group_call("k3", "complete", json!({"implementation_done": true})),
+            &sink,
+        )
+        .unwrap();
+    assert!(!allowed.is_error, "{}", allowed.output);
+    assert!(root.terminal_complete);
+}

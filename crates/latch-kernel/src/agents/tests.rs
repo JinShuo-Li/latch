@@ -1215,3 +1215,172 @@ async fn child_sessions_pin_their_spawn_profile_durably() {
     );
     resumed.shutdown_extensions().await.unwrap();
 }
+
+#[tokio::test]
+async fn spawn_with_task_id_claims_atomically_and_survives_interrupt() {
+    let (_workspace, _store, agent) = test_agent(Arc::new(TestProvider::plain(0)), Mode::Work);
+    let supervisor = agent.agent_supervisor().unwrap();
+    let group = agent.group().unwrap();
+    let task = group
+        .create_task(
+            agent.session_id,
+            "parser".into(),
+            String::new(),
+            vec![],
+            true,
+            vec![],
+        )
+        .unwrap();
+    let child = supervisor
+        .spawn_agent_with_task(
+            "parser-worker".into(),
+            "implement the parser".into(),
+            None,
+            DelegationContext::default(),
+            Some(task.task_id),
+        )
+        .await
+        .unwrap();
+    // The claim and the explicit membership join are both durable before the
+    // child's first turn starts.
+    let claimed = group.snapshot().task(task.task_id).unwrap().clone();
+    assert_eq!(claimed.assignee, Some(child.agent_id));
+    assert_eq!(claimed.status, latch_protocol::GroupTaskStatus::Claimed);
+    assert!(group.is_member(child.agent_id));
+    // A second spawn for the same task is refused before any child is created.
+    let duplicate = supervisor
+        .spawn_agent_with_task(
+            "parser-worker-two".into(),
+            "also implement the parser".into(),
+            None,
+            DelegationContext::default(),
+            Some(task.task_id),
+        )
+        .await;
+    assert!(duplicate.is_err());
+    // Model turns complete, but coordination state does not silently change.
+    wait_for_status(&supervisor, child.agent_id, AgentStatus::Completed).await;
+    assert_eq!(
+        group.snapshot().task(task.task_id).unwrap().assignee,
+        Some(child.agent_id)
+    );
+    // A crash/interrupt never releases the task: only an explicit release,
+    // completion, or root reassignment/cancel may change ownership.
+    let second = group
+        .create_task(
+            agent.session_id,
+            "slow".into(),
+            String::new(),
+            vec![],
+            true,
+            vec![],
+        )
+        .unwrap();
+    let worker = supervisor
+        .spawn_agent_with_task(
+            "slow-worker".into(),
+            "do slow work".into(),
+            None,
+            DelegationContext::default(),
+            Some(second.task_id),
+        )
+        .await
+        .unwrap();
+    wait_for_status(&supervisor, worker.agent_id, AgentStatus::Running).await;
+    supervisor.interrupt_agent(worker.agent_id).await.unwrap();
+    wait_for_status(&supervisor, worker.agent_id, AgentStatus::Interrupted).await;
+    assert_eq!(
+        group.snapshot().task(second.task_id).unwrap().assignee,
+        Some(worker.agent_id),
+        "an interrupted child keeps its task until an explicit decision"
+    );
+    // Restarting the worker for an explicit continue rebuilds the child from
+    // its durable profile and never steals or drops the task.
+    supervisor
+        .continue_agent(worker.agent_id, "resume the slow work".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        group.snapshot().task(second.task_id).unwrap().assignee,
+        Some(worker.agent_id)
+    );
+}
+
+#[tokio::test]
+async fn group_messages_deliver_once_at_a_child_boundary_without_waking_idle_children() {
+    let (_workspace, store, agent) = test_agent(Arc::new(TestProvider::plain(0)), Mode::Work);
+    let supervisor = agent.agent_supervisor().unwrap();
+    let group = agent.group().unwrap();
+    let child = supervisor
+        .spawn_agent(
+            "listener".into(),
+            "wait for instructions".into(),
+            None,
+            DelegationContext::default(),
+        )
+        .await
+        .unwrap();
+    wait_for_status(&supervisor, child.agent_id, AgentStatus::Completed).await;
+    group.join(child.agent_id).unwrap();
+    group
+        .send_message(
+            agent.session_id,
+            latch_protocol::GroupMessageTarget::Agent(child.agent_id),
+            "parser contract changed: return i64".into(),
+        )
+        .unwrap();
+    // Queuing information must not wake an idle/completed child into an
+    // expensive model request.
+    assert_eq!(
+        supervisor.list_agents()[0].status,
+        AgentStatus::Completed,
+        "a group message is information, never an implicit continue"
+    );
+    assert!(
+        store
+            .events_of_kinds(child.agent_id, &["group_message_delivered"])
+            .unwrap()
+            .is_empty(),
+        "no delivery happens outside a safe model boundary"
+    );
+    // The next explicit turn delivers the message exactly once, and the
+    // provider-visible request contains it.
+    supervisor
+        .continue_agent(child.agent_id, "check coordination messages".into())
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let deliveries = store
+            .events_of_kinds(child.agent_id, &["group_message_delivered"])
+            .unwrap();
+        if deliveries.len() == 1 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "message was not delivered at the next boundary"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // No redelivery on a later boundary, and a rebuilt coordinator agrees.
+    supervisor
+        .continue_agent(child.agent_id, "anything else?".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        store
+            .events_of_kinds(child.agent_id, &["group_message_delivered"])
+            .unwrap()
+            .len(),
+        1
+    );
+    let resumed = GroupCoordinator::new(store.clone(), agent.session_id, "resumed".into()).unwrap();
+    assert!(
+        resumed
+            .deliver_pending(child.agent_id, false)
+            .unwrap()
+            .is_empty()
+    );
+}
