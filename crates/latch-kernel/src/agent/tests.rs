@@ -421,6 +421,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             reasoning_content: Some("reasoned".into()),
 
             reasoning: vec![],
+            media: Vec::new(),
         },
         ModelMessage {
             role: "tool".into(),
@@ -430,6 +431,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             reasoning_content: None,
 
             reasoning: vec![],
+            media: Vec::new(),
         },
     ];
     let sanitized = sanitize_tool_history(corrupt);
@@ -466,6 +468,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             reasoning_content: Some("reasoned".into()),
 
             reasoning: vec![],
+            media: Vec::new(),
         },
         ModelMessage {
             role: "tool".into(),
@@ -475,6 +478,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             reasoning_content: None,
 
             reasoning: vec![],
+            media: Vec::new(),
         },
         ModelMessage {
             role: "tool".into(),
@@ -484,6 +488,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
             reasoning_content: None,
 
             reasoning: vec![],
+            media: Vec::new(),
         },
     ];
     let kept = sanitize_tool_history(complete);
@@ -535,6 +540,7 @@ fn context_messages_anchor_mid_task_windows_instead_of_dropping_them() {
                 output: "hash: x\ncontents".into(),
                 is_error: false,
                 artifact_id: None,
+                media: Vec::new(),
             },
         },
     );
@@ -573,6 +579,7 @@ fn context_messages_anchor_mid_task_windows_instead_of_dropping_them() {
                 1,
                 EventPayload::UserMessage {
                     text: "do it".into(),
+                    media: vec![],
                 },
             ),
             assistant,
@@ -1312,7 +1319,7 @@ struct SteeringProvider {
     /// simulates a user typing into the live queue.
     steering: std::sync::RwLock<SteeringQueue>,
     inject_on_request: usize,
-    injections: Vec<String>,
+    injections: Vec<UserInput>,
 }
 
 #[async_trait::async_trait]
@@ -1336,8 +1343,8 @@ impl ModelProvider for SteeringProvider {
         };
         if index == self.inject_on_request {
             let steering = self.steering.read().unwrap().clone();
-            for text in &self.injections {
-                let _ = steering.push(text.clone());
+            for input in &self.injections {
+                let _ = steering.push(input.clone());
             }
         }
         let response = self
@@ -1691,6 +1698,7 @@ fn profile_descriptor(model: &str, window: Option<usize>) -> crate::providers::M
         reasoning_replay: crate::provider::ReasoningReplay::Replay,
         adaptive_thinking: false,
         transport: crate::config::TransportKind::ChatCompletions,
+        input_modalities: vec![latch_protocol::InputModality::Text],
         pricing: Some(latch_protocol::ModelPricing {
             input_per_million: Some(1.0),
             output_per_million: Some(2.0),
@@ -1808,14 +1816,14 @@ async fn live_profile_switch_updates_the_actual_runtime_and_rotates_the_epoch() 
     // The first user turn and its answer are still in history.
     assert!(events.iter().any(|event| matches!(
         &event.payload,
-        EventPayload::UserMessage { text } if text == "start"
+        EventPayload::UserMessage {  text, .. } if text == "start"
     )));
 }
 
 fn steering_agent(
     dir: &tempfile::TempDir,
     responses: Vec<ModelResponse>,
-    injections: Vec<String>,
+    injections: Vec<UserInput>,
     inject_on_request: usize,
 ) -> (EventStore, Uuid, Agent, Arc<SteeringProvider>) {
     let workspace = dir.path();
@@ -1856,7 +1864,7 @@ fn user_turns(events: &[Event]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match &event.payload {
-            EventPayload::UserMessage { text } => Some(text.clone()),
+            EventPayload::UserMessage { text, .. } => Some(text.clone()),
             _ => None,
         })
         .collect()
@@ -2028,7 +2036,7 @@ async fn steering_during_a_running_tool_waits_for_its_result() {
     let steer_index = events
             .iter()
             .position(|event| {
-                matches!(&event.payload, EventPayload::UserMessage { text } if text == "stop after this tool")
+                matches!(&event.payload, EventPayload::UserMessage {  text, .. } if text == "stop after this tool")
             })
             .expect("steering recorded");
     assert!(
@@ -2090,7 +2098,7 @@ async fn steering_after_a_plain_answer_gets_another_turn() {
     let recorded = events
             .iter()
             .filter(|event| {
-                matches!(&event.payload, EventPayload::UserMessage { text } if text == "not done yet")
+                matches!(&event.payload, EventPayload::UserMessage {  text, .. } if text == "not done yet")
             })
             .count();
     assert_eq!(recorded, 1, "the accepted steer is recorded exactly once");
@@ -2225,7 +2233,7 @@ async fn live_and_resumed_steering_state_remain_identical() {
         .recent
         .iter()
         .filter_map(|event| match &event.payload {
-            EventPayload::UserMessage { text } => Some(text.clone()),
+            EventPayload::UserMessage { text, .. } => Some(text.clone()),
             _ => None,
         })
         .collect();
@@ -2304,9 +2312,9 @@ fn steering_acceptance_and_closing_are_atomic() {
     assert_eq!(queue.push("first"), SteeringSubmission::Accepted);
     // Closing with an accepted message keeps the run open and hands the
     // message back for consumption.
-    assert_eq!(queue.close_and_drain(), vec!["first".to_owned()]);
+    assert_eq!(queue.close_and_drain(), vec![UserInput::text("first")]);
     assert_eq!(queue.push("second"), SteeringSubmission::Accepted);
-    assert_eq!(queue.close_and_drain(), vec!["second".to_owned()]);
+    assert_eq!(queue.close_and_drain(), vec![UserInput::text("second")]);
     // Closing with nothing pending latches the queue closed.
     assert!(queue.close_and_drain().is_empty());
     assert_eq!(queue.push("late"), SteeringSubmission::Closed);
@@ -2314,7 +2322,7 @@ fn steering_acceptance_and_closing_are_atomic() {
     // A later run opens the queue and does not see the rejected message.
     queue.open();
     assert_eq!(queue.push("next"), SteeringSubmission::Accepted);
-    assert_eq!(queue.drain(), vec!["next".to_owned()]);
+    assert_eq!(queue.drain(), vec![UserInput::text("next")]);
     assert!(queue.is_empty());
 }
 
@@ -2348,7 +2356,7 @@ fn concurrent_push_and_close_have_one_deterministic_outcome() {
         match handle.join().unwrap() {
             SteeringSubmission::Accepted => {
                 // The run saw the submission and must consume it.
-                assert_eq!(drained, vec!["race".to_owned()]);
+                assert_eq!(drained, vec![UserInput::text("race")]);
             }
             SteeringSubmission::Closed => {
                 // The close linearized first; nothing is left behind.
@@ -2601,7 +2609,7 @@ async fn a_steer_between_sequential_mutations_supersedes_the_stale_tail() {
     let steer_index = events
             .iter()
             .position(|event| {
-                matches!(&event.payload, EventPayload::UserMessage { text } if text.contains("switch"))
+                matches!(&event.payload, EventPayload::UserMessage {  text, .. } if text.contains("switch"))
             })
             .unwrap();
     assert!(
@@ -2628,7 +2636,7 @@ async fn a_steer_between_sequential_mutations_supersedes_the_stale_tail() {
         .recent
         .iter()
         .filter_map(|event| match &event.payload {
-            EventPayload::UserMessage { text } => Some(text.clone()),
+            EventPayload::UserMessage { text, .. } => Some(text.clone()),
             _ => None,
         })
         .collect();
@@ -2756,10 +2764,22 @@ async fn watermark_cursors_deliver_each_new_event_once() {
         0,
     );
     store
-        .append(sid, EventPayload::UserMessage { text: "one".into() })
+        .append(
+            sid,
+            EventPayload::UserMessage {
+                text: "one".into(),
+                media: vec![],
+            },
+        )
         .unwrap();
     store
-        .append(sid, EventPayload::UserMessage { text: "two".into() })
+        .append(
+            sid,
+            EventPayload::UserMessage {
+                text: "two".into(),
+                media: vec![],
+            },
+        )
         .unwrap();
 
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2777,6 +2797,7 @@ async fn watermark_cursors_deliver_each_new_event_once() {
             sid,
             EventPayload::UserMessage {
                 text: "three".into(),
+                media: vec![],
             },
         )
         .unwrap();
@@ -2919,10 +2940,10 @@ fn steering_survives_a_poisoned_lock() {
         "poisoning must not silently report an empty queue"
     );
     assert_eq!(queue.len(), 1, "accepted input is never lost");
-    assert_eq!(queue.drain(), vec!["before".to_owned()]);
+    assert_eq!(queue.drain(), vec![UserInput::text("before")]);
     assert!(queue.is_empty());
     assert_eq!(queue.push("after"), SteeringSubmission::Accepted);
-    assert_eq!(queue.drain(), vec!["after".to_owned()]);
+    assert_eq!(queue.drain(), vec![UserInput::text("after")]);
 }
 
 #[tokio::test]
@@ -3012,4 +3033,329 @@ async fn ordinary_turns_extend_the_provider_prefix_exactly() {
         "kernel state is part of the provider-visible epoch"
     );
     let _ = (store, sid);
+}
+
+/// Minimal structurally valid 1x1 PNG shared by the multimodal tests.
+const TINY_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xdd, 0x8d, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+fn final_text(text: &str) -> ModelResponse {
+    ModelResponse {
+        text: text.into(),
+        tool_calls: vec![],
+        stop_reason: "stop".into(),
+        usage: None,
+        reasoning_content: None,
+        reasoning: vec![],
+    }
+}
+
+fn vision_descriptor(model: &str) -> crate::providers::ModelDescriptor {
+    let mut descriptor = profile_descriptor(model, None);
+    descriptor.input_modalities = vec![
+        latch_protocol::InputModality::Text,
+        latch_protocol::InputModality::Image,
+    ];
+    descriptor
+}
+
+fn latest_stats(store: &EventStore, sid: Uuid) -> latch_protocol::ContextStats {
+    store
+        .events(sid)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::ContextMaterialized { stats } => Some(stats.clone()),
+            _ => None,
+        })
+        .expect("materialized context stats")
+}
+
+#[tokio::test]
+async fn user_attached_image_reaches_the_model_request_and_is_counted() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent, provider) = steering_agent(&d, vec![final_text("seen")], vec![], 0);
+    let artifacts = d.path().join("art");
+    let media =
+        crate::media::ingest_image_bytes(&artifacts, TINY_PNG, Some("shot.png".into())).unwrap();
+    let profile = agent.profile();
+    agent.restore_inference_profile(
+        provider.clone(),
+        profile,
+        &vision_descriptor("steering-test"),
+        ContextConfig::default(),
+    );
+    let out = agent
+        .run(
+            UserInput::new("inspect the screenshot", vec![media.clone()]),
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out, "seen");
+
+    let requests = provider.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1);
+    let user = requests[0]
+        .messages
+        .iter()
+        .find(|message| message.role == "user" && message.content.contains("inspect"))
+        .expect("user turn");
+    assert_eq!(
+        user.media.len(),
+        1,
+        "the image reaches the provider request"
+    );
+    assert_eq!(user.media[0].sha256, media.sha256);
+
+    // Durable history keeps the reference, not the bytes.
+    let events = store.events(sid).unwrap();
+    let stored = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::UserMessage { media, .. } if !media.is_empty() => Some(media.clone()),
+            _ => None,
+        })
+        .expect("durable user media");
+    assert_eq!(stored[0].sha256, media.sha256);
+    // Context accounting exposes the image honestly as estimated visual
+    // tokens, not base64 text length.
+    let stats = latest_stats(&store, sid);
+    assert_eq!(stats.image_count, 1);
+    assert!(stats.image_tokens > 0);
+    assert!(
+        stats.image_tokens < TINY_PNG.len() * 2,
+        "image accounting must not price encoded bytes as text"
+    );
+}
+
+#[tokio::test]
+async fn images_are_rejected_locally_for_text_only_models() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent, provider) =
+        steering_agent(&d, vec![final_text("unused")], vec![], 0);
+    let artifacts = d.path().join("art");
+    let media =
+        crate::media::ingest_image_bytes(&artifacts, TINY_PNG, Some("shot.png".into())).unwrap();
+    // The agent keeps its conservative text-only descriptor.
+    let error = agent
+        .run(
+            UserInput::new("inspect", vec![media]),
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("does not accept image input"),
+        "{error}"
+    );
+    assert!(
+        provider.requests.lock().unwrap().is_empty(),
+        "no provider request is made for rejected image input"
+    );
+    let events = store.events(sid).unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::UserMessage { .. })),
+        "rejected image input is not recorded as a durable user turn"
+    );
+}
+
+#[tokio::test]
+async fn a_text_only_model_switch_rejects_replayed_image_history_locally() {
+    let d = tempdir().unwrap();
+    let (_store, sid, mut agent, provider) = steering_agent(
+        &d,
+        vec![final_text("seen"), final_text("second")],
+        vec![],
+        0,
+    );
+    let artifacts = d.path().join("art");
+    let media =
+        crate::media::ingest_image_bytes(&artifacts, TINY_PNG, Some("shot.png".into())).unwrap();
+    let profile = agent.profile();
+    agent.restore_inference_profile(
+        provider.clone(),
+        profile.clone(),
+        &vision_descriptor("steering-test"),
+        ContextConfig::default(),
+    );
+    agent
+        .run(
+            UserInput::new("with image", vec![media]),
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.requests.lock().unwrap().len(), 1);
+
+    // Switch to a text-only model: replaying the image-bearing history must
+    // fail locally instead of dropping the image or sending an invalid body.
+    agent.restore_inference_profile(
+        provider.clone(),
+        profile,
+        &profile_descriptor("steering-test", None),
+        ContextConfig::default(),
+    );
+    let error = agent
+        .run(
+            UserInput::text("continue"),
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("does not accept image input"),
+        "{error}"
+    );
+    assert_eq!(
+        provider.requests.lock().unwrap().len(),
+        1,
+        "the text-only request is never sent"
+    );
+    let _ = sid;
+}
+
+#[tokio::test]
+async fn read_image_feeds_pixels_into_the_next_request_and_survives_source_deletion() {
+    let d = tempdir().unwrap();
+    std::fs::write(d.path().join("shot.png"), TINY_PNG).unwrap();
+    let (store, sid, mut agent, provider) = steering_agent(
+        &d,
+        vec![
+            tool_response("reading", "img-1", "read_image", json!({"path":"shot.png"})),
+            final_text("looked"),
+        ],
+        vec![],
+        0,
+    );
+    let profile = agent.profile();
+    agent.restore_inference_profile(
+        provider.clone(),
+        profile.clone(),
+        &vision_descriptor("steering-test"),
+        ContextConfig::default(),
+    );
+    agent
+        .run(
+            UserInput::text("look at the screenshot"),
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+
+    let requests = provider.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let tool = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.role == "tool")
+        .expect("tool result");
+    assert_eq!(tool.media.len(), 1, "read_image result carries the image");
+    let stored = tool.media[0].clone();
+    let artifacts = d.path().join("art");
+    assert_eq!(
+        crate::media::read_image_bytes(&artifacts, &stored).unwrap(),
+        TINY_PNG
+    );
+
+    // The original workspace file disappears; replay must still resolve the
+    // exact original image from immutable artifact storage.
+    std::fs::remove_file(d.path().join("shot.png")).unwrap();
+    let provider2 = Arc::new(FakeProvider::scripted(vec![]));
+    let mut resumed = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: d.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: provider2.clone(),
+        tools: ToolExecutor::new(
+            d.path().into(),
+            artifacts.clone(),
+            store.clone(),
+            sid,
+            PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default()),
+        )
+        .unwrap(),
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    resumed.restore_inference_profile(
+        provider2,
+        profile,
+        &vision_descriptor("steering-test"),
+        ContextConfig::default(),
+    );
+    let ctx = resumed.context(None).unwrap();
+    let messages = context_messages(&ctx);
+    let replayed = messages
+        .iter()
+        .flat_map(|message| message.media.iter())
+        .find(|media| media.sha256 == stored.sha256)
+        .expect("resumed history still references the image");
+    assert_eq!(
+        crate::media::read_image_bytes(&artifacts, replayed).unwrap(),
+        TINY_PNG
+    );
+}
+
+#[tokio::test]
+async fn steering_can_carry_an_image() {
+    let d = tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("art")).unwrap();
+    let media =
+        crate::media::ingest_image_bytes(&d.path().join("art"), TINY_PNG, Some("steer.png".into()))
+            .unwrap();
+    let (store, sid, mut agent, provider) = steering_agent(
+        &d,
+        vec![
+            tool_response("checking", "c1", "read_file", json!({"path":"a"})),
+            final_text("adapted"),
+        ],
+        vec![UserInput::new("look at this instead", vec![media.clone()])],
+        1,
+    );
+    let profile = agent.profile();
+    agent.restore_inference_profile(
+        provider.clone(),
+        profile,
+        &vision_descriptor("steering-test"),
+        ContextConfig::default(),
+    );
+    agent
+        .run("start", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    let requests = provider.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let steer = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.role == "user" && message.content.contains("look at this"))
+        .expect("steering turn");
+    assert_eq!(steer.media.len(), 1);
+    assert_eq!(steer.media[0].sha256, media.sha256);
+    // FIFO ordering and safe boundaries are unchanged for media steering too.
+    let events = store.events(sid).unwrap();
+    let durable = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::UserMessage { media, .. } if !media.is_empty() => Some(media.clone()),
+            _ => None,
+        })
+        .expect("durable steering media");
+    assert_eq!(durable[0].sha256, media.sha256);
 }

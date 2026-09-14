@@ -17,7 +17,8 @@ use crate::store::EventStore;
 use crate::tokens::TokenEstimator;
 use anyhow::{Context, Result, anyhow, bail};
 use latch_protocol::{
-    ChangeOwner, EventPayload, FileVersion, Mode, PermissionMode, Safety, ToolCall, ToolResult,
+    ChangeOwner, EventPayload, FileVersion, MediaRef, Mode, PermissionMode, Safety, ToolCall,
+    ToolResult,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -331,8 +332,13 @@ impl ToolExecutor {
         vec![
             def(
                 "read_file",
-                "Read a bounded window of a UTF-8 workspace file and return its version hash. Defaults to the first 400 lines; pass offset (1-based line) and/or limit, or tail, to read another window. The result reports the line range and the offset for continuation, so large files are never injected whole.",
+                "Read a bounded window of a UTF-8 workspace file and return its version hash. Defaults to the first 400 lines; pass offset (1-based line) and/or limit, or tail, to read another window. The result reports the line range and the offset for continuation, so large files are never injected whole. Use read_image for image files.",
                 json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based first line to return"},"limit":{"type":"integer","description":"maximum lines to return"},"tail":{"type":"integer","description":"return the last N lines instead of a head window"}}}),
+            ),
+            def(
+                "read_image",
+                "Inspect an image file (PNG, JPEG, or WebP) in the workspace. The image is ingested into Latch's immutable artifact store and attached to the conversation, so a vision-capable model sees the original pixels. Returns image metadata; do not use read_file for images.",
+                json!({"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"workspace-relative or workspace-contained image path"}}}),
             ),
             def(
                 "search",
@@ -443,25 +449,31 @@ impl ToolExecutor {
             return result(call, format!("persist tool start: {error}"), true, None);
         }
         let outcome = match call.name.as_str() {
-            "read_file" => self.read_file(call).await,
-            "search" => self.search(call).await,
-            "read_artifact" => self.read_artifact(call).await,
-            "exec_start" => self.process_start(call).await,
-            "exec_poll" => self.process_poll(call).await,
-            "exec_terminate" => self.process_terminate(call).await,
-            "patch" => self.patch(call).await,
-            "write" => self.write(call).await,
-            "shell" => self.shell(call, cancel).await,
-            "git_status" => self.git_status(call).await,
-            "git_diff" => self.git_diff(call).await,
-            "checkpoint" => self.checkpoint(call).await,
-            "undo" => self.undo(call).await,
-            _ => Err(anyhow!("unknown tool {}", call.name)),
+            "read_image" => self.read_image(call).await,
+            other => match other {
+                "read_file" => self.read_file(call).await,
+                "search" => self.search(call).await,
+                "read_artifact" => self.read_artifact(call).await,
+                "exec_start" => self.process_start(call).await,
+                "exec_poll" => self.process_poll(call).await,
+                "exec_terminate" => self.process_terminate(call).await,
+                "patch" => self.patch(call).await,
+                "write" => self.write(call).await,
+                "shell" => self.shell(call, cancel).await,
+                "git_status" => self.git_status(call).await,
+                "git_diff" => self.git_diff(call).await,
+                "checkpoint" => self.checkpoint(call).await,
+                "undo" => self.undo(call).await,
+                _ => Err(anyhow!("unknown tool {}", call.name)),
+            }
+            .map(|(output, artifact_id)| (output, artifact_id, Vec::new())),
         };
         // The grant is single-use for exactly this call id.
         self.clear_grant(&call.id);
         let r = match outcome {
-            Ok(v) => result(call, v.0, false, v.1),
+            Ok((output, artifact_id, media)) => {
+                result_with_media(call, output, false, artifact_id, media)
+            }
             Err(e) => result(call, format!("{e:#}"), true, None),
         };
         let payload = if r.is_error {
@@ -494,12 +506,23 @@ fn result(
     is_error: bool,
     artifact_id: Option<String>,
 ) -> ToolResult {
+    result_with_media(call, output, is_error, artifact_id, Vec::new())
+}
+
+fn result_with_media(
+    call: &ToolCall,
+    output: String,
+    is_error: bool,
+    artifact_id: Option<String>,
+    media: Vec<MediaRef>,
+) -> ToolResult {
     ToolResult {
         call_id: call.id.clone(),
         name: call.name.clone(),
         output,
         is_error,
         artifact_id,
+        media,
     }
 }
 

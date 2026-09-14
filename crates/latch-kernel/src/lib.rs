@@ -7,6 +7,7 @@ pub mod continuity;
 pub mod credentials;
 pub mod extension;
 pub mod linediff;
+pub mod media;
 pub mod permissions;
 pub mod progress;
 pub mod prompt;
@@ -25,6 +26,7 @@ pub use agents::{AgentSnapshot, AgentSupervisor, ProviderBuild, ProviderFactory}
 pub use config::Config;
 pub use continuity::{ContinuityEngine, MaterializeBudget, MaterializedContext};
 pub use credentials::{CredentialRef, CredentialStore};
+pub use media::{ArtifactMediaStore, ImageFormat, ingest_image_bytes, read_image_bytes};
 pub use permissions::PermissionBroker;
 pub use progress::{ProgressSupervisor, StagnationDecision};
 pub use provider::{

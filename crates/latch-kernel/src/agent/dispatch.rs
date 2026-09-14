@@ -143,7 +143,7 @@ impl Agent {
         let mut executed = if permitted.iter().all(|c| {
             matches!(
                 c.name.as_str(),
-                "read_file" | "search" | "read_artifact" | "git_status" | "git_diff"
+                "read_file" | "read_image" | "search" | "read_artifact" | "git_status" | "git_diff"
             )
         }) {
             let tasks = permitted
@@ -164,6 +164,7 @@ impl Agent {
                         output: e.to_string(),
                         is_error: true,
                         artifact_id: None,
+                        media: Vec::new(),
                     }),
                 }
             }
@@ -286,6 +287,7 @@ pub(super) fn tool_ok(call: &ToolCall, output: String) -> ToolResult {
         output,
         is_error: false,
         artifact_id: None,
+        media: Vec::new(),
     }
 }
 
@@ -296,5 +298,6 @@ pub(super) fn tool_error(call: &ToolCall, output: String) -> ToolResult {
         output,
         is_error: true,
         artifact_id: None,
+        media: Vec::new(),
     }
 }

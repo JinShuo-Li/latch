@@ -149,7 +149,7 @@ async fn run_once(
     let session = store.create_session(&workspace)?;
     let (profile, descriptor) =
         registry.resolve_profile(&InferenceProfile::new(provider_id, model, effort))?;
-    let provider = registry.build_provider(&profile, &descriptor, credentials, session)?;
+    let provider = registry.build_provider(&profile, &descriptor, credentials, session, None)?;
     let tools = ToolExecutor::new(
         workspace.clone(),
         dir.path().join("artifacts"),

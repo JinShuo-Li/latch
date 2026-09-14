@@ -100,7 +100,7 @@ async fn run_turn(
         let turn_cancel = lifetime.child_token();
         let child_mailbox = agent.child_mailbox_handle();
         let sink: AgentEventSink = Arc::new(|_| {});
-        let run = agent.run(&prompt, turn_cancel.clone(), sink);
+        let run = agent.run(prompt.as_str(), turn_cancel.clone(), sink);
         tokio::pin!(run);
         let mut interrupted = false;
         let mut closing = false;

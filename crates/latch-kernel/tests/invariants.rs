@@ -318,6 +318,7 @@ fn kernel_state_deltas_append_without_rewriting_history() {
             session,
             EventPayload::UserMessage {
                 text: "fix the failing test".into(),
+                media: vec![],
             },
         )
         .unwrap();
@@ -380,6 +381,7 @@ fn rotation_is_occasional_and_preserves_truth_and_recall() {
             session,
             EventPayload::UserMessage {
                 text: "early diagnostic: EADDRINUSE on port 4317".into(),
+                media: vec![],
             },
         )
         .unwrap();
@@ -410,6 +412,7 @@ fn rotation_is_occasional_and_preserves_truth_and_recall() {
                 session,
                 EventPayload::UserMessage {
                     text: format!("turn {turns} {}", "x".repeat(200)),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -488,7 +491,7 @@ fn rotation_is_occasional_and_preserves_truth_and_recall() {
     assert!(
         recalled
             .iter()
-            .any(|event| matches!(&event.payload, EventPayload::UserMessage { text } if text.contains("EADDRINUSE"))),
+            .any(|event| matches!(&event.payload, EventPayload::UserMessage {  text, .. } if text.contains("EADDRINUSE"))),
         "evicted material stays reachable through exact recall"
     );
     let queried = materialize(
@@ -519,6 +522,7 @@ fn tool_transactions_survive_rotation_atomically() {
                 session,
                 EventPayload::UserMessage {
                     text: format!("request {index}"),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -548,6 +552,7 @@ fn tool_transactions_survive_rotation_atomically() {
                         output: "y".repeat(600),
                         is_error: false,
                         artifact_id: None,
+                        media: Vec::new(),
                     },
                 },
             )
@@ -597,6 +602,7 @@ fn provider_serialization_is_deterministic() {
                 reasoning_content: Some("reasoning must replay".into()),
 
                 reasoning: vec![],
+                media: Vec::new(),
             },
             ModelMessage {
                 role: "tool".into(),
@@ -606,19 +612,18 @@ fn provider_serialization_is_deterministic() {
                 reasoning_content: None,
 
                 reasoning: vec![],
+                media: Vec::new(),
             },
         ],
         tools: ToolExecutor::definitions(),
     };
     let encode = |request: &ModelRequest| {
         (
-            serde_json::to_string(&openai_request(
-                request,
-                "deepseek-test",
-                ReasoningReplay::Replay,
-            ))
+            serde_json::to_string(
+                &openai_request(request, "deepseek-test", ReasoningReplay::Replay).unwrap(),
+            )
             .unwrap(),
-            serde_json::to_string(&anthropic_request(request, "claude-test")).unwrap(),
+            serde_json::to_string(&anthropic_request(request, "claude-test").unwrap()).unwrap(),
         )
     };
     assert_eq!(encode(&request), encode(&request));

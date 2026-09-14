@@ -371,6 +371,7 @@ async fn scripted_long_session_dogfood() {
                 session,
                 EventPayload::UserMessage {
                     text: format!("unrelated turnover {index}"),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -412,7 +413,7 @@ async fn scripted_long_session_dogfood() {
     let items = replay_items(&events);
     assert!(items.iter().any(|item| matches!(
         item,
-        DisplayItem::UserMessage { text } if text.contains("What is in this repository?")
+        DisplayItem::UserMessage {  text, .. } if text.contains("What is in this repository?")
     )));
     assert!(items.iter().any(|item| matches!(
         item,
@@ -839,7 +840,8 @@ async fn reasoning_and_tool_history_round_trip_across_resume() {
     assert_eq!(tool.tool_call_id.as_deref(), Some("read-1"));
 
     let body =
-        latch_kernel::provider::openai_request(second, "deepseek-test", ReasoningReplay::Replay);
+        latch_kernel::provider::openai_request(second, "deepseek-test", ReasoningReplay::Replay)
+            .unwrap();
     let messages = body["messages"].as_array().unwrap();
     let assistant_json = messages
         .iter()
@@ -931,7 +933,8 @@ async fn reasoning_and_tool_history_round_trip_across_resume() {
         &resumed[0],
         "deepseek-test",
         ReasoningReplay::Replay,
-    );
+    )
+    .unwrap();
     let messages = body["messages"].as_array().unwrap();
     assert!(messages.iter().any(|m| {
         m["role"] == "assistant"
@@ -1209,7 +1212,8 @@ async fn denied_tool_call_preserves_complete_provider_transaction() {
 
     // 11: serialize and assert protocol validity for the thinking wire profile.
     let body =
-        latch_kernel::provider::openai_request(second, "deepseek-test", ReasoningReplay::Replay);
+        latch_kernel::provider::openai_request(second, "deepseek-test", ReasoningReplay::Replay)
+            .unwrap();
     let messages = body["messages"].as_array().unwrap();
     let assistant_json = messages
         .iter()
@@ -1318,7 +1322,8 @@ async fn denied_tool_call_preserves_complete_provider_transaction() {
         &resumed[0],
         "deepseek-test",
         ReasoningReplay::Replay,
-    );
+    )
+    .unwrap();
     let messages = body["messages"].as_array().unwrap();
     assert!(messages.iter().any(|m| {
         m["role"] == "assistant"
@@ -1575,7 +1580,7 @@ async fn live_and_replay_transcripts_converge() {
     let user_live: Vec<&str> = live_items
         .iter()
         .filter_map(|item| match item {
-            DisplayItem::UserMessage { text } => Some(text.as_str()),
+            DisplayItem::UserMessage { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -1592,7 +1597,7 @@ async fn live_and_replay_transcripts_converge() {
     let user_replay: Vec<&str> = replay
         .iter()
         .filter_map(|item| match item {
-            DisplayItem::UserMessage { text } => Some(text.as_str()),
+            DisplayItem::UserMessage { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();

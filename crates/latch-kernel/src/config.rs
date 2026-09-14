@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use latch_protocol::{Mode, ModelPricing, PermissionMode, ReasoningEffort, Safety};
+use latch_protocol::{InputModality, Mode, ModelPricing, PermissionMode, ReasoningEffort, Safety};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -237,6 +237,12 @@ pub struct ModelConfig {
     /// capability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_thinking: Option<bool>,
+    /// Provider-neutral input modalities, for example `["text", "image"]`.
+    /// `None` uses the built-in model capability; `Some` overrides it, so a
+    /// custom or newly released vision model never requires a Latch rebuild.
+    /// Text is always implicit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_modalities: Option<Vec<InputModality>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
 }

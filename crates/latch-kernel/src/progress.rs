@@ -341,6 +341,16 @@ fn observation_key(
             };
             Some((format!("read_file:{path}:{range}"), label, freshness))
         }
+        "read_image" => {
+            let raw = string_arg(call, "path")?;
+            let path = normalize_path(workspace, raw);
+            let freshness = freshness_of_file(call, workspace);
+            Some((
+                format!("read_image:{path}"),
+                format!("read_image {path}"),
+                freshness,
+            ))
+        }
         "search" => {
             let query = collapse_whitespace(string_arg(call, "query")?);
             let target = string_arg(call, "path")
@@ -391,7 +401,7 @@ fn observation_key(
 }
 
 fn freshness_of_file(call: &ToolCall, workspace: &Path) -> Option<Freshness> {
-    if call.name != "read_file" {
+    if !matches!(call.name.as_str(), "read_file" | "read_image") {
         return None;
     }
     let path = Path::new(string_arg(call, "path")?);
@@ -500,6 +510,7 @@ mod tests {
                     output: output.into(),
                     is_error: false,
                     artifact_id: None,
+                    media: Vec::new(),
                 },
             },
         )
@@ -520,6 +531,7 @@ mod tests {
             output: output.into(),
             is_error: false,
             artifact_id: None,
+            media: Vec::new(),
         }
     }
 
@@ -650,6 +662,7 @@ mod tests {
                 1,
                 EventPayload::UserMessage {
                     text: "do it".into(),
+                    media: vec![],
                 },
             ),
             requested("r1", "read_file", json!({"path": path})),

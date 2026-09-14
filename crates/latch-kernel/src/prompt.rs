@@ -72,7 +72,7 @@ impl PromptCompiler {
                 "core.tool_use",
                 60,
                 true,
-                "read_file returns a bounded window with the file hash and continuation offset; re-read only when code changed or evidence requires it, and never re-read merely to confirm a successful guarded patch. search and read_artifact return bounded pages. Prefer read_file, search, and git_diff over shell. Avoid `cd <workspace> &&`; `cd` into a subdirectory only for read-only inspection, and never `cd` outside the workspace. Use exec_start/exec_poll/exec_terminate for long commands. A failed tool call is evidence: change assumptions, do not retry unchanged.",
+                "read_file returns a bounded window with the file hash and continuation offset; re-read only when code changed or evidence requires it, and never re-read merely to confirm a successful guarded patch. search and read_artifact return bounded pages. For image files (PNG, JPEG, WebP) use read_image so the image itself reaches the model; do not use read_file on binary images. Images the user attached are already visible when the model accepts image input. Prefer read_file, search, and git_diff over shell. Avoid `cd <workspace> &&`; `cd` into a subdirectory only for read-only inspection, and never `cd` outside the workspace. Use exec_start/exec_poll/exec_terminate for long commands. A failed tool call is evidence: change assumptions, do not retry unchanged.",
             ),
             fragment(
                 "core.editing",
@@ -362,6 +362,7 @@ mod tests {
         let (_d, p) = work_prompt();
         for required in [
             "read_file",
+            "read_image",
             "read_artifact",
             "search",
             "git_diff",
@@ -462,13 +463,15 @@ mod tests {
             .sum();
         // Proportional-effort architecture: the always-on stable prefix is a
         // small behavioral core plus kernel semantics. The cap is deliberately
-        // just above today's size so accidental growth fails loudly.
+        // just above today's size so accidental growth fails loudly. The
+        // image-input guidance raised it once, deliberately, for the vision
+        // capability.
         assert!(
-            static_tokens <= 1_220,
+            static_tokens <= 1_300,
             "static coding prompt grew to {static_tokens} tokens"
         );
         assert!(
-            p.approximate_tokens() <= 1_360,
+            p.approximate_tokens() <= 1_440,
             "compiled prompt grew to {} tokens",
             p.approximate_tokens()
         );

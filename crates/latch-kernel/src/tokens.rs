@@ -12,9 +12,12 @@
 //! punctuation at two, and non-ASCII characters at one to two tokens each
 //! (CJK-aware models get a tighter profile).
 
-use latch_protocol::{ModelMessage, ToolDefinition};
+use latch_protocol::{MediaRef, ModelMessage, ToolDefinition};
 use serde_json::Value;
 use unicode_width::UnicodeWidthChar;
+
+/// Conservative fallback for an image whose dimensions are unknown.
+pub const IMAGE_TOKEN_FALLBACK: usize = 1_600;
 
 /// Tokenizer family used to price text. `Generic` is the conservative
 /// fallback for unknown providers.
@@ -155,8 +158,34 @@ impl TokenEstimator {
         self.estimate(&text)
     }
 
+    /// Estimated tokens for one image. Never measures base64 bytes as text:
+    /// visual tokens are estimated from dimensions with the conservative
+    /// maximum of the current provider patch formulas (Anthropic 28px visual
+    /// tokens, OpenAI 32px patches), and an unknown size uses a flat
+    /// conservative fallback. The label stays "estimated"; provider-reported
+    /// usage is authoritative after the request.
+    #[must_use]
+    pub fn estimate_image(&self, media: &MediaRef) -> usize {
+        match (media.width, media.height) {
+            (Some(width), Some(height)) => {
+                let width = width.max(1) as usize;
+                let height = height.max(1) as usize;
+                let anthropic = width.div_ceil(28).saturating_mul(height.div_ceil(28));
+                let openai = width.div_ceil(32).saturating_mul(height.div_ceil(32));
+                anthropic.max(openai).max(85)
+            }
+            _ => IMAGE_TOKEN_FALLBACK,
+        }
+    }
+
+    /// Estimated visual/input tokens for a media list.
+    #[must_use]
+    pub fn estimate_media(&self, media: &[MediaRef]) -> usize {
+        media.iter().map(|item| self.estimate_image(item)).sum()
+    }
+
     /// Estimated tokens for a provider-neutral message list, including a small
-    /// per-message framing overhead.
+    /// per-message framing overhead and image-aware accounting.
     #[must_use]
     pub fn estimate_messages(&self, messages: &[ModelMessage]) -> usize {
         const MESSAGE_OVERHEAD: usize = 4;
@@ -165,6 +194,7 @@ impl TokenEstimator {
             .map(|message| {
                 self.estimate(&message.content)
                     + MESSAGE_OVERHEAD
+                    + self.estimate_media(&message.media)
                     + message
                         .tool_calls
                         .iter()
@@ -288,6 +318,7 @@ mod tests {
             reasoning_content: None,
 
             reasoning: vec![],
+            media: Vec::new(),
         }];
         let rich = vec![ModelMessage {
             role: "assistant".into(),
@@ -301,6 +332,7 @@ mod tests {
             reasoning_content: Some("deep reasoning ".repeat(200)),
 
             reasoning: vec![],
+            media: Vec::new(),
         }];
         let plain_tokens = estimator.estimate_messages(&plain);
         let rich_tokens = estimator.estimate_messages(&rich);

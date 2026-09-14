@@ -253,7 +253,7 @@ impl EventStore {
                 }),
                 event_count,
                 prompt_preview: payload(prompt)?.and_then(|payload| match payload {
-                    EventPayload::UserMessage { text } => Some(compact_preview(&text, 140)),
+                    EventPayload::UserMessage { text, .. } => Some(compact_preview(&text, 140)),
                     _ => None,
                 }),
                 completion: payload(completion)?.and_then(|payload| match payload {
@@ -305,7 +305,7 @@ impl EventStore {
             .into_iter()
             .filter_map(|json| serde_json::from_str::<EventPayload>(&json).ok())
             .filter_map(|payload| match payload {
-                EventPayload::UserMessage { text } => Some(SessionPreviewLine {
+                EventPayload::UserMessage { text, .. } => Some(SessionPreviewLine {
                     speaker: "You",
                     text: compact_preview(&text, 220),
                 }),
@@ -786,10 +786,22 @@ mod tests {
         let s = EventStore::open_memory().unwrap();
         let id = s.create_session(Path::new("/tmp/x")).unwrap();
         let a = s
-            .append(id, EventPayload::UserMessage { text: "a".into() })
+            .append(
+                id,
+                EventPayload::UserMessage {
+                    text: "a".into(),
+                    media: vec![],
+                },
+            )
             .unwrap();
         let b = s
-            .append(id, EventPayload::UserMessage { text: "b".into() })
+            .append(
+                id,
+                EventPayload::UserMessage {
+                    text: "b".into(),
+                    media: vec![],
+                },
+            )
             .unwrap();
         assert_eq!((a.sequence, b.sequence), (1, 2));
         let es = s.events(id).unwrap();
@@ -806,6 +818,7 @@ mod tests {
                 first,
                 EventPayload::UserMessage {
                     text: "first prompt".into(),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -827,6 +840,7 @@ mod tests {
                 second,
                 EventPayload::UserMessage {
                     text: "new prompt".into(),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -885,6 +899,7 @@ mod tests {
                     sid,
                     EventPayload::UserMessage {
                         text: format!("message {index}"),
+                        media: vec![],
                     },
                 )
                 .unwrap();
@@ -958,6 +973,7 @@ mod tests {
                     sid,
                     EventPayload::UserMessage {
                         text: format!("{text} {index}"),
+                        media: vec![],
                     },
                 )
                 .unwrap();
@@ -1039,6 +1055,7 @@ mod tests {
                     session,
                     EventPayload::UserMessage {
                         text: "persist me".into(),
+                        media: vec![],
                     },
                 )
                 .unwrap();

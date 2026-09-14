@@ -218,9 +218,9 @@ async fn multiple_children_run_concurrently_with_isolated_contexts() {
     assert!(provider.max_active.load(Ordering::SeqCst) >= 2);
     let first = store.events(one.agent_id).unwrap();
     let second = store.events(two.agent_id).unwrap();
-    assert!(first.iter().any(|event| matches!(&event.payload, EventPayload::UserMessage { text } if text.contains("first unique"))));
-    assert!(!first.iter().any(|event| matches!(&event.payload, EventPayload::UserMessage { text } if text.contains("second unique"))));
-    assert!(second.iter().any(|event| matches!(&event.payload, EventPayload::UserMessage { text } if text.contains("second unique"))));
+    assert!(first.iter().any(|event| matches!(&event.payload, EventPayload::UserMessage {  text, .. } if text.contains("first unique"))));
+    assert!(!first.iter().any(|event| matches!(&event.payload, EventPayload::UserMessage {  text, .. } if text.contains("second unique"))));
+    assert!(second.iter().any(|event| matches!(&event.payload, EventPayload::UserMessage {  text, .. } if text.contains("second unique"))));
 }
 
 #[tokio::test]
@@ -499,6 +499,7 @@ async fn child_notification_enters_parent_only_after_terminal_tool_result() {
                     output: "old result".into(),
                     is_error: false,
                     artifact_id: None,
+                    media: Vec::new(),
                 },
             },
         )
@@ -933,6 +934,7 @@ async fn child_inherits_the_live_inference_profile() {
         reasoning_replay: crate::provider::ReasoningReplay::Omit,
         adaptive_thinking: false,
         transport: crate::config::TransportKind::Responses,
+        input_modalities: vec![latch_protocol::InputModality::Text],
         pricing: None,
         aliases: Vec::new(),
         known: true,
@@ -1029,6 +1031,7 @@ fn named_descriptor(model: &str) -> crate::providers::ModelDescriptor {
         reasoning_replay: crate::provider::ReasoningReplay::Omit,
         adaptive_thinking: false,
         transport: crate::config::TransportKind::ChatCompletions,
+        input_modalities: vec![latch_protocol::InputModality::Text],
         pricing: None,
         aliases: Vec::new(),
         known: true,

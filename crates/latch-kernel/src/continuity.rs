@@ -302,7 +302,7 @@ impl ContinuityEngine {
         let conversation_tokens: usize = recent
             .iter()
             .filter(|event| !matches!(event.payload, EventPayload::KernelContext { .. }))
-            .map(|event| estimator.estimate(&render_event(event)))
+            .map(|event| event_tokens(event, &estimator))
             .sum();
         // The high-water mark governs conversation working memory. Kernel
         // messages (current state, recall, archive index) are authoritative
@@ -348,7 +348,7 @@ impl ContinuityEngine {
             retained.retain(|event| !matches!(event.payload, EventPayload::KernelContext { .. }));
             let retained_tokens: usize = retained
                 .iter()
-                .map(|event| estimator.estimate(&render_event(event)))
+                .map(|event| event_tokens(event, &estimator))
                 .sum();
             let from_sequence = retained
                 .first()
@@ -572,8 +572,13 @@ impl ContinuityEngine {
         let mut reasoning_replay_used = 0usize;
         let mut tool_arguments_used = 0usize;
         let mut tool_result_used = 0usize;
+        let mut image_count = 0usize;
+        let mut image_tokens = 0usize;
         for event in &recent {
-            let tokens = estimator.estimate(&render_event(event));
+            let tokens = event_tokens(event, &estimator);
+            let media = event_media(event);
+            image_count += media.len();
+            image_tokens += estimator.estimate_media(media);
             match &event.payload {
                 EventPayload::KernelContext {
                     kind: KernelContextKind::Snapshot | KernelContextKind::StateUpdate,
@@ -641,6 +646,8 @@ impl ContinuityEngine {
             reasoning_replay_tokens: reasoning_replay_used,
             tool_arguments_tokens: tool_arguments_used,
             tool_result_tokens: tool_result_used,
+            image_count,
+            image_tokens,
             recall_tokens: recall_used,
             episode_tokens: episode_used,
             recent_start_sequence: epoch_start,
@@ -862,7 +869,7 @@ fn bounded_recent(
         .map(|(start, end)| {
             conversation[*start..*end]
                 .iter()
-                .map(|event| estimator.estimate(&render_event(event)))
+                .map(|event| event_tokens(event, estimator))
                 .sum::<usize>()
         })
         .collect();
@@ -998,8 +1005,26 @@ fn is_epoch_visible(event: &Event, generation: u64) -> bool {
 fn estimated_events_tokens(events: &[Event], estimator: &TokenEstimator) -> usize {
     events
         .iter()
-        .map(|event| estimator.estimate(&render_event(event)))
+        .map(|event| event_tokens(event, estimator))
         .sum()
+}
+
+/// Images referenced by one durable event. Only user turns and tool results can
+/// carry media; everything else contributes none.
+fn event_media(event: &Event) -> &[latch_protocol::MediaRef] {
+    match &event.payload {
+        EventPayload::UserMessage { media, .. } => media,
+        EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } => {
+            &result.media
+        }
+        _ => &[],
+    }
+}
+
+/// Estimated provider cost of one event: rendered text plus conservative
+/// image-token accounting. Image bytes are never measured as base64 text.
+fn event_tokens(event: &Event, estimator: &TokenEstimator) -> usize {
+    estimator.estimate(&render_event(event)) + estimator.estimate_media(event_media(event))
 }
 
 /// Stable header for one durable kernel context message. The generation and
@@ -1262,7 +1287,7 @@ impl EpisodeCache {
             if !rebuild {
                 self.last_evicted_tokens = delta
                     .iter()
-                    .map(|event| estimator.estimate(&render_event(event)))
+                    .map(|event| event_tokens(event, estimator))
                     .sum();
             }
             for event in &delta {
@@ -1310,7 +1335,7 @@ fn conversation_bridge(state: &TaskState, events: &[Event]) -> ConversationBridg
 
 fn event_user_text(payload: &EventPayload) -> Option<&str> {
     match payload {
-        EventPayload::UserMessage { text } => Some(text),
+        EventPayload::UserMessage { text, .. } => Some(text),
         EventPayload::AgentMessageReceived { message } => Some(&message.text),
         _ => None,
     }
@@ -1444,7 +1469,7 @@ fn render_recalled(
     let mut selected = Vec::new();
     for event in recalled {
         let rendered = render_event(event);
-        let cost = estimator.estimate(&rendered);
+        let cost = estimator.estimate(&rendered) + estimator.estimate_media(event_media(event));
         if !selected.is_empty() && used + cost > cap_tokens {
             break;
         }
@@ -1461,7 +1486,14 @@ fn render_recalled(
 /// provider bills and caches them; omitting them undercounted real requests.
 fn render_event(e: &Event) -> String {
     match &e.payload {
-        EventPayload::UserMessage { text } => format!("user: {text}"),
+        EventPayload::UserMessage { text, media } => {
+            let mut rendered = format!("user: {text}");
+            for media_ref in media {
+                rendered.push('\n');
+                rendered.push_str(&media_ref.compact_label());
+            }
+            rendered
+        }
         EventPayload::AgentMessageReceived { message } => format!("user: {}", message.text),
         EventPayload::AssistantMessageCompleted {
             text,
@@ -1545,6 +1577,7 @@ mod tests {
                 sid,
                 EventPayload::UserMessage {
                     text: "Constraint A: preserve wire compatibility".into(),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -1553,6 +1586,7 @@ mod tests {
                 sid,
                 EventPayload::UserMessage {
                     text: "Decision B: use framed stdio".into(),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -1561,6 +1595,7 @@ mod tests {
                 sid,
                 EventPayload::UserMessage {
                     text: "Approach C: rewrite the fixture".into(),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -1574,6 +1609,7 @@ mod tests {
                         output: "exact diagnostic D: EADDRINUSE on 4317".into(),
                         is_error: true,
                         artifact_id: None,
+                        media: Vec::new(),
                     },
                 },
             )
@@ -1611,6 +1647,7 @@ mod tests {
                     sid,
                     EventPayload::UserMessage {
                         text: format!("unrelated conversation {i} {}", "x".repeat(80)),
+                        media: vec![],
                     },
                 )
                 .unwrap();
@@ -1660,7 +1697,7 @@ mod tests {
         assert!(ctx.recalled.contains("exact diagnostic D"));
         assert!(ctx.recent.iter().any(|e| matches!(
             &e.payload,
-            EventPayload::UserMessage { text } if text.contains("unrelated conversation 1999")
+            EventPayload::UserMessage {  text, .. } if text.contains("unrelated conversation 1999")
         )));
         let all = store.events(sid).unwrap();
         let epoch_events = all
@@ -1717,6 +1754,7 @@ mod tests {
                     sid,
                     EventPayload::UserMessage {
                         text: format!("filler event {i} {}", "y".repeat(120)),
+                        media: vec![],
                     },
                 )
                 .unwrap();
@@ -1769,6 +1807,7 @@ mod tests {
             id,
             EventPayload::UserMessage {
                 text: "keep".into(),
+                media: vec![],
             },
         )
         .unwrap();
@@ -1816,7 +1855,7 @@ mod tests {
         assert_eq!(context.stats.cache_rotation_reason, "manual compact");
         assert!(s.events(id).unwrap().iter().any(|event| matches!(
             &event.payload,
-            EventPayload::UserMessage { text } if text == "keep"
+            EventPayload::UserMessage {  text, .. } if text == "keep"
         )));
     }
 
@@ -1869,6 +1908,7 @@ mod tests {
                 1,
                 EventPayload::UserMessage {
                     text: "inspect".into(),
+                    media: vec![],
                 },
             ),
             event(
@@ -1896,6 +1936,7 @@ mod tests {
                         output: "contents".into(),
                         is_error: false,
                         artifact_id: None,
+                        media: Vec::new(),
                     },
                 },
             ),
@@ -1943,7 +1984,7 @@ mod tests {
         // A budget that covers the whole conversation keeps every unit intact.
         let total: usize = events
             .iter()
-            .map(|event| estimator.estimate(&render_event(event)))
+            .map(|event| event_tokens(event, &estimator))
             .sum();
         let (whole, _) = bounded_recent(&events, total, &estimator);
         assert_eq!(whole.len(), 4);
@@ -1989,6 +2030,7 @@ mod tests {
                         output: "contents".into(),
                         is_error: false,
                         artifact_id: None,
+                        media: Vec::new(),
                     },
                 },
             ),
@@ -2019,6 +2061,7 @@ mod tests {
             1,
             EventPayload::UserMessage {
                 text: "fix the flaky test".into(),
+                media: vec![],
             },
         )];
         events.push(event(
@@ -2061,6 +2104,7 @@ mod tests {
             5,
             EventPayload::UserMessage {
                 text: "now document it".into(),
+                media: vec![],
             },
         ));
         let episodes = build_episodes(&events);
@@ -2123,6 +2167,7 @@ mod tests {
                     sid,
                     EventPayload::UserMessage {
                         text: format!("request {index} {}", "x".repeat(200)),
+                        media: vec![],
                     },
                 )
                 .unwrap();
@@ -2214,6 +2259,7 @@ mod tests {
                 sid,
                 EventPayload::UserMessage {
                     text: "one more request".into(),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -2253,6 +2299,7 @@ mod tests {
                     sid,
                     EventPayload::UserMessage {
                         text: format!("filler {turns} {}", "y".repeat(200)),
+                        media: vec![],
                     },
                 )
                 .unwrap();
@@ -2287,13 +2334,13 @@ mod tests {
         assert!(
             recalled.iter().any(|event| matches!(
                 &event.payload,
-                EventPayload::UserMessage { text } if text.contains("request 0")
+                EventPayload::UserMessage {  text, .. } if text.contains("request 0")
             )),
             "evicted events remain retrievable"
         );
         assert!(store.events(sid).unwrap().iter().any(|event| matches!(
             &event.payload,
-            EventPayload::UserMessage { text } if text.contains("request 0")
+            EventPayload::UserMessage {  text, .. } if text.contains("request 0")
         )));
 
         // Resume equivalence: a fresh engine reconstructs the same working set
@@ -2345,6 +2392,7 @@ mod tests {
         for index in 0..60 {
             push(EventPayload::UserMessage {
                 text: format!("task {index}"),
+                media: vec![],
             });
             if index % 3 == 0 {
                 push(EventPayload::AssistantMessageCompleted {
@@ -2365,6 +2413,7 @@ mod tests {
                         output: "contents".into(),
                         is_error: false,
                         artifact_id: None,
+                        media: Vec::new(),
                     },
                 });
             }
@@ -2496,6 +2545,7 @@ mod tests {
                     sid,
                     EventPayload::UserMessage {
                         text: format!("turn {index}"),
+                        media: vec![],
                     },
                 )
                 .unwrap();
@@ -2554,6 +2604,7 @@ mod tests {
                 sid,
                 EventPayload::UserMessage {
                     text: "one more turn".into(),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -2590,6 +2641,7 @@ mod tests {
                     sid,
                     EventPayload::UserMessage {
                         text: format!("before compact {i}"),
+                        media: vec![],
                     },
                 )
                 .unwrap();
@@ -2602,6 +2654,7 @@ mod tests {
                 sid,
                 EventPayload::UserMessage {
                     text: "after compact".into(),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -2610,6 +2663,7 @@ mod tests {
                 sid,
                 EventPayload::UserMessage {
                     text: "tail".into(),
+                    media: vec![],
                 },
             )
             .unwrap();
@@ -2652,7 +2706,7 @@ mod tests {
         assert!(all.iter().any(|event| event.id == tail.id));
         assert!(all.iter().any(|event| matches!(
             &event.payload,
-            EventPayload::UserMessage { text } if text.starts_with("before compact")
+            EventPayload::UserMessage {  text, .. } if text.starts_with("before compact")
         )));
     }
     #[test]
@@ -2697,6 +2751,7 @@ mod tests {
                         sid,
                         EventPayload::UserMessage {
                             text: format!("turn {turn} {}", "x".repeat(200)),
+                            media: vec![],
                         },
                     )
                     .unwrap(),

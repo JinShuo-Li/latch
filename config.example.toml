@@ -24,6 +24,7 @@ default_mode = "WORK"
 # reasoning_replay = "replay"
 # transport = "chat_completions"   # chat_completions | responses | anthropic_messages
 # adaptive_thinking = false        # Anthropic adaptive thinking
+# input_modalities = ["text", "image"]  # explicit image input for a custom model
 # aliases = ["flash", "deepseek-v4.1-flash"]
 # [providers.opencode-go.models."deepseek-v4-flash".pricing]
 # input_per_million = 0.28
@@ -84,6 +85,10 @@ stagnation_budget = 2
 # configured; set it explicitly to match the provider model.
 # [models.deepseek-flash]
 # context_window_tokens = 262144
+# Image input is explicit capability metadata. Built-in catalogs mark the
+# official vision models, but a custom or newly released model can opt in
+# without a Latch rebuild: input_modalities = ["text", "image"].
+# input_modalities = ["text", "image"]
 
 # Optional, user-configured pricing for the usage sidebar. Latch never fetches
 # or invents prices; amounts are presented as estimates. Every component is

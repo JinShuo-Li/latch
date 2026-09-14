@@ -4,18 +4,15 @@
 use super::*;
 
 impl ToolExecutor {
-    pub(super) async fn read_file(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
-        let _permit = self.read_slots.acquire().await?;
-        let path = self.path_arg(call)?;
-        let bytes = tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("read {}", path.display()))?;
-        let version = version(&self.workspace, &path, &bytes)?;
+    /// Records the observed version and detects external drift, shared by
+    /// read-only inspection tools.
+    async fn observe_file(&self, path: &Path, bytes: &[u8]) -> Result<FileVersion> {
+        let version = version(&self.workspace, path, bytes)?;
         let previous = self
             .observations
             .lock()
             .await
-            .insert(path.clone(), version.clone());
+            .insert(path.to_path_buf(), version.clone());
         if let Some(previous) = previous
             && previous.content_hash != version.content_hash
             && !self
@@ -34,7 +31,11 @@ impl ToolExecutor {
                     actual_hash: version.content_hash.clone(),
                 },
             )?;
-            self.ledger.lock().await.externally_changed.insert(path);
+            self.ledger
+                .lock()
+                .await
+                .externally_changed
+                .insert(path.to_path_buf());
         }
         self.store.append(
             self.session_id,
@@ -42,6 +43,24 @@ impl ToolExecutor {
                 version: version.clone(),
             },
         )?;
+        Ok(version)
+    }
+
+    pub(super) async fn read_file(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
+        let _permit = self.read_slots.acquire().await?;
+        let path = self.path_arg(call)?;
+        let bytes = tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("read {}", path.display()))?;
+        // Binary images are never dumped as text; point the model at the
+        // dedicated image tool instead.
+        if let Some(format) = crate::media::detect_format(&bytes) {
+            bail!("{format} image; use read_image to inspect it");
+        }
+        if let Some(kind) = crate::media::detected_unsupported_kind(&bytes) {
+            bail!("{kind} image; read_image supports PNG, JPEG, and WebP");
+        }
+        let version = self.observe_file(&path, &bytes).await?;
         let text = String::from_utf8(bytes).context("file is not UTF-8")?;
         let total = text.lines().count();
         let mut window = LineWindow::from_args(call, total, READ_DEFAULT_LINES, READ_MAX_LINES)?;
@@ -61,6 +80,39 @@ impl ToolExecutor {
             }
         }
         Ok((out, None))
+    }
+
+    /// Ingests one workspace image into the immutable artifact store and
+    /// returns it as tool media so the next model request contains the actual
+    /// pixels. No OCR, no textual approximation: the original bytes are
+    /// preserved exactly.
+    pub(super) async fn read_image(
+        &self,
+        call: &ToolCall,
+    ) -> Result<(String, Option<String>, Vec<MediaRef>)> {
+        let _permit = self.read_slots.acquire().await?;
+        let path = self.path_arg(call)?;
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .with_context(|| format!("read {}", path.display()))?;
+        crate::media::ensure_size(metadata.len())
+            .with_context(|| format!("read {}", path.display()))?;
+        let bytes = tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("read {}", path.display()))?;
+        let version = self.observe_file(&path, &bytes).await?;
+        let media =
+            crate::media::ingest_image_bytes(&self.artifacts, &bytes, Some(version.path.clone()))
+                .with_context(|| format!("ingest {}", version.path))?;
+        let mut out = format!("image: {}\n", media.compact_label());
+        out.push_str(&format!(
+            "path: {}\nsha256: {}\nbytes: {}\n",
+            version.path, media.sha256, media.byte_len
+        ));
+        out.push_str(
+            "The image is now attached to this conversation; inspect the actual pixels directly.",
+        );
+        Ok((out, None, vec![media]))
     }
     pub(super) async fn search(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
         if let Some(message) = self.search_runtime_error() {

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use futures::StreamExt;
-use latch_protocol::{ModelRequest, ModelResponse, StreamEvent, ToolCall, Usage};
+use latch_protocol::{MediaRef, ModelRequest, ModelResponse, StreamEvent, ToolCall, Usage};
 use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
@@ -14,6 +14,28 @@ use uuid::Uuid;
 pub const USER_AGENT: &str = "latch/0.2.0";
 const OPENCODE_GO_BASE: &str = "https://opencode.ai/zen/go";
 const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
+
+/// Resolves durable, provider-neutral media references to their immutable
+/// bytes at the provider boundary. The kernel's artifact store implements
+/// this; tests use an in-memory store. Bytes never enter the event log.
+pub trait MediaBytesProvider: Send + Sync {
+    fn read(&self, media: &MediaRef) -> Result<Vec<u8>>;
+}
+
+/// Shared handle to a media byte resolver.
+pub type MediaStore = Arc<dyn MediaBytesProvider>;
+
+/// Encodes one durable reference as a provider-facing base64 data URL. The
+/// adapter resolves bytes only here, at the wire boundary, so request payloads
+/// stay the only place image bytes exist.
+fn media_data_url(media: &MediaRef, store: Option<&dyn MediaBytesProvider>) -> Result<String> {
+    let store = store.ok_or_else(|| {
+        anyhow!("image input is unavailable: no media artifact store is attached to this provider")
+    })?;
+    let bytes = store.read(media)?;
+    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+    Ok(format!("data:{};base64,{encoded}", media.mime_type))
+}
 
 pub type StreamSink = Arc<dyn Fn(StreamEvent) + Send + Sync>;
 /// Parses OpenAI/DeepSeek-compatible usage. Cache categories are optional: an
@@ -132,6 +154,7 @@ pub struct OpenAiProvider {
     effort: latch_protocol::ReasoningEffort,
     supports_effort: bool,
     thinking: ThinkingToggle,
+    media: Option<MediaStore>,
 }
 impl OpenAiProvider {
     #[must_use]
@@ -147,6 +170,7 @@ impl OpenAiProvider {
             effort: latch_protocol::ReasoningEffort::ProviderDefault,
             supports_effort: false,
             thinking: ThinkingToggle::Default,
+            media: None,
         }
     }
     /// Selects the configured provider identity reported in durable
@@ -186,6 +210,13 @@ impl OpenAiProvider {
         self.session_id = Some(session_id);
         self
     }
+    /// Attaches the resolver that turns durable media references into the
+    /// inline bytes this transport requires.
+    #[must_use]
+    pub fn with_media(mut self, media: Option<MediaStore>) -> Self {
+        self.media = media;
+        self
+    }
     /// Headers attached to every model request.
     fn request_headers(&self) -> HeaderMap {
         let mut headers = user_agent_headers();
@@ -218,6 +249,7 @@ impl ModelProvider for OpenAiProvider {
             effort: self.effort,
             supports_effort: self.supports_effort,
             thinking: self.thinking,
+            media: self.media.clone(),
         }))
     }
     async fn stream(
@@ -233,7 +265,8 @@ impl ModelProvider for OpenAiProvider {
             self.reasoning,
             effort,
             self.thinking.wire(),
-        );
+            self.media.as_deref(),
+        )?;
         // The transport phase (connect + headers) obeys the same run
         // cancellation as the streaming loop, so Ctrl+C cannot hang on a
         // stalled connection.
@@ -346,6 +379,7 @@ pub struct OpenAiResponsesProvider {
     session_id: Option<Uuid>,
     effort: latch_protocol::ReasoningEffort,
     supports_effort: bool,
+    media: Option<MediaStore>,
 }
 impl OpenAiResponsesProvider {
     #[must_use]
@@ -359,6 +393,7 @@ impl OpenAiResponsesProvider {
             session_id: None,
             effort: latch_protocol::ReasoningEffort::ProviderDefault,
             supports_effort: false,
+            media: None,
         }
     }
     #[must_use]
@@ -379,6 +414,13 @@ impl OpenAiResponsesProvider {
     #[must_use]
     pub fn with_session(mut self, session_id: Uuid) -> Self {
         self.session_id = Some(session_id);
+        self
+    }
+    /// Attaches the resolver that turns durable media references into inline
+    /// `input_image` data URLs for this transport.
+    #[must_use]
+    pub fn with_media(mut self, media: Option<MediaStore>) -> Self {
+        self.media = media;
         self
     }
     fn request_headers(&self) -> HeaderMap {
@@ -410,6 +452,7 @@ impl ModelProvider for OpenAiResponsesProvider {
             session_id: Some(session_id),
             effort: self.effort,
             supports_effort: self.supports_effort,
+            media: self.media.clone(),
         }))
     }
     async fn stream(
@@ -419,7 +462,7 @@ impl ModelProvider for OpenAiResponsesProvider {
         sink: StreamSink,
     ) -> Result<ModelResponse> {
         let effort = self.supports_effort.then(|| self.effort.wire()).flatten();
-        let body = responses_request(&request, &self.model, effort);
+        let body = responses_request(&request, &self.model, effort, self.media.as_deref())?;
         let response = tokio::select! {
             response = async {
                 let sent = self
@@ -607,8 +650,17 @@ impl ResponsesStreamState {
 /// Serializes a provider-neutral request into the OpenAI Responses API shape.
 /// The request is stateless (`store: false`) and asks for encrypted reasoning
 /// so the durable Latch history alone is enough to continue a tool loop.
-#[must_use]
-pub fn responses_request(request: &ModelRequest, model: &str, effort: Option<&str>) -> Value {
+///
+/// User turns with images become the documented `input_image` content parts
+/// carrying base64 data URLs, and tool results with images use the documented
+/// `function_call_output` array form. Text-only traffic serializes exactly as
+/// before.
+pub fn responses_request(
+    request: &ModelRequest,
+    model: &str,
+    effort: Option<&str>,
+    media: Option<&dyn MediaBytesProvider>,
+) -> Result<Value> {
     let mut input: Vec<Value> = Vec::new();
     for message in &request.messages {
         match message.role.as_str() {
@@ -641,16 +693,58 @@ pub fn responses_request(request: &ModelRequest, model: &str, effort: Option<&st
                     }));
                 }
             }
-            "tool" => input.push(json!({
-                "type": "function_call_output",
-                "call_id": message.tool_call_id.clone().unwrap_or_default(),
-                "output": message.content,
-            })),
-            role => input.push(json!({
-                "type": "message",
-                "role": role,
-                "content": [{"type": "input_text", "text": message.content}],
-            })),
+            "tool" => {
+                if message.media.is_empty() {
+                    input.push(json!({
+                        "type": "function_call_output",
+                        "call_id": message.tool_call_id.clone().unwrap_or_default(),
+                        "output": message.content,
+                    }));
+                } else {
+                    // Documented array form: text and images as input content
+                    // parts, so the terminal tool transaction stays valid.
+                    let mut parts = Vec::new();
+                    if !message.content.is_empty() {
+                        parts.push(json!({"type": "input_text", "text": message.content}));
+                    }
+                    for media_ref in &message.media {
+                        parts.push(json!({
+                            "type": "input_image",
+                            "image_url": media_data_url(media_ref, media)?,
+                        }));
+                    }
+                    input.push(json!({
+                        "type": "function_call_output",
+                        "call_id": message.tool_call_id.clone().unwrap_or_default(),
+                        "output": parts,
+                    }));
+                }
+            }
+            role => {
+                if message.media.is_empty() {
+                    input.push(json!({
+                        "type": "message",
+                        "role": role,
+                        "content": [{"type": "input_text", "text": message.content}],
+                    }));
+                } else {
+                    let mut content = Vec::new();
+                    for media_ref in &message.media {
+                        content.push(json!({
+                            "type": "input_image",
+                            "image_url": media_data_url(media_ref, media)?,
+                        }));
+                    }
+                    if !message.content.is_empty() {
+                        content.push(json!({"type": "input_text", "text": message.content}));
+                    }
+                    input.push(json!({
+                        "type": "message",
+                        "role": role,
+                        "content": content,
+                    }));
+                }
+            }
         }
     }
     let mut body = json!({
@@ -676,7 +770,7 @@ pub fn responses_request(request: &ModelRequest, model: &str, effort: Option<&st
     if let Some(effort) = effort {
         body["reasoning"] = json!({"effort": effort});
     }
-    body
+    Ok(body)
 }
 
 /// Maps Responses usage. Cache and reasoning categories stay `None` when the
@@ -712,6 +806,7 @@ pub struct AnthropicProvider {
     effort: latch_protocol::ReasoningEffort,
     supports_effort: bool,
     adaptive_thinking: bool,
+    media: Option<MediaStore>,
 }
 impl AnthropicProvider {
     #[must_use]
@@ -726,6 +821,7 @@ impl AnthropicProvider {
             effort: latch_protocol::ReasoningEffort::ProviderDefault,
             supports_effort: false,
             adaptive_thinking: false,
+            media: None,
         }
     }
     /// Selects the configured provider identity reported in durable provenance.
@@ -753,6 +849,13 @@ impl AnthropicProvider {
     #[must_use]
     pub fn with_session(mut self, session_id: Uuid) -> Self {
         self.session_id = Some(session_id);
+        self
+    }
+    /// Attaches the resolver that turns durable media references into base64
+    /// image blocks for the Messages transport.
+    #[must_use]
+    pub fn with_media(mut self, media: Option<MediaStore>) -> Self {
+        self.media = media;
         self
     }
     fn request_headers(&self) -> HeaderMap {
@@ -785,6 +888,7 @@ impl ModelProvider for AnthropicProvider {
             effort: self.effort,
             supports_effort: self.supports_effort,
             adaptive_thinking: self.adaptive_thinking,
+            media: self.media.clone(),
         }))
     }
     async fn stream(
@@ -807,7 +911,12 @@ impl ModelProvider for AnthropicProvider {
                     .header("x-api-key", &self.api_key)
                     .header("anthropic-version", "2023-06-01")
                     .headers(self.request_headers())
-                    .json(&anthropic_request_with_config(&request, &self.model, config))
+                    .json(&anthropic_request_with_config(
+                        &request,
+                        &self.model,
+                        config,
+                        self.media.as_deref(),
+                    )?)
                     .send()
                     .await?;
                 checked_response_redacted("anthropic", sent, &self.api_key).await
@@ -1134,43 +1243,78 @@ fn bound_error_body(body: &str) -> String {
 /// endpoints. Reasoning replay is decoupled from tool-call structure so a
 /// defensive transform that changes tool calls can never drop required
 /// reasoning state.
-#[must_use]
-pub fn openai_request(request: &ModelRequest, model: &str, reasoning: ReasoningReplay) -> Value {
-    openai_request_with_effort(request, model, reasoning, None)
+///
+/// Chat Completions tool messages do not carry images, so tool media is
+/// preserved by the documented fallback: every terminal textual tool result is
+/// emitted first, then one adjacent user observation turn with the images. No
+/// user turn is ever inserted between a tool call and its terminal result.
+pub fn openai_request(
+    request: &ModelRequest,
+    model: &str,
+    reasoning: ReasoningReplay,
+) -> Result<Value> {
+    openai_request_full(request, model, reasoning, None, None, None)
 }
 
 /// Like [`openai_request`], but emits `reasoning_effort` only when the resolved
 /// model capability selected a concrete effort value. A `None` effort never
 /// adds the field, so unsupported DeepSeek/OpenAI parameters can never leak to
 /// unrelated OpenAI-compatible endpoints.
-#[must_use]
 pub fn openai_request_with_effort(
     request: &ModelRequest,
     model: &str,
     reasoning: ReasoningReplay,
     effort: Option<&str>,
-) -> Value {
-    openai_request_full(request, model, reasoning, effort, None)
+) -> Result<Value> {
+    openai_request_full(request, model, reasoning, effort, None, None)
 }
 
 /// Full chat-completions serialization. `thinking` is the DeepSeek-family
 /// toggle (`thinking: {type: enabled|disabled}`) and is never sent when the
-/// resolved capability does not provide one.
-#[must_use]
+/// resolved capability does not provide one. `media` resolves durable image
+/// references when any are present.
 pub fn openai_request_full(
     request: &ModelRequest,
     model: &str,
     reasoning: ReasoningReplay,
     effort: Option<&str>,
     thinking: Option<&str>,
-) -> Value {
+    media: Option<&dyn MediaBytesProvider>,
+) -> Result<Value> {
+    /// Deterministic adjacent-turn note for images that a tool produced.
+    const TOOL_IMAGE_NOTE: &str = "Images returned by the tool call(s) above.";
     let mut messages = vec![json!({"role":"system","content":request.system})];
-    messages.extend(
-        request
-            .messages
-            .iter()
-            .map(|message| openai_message(message, reasoning)),
-    );
+    // Images from consecutive terminal tool results are held until the tool
+    // run ends, so they can never split a tool call from its result.
+    let mut pending_tool_media: Vec<&MediaRef> = Vec::new();
+    let flush = |messages: &mut Vec<Value>, pending: &mut Vec<&MediaRef>| -> Result<()> {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let mut content = Vec::new();
+        for media_ref in pending.iter() {
+            content.push(json!({
+                "type": "image_url",
+                "image_url": {"url": media_data_url(media_ref, media)?},
+            }));
+        }
+        content.push(json!({"type": "text", "text": TOOL_IMAGE_NOTE}));
+        messages.push(json!({"role": "user", "content": content}));
+        pending.clear();
+        Ok(())
+    };
+    for message in &request.messages {
+        if message.role != "tool" {
+            flush(&mut messages, &mut pending_tool_media)?;
+        }
+        if message.role == "tool" && !message.media.is_empty() {
+            messages.push(openai_message(message, reasoning));
+            pending_tool_media.extend(message.media.iter());
+            continue;
+        }
+        messages.push(openai_message_media_aware(message, reasoning, media)?);
+    }
+    flush(&mut messages, &mut pending_tool_media)?;
     let mut body = json!({"model":model,"messages":messages,"tools":request.tools.iter().map(|t|json!({"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.input_schema}})).collect::<Vec<_>>(),"stream":true,"stream_options":{"include_usage":true}});
     if let Some(effort) = effort {
         body["reasoning_effort"] = Value::String(effort.to_owned());
@@ -1178,7 +1322,35 @@ pub fn openai_request_full(
     if let Some(thinking) = thinking {
         body["thinking"] = json!({"type": thinking});
     }
-    body
+    Ok(body)
+}
+
+/// Serializes one non-tool message, upgrading to multimodal content parts when
+/// the message carries images.
+fn openai_message_media_aware(
+    message: &latch_protocol::ModelMessage,
+    reasoning: ReasoningReplay,
+    media: Option<&dyn MediaBytesProvider>,
+) -> Result<Value> {
+    if message.media.is_empty() {
+        return Ok(openai_message(message, reasoning));
+    }
+    if message.role == "user" || message.role == "developer" {
+        let mut content = Vec::new();
+        for media_ref in &message.media {
+            content.push(json!({
+                "type": "image_url",
+                "image_url": {"url": media_data_url(media_ref, media)?},
+            }));
+        }
+        if !message.content.is_empty() {
+            content.push(json!({"type": "text", "text": message.content}));
+        }
+        return Ok(json!({"role": message.role, "content": content}));
+    }
+    // Assistant-side images are never produced by Latch; text-only is the
+    // honest serialization rather than inventing a role that no API accepts.
+    Ok(openai_message(message, reasoning))
 }
 
 fn openai_message(message: &latch_protocol::ModelMessage, reasoning: ReasoningReplay) -> Value {
@@ -1240,12 +1412,32 @@ pub struct AnthropicConfig {
 /// back unchanged and in their original order ahead of text/tool blocks, which
 /// is required for tool-use continuation; OpenAI-only fields such as
 /// `reasoning_content` are never emitted.
-#[must_use]
+///
+/// Images serialize as official base64 `image` blocks: ahead of the text in a
+/// user turn, and nested inside `tool_result.content` for tool output.
 pub fn anthropic_request_with_config(
     request: &ModelRequest,
     model: &str,
     config: AnthropicConfig,
-) -> Value {
+    media: Option<&dyn MediaBytesProvider>,
+) -> Result<Value> {
+    let image_block = |media_ref: &MediaRef| -> Result<Value> {
+        let store = media.ok_or_else(|| {
+            anyhow!(
+                "image input is unavailable: no media artifact store is attached to this provider"
+            )
+        })?;
+        let bytes = store.read(media_ref)?;
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+        Ok(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_ref.mime_type,
+                "data": encoded,
+            },
+        }))
+    };
     let mut messages: Vec<Value> = Vec::new();
     let mut index = 0;
     while index < request.messages.len() {
@@ -1298,13 +1490,23 @@ pub fn anthropic_request_with_config(
             "tool" => {
                 let mut blocks = Vec::new();
                 while index < request.messages.len() && request.messages[index].role == "tool" {
+                    let tool = &request.messages[index];
+                    let content = if tool.media.is_empty() {
+                        Value::String(tool.content.clone())
+                    } else {
+                        let mut parts = Vec::new();
+                        if !tool.content.is_empty() {
+                            parts.push(json!({"type":"text","text": tool.content}));
+                        }
+                        for media_ref in &tool.media {
+                            parts.push(image_block(media_ref)?);
+                        }
+                        Value::Array(parts)
+                    };
                     blocks.push(json!({
                         "type":"tool_result",
-                        "tool_use_id": request.messages[index]
-                            .tool_call_id
-                            .clone()
-                            .unwrap_or_default(),
-                        "content": request.messages[index].content,
+                        "tool_use_id": tool.tool_call_id.clone().unwrap_or_default(),
+                        "content": content,
                     }));
                     index += 1;
                 }
@@ -1317,21 +1519,36 @@ pub fn anthropic_request_with_config(
                 if let Some(last) = messages.last_mut()
                     && last.get("role").and_then(Value::as_str) == Some("user")
                 {
+                    // Images precede text in the merged user turn, matching the
+                    // single-message ordering.
+                    let mut extra = Vec::new();
+                    for media_ref in &message.media {
+                        extra.push(image_block(media_ref)?);
+                    }
+                    if !message.content.is_empty() {
+                        extra.push(json!({"type":"text","text":message.content}));
+                    }
                     let content = last.get_mut("content").expect("user message has content");
                     match content {
-                        Value::Array(blocks) => {
-                            blocks.push(json!({"type":"text","text":message.content}));
-                        }
+                        Value::Array(blocks) => blocks.extend(extra),
                         _ => {
                             let previous = content.take();
-                            *content = json!([
-                                {"type":"text","text": previous},
-                                {"type":"text","text": message.content},
-                            ]);
+                            let mut merged = vec![json!({"type":"text","text": previous})];
+                            merged.extend(extra);
+                            *content = Value::Array(merged);
                         }
                     }
-                } else {
+                } else if message.media.is_empty() {
                     messages.push(json!({"role":"user","content":message.content}));
+                } else {
+                    let mut blocks = Vec::new();
+                    for media_ref in &message.media {
+                        blocks.push(image_block(media_ref)?);
+                    }
+                    if !message.content.is_empty() {
+                        blocks.push(json!({"type":"text","text":message.content}));
+                    }
+                    messages.push(json!({"role":"user","content":blocks}));
                 }
                 index += 1;
             }
@@ -1374,13 +1591,12 @@ pub fn anthropic_request_with_config(
             body["output_config"] = json!({"effort": effort});
         }
     }
-    body
+    Ok(body)
 }
 
 /// Compatibility wrapper for callers that do not configure thinking.
-#[must_use]
-pub fn anthropic_request(request: &ModelRequest, model: &str) -> Value {
-    anthropic_request_with_config(request, model, AnthropicConfig::default())
+pub fn anthropic_request(request: &ModelRequest, model: &str) -> Result<Value> {
+    anthropic_request_with_config(request, model, AnthropicConfig::default(), None)
 }
 
 #[derive(Default)]
@@ -1440,10 +1656,10 @@ mod tests {
                 input_schema: json!({"type":"object"}),
             }],
         };
-        let o = openai_request(&r, "m", ReasoningReplay::Replay);
+        let o = openai_request(&r, "m", ReasoningReplay::Replay).unwrap();
         assert_eq!(o["messages"][0]["role"], "system");
         assert_eq!(o["tools"][0]["function"]["name"], "read");
-        let a = anthropic_request(&r, "m");
+        let a = anthropic_request(&r, "m").unwrap();
         assert_eq!(a["system"][0]["text"], "s");
         assert_eq!(a["system"][0]["cache_control"]["type"], "ephemeral");
         assert_eq!(a["tools"][0]["name"], "read");
@@ -1467,6 +1683,7 @@ mod tests {
                     reasoning_content: Some("step by step".into()),
 
                     reasoning: vec![],
+                    media: Vec::new(),
                 },
                 ModelMessage {
                     role: "tool".into(),
@@ -1476,11 +1693,12 @@ mod tests {
                     reasoning_content: None,
 
                     reasoning: vec![],
+                    media: Vec::new(),
                 },
             ],
             tools: vec![],
         };
-        let body = openai_request(&r, "m", ReasoningReplay::Replay);
+        let body = openai_request(&r, "m", ReasoningReplay::Replay).unwrap();
         let assistant = &body["messages"][2];
         assert_eq!(assistant["role"], "assistant");
         assert_eq!(assistant["reasoning_content"], "step by step");
@@ -1512,11 +1730,12 @@ mod tests {
                     reasoning_content: Some("step by step".into()),
 
                     reasoning: vec![],
+                    media: Vec::new(),
                 },
             ],
             tools: vec![],
         };
-        let replaying = openai_request(&r, "m", ReasoningReplay::Replay);
+        let replaying = openai_request(&r, "m", ReasoningReplay::Replay).unwrap();
         let assistant = &replaying["messages"][2];
         assert_eq!(assistant["reasoning_content"], "step by step");
         assert!(
@@ -1524,7 +1743,7 @@ mod tests {
             "reasoning is emitted even when tool_calls were stripped"
         );
         // Providers that do not accept the field never receive it.
-        let omitting = openai_request(&r, "m", ReasoningReplay::Omit);
+        let omitting = openai_request(&r, "m", ReasoningReplay::Omit).unwrap();
         assert!(
             !omitting["messages"][2]
                 .to_string()
@@ -1578,6 +1797,7 @@ mod tests {
                     reasoning_content: Some("secret reasoning".into()),
 
                     reasoning: vec![],
+                    media: Vec::new(),
                 },
                 ModelMessage {
                     role: "tool".into(),
@@ -1587,11 +1807,12 @@ mod tests {
                     reasoning_content: None,
 
                     reasoning: vec![],
+                    media: Vec::new(),
                 },
             ],
             tools: vec![],
         };
-        let body = anthropic_request(&r, "m");
+        let body = anthropic_request(&r, "m").unwrap();
         let assistant = &body["messages"][1];
         assert_eq!(assistant["role"], "assistant");
         assert_eq!(assistant["content"][0]["type"], "text");
@@ -1633,7 +1854,8 @@ mod tests {
                 "deepseek-v4.1-flash",
                 ReasoningReplay::Replay,
                 Some(effort),
-            );
+            )
+            .unwrap();
             assert_eq!(
                 body["reasoning_effort"], effort,
                 "DeepSeek V4 emits the documented value"
@@ -1645,11 +1867,13 @@ mod tests {
             "deepseek-v4.1-flash",
             ReasoningReplay::Replay,
             None,
-        );
+        )
+        .unwrap();
         assert!(body.get("reasoning_effort").is_none());
         // Generic OpenAI-compatible endpoints never receive the parameter.
         let body =
-            openai_request_with_effort(&request, "custom-model", ReasoningReplay::Omit, None);
+            openai_request_with_effort(&request, "custom-model", ReasoningReplay::Omit, None)
+                .unwrap();
         assert!(body.get("reasoning_effort").is_none());
     }
 
@@ -1734,6 +1958,7 @@ mod tests {
                     reasoning_content: None,
 
                     reasoning: vec![],
+                    media: Vec::new(),
                 },
                 ModelMessage {
                     role: "tool".into(),
@@ -1743,11 +1968,12 @@ mod tests {
                     reasoning_content: None,
 
                     reasoning: vec![],
+                    media: Vec::new(),
                 },
                 ModelMessage::text("user", "Kernel context: state"),
             ],
         };
-        let body = anthropic_request(&request, "claude-test");
+        let body = anthropic_request(&request, "claude-test").unwrap();
         let messages = body["messages"].as_array().unwrap();
         // user / assistant / user(tool_result + kernel context) — roles still
         // alternate, so the API accepts the request.
@@ -1823,6 +2049,7 @@ mod tests {
                     reasoning: vec![latch_protocol::ReasoningArtifact::Encrypted {
                         data: "enc-blob".into(),
                     }],
+                    media: Vec::new(),
                 },
                 ModelMessage {
                     role: "tool".into(),
@@ -1831,6 +2058,7 @@ mod tests {
                     tool_call_id: Some("call-1".into()),
                     reasoning_content: None,
                     reasoning: Vec::new(),
+                    media: Vec::new(),
                 },
             ],
             tools: vec![ToolDefinition {
@@ -1839,7 +2067,7 @@ mod tests {
                 input_schema: json!({"type": "object"}),
             }],
         };
-        let body = responses_request(&request, "gpt-6-astra", Some("high"));
+        let body = responses_request(&request, "gpt-6-astra", Some("high"), None).unwrap();
         assert_eq!(body["model"], "gpt-6-astra");
         assert_eq!(body["instructions"], "stable");
         assert_eq!(body["store"], false);
@@ -1869,7 +2097,7 @@ mod tests {
             messages: vec![ModelMessage::text("user", "hi")],
             tools: vec![],
         };
-        let body = responses_request(&request, "m", None);
+        let body = responses_request(&request, "m", None, None).unwrap();
         assert!(body.get("reasoning").is_none());
     }
 
@@ -2019,6 +2247,7 @@ mod tests {
                     session,
                     latch_protocol::EventPayload::UserMessage {
                         text: "Fix the bug in calc.py and verify it.".into(),
+                        media: vec![],
                     },
                 )
                 .unwrap();
@@ -2043,6 +2272,7 @@ mod tests {
                             output: "def add(a, b):\n    return a - b".into(),
                             is_error: false,
                             artifact_id: None,
+                            media: Vec::new(),
                         },
                     },
                 )
@@ -2074,7 +2304,7 @@ mod tests {
 
         // Request 2 replays exactly one encrypted item, before the function
         // call it belongs to, followed by the tool output.
-        let body = responses_request(&request, "gpt-6-astra", Some("high"));
+        let body = responses_request(&request, "gpt-6-astra", Some("high"), None).unwrap();
         assert_eq!(body["store"], false);
         assert!(
             body["include"]
@@ -2144,6 +2374,7 @@ mod tests {
                             data: "opaque".into(),
                         },
                     ],
+                    media: Vec::new(),
                 },
                 ModelMessage {
                     role: "tool".into(),
@@ -2152,6 +2383,7 @@ mod tests {
                     tool_call_id: Some("call-1".into()),
                     reasoning_content: None,
                     reasoning: Vec::new(),
+                    media: Vec::new(),
                 },
             ],
             tools: vec![],
@@ -2163,7 +2395,9 @@ mod tests {
                 adaptive_thinking: true,
                 effort: Some("high"),
             },
-        );
+            None,
+        )
+        .unwrap();
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert_eq!(body["thinking"]["display"], "summarized");
         assert_eq!(body["output_config"]["effort"], "high");
@@ -2182,8 +2416,13 @@ mod tests {
         assert_eq!(body["messages"][2]["content"][0]["type"], "tool_result");
         assert_eq!(body["messages"][2]["content"][0]["tool_use_id"], "call-1");
         // Without adaptive thinking no thinking configuration is sent.
-        let plain =
-            anthropic_request_with_config(&request, "claude-haiku-4-5", AnthropicConfig::default());
+        let plain = anthropic_request_with_config(
+            &request,
+            "claude-haiku-4-5",
+            AnthropicConfig::default(),
+            None,
+        )
+        .unwrap();
         assert!(plain.get("thinking").is_none());
         assert!(plain.get("output_config").is_none());
     }
@@ -2201,7 +2440,9 @@ mod tests {
             ReasoningReplay::Replay,
             Some("high"),
             Some("enabled"),
-        );
+            None,
+        )
+        .unwrap();
         assert_eq!(enabled["thinking"]["type"], "enabled");
         assert_eq!(enabled["reasoning_effort"], "high");
         let disabled = openai_request_full(
@@ -2210,7 +2451,9 @@ mod tests {
             ReasoningReplay::Replay,
             None,
             Some("disabled"),
-        );
+            None,
+        )
+        .unwrap();
         assert_eq!(disabled["thinking"]["type"], "disabled");
         assert!(disabled.get("reasoning_effort").is_none());
         let omitted = openai_request_full(
@@ -2219,7 +2462,325 @@ mod tests {
             ReasoningReplay::Replay,
             None,
             None,
-        );
+            None,
+        )
+        .unwrap();
         assert!(omitted.get("thinking").is_none());
+    }
+
+    /// In-memory media resolver for wire-serialization tests.
+    struct MemoryMedia(std::collections::HashMap<String, Vec<u8>>);
+
+    impl MediaBytesProvider for MemoryMedia {
+        fn read(&self, media: &MediaRef) -> Result<Vec<u8>> {
+            self.0
+                .get(&media.id)
+                .cloned()
+                .ok_or_else(|| anyhow!("missing media {}", media.id))
+        }
+    }
+
+    fn image_ref(id: &str) -> MediaRef {
+        MediaRef {
+            id: id.into(),
+            kind: latch_protocol::MediaKind::Image,
+            mime_type: "image/png".into(),
+            artifact_path: format!("media/{id}.png"),
+            sha256: id.into(),
+            byte_len: 3,
+            width: Some(1440),
+            height: Some(900),
+            display_name: Some(format!("{id}.png")),
+        }
+    }
+
+    fn media_store() -> MemoryMedia {
+        MemoryMedia(
+            [
+                ("img-a".to_owned(), vec![1, 2, 3]),
+                ("img-b".to_owned(), vec![4, 5]),
+            ]
+            .into_iter()
+            .collect(),
+        )
+    }
+
+    fn multimodal_request() -> ModelRequest {
+        let user = ModelMessage {
+            role: "user".into(),
+            content: "inspect".into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+            reasoning_content: None,
+            reasoning: vec![],
+            media: vec![image_ref("img-a"), image_ref("img-b")],
+        };
+        let assistant = ModelMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: vec![
+                ToolCall {
+                    id: "call-media".into(),
+                    name: "read_image".into(),
+                    arguments: json!({"path": "shot.png"}),
+                },
+                ToolCall {
+                    id: "call-text".into(),
+                    name: "read_file".into(),
+                    arguments: json!({"path": "a.txt"}),
+                },
+            ],
+            tool_call_id: None,
+            reasoning_content: None,
+            reasoning: vec![],
+            media: vec![],
+        };
+        let tool_media = ModelMessage {
+            role: "tool".into(),
+            content: "image: [image: shot.png · 1440×900]".into(),
+            tool_calls: vec![],
+            tool_call_id: Some("call-media".into()),
+            reasoning_content: None,
+            reasoning: vec![],
+            media: vec![image_ref("img-b")],
+        };
+        let tool_text = ModelMessage {
+            role: "tool".into(),
+            content: "contents".into(),
+            tool_calls: vec![],
+            tool_call_id: Some("call-text".into()),
+            reasoning_content: None,
+            reasoning: vec![],
+            media: vec![],
+        };
+        ModelRequest {
+            system: "s".into(),
+            messages: vec![user, assistant, tool_media, tool_text],
+            tools: vec![],
+        }
+    }
+
+    #[test]
+    fn responses_serializes_user_and_tool_images_natively() {
+        let store = media_store();
+        let body =
+            responses_request(&multimodal_request(), "gpt-6-astra", None, Some(&store)).unwrap();
+        let input = body["input"].as_array().unwrap();
+        // User turn: every image is preserved ahead of the text.
+        let user = input
+            .iter()
+            .find(|item| item["type"] == "message" && item["role"] == "user")
+            .unwrap();
+        let content = user["content"].as_array().unwrap();
+        assert_eq!(content.len(), 3, "two images plus text: {content:#?}");
+        assert_eq!(content[0]["type"], "input_image");
+        assert_eq!(
+            content[0]["image_url"],
+            "data:image/png;base64,AQID".to_owned()
+        );
+        assert_eq!(content[1]["type"], "input_image");
+        assert_eq!(
+            content[1]["image_url"],
+            "data:image/png;base64,BAU=".to_owned()
+        );
+        assert_eq!(content[2]["type"], "input_text");
+        assert_eq!(content[2]["text"], "inspect");
+        // Tool result: the documented function_call_output array with the
+        // terminal text first and the image content part after it.
+        let tool = input
+            .iter()
+            .find(|item| item["type"] == "function_call_output")
+            .unwrap();
+        let output = tool["output"].as_array().unwrap();
+        assert_eq!(output[0]["type"], "input_text");
+        assert!(output[0]["text"].as_str().unwrap().contains("shot.png"));
+        assert_eq!(output[1]["type"], "input_image");
+        assert_eq!(output[1]["image_url"], "data:image/png;base64,BAU=");
+        assert_eq!(tool["call_id"], "call-media");
+    }
+
+    #[test]
+    fn anthropic_serializes_image_blocks_in_user_and_tool_result() {
+        let store = media_store();
+        let body = anthropic_request_with_config(
+            &multimodal_request(),
+            "claude-opus-5",
+            AnthropicConfig::default(),
+            Some(&store),
+        )
+        .unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        // user / assistant / user(tool results)
+        assert_eq!(messages.len(), 3, "{messages:#?}");
+        let user_blocks = messages[0]["content"].as_array().unwrap();
+        assert_eq!(user_blocks[0]["type"], "image");
+        assert_eq!(user_blocks[0]["source"]["type"], "base64");
+        assert_eq!(user_blocks[0]["source"]["media_type"], "image/png");
+        assert_eq!(user_blocks[0]["source"]["data"], "AQID");
+        assert_eq!(user_blocks[1]["type"], "image");
+        assert_eq!(user_blocks[2]["type"], "text");
+        assert_eq!(user_blocks[2]["text"], "inspect");
+        // The tool transaction stays one user turn with tool_result blocks.
+        let tool_turn = messages[2]["content"].as_array().unwrap();
+        assert_eq!(tool_turn.len(), 2, "two tool results in one turn");
+        assert_eq!(tool_turn[0]["type"], "tool_result");
+        assert_eq!(tool_turn[0]["tool_use_id"], "call-media");
+        let tool_content = tool_turn[0]["content"].as_array().unwrap();
+        assert_eq!(tool_content[0]["type"], "text");
+        assert_eq!(tool_content[1]["type"], "image");
+        assert_eq!(tool_content[1]["source"]["data"], "BAU=");
+        assert_eq!(tool_turn[1]["type"], "tool_result");
+        assert_eq!(tool_turn[1]["tool_use_id"], "call-text");
+        assert_eq!(tool_turn[1]["content"], "contents");
+    }
+
+    #[test]
+    fn anthropic_merges_user_images_without_losing_blocks() {
+        let store = media_store();
+        let mut request = multimodal_request();
+        request.messages.insert(
+            1,
+            ModelMessage {
+                role: "user".into(),
+                content: "kernel context".into(),
+                tool_calls: vec![],
+                tool_call_id: None,
+                reasoning_content: None,
+                reasoning: vec![],
+                media: vec![image_ref("img-a")],
+            },
+        );
+        let body = anthropic_request_with_config(
+            &request,
+            "claude-opus-5",
+            AnthropicConfig::default(),
+            Some(&store),
+        )
+        .unwrap();
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+        let types: Vec<&str> = blocks
+            .iter()
+            .map(|block| block["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(types, vec!["image", "image", "text", "image", "text"]);
+        // Each source message keeps image-before-text ordering and no block is
+        // dropped by the merge.
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|block| block["type"] == "image")
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn chat_completions_serializes_user_images_and_never_splits_a_tool_transaction() {
+        let store = media_store();
+        let body = openai_request_full(
+            &multimodal_request(),
+            "deepseek-flash",
+            ReasoningReplay::Replay,
+            None,
+            None,
+            Some(&store),
+        )
+        .unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        // system / user / assistant(tool_calls) / tool / tool / user(images)
+        assert_eq!(messages.len(), 6, "{messages:#?}");
+        let content = messages[1]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "image_url");
+        assert_eq!(
+            content[0]["image_url"]["url"],
+            "data:image/png;base64,AQID".to_owned()
+        );
+        assert_eq!(content[2]["type"], "text");
+        // Both terminal tool results precede the adjacent image observation.
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call-media");
+        assert_eq!(messages[4]["role"], "tool");
+        assert_eq!(messages[4]["tool_call_id"], "call-text");
+        assert_eq!(messages[5]["role"], "user");
+        let observation = messages[5]["content"].as_array().unwrap();
+        assert!(
+            observation[0]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .contains("data:image/png")
+        );
+        assert_eq!(observation[1]["type"], "text");
+        assert!(
+            !messages[3]["content"].is_array() && !messages[4]["content"].is_array(),
+            "tool roles keep string content on Chat Completions"
+        );
+    }
+
+    #[test]
+    fn text_only_serialization_is_identical_with_and_without_a_media_store() {
+        let request = ModelRequest {
+            system: "s".into(),
+            messages: vec![
+                ModelMessage::text("user", "hi"),
+                ModelMessage {
+                    role: "assistant".into(),
+                    content: "working".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path": "a.txt"}),
+                    }],
+                    tool_call_id: None,
+                    reasoning_content: Some("step".into()),
+                    reasoning: vec![],
+                    media: vec![],
+                },
+                ModelMessage {
+                    role: "tool".into(),
+                    content: "contents".into(),
+                    tool_calls: vec![],
+                    tool_call_id: Some("call-1".into()),
+                    reasoning_content: None,
+                    reasoning: vec![],
+                    media: vec![],
+                },
+            ],
+            tools: vec![],
+        };
+        let store = media_store();
+        assert_eq!(
+            openai_request(&request, "m", ReasoningReplay::Replay).unwrap(),
+            openai_request_full(
+                &request,
+                "m",
+                ReasoningReplay::Replay,
+                None,
+                None,
+                Some(&store),
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            responses_request(&request, "m", None, None).unwrap(),
+            responses_request(&request, "m", None, Some(&store)).unwrap()
+        );
+        assert_eq!(
+            anthropic_request(&request, "m").unwrap(),
+            anthropic_request_with_config(&request, "m", AnthropicConfig::default(), Some(&store),)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn missing_media_bytes_fail_loudly_instead_of_sending_placeholders() {
+        let empty = MemoryMedia(std::collections::HashMap::new());
+        let error = responses_request(&multimodal_request(), "m", None, Some(&empty)).unwrap_err();
+        assert!(error.to_string().contains("missing media"), "{error}");
+        // No resolver at all is an explicit failure, never a silent drop.
+        let error = responses_request(&multimodal_request(), "m", None, None).unwrap_err();
+        assert!(
+            error.to_string().contains("no media artifact store"),
+            "{error}"
+        );
     }
 }

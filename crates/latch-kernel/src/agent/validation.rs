@@ -147,6 +147,7 @@ impl Agent {
             output: body,
             is_error: !passed,
             artifact_id: output.artifact_id,
+            media: Vec::new(),
         };
         // 4. The validation's own failure lineage is supervised against the
         //    result body, the exact text a resumed session replays — so live

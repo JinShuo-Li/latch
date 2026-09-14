@@ -17,14 +17,16 @@ pub enum SteeringSubmission {
 
 #[derive(Debug, Default)]
 struct SteeringState {
-    pending: std::collections::VecDeque<String>,
+    pending: std::collections::VecDeque<UserInput>,
     closed: bool,
 }
 
 /// Live user steering: messages typed while a task is running. The TUI/CLI
 /// pushes; the single agent loop drains at safe model boundaries and records
 /// each message durably as a normal user turn. Ordering is FIFO and messages
-/// are never inserted into an unresolved assistant/tool transaction.
+/// are never inserted into an unresolved assistant/tool transaction. Each
+/// submission is structured (text plus durable image references), so images
+/// are usable mid-run exactly like on the initial prompt.
 ///
 /// The queue is an atomic run-closing handshake. A run [`open`](Self::open)s
 /// it while it can still consume, and closing it is atomic with acceptance:
@@ -44,9 +46,10 @@ impl SteeringQueue {
 
     /// Locks the queue state, recovering from poisoning instead of reporting a
     /// default. Poisoning means a panic happened while the lock was held; the
-    /// protected state is a `VecDeque<String>` plus a bool, whose invariants
-    /// cannot be left half-written by a panic, so recovering is strictly safer
-    /// than silently reporting an empty queue and losing user input.
+    /// protected state is a `VecDeque<UserInput>` plus a bool, whose
+    /// invariants cannot be left half-written by a panic, so recovering is
+    /// strictly safer than silently reporting an empty queue and losing user
+    /// input.
     fn lock(&self) -> std::sync::MutexGuard<'_, SteeringState> {
         self.state
             .lock()
@@ -55,12 +58,12 @@ impl SteeringQueue {
 
     /// Submits a steering message. The result is the deterministic
     /// accept/reject outcome; a rejected message is never enqueued.
-    pub fn push(&self, text: impl Into<String>) -> SteeringSubmission {
+    pub fn push(&self, input: impl Into<UserInput>) -> SteeringSubmission {
         let mut state = self.lock();
         if state.closed {
             SteeringSubmission::Closed
         } else {
-            state.pending.push_back(text.into());
+            state.pending.push_back(input.into());
             SteeringSubmission::Accepted
         }
     }
@@ -75,7 +78,7 @@ impl SteeringQueue {
         self.lock().pending.len()
     }
 
-    pub(super) fn drain(&self) -> Vec<String> {
+    pub(super) fn drain(&self) -> Vec<UserInput> {
         self.lock().pending.drain(..).collect()
     }
 
@@ -83,7 +86,7 @@ impl SteeringQueue {
     /// close. When nothing is pending the queue stays closed (the run may
     /// exit). When messages were accepted the queue stays open and returns
     /// them, because the current run must consume them before it may close.
-    pub(super) fn close_and_drain(&self) -> Vec<String> {
+    pub(super) fn close_and_drain(&self) -> Vec<UserInput> {
         let mut state = self.lock();
         if state.pending.is_empty() {
             state.closed = true;

@@ -91,7 +91,7 @@ pub fn prompt_history(events: &[Event]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match &event.payload {
-            EventPayload::UserMessage { text } if !text.trim().is_empty() => Some(text.clone()),
+            EventPayload::UserMessage { text, .. } if !text.trim().is_empty() => Some(text.clone()),
             _ => None,
         })
         .collect()
@@ -161,6 +161,7 @@ mod tests {
         let events = vec![
             event(EventPayload::UserMessage {
                 text: "fix the bug".into(),
+                media: vec![],
             }),
             event(EventPayload::AssistantMessageCompleted {
                 text: "looking".into(),
@@ -176,6 +177,7 @@ mod tests {
                     output: "exit code 1\nFAIL".into(),
                     is_error: true,
                     artifact_id: None,
+                    media: Vec::new(),
                 },
             }),
             event(EventPayload::ToolCompleted {
@@ -185,6 +187,7 @@ mod tests {
                     output: "exit 0".into(),
                     is_error: false,
                     artifact_id: None,
+                    media: Vec::new(),
                 },
             }),
             event(EventPayload::ContextMaterialized {
@@ -225,6 +228,7 @@ mod tests {
         let events = vec![
             event(EventPayload::UserMessage {
                 text: "first prompt".into(),
+                media: vec![],
             }),
             event(EventPayload::AssistantMessageCompleted {
                 text: "ok".into(),
@@ -235,6 +239,7 @@ mod tests {
             }),
             event(EventPayload::UserMessage {
                 text: "second prompt".into(),
+                media: vec![],
             }),
         ];
         assert_eq!(

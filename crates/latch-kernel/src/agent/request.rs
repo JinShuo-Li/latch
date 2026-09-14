@@ -93,7 +93,15 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
         .recent
         .iter()
         .filter_map(|e| match &e.payload {
-            EventPayload::UserMessage { text } => Some(ModelMessage::text("user", text.clone())),
+            EventPayload::UserMessage { text, media } => Some(ModelMessage {
+                role: "user".into(),
+                content: text.clone(),
+                tool_calls: vec![],
+                tool_call_id: None,
+                reasoning_content: None,
+                reasoning: Vec::new(),
+                media: media.clone(),
+            }),
             EventPayload::AgentMessageReceived { message } => {
                 Some(ModelMessage::text("user", message.text.clone()))
             }
@@ -109,6 +117,7 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
                 tool_call_id: None,
                 reasoning_content: reasoning_content.clone(),
                 reasoning: reasoning.clone(),
+                media: Vec::new(),
             }),
             EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } => {
                 Some(ModelMessage {
@@ -118,6 +127,7 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
                     tool_call_id: Some(result.call_id.clone()),
                     reasoning_content: None,
                     reasoning: Vec::new(),
+                    media: result.media.clone(),
                 })
             }
             EventPayload::RegroundRequested { signature } => Some(ModelMessage::text("user", format!("Kernel re-ground required after repeated failure {signature}. Re-read current reality, identify disproven assumptions, and form a materially different strategy before another mutation."))),
@@ -167,8 +177,15 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
             && message.tool_calls.is_empty()
             && message.tool_call_id.is_none()
         {
-            previous.content.push_str("\n\n");
-            previous.content.push_str(&message.content);
+            if !message.content.is_empty() {
+                if !previous.content.is_empty() {
+                    previous.content.push_str("\n\n");
+                }
+                previous.content.push_str(&message.content);
+            }
+            // Merging must not drop media: a kernel context turn merged into a
+            // user turn keeps any attached images visible to the provider.
+            previous.media.extend(message.media);
         } else {
             normalized.push(message);
         }

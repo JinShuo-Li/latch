@@ -79,6 +79,9 @@ pub struct ModelDescriptor {
     /// `output_config.effort` control.
     pub adaptive_thinking: bool,
     pub transport: TransportKind,
+    /// Provider-neutral input modalities the model accepts. Always contains
+    /// `Text`; `Image` is explicit metadata, never inferred from a model name.
+    pub input_modalities: Vec<latch_protocol::InputModality>,
     pub pricing: Option<ModelPricing>,
     pub aliases: Vec<String>,
     /// True when metadata comes from the built-in catalog or explicit user
@@ -87,6 +90,12 @@ pub struct ModelDescriptor {
 }
 
 impl ModelDescriptor {
+    /// Whether the model accepts image input.
+    #[must_use]
+    pub fn supports_image_input(&self) -> bool {
+        self.input_modalities
+            .contains(&latch_protocol::InputModality::Image)
+    }
     #[must_use]
     pub fn supports_effort(&self, effort: ReasoningEffort) -> bool {
         matches!(effort, ReasoningEffort::ProviderDefault)
@@ -144,6 +153,7 @@ impl ModelDescriptor {
             reasoning_replay: conservative_replay(kind, model),
             adaptive_thinking: false,
             transport: kind.default_transport(),
+            input_modalities: vec![latch_protocol::InputModality::Text],
             pricing: None,
             aliases: Vec::new(),
             known: false,
@@ -198,6 +208,9 @@ struct BuiltinModel {
     adaptive_thinking: bool,
     replay: ReasoningReplay,
     aliases: &'static [&'static str],
+    /// Explicit image-input capability from the provider's official model
+    /// documentation. Never inferred from the model name or transport.
+    image: bool,
 }
 
 const NONE: ReasoningEffort = ReasoningEffort::None;
@@ -231,6 +244,7 @@ fn builtin_openai() -> Vec<BuiltinModel> {
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: true,
             aliases: &[],
         },
         BuiltinModel {
@@ -242,6 +256,7 @@ fn builtin_openai() -> Vec<BuiltinModel> {
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: true,
             aliases: &["gpt-5.6"],
         },
         BuiltinModel {
@@ -253,6 +268,7 @@ fn builtin_openai() -> Vec<BuiltinModel> {
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: true,
             aliases: &[],
         },
         BuiltinModel {
@@ -264,6 +280,7 @@ fn builtin_openai() -> Vec<BuiltinModel> {
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: true,
             aliases: &[],
         },
         BuiltinModel {
@@ -275,6 +292,7 @@ fn builtin_openai() -> Vec<BuiltinModel> {
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: true,
             aliases: &[],
         },
         BuiltinModel {
@@ -286,6 +304,7 @@ fn builtin_openai() -> Vec<BuiltinModel> {
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: true,
             aliases: &[],
         },
     ]
@@ -307,6 +326,7 @@ fn builtin_anthropic() -> Vec<BuiltinModel> {
             transport: messages,
             adaptive_thinking: true,
             replay: ReasoningReplay::Replay,
+            image: true,
             aliases: &[],
         },
         BuiltinModel {
@@ -318,6 +338,7 @@ fn builtin_anthropic() -> Vec<BuiltinModel> {
             transport: messages,
             adaptive_thinking: true,
             replay: ReasoningReplay::Replay,
+            image: true,
             aliases: &[],
         },
         BuiltinModel {
@@ -329,6 +350,7 @@ fn builtin_anthropic() -> Vec<BuiltinModel> {
             transport: messages,
             adaptive_thinking: true,
             replay: ReasoningReplay::Replay,
+            image: true,
             aliases: &[],
         },
     ];
@@ -342,6 +364,7 @@ fn builtin_anthropic() -> Vec<BuiltinModel> {
         transport: messages,
         adaptive_thinking: true,
         replay: ReasoningReplay::Replay,
+        image: true,
         aliases: &[],
     });
     models.push(BuiltinModel {
@@ -353,6 +376,7 @@ fn builtin_anthropic() -> Vec<BuiltinModel> {
         transport: messages,
         adaptive_thinking: true,
         replay: ReasoningReplay::Replay,
+        image: true,
         aliases: &[],
     });
     models.push(BuiltinModel {
@@ -364,6 +388,7 @@ fn builtin_anthropic() -> Vec<BuiltinModel> {
         transport: messages,
         adaptive_thinking: false,
         replay: ReasoningReplay::Replay,
+        image: true,
         aliases: &["claude-haiku-4-5-20251001"],
     });
     models
@@ -397,6 +422,7 @@ fn builtin_deepseek() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Replay,
+            image: true,
             aliases: &[
                 "deepseek-v4-flash",
                 "deepseek-v4-flash-vision-exp",
@@ -415,6 +441,7 @@ fn builtin_deepseek() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Replay,
+            image: false,
             aliases: &[],
         },
     ]
@@ -425,6 +452,16 @@ fn builtin_deepseek() -> Vec<BuiltinModel> {
 /// the rest use Chat Completions. DeepSeek models keep DeepSeek replay
 /// semantics; every other family does not inherit them. Effort levels are only
 /// advertised where the provider documents them.
+///
+/// Input modality: the Go endpoint table publishes a transport per model but no
+/// modality metadata, and live probing shows the gateway rejects images for
+/// models whose upstream accepts them (the DeepSeek Flash alias reports
+/// "Model only supports text input"). Every Go model therefore stays
+/// conservative text-only by default; a model the gateway actually serves with
+/// vision can be opted in per model with `input_modalities = ["text",
+/// "image"]`. Live probing (2026-09) observed that `kimi-k3` (chat completions)
+/// and `qwen3.8-max` (messages) do accept images correctly through the
+/// gateway, so those are the first rows a user should opt in.
 fn builtin_opencode_go() -> Vec<BuiltinModel> {
     let chat = TransportKind::ChatCompletions;
     let messages = TransportKind::AnthropicMessages;
@@ -442,6 +479,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: responses,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -453,6 +491,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Replay,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -464,6 +503,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Replay,
+            image: false,
             aliases: &["deepseek-v4.1-flash", "deepseek-v4.1", "deepseek-flash"],
         },
         BuiltinModel {
@@ -475,6 +515,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -486,6 +527,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -497,6 +539,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -508,6 +551,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -519,6 +563,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -530,6 +575,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -541,6 +587,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -552,6 +599,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -563,6 +611,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: chat,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -574,6 +623,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: messages,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -585,6 +635,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: messages,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -596,6 +647,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: messages,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -607,6 +659,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: messages,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -618,6 +671,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: messages,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
         BuiltinModel {
@@ -629,6 +683,7 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             transport: messages,
             adaptive_thinking: false,
             replay: ReasoningReplay::Omit,
+            image: false,
             aliases: &[],
         },
     ];
@@ -662,6 +717,14 @@ fn builtin_descriptor(
         reasoning_replay: builtin.replay,
         adaptive_thinking: builtin.adaptive_thinking,
         transport: builtin.transport,
+        input_modalities: if builtin.image {
+            vec![
+                latch_protocol::InputModality::Text,
+                latch_protocol::InputModality::Image,
+            ]
+        } else {
+            vec![latch_protocol::InputModality::Text]
+        },
         pricing: None,
         aliases: builtin
             .aliases
@@ -861,6 +924,20 @@ fn apply_user_metadata(descriptor: &mut ModelDescriptor, user: &ModelConfig) {
     if !user.aliases.is_empty() {
         descriptor.aliases = user.aliases.clone();
     }
+    if let Some(modalities) = &user.input_modalities {
+        let mut resolved: Vec<latch_protocol::InputModality> = Vec::new();
+        for modality in modalities {
+            if !resolved.contains(modality) {
+                resolved.push(*modality);
+            }
+        }
+        // Text is always available; a user override only adds or removes
+        // image input (a model that cannot read text is not representable).
+        if !resolved.contains(&latch_protocol::InputModality::Text) {
+            resolved.insert(0, latch_protocol::InputModality::Text);
+        }
+        descriptor.input_modalities = resolved;
+    }
 }
 
 /// Central provider/model catalog.
@@ -1033,13 +1110,15 @@ impl ProviderRegistry {
     }
 
     /// Builds the provider adapter for a resolved profile. Credentials are
-    /// resolved here and never stored in the profile or the registry.
+    /// resolved here and never stored in the profile or the registry. `media`
+    /// resolves durable image references only at the wire boundary.
     pub fn build_provider(
         &self,
         profile: &InferenceProfile,
         descriptor: &ModelDescriptor,
         credentials: &CredentialStore,
         session_id: Uuid,
+        media: Option<crate::provider::MediaStore>,
     ) -> Result<Arc<dyn ModelProvider>> {
         let provider = self
             .profiles
@@ -1071,7 +1150,8 @@ impl ProviderRegistry {
                 )
                 .with_identity(provider.id.to_string())
                 .with_reasoning(effort, supports_effort, descriptor.adaptive_thinking)
-                .with_session(session_id),
+                .with_session(session_id)
+                .with_media(media.clone()),
             ),
             TransportKind::Responses => Arc::new(
                 OpenAiResponsesProvider::new(
@@ -1081,14 +1161,16 @@ impl ProviderRegistry {
                 )
                 .with_identity(provider.id.to_string())
                 .with_reasoning(effort, supports_effort)
-                .with_session(session_id),
+                .with_session(session_id)
+                .with_media(media.clone()),
             ),
             TransportKind::ChatCompletions => Arc::new(
                 OpenAiProvider::new(provider.base_url.clone(), api_key, descriptor.model.clone())
                     .with_identity(provider.id.to_string())
                     .with_reasoning(effort, descriptor.reasoning_replay, supports_effort)
                     .with_thinking(thinking)
-                    .with_session(session_id),
+                    .with_session(session_id)
+                    .with_media(media.clone()),
             ),
         };
         Ok(provider_impl)
@@ -1512,7 +1594,7 @@ mod tests {
                 ))
                 .unwrap();
             let provider = registry
-                .build_provider(&profile, &descriptor, &credentials, Uuid::new_v4())
+                .build_provider(&profile, &descriptor, &credentials, Uuid::new_v4(), None)
                 .unwrap();
             assert_eq!(provider.model(), wire, "alias {entered}");
             // The serialized request body carries the canonical wire ID, never
@@ -1525,7 +1607,8 @@ mod tests {
                 },
                 provider.model(),
                 descriptor.reasoning_replay,
-            );
+            )
+            .unwrap();
             assert_eq!(body["model"], wire, "request body for {entered}");
         }
     }
@@ -1601,6 +1684,128 @@ mod tests {
         // sending an unsupported parameter.
         assert_eq!(profile.effort, ReasoningEffort::ProviderDefault);
         assert!(descriptor.supported_efforts.is_empty());
+    }
+
+    #[test]
+    fn builtin_catalogs_mark_official_vision_models() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.openai]
+            kind = "openai"
+            credential = "env:OPENAI_API_KEY"
+
+            [providers.anthropic]
+            kind = "anthropic"
+            credential = "env:ANTHROPIC_API_KEY"
+
+            [providers.deepseek]
+            kind = "deepseek"
+            credential = "env:DEEPSEEK_API_KEY"
+
+            [providers.opencode-go]
+            kind = "opencode-go"
+            credential = "env:OPENCODE_API_KEY"
+            "#,
+        );
+        // The official OpenAI model sizing table documents image input for
+        // every current built-in model.
+        for model in registry.available_models("openai") {
+            assert!(
+                model.supports_image_input(),
+                "{} is documented as vision-capable",
+                model.model
+            );
+        }
+        // The Anthropic models overview states all current models accept
+        // image input.
+        for model in registry.available_models("anthropic") {
+            assert!(
+                model.supports_image_input(),
+                "{} is documented as vision-capable",
+                model.model
+            );
+        }
+        // DeepSeek documents image input for the current Flash model only.
+        assert!(
+            registry
+                .model_descriptor("deepseek", "deepseek-flash")
+                .unwrap()
+                .supports_image_input()
+        );
+        assert!(
+            !registry
+                .model_descriptor("deepseek", "deepseek-v4-pro")
+                .unwrap()
+                .supports_image_input()
+        );
+        // OpenCode Go publishes no per-model modalities and live probing shows
+        // the gateway rejects images even for upstream vision models, so every
+        // Go model stays conservative text-only by default. Explicit user
+        // metadata is the only way to opt a Go model into image input, and the
+        // kernel still fails locally when the endpoint disagrees.
+        for model in registry.available_models("opencode-go") {
+            assert!(
+                !model.supports_image_input(),
+                "{} stays text-only by default",
+                model.model
+            );
+        }
+        assert!(
+            !registry
+                .model_descriptor("opencode-go", "mystery-model")
+                .unwrap()
+                .supports_image_input(),
+            "unknown models default to text-only"
+        );
+        // An unknown model never gains vision through a name or transport.
+        assert!(
+            !registry
+                .model_descriptor("openai", "gpt-vision-unofficial")
+                .unwrap()
+                .supports_image_input()
+        );
+    }
+
+    #[test]
+    fn user_configuration_can_opt_models_in_and_out_of_image_input() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.custom]
+            kind = "openai-compatible"
+            base_url = "https://example.com/v1"
+            credential = "env:CUSTOM_KEY"
+
+            [providers.custom.models."mystery-vision"]
+            input_modalities = ["text", "image"]
+
+            [providers.custom.models."text-only-override"]
+            input_modalities = ["text"]
+
+            [providers.openai]
+            kind = "openai"
+            credential = "env:OPENAI_API_KEY"
+
+            [providers.openai.models."gpt-5.5"]
+            input_modalities = ["text"]
+            "#,
+        );
+        let custom = registry
+            .model_descriptor("custom", "mystery-vision")
+            .unwrap();
+        assert!(custom.known);
+        assert!(custom.supports_image_input());
+        assert!(
+            custom
+                .input_modalities
+                .contains(&latch_protocol::InputModality::Text)
+        );
+        let text_only = registry
+            .model_descriptor("custom", "text-only-override")
+            .unwrap();
+        assert!(!text_only.supports_image_input());
+        // Explicit user metadata wins over the built-in catalog.
+        let overridden = registry.model_descriptor("openai", "gpt-5.5").unwrap();
+        assert!(!overridden.supports_image_input());
     }
 
     #[test]

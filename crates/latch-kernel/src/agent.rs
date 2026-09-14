@@ -18,9 +18,9 @@ use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use latch_protocol::{
     AgentEvidenceRef, AgentIdentity, AgentReport, AgentStatus, CompletionState, Event,
-    EventPayload, EvidenceStatus, InferenceProfile, MemoryKind, MemoryRecord, Mode, ModelMessage,
-    ModelRequest, PermissionMode, ReasoningEffort, Safety, StreamEvent, ToolCall, ToolDefinition,
-    ToolResult, Validity,
+    EventPayload, EvidenceStatus, InferenceProfile, InputModality, MemoryKind, MemoryRecord, Mode,
+    ModelMessage, ModelRequest, PermissionMode, ReasoningEffort, Safety, StreamEvent, ToolCall,
+    ToolDefinition, ToolResult, UserInput, Validity,
 };
 use request::{common_prefix_bytes, context_messages, request_signature};
 use serde_json::json;
@@ -81,6 +81,10 @@ pub struct Agent {
     /// reasoning effort. Durable changes are appended as
     /// `InferenceProfileChanged`; credentials never live here.
     profile: InferenceProfile,
+    /// Provider-neutral input modalities the effective model accepts. Text is
+    /// implicit; image input is explicit and checked before any request, so an
+    /// image is never silently dropped for a text-only model.
+    input_modalities: Vec<InputModality>,
     /// Set when the current turn executed `complete` and the kernel-derived
     /// completion is terminal. Lets the loop exit in the same turn instead of
     /// spending another provider request on a summary already produced.
@@ -180,6 +184,7 @@ impl Agent {
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
             estimator,
             profile,
+            input_modalities: vec![InputModality::Text],
             terminal_complete: false,
             permissions: PermissionBroker::new(),
             steering: SteeringQueue::new(),
@@ -322,6 +327,10 @@ impl Agent {
         let estimator = TokenEstimator::for_model(&profile.model);
         self.provider = provider;
         self.profile = profile.clone();
+        self.input_modalities = descriptor.input_modalities.clone();
+        if !self.input_modalities.contains(&InputModality::Text) {
+            self.input_modalities.insert(0, InputModality::Text);
+        }
         self.estimator = estimator;
         self.continuity.set_estimator(estimator);
         // A profile change invalidates architecture-level prefix accounting.
@@ -338,6 +347,30 @@ impl Agent {
     #[must_use]
     pub const fn estimator(&self) -> &TokenEstimator {
         &self.estimator
+    }
+
+    /// Provider-neutral input modalities of the effective model.
+    #[must_use]
+    pub fn input_modalities(&self) -> &[InputModality] {
+        &self.input_modalities
+    }
+
+    /// Whether the effective model can receive image input.
+    #[must_use]
+    pub fn supports_image_input(&self) -> bool {
+        self.input_modalities.contains(&InputModality::Image)
+    }
+
+    /// Fails locally, before any provider request, when input carries images
+    /// the effective model cannot accept. The image is never silently dropped
+    /// and the model is never switched behind the user's back.
+    fn ensure_media_supported(&self, media: &[latch_protocol::MediaRef]) -> Result<()> {
+        if media.is_empty() || self.supports_image_input() {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "Current model does not accept image input. Choose a vision-capable model with /model."
+        ))
     }
     /// Changes the effective mode and records it durably so `--resume`
     /// restores the mode the session actually transitioned to.
@@ -548,15 +581,27 @@ impl Agent {
     }
     /// Records one user turn with normal provenance. Used for the initial
     /// prompt and for every live-steering message, so injected turns are
-    /// indistinguishable from ordinary user turns in durable history.
-    async fn record_user_message(&mut self, text: &str, sink: &AgentEventSink) -> Result<()> {
-        let user_event = self.emit(EventPayload::UserMessage { text: text.into() }, sink)?;
-        if looks_like_constraint(text) {
+    /// indistinguishable from ordinary user turns in durable history. Images
+    /// are durable media references; bytes stay in artifact storage.
+    async fn record_user_message(
+        &mut self,
+        input: &UserInput,
+        sink: &AgentEventSink,
+    ) -> Result<()> {
+        self.ensure_media_supported(&input.media)?;
+        let user_event = self.emit(
+            EventPayload::UserMessage {
+                text: input.text.clone(),
+                media: input.media.clone(),
+            },
+            sink,
+        )?;
+        if looks_like_constraint(&input.text) {
             self.store.add_memory(&MemoryRecord {
                 id: Uuid::new_v4(),
                 session_id: self.session_id,
                 kind: MemoryKind::UserConstraint,
-                content: text.into(),
+                content: input.text.clone(),
                 originating_event: user_event.id,
                 created_at: Utc::now(),
                 validity: Validity::Active,
@@ -568,12 +613,12 @@ impl Agent {
         self.extensions
             .observe(
                 "user_message",
-                json!({"text":text,"sessionId":self.session_id}),
+                json!({"text":input.text,"media":input.media.len(),"sessionId":self.session_id}),
             )
             .await?;
-        if self.state.state().goal.is_empty() {
+        if self.state.state().goal.is_empty() && !input.text.trim().is_empty() {
             self.state.update(crate::state::StateUpdate {
-                goal: Some(text.into()),
+                goal: Some(input.text.clone()),
                 ..Default::default()
             });
             self.emit(
@@ -589,12 +634,12 @@ impl Agent {
     /// Records newly drained steering messages in submission order. Each one
     /// stays a distinct durable `UserMessage`; the supervisors then observe the
     /// new user turns exactly like an ordinary prompt.
-    async fn record_steers(&mut self, texts: &[String], sink: &AgentEventSink) -> Result<()> {
-        if texts.is_empty() {
+    async fn record_steers(&mut self, inputs: &[UserInput], sink: &AgentEventSink) -> Result<()> {
+        if inputs.is_empty() {
             return Ok(());
         }
-        for text in texts {
-            self.record_user_message(text, sink).await?;
+        for input in inputs {
+            self.record_user_message(input, sink).await?;
         }
         self.observe_progress_events()
     }
@@ -633,12 +678,19 @@ impl Agent {
     /// safe model boundaries. The queue is opened for the whole run and closed
     /// atomically when the run makes its exit decision, so a submission always
     /// has one deterministic outcome: accepted-and-consumed or rejected.
+    ///
+    /// Text-only callers pass a plain string; structured callers pass a
+    /// [`UserInput`] carrying durable image references.
     pub async fn run(
         &mut self,
-        user_text: &str,
+        input: impl Into<UserInput>,
         cancel: CancellationToken,
         sink: AgentEventSink,
     ) -> Result<String> {
+        let input = input.into();
+        // Fail closed before any durable user turn is recorded, so an image a
+        // text-only model cannot see never enters the conversation silently.
+        self.ensure_media_supported(&input.media)?;
         self.steering.open();
         // Durable run boundary: every provider request, tool call, usage
         // record, and mutation between these events belongs to exactly one run.
@@ -646,11 +698,11 @@ impl Agent {
         self.emit(
             EventPayload::RunStarted {
                 run_id,
-                prompt: compact_agent_summary(user_text),
+                prompt: compact_agent_summary(&input.text),
             },
             &sink,
         )?;
-        let result = self.run_loop(user_text, cancel.clone(), sink.clone()).await;
+        let result = self.run_loop(&input, cancel.clone(), sink.clone()).await;
         let outcome = match &result {
             Ok(_) => "completed",
             Err(_) if cancel.is_cancelled() => "cancelled",
@@ -676,7 +728,7 @@ impl Agent {
 
     async fn run_loop(
         &mut self,
-        user_text: &str,
+        input: &UserInput,
         cancel: CancellationToken,
         sink: AgentEventSink,
     ) -> Result<String> {
@@ -687,8 +739,8 @@ impl Agent {
         self.forward_watermark.store(start, Ordering::Relaxed);
         let initial_agent_messages = self.child_mailbox.drain();
         let effective_user_text = if initial_agent_messages.is_empty() {
-            self.record_user_message(user_text, &sink).await?;
-            user_text.to_owned()
+            self.record_user_message(input, &sink).await?;
+            input.text.clone()
         } else {
             self.record_agent_messages(&initial_agent_messages, &sink)
                 .await?;
@@ -742,7 +794,7 @@ impl Agent {
             let queued = self.steering.drain();
             if !queued.is_empty() {
                 self.record_steers(&queued, &sink).await?;
-                steer_query = Some(queued.join("\n"));
+                steer_query = Some(steer_query_text(&queued));
             }
             let agent_messages = self.child_mailbox.drain();
             if !agent_messages.is_empty() {
@@ -797,6 +849,15 @@ impl Agent {
                     .await?,
             )
             .context("extension returned invalid model_request transform")?;
+            // Replayed history may contain images from an earlier model. Fail
+            // locally before the provider request instead of dropping them or
+            // letting the endpoint reject the request ambiguously.
+            if request.messages.iter().any(ModelMessage::has_media) && !self.supports_image_input()
+            {
+                return Err(anyhow!(
+                    "Current model does not accept image input. Choose a vision-capable model with /model."
+                ));
+            }
             // Diagnostics for the exact provider-facing shape: the real request
             // size (including tool calls, arguments, and replayed reasoning)
             // and the estimated architecture cacheability — the byte prefix
@@ -892,7 +953,7 @@ impl Agent {
                 }
                 if !late.is_empty() {
                     self.record_steers(&late, &sink).await?;
-                    steer_query = Some(late.join("\n"));
+                    steer_query = Some(steer_query_text(&late));
                 }
                 continue;
             }
@@ -935,7 +996,7 @@ impl Agent {
                 }
                 if !late.is_empty() {
                     self.record_steers(&late, &sink).await?;
-                    steer_query = Some(late.join("\n"));
+                    steer_query = Some(steer_query_text(&late));
                 }
                 continue;
             }
@@ -1011,6 +1072,14 @@ impl Agent {
         self.forward_watermark.store(last, Ordering::Relaxed);
         Ok(())
     }
+}
+
+fn steer_query_text(inputs: &[UserInput]) -> String {
+    inputs
+        .iter()
+        .map(|input| input.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn looks_like_constraint(text: &str) -> bool {

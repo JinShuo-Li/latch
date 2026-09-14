@@ -16,10 +16,13 @@
 
 use latch_kernel::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS, PermissionConfig};
 use latch_kernel::{
-    Agent, AgentRuntime, Config, ContinuityEngine, CredentialStore, EventStore, ModelDescriptor,
-    ModelProvider, PolicyEngine, ProviderRegistry, ToolExecutor,
+    Agent, AgentRuntime, ArtifactMediaStore, Config, ContinuityEngine, CredentialStore, EventStore,
+    ModelDescriptor, ModelProvider, PolicyEngine, ProviderRegistry, ToolExecutor,
+    ingest_image_bytes,
 };
-use latch_protocol::{CompletionState, Event, EventPayload, InferenceProfile, Mode, Usage};
+use latch_protocol::{
+    CompletionState, Event, EventPayload, InferenceProfile, Mode, Usage, UserInput,
+};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,6 +49,7 @@ fn live_config() -> Config {
 fn live_provider(
     config: &Config,
     session: uuid::Uuid,
+    artifacts: &Path,
 ) -> (Arc<dyn ModelProvider>, InferenceProfile, ModelDescriptor) {
     let registry = ProviderRegistry::from_config(config).expect("provider registry");
     let credentials = CredentialStore::open(CredentialStore::default_path(&config.state_dir))
@@ -53,8 +57,10 @@ fn live_provider(
     let (profile, descriptor) = registry
         .default_profile(config)
         .expect("default inference profile");
+    let media: latch_kernel::provider::MediaStore =
+        Arc::new(ArtifactMediaStore::new(artifacts.to_path_buf()));
     let provider = registry
-        .build_provider(&profile, &descriptor, &credentials, session)
+        .build_provider(&profile, &descriptor, &credentials, session, Some(media))
         .expect("provider");
     (provider, profile, descriptor)
 }
@@ -172,19 +178,19 @@ async fn live_agent(workspace: PathBuf, artifacts: PathBuf, mode: Mode) -> LiveR
     let session = store.create_session(&workspace).unwrap();
     let tools = ToolExecutor::new(
         workspace.clone(),
-        artifacts,
+        artifacts.clone(),
         store.clone(),
         session,
         PolicyEngine::new(mode, workspace.clone(), PermissionConfig::default()),
     )
     .unwrap();
-    let (provider, profile, descriptor) = live_provider(&config, session);
+    let (provider, profile, descriptor) = live_provider(&config, session, &artifacts);
     let mut agent = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.clone(),
         mode,
         store: store.clone(),
-        provider,
+        provider: provider.clone(),
         tools,
         continuity: ContinuityEngine::for_model(
             store.clone(),
@@ -193,6 +199,9 @@ async fn live_agent(workspace: PathBuf, artifacts: PathBuf, mode: Mode) -> LiveR
         ),
         retry_budget: config.failure.retry_budget,
     });
+    // Apply the resolved capability exactly like the CLI does, so the live
+    // harness exercises the same image-input gating and context budget.
+    agent.restore_inference_profile(provider, profile, &descriptor, ContextConfig::default());
     agent.set_stagnation_budget(config.failure.stagnation_budget);
     agent.set_max_model_turns(config.failure.max_model_turns);
     agent.set_context_budget(
@@ -573,7 +582,8 @@ async fn live_interrupt_and_resume() {
         ),
     )
     .unwrap();
-    let (provider, profile, descriptor) = live_provider(&config, session);
+    let (provider, profile, descriptor) =
+        live_provider(&config, session, &workspace.path().join("artifacts"));
     let mut agent = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.path().into(),
@@ -632,7 +642,8 @@ async fn live_interrupt_and_resume() {
         ),
     )
     .unwrap();
-    let (provider, profile, descriptor) = live_provider(&config, session);
+    let (provider, profile, descriptor) =
+        live_provider(&config, session, &workspace.path().join("artifacts"));
     let mut resumed = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.path().into(),
@@ -730,7 +741,8 @@ async fn live_long_horizon_over_100_turns() {
         ),
     )
     .unwrap();
-    let (provider, profile, descriptor) = live_provider(&config, session);
+    let (provider, profile, descriptor) =
+        live_provider(&config, session, &workspace.path().join("artifacts"));
     let mut agent = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.path().into(),
@@ -758,7 +770,7 @@ async fn live_long_horizon_over_100_turns() {
             "Append the note `note {index}` to NOTES in src/notes.rs, keeping the file valid, and run `cargo test` if the file has tests. One note per request; do not add anything else."
         );
         agent
-            .run(&prompt, CancellationToken::new(), Arc::new(|_| {}))
+            .run(prompt.as_str(), CancellationToken::new(), Arc::new(|_| {}))
             .await
             .expect("long-horizon turn failed");
     }
@@ -777,4 +789,138 @@ async fn live_long_horizon_over_100_turns() {
         &format!("turns={} (target >100)", metrics.turns),
     );
     assert!(success, "long-horizon run made {} turns", metrics.turns);
+}
+
+/// Live vision: one user-attached image and one `read_image` workspace
+/// inspection must both reach the model as actual pixels. The configured
+/// model must declare image input; otherwise the scenario skips honestly.
+///
+/// Enable with a vision-capable model, for example an OpenCode Go model opted
+/// in through configuration:
+///
+///     LATCH_LIVE_TESTS=1 LATCH_LIVE_SCENARIO=vision \
+///         cargo test -p latch-kernel --test live_acceptance -- --ignored --nocapture
+#[tokio::test]
+#[ignore]
+async fn live_vision_image_input() {
+    if !enabled() || !selected("vision") {
+        return;
+    }
+    let config = live_config();
+    let registry = ProviderRegistry::from_config(&config).expect("provider registry");
+    let (_profile, descriptor) = registry.default_profile(&config).expect("profile");
+    if !descriptor.supports_image_input() {
+        eprintln!(
+            "vision scenario skipped: {}/{} does not declare image input",
+            config.inference.provider.as_deref().unwrap_or("-"),
+            descriptor.model
+        );
+        return;
+    }
+
+    // Tiny solid-color PNGs generated once; the model must report the actual
+    // color, which a text-only fallback cannot reliably do for two images.
+    const RED_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mO4IyeHFTEMLQkAid1GAQVcagkAAAAASUVORK5CYII=";
+    const BLUE_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mOQs7mDFTEMLQkAGQpNgeHxNVAAAAAASUVORK5CYII=";
+
+    let workspace = tempdir().unwrap();
+    let artifacts = workspace.path().join("artifacts");
+    let red =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, RED_PNG_B64).unwrap();
+    let blue =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, BLUE_PNG_B64).unwrap();
+    std::fs::write(workspace.path().join("red.png"), &red).unwrap();
+    std::fs::write(workspace.path().join("blue.png"), &blue).unwrap();
+    let attached =
+        ingest_image_bytes(&artifacts, &red, Some("red.png".into())).expect("ingest red");
+
+    let mut run = live_agent(workspace.path().into(), artifacts, Mode::Work).await;
+    let started = Instant::now();
+    run.agent
+        .run(
+            UserInput::new(
+                "What is the dominant color of the attached image? Answer with one word.",
+                vec![attached],
+            ),
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .expect("attached-image turn failed");
+    let attached_answer = run.store.events(run.session).unwrap();
+    let attached_text = attached_answer
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::AssistantMessageCompleted { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    run.agent
+        .run(
+            UserInput::text(
+                "Use the read_image tool on blue.png and tell me its dominant color in one word.",
+            ),
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .expect("read_image turn failed");
+    let final_events = run.store.events(run.session).unwrap();
+    let read_image_text = final_events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::AssistantMessageCompleted { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let read_image_used = final_events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            EventPayload::ToolCompleted { result }
+                if result.name == "read_image" && !result.media.is_empty()
+        )
+    });
+
+    let success = attached_text.to_ascii_lowercase().contains("red")
+        && read_image_text.to_ascii_lowercase().contains("blue")
+        && read_image_used;
+    let metrics = Metrics::from_events(&final_events, started.elapsed());
+    metrics.report(
+        "vision",
+        success,
+        &format!(
+            "attached_image_answer={attached_text:?} read_image_answer={read_image_text:?} read_image_tool_used={read_image_used} images={} image_tokens={}",
+            latest_image_count(&final_events),
+            latest_image_tokens(&final_events),
+        ),
+    );
+    assert!(
+        success,
+        "vision scenario failed: attached={attached_text:?} read_image={read_image_text:?} tool_used={read_image_used}"
+    );
+}
+
+fn latest_image_count(events: &[Event]) -> usize {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::ContextMaterialized { stats } => Some(stats.image_count),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
+fn latest_image_tokens(events: &[Event]) -> usize {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::ContextMaterialized { stats } => Some(stats.image_tokens),
+            _ => None,
+        })
+        .unwrap_or(0)
 }

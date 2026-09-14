@@ -1397,3 +1397,138 @@ fn call_as(id: &str, name: &str, args: Value) -> ToolCall {
         arguments: args,
     }
 }
+
+/// Structurally valid 1x1 PNG used by the image-inspection tests.
+const TINY_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xdd, 0x8d, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+#[tokio::test]
+async fn read_image_ingests_supported_formats_and_carries_media() {
+    for mode in [Mode::Ask, Mode::Plan, Mode::Work] {
+        let (d, e) = setup(mode);
+        std::fs::write(d.path().join("shot.png"), TINY_PNG).unwrap();
+        let result = e
+            .execute(
+                &call("read_image", json!({"path":"shot.png"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!result.is_error, "{mode}: {}", result.output);
+        assert_eq!(result.name, "read_image");
+        assert_eq!(result.media.len(), 1, "read_image carries a MediaRef");
+        let media = &result.media[0];
+        assert_eq!(media.mime_type, "image/png");
+        assert_eq!(media.dimensions().as_deref(), Some("1×1"));
+        assert!(result.output.contains("[image: shot.png · 1×1]"));
+        // The bytes are stored content-addressed in the artifact store.
+        let stored = e.artifacts.join(&media.artifact_path);
+        assert_eq!(std::fs::read(&stored).unwrap(), TINY_PNG);
+        // Durable events carry only the compact reference.
+        let payload = serde_json::to_string(
+            &e.store
+                .events(e.session_id)
+                .unwrap()
+                .iter()
+                .find(|event| matches!(event.payload, EventPayload::ToolCompleted { .. }))
+                .unwrap()
+                .payload,
+        )
+        .unwrap();
+        assert!(
+            !payload.contains("iVBORw0KGgo") && !payload.contains("\\u00"),
+            "raw bytes must never enter the durable event log: {payload}"
+        );
+        // Re-ingesting identical bytes deduplicates.
+        let again = e
+            .execute(
+                &call("read_image", json!({"path":"shot.png"})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert_eq!(again.media[0].id, media.id);
+    }
+}
+
+#[tokio::test]
+async fn read_file_points_away_from_binary_images() {
+    let (d, e) = setup(Mode::Work);
+    std::fs::write(d.path().join("shot.png"), TINY_PNG).unwrap();
+    let result = e
+        .execute(
+            &call("read_file", json!({"path":"shot.png"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(result.is_error);
+    assert!(
+        result.output.contains("use read_image"),
+        "{}",
+        result.output
+    );
+}
+
+#[tokio::test]
+async fn read_image_rejects_invalid_and_unsupported_input_cleanly() {
+    let (d, e) = setup(Mode::Work);
+    std::fs::write(d.path().join("bad.png"), b"not an image").unwrap();
+    let result = e
+        .execute(
+            &call("read_image", json!({"path":"bad.png"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(result.is_error);
+    assert!(
+        result.output.contains("not a supported image"),
+        "{}",
+        result.output
+    );
+    assert!(result.media.is_empty());
+
+    std::fs::write(
+        d.path().join("anim.gif"),
+        b"GIF89a\x01\x00\x01\x00\x00\x00\x00;",
+    )
+    .unwrap();
+    let result = e
+        .execute(
+            &call("read_image", json!({"path":"anim.gif"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(result.is_error);
+    assert!(result.output.contains("GIF"), "{}", result.output);
+
+    let result = e
+        .execute(
+            &call("read_image", json!({"path":"missing.png"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(result.is_error);
+    assert!(result.media.is_empty());
+}
+
+#[tokio::test]
+async fn read_image_obeys_the_workspace_read_boundary() {
+    let (d, e) = setup(Mode::Work);
+    std::fs::write(d.path().join("shot.png"), TINY_PNG).unwrap();
+    let result = e
+        .execute(
+            &call("read_image", json!({"path":"../outside.png"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(result.is_error, "path escape must be rejected");
+    assert!(
+        result.output.contains("escapes workspace"),
+        "{}",
+        result.output
+    );
+    assert!(result.media.is_empty());
+}
