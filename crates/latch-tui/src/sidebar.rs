@@ -7,6 +7,7 @@
 //! two cannot drift.
 
 use crate::agents::SubagentModel;
+use crate::group::GroupModel;
 use chrono::{DateTime, Duration, Utc};
 use latch_protocol::{
     AgentStatus, CompletionState, ContextStats, Event, EventPayload, EvidenceStatus, Mode,
@@ -317,6 +318,8 @@ pub struct SidebarModel {
     stall: Option<StagnationView>,
     /// Root-visible child sessions; the child transcripts stay separate.
     subagents: SubagentModel,
+    /// Root-scoped coordination overlay (shared tasks, claims, members).
+    group: GroupModel,
 }
 
 impl SidebarModel {
@@ -337,6 +340,7 @@ impl SidebarModel {
             changes: ChangeView::default(),
             stall: None,
             subagents: SubagentModel::default(),
+            group: GroupModel::default(),
         }
     }
 
@@ -398,6 +402,12 @@ impl SidebarModel {
     #[must_use]
     pub fn subagents(&self) -> &SubagentModel {
         &self.subagents
+    }
+
+    /// Compact coordination state for the sidebar GROUP block and tests.
+    #[must_use]
+    pub fn group(&self) -> &GroupModel {
+        &self.group
     }
 
     #[must_use]
@@ -485,6 +495,7 @@ impl SidebarModel {
 
     pub fn apply_event(&mut self, event: &Event) {
         self.subagents.apply_event(event);
+        self.group.apply_event(event);
         if self.started_at.is_none() {
             self.started_at = Some(event.timestamp);
         }
@@ -663,6 +674,7 @@ impl SidebarModel {
                 self.task_lines(width, false),
             ]),
             (!self.subagents.is_empty()).then(|| vec![self.children_lines(width)]),
+            (!self.group.is_empty()).then(|| vec![self.group_lines(width)]),
             Some(vec![
                 self.run_lines(width, true),
                 self.run_lines(width, false),
@@ -754,6 +766,69 @@ impl SidebarModel {
                 format!("  … and {} more", self.subagents.agents().len() - 6),
                 dim(),
             ));
+        }
+        lines
+    }
+
+    /// Restrained coordination block: counts plus at most a few active or
+    /// ready task titles. The full DAG stays behind `/group`.
+    fn group_lines(&self, width: usize) -> Vec<Line<'static>> {
+        if self.group.is_empty() {
+            return Vec::new();
+        }
+        let counts = self.group.counts();
+        let mut lines = vec![section_title("GROUP")];
+        let name = self.group.name().unwrap_or("group");
+        lines.push(Line::styled(
+            fit(&format!("{name} · tasks {}", counts.total), width),
+            dim(),
+        ));
+        lines.push(Line::styled(
+            fit(
+                &format!(
+                    "ready {} · active {} · blocked {} · done {}",
+                    counts.ready,
+                    counts.active(),
+                    counts.blocked,
+                    counts.completed
+                ),
+                width,
+            ),
+            if counts.active() > 0 { cyan() } else { dim() },
+        ));
+        let owner = |agent: uuid::Uuid| {
+            self.subagents
+                .agents()
+                .iter()
+                .find(|view| view.agent_id == Some(agent))
+                .map(|view| view.task_name.clone())
+                .unwrap_or_else(|| agent.to_string()[..8].to_owned())
+        };
+        for task in self.group.active_tasks().iter().take(3) {
+            lines.push(Line::from(vec![
+                Span::styled("●", cyan()),
+                Span::raw(" "),
+                Span::raw(fit(
+                    &task.title,
+                    width.saturating_sub(2 + owner(task.assignee.unwrap_or_default()).len()),
+                )),
+                Span::styled(
+                    format!(" {}", owner(task.assignee.unwrap_or_default())),
+                    dim(),
+                ),
+            ]));
+        }
+        if counts.active() == 0 {
+            for task in self.group.ready_tasks().iter().take(2) {
+                lines.push(Line::from(vec![
+                    Span::styled("○", dim()),
+                    Span::raw(" "),
+                    Span::raw(fit(
+                        &format!("ready · {}", task.title),
+                        width.saturating_sub(2),
+                    )),
+                ]));
+            }
         }
         lines
     }
@@ -1528,6 +1603,65 @@ mod tests {
             status: "bounded".into(),
             ..ContextStats::default()
         }
+    }
+
+    #[test]
+    fn group_block_shows_counts_and_active_task_owner() {
+        let mut model = SidebarModel::new(session());
+        let group_id = Uuid::new_v4();
+        let root = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        model.apply_event(&event(EventPayload::AgentGroupCreated {
+            identity: latch_protocol::AgentGroupIdentity {
+                group_id,
+                root_session_id: root,
+                name: "workspace".into(),
+                created_at: Utc::now(),
+            },
+        }));
+        model.apply_event(&event(EventPayload::GroupTaskCreated {
+            task: latch_protocol::GroupTask {
+                task_id: Uuid::new_v4(),
+                group_id,
+                title: "parser".into(),
+                description: String::new(),
+                status: latch_protocol::GroupTaskStatus::Claimed,
+                dependencies: vec![],
+                assignee: Some(child),
+                required: true,
+                created_by: root,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                summary: None,
+                findings: vec![],
+                expected_paths: vec![],
+                touched_files: vec![],
+                reason: None,
+            },
+        }));
+        model.apply_event(&event(EventPayload::AgentNotificationDelivered {
+            report: latch_protocol::AgentReport {
+                report_id: Uuid::new_v4(),
+                agent_id: child,
+                task_name: "A-parser".into(),
+                status: AgentStatus::Running,
+                completion: latch_protocol::CompletionState::InProgress,
+                summary: String::new(),
+                findings: vec![],
+                touched_files: vec![],
+                evidence: vec![],
+                unresolved_questions: vec![],
+            },
+        }));
+        let rendered = render(&model, 50, 60);
+        assert!(rendered.contains("GROUP"), "{rendered}");
+        assert!(rendered.contains("workspace · tasks 1"), "{rendered}");
+        assert!(rendered.contains("active 1"), "{rendered}");
+        assert!(rendered.contains("parser"), "{rendered}");
+        assert!(rendered.contains("A-parser"), "{rendered}");
+        // A session without group events never grows a GROUP section.
+        let plain = SidebarModel::new(session());
+        assert!(!render(&plain, 50, 60).contains("GROUP"));
     }
 
     #[test]

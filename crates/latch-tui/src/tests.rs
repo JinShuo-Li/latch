@@ -2958,7 +2958,7 @@ fn user_transcript_renders_compact_attachment_metadata_without_bytes() {
     assert!(!rendered.contains("iVBOR"), "no base64 in the transcript");
 
     // The palette advertises the new commands and /help lists them.
-    for command in ["/attach", "/attachments", "/detach"] {
+    for command in ["/attach", "/attachments", "/detach", "/group"] {
         assert!(
             SLASH_COMMANDS.iter().any(|entry| entry.name == command),
             "missing {command}"

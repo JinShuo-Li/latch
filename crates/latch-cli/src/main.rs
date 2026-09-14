@@ -1227,6 +1227,9 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
             .await?;
         }
         "/diff" => send_tool(agent, "git_diff", tx).await?,
+        "/group" => {
+            tx.send(Output::Notice(agent.group_overview_text())).await?;
+        }
         "/checkpoint" => send_tool(agent, "checkpoint", tx).await?,
         "/undo" => send_tool(agent, "undo", tx).await?,
         "/model" => {
@@ -1350,6 +1353,7 @@ mod tests {
             "/mode",
             "/model",
             "/context",
+            "/group",
             "/diff",
             "/checkpoint",
             "/undo",

@@ -40,6 +40,7 @@ use tokio::sync::mpsc;
 mod agents;
 mod composer;
 mod diff;
+mod group;
 mod presentation;
 mod profile;
 mod session_picker;
@@ -211,6 +212,10 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/diff",
         description: "Open workspace diff inspector",
+    },
+    SlashCommand {
+        name: "/group",
+        description: "Show agent-group coordination state",
     },
     SlashCommand {
         name: "/sidebar",
