@@ -245,10 +245,10 @@ validation passing resolves it, and a materially different failure signature
 restarts the count. Streaks replay from durable events, so `--resume` does not
 forget a stalled loop. At the configured budget the kernel requests re-ground.
 
-Progress supervision is separate and deterministic: every read_file, search,
-read_artifact, git_status, git_diff, and conservative read-only shell
-observation is keyed by canonical subject (including range arguments) plus
-result digest, scoped to a progress epoch. Workspace mutations (Latch, shell,
+Progress supervision is separate and deterministic: every read_file,
+read_image, search, read_artifact, git_status, git_diff, and conservative
+read-only shell observation is keyed by canonical subject (including range
+arguments) plus result digest, scoped to a progress epoch. Workspace mutations (Latch, shell,
 or detected external), new validation/evidence, meaningful task-state changes,
 mode switches, and new user turns advance the epoch, so legitimate re-reads
 after real change are never confused with redundancy. Consecutive turns that
@@ -396,7 +396,8 @@ The kernel keeps its stable public types and the run loop in `agent.rs`, with
 one child module per responsibility: `steering`, `request`, `permissions`,
 `dispatch`, `agent_controls`, `kernel_tools`, `validation`, and `supervision`.
 Root graph/runtime ownership lives in `agents/{supervisor,worker,graph,mailbox,
-profile}.rs`. Tools keep the
+profile}.rs`. Image ingestion, validation, and the artifact media resolver live
+in `media.rs`. Tools keep the
 `ToolExecutor` facade in `tools.rs` and split `policy`, `ownership`,
 `process`, `files`, `write`, and `git` into children. The continuity engine is
 a single module because rollover, episode segmentation, and recall share one
@@ -496,6 +497,48 @@ drop required reasoning state. Reasoning is never displayed in the transcript.
 Repository instruction precedence is `CLAUDE.md`, `AGENTS.md`, then
 `.latch/instructions.md`; current user input follows them. Kernel invariants
 override project text.
+
+## Multimodal image input
+
+Image input is provider-neutral above the provider boundary. A durable
+`MediaRef` (content-addressed id/`sha256`, MIME type, dimensions, artifact
+path) names one immutable artifact in the session artifact store; bytes never
+enter events, SQLite JSON, logs, or transcripts. `EventPayload::UserMessage`,
+`ModelMessage`, and `ToolResult` carry `media: Vec<MediaRef>`, all
+serde-defaulted, so text-only traffic is structurally unchanged and older
+events deserialize with empty media.
+
+`media.rs` owns validation and ingestion: format detection from actual bytes
+(PNG/JPEG/WebP; GIF is rejected honestly because not every supported serializer
+path handles it), structural header validation with a CRC check for PNG, the
+5 MiB and 8000 px limits, and content-addressed write-once storage. The
+`read_image` tool reuses the workspace read policy and feeds the resulting
+reference into the tool result. The agent request builder carries user and tool
+media into `ModelRequest`, and adapters resolve bytes to inline base64 only at
+the wire boundary through a `MediaBytesProvider` rooted at the session's
+artifact store, so replayed history keeps referencing the original immutable
+artifact even if the source file changed or disappeared.
+
+Wire serialization is per transport: OpenAI Responses emits `input_image`
+content parts in user turns and in `function_call_output.output` arrays;
+Anthropic Messages emits base64 `image` blocks ahead of the text in user turns
+and nested inside `tool_result.content`; chat completions emits multimodal
+`image_url` content for user turns and, because tool-role images are not
+portable there, a terminal textual tool result followed by one adjacent user
+observation turn so a tool transaction is never split. Encrypted-reasoning and
+thinking replay are untouched by image input.
+
+`ModelDescriptor.input_modalities` is the capability authority. Built-in
+catalogs mark only officially documented vision models (the current OpenAI and
+Anthropic catalogs, and DeepSeek Flash). OpenCode Go publishes no per-model
+modalities and live probing shows the gateway rejects images even for upstream
+vision models, so every Go model stays conservative text-only by default.
+User `ModelConfig.input_modalities` overrides built-in metadata, and unknown
+models stay text-only. The kernel fails locally before any provider request
+when pending input or replayed history contains an image the effective model
+cannot accept, and `/model` annotates image-capable models with `vision`.
+Images are priced as estimated visual tokens in context accounting (never as
+base64 text length).
 
 ## TUI state surfaces (V3.1)
 

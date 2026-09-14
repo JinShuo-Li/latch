@@ -110,7 +110,9 @@ root-scoped child ownership is in
 `agents/{supervisor,worker,graph,mailbox,profile}.rs`. `tools.rs` keeps
 `ToolExecutor` + dispatch, with `tools/{policy,ownership,process,files,write,git}.rs`.
 `continuity.rs` is intentionally one module (rollover, episodes, recall share one
-invariant). TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
+invariant). `media.rs` owns image validation/ingestion and the artifact media
+resolver; provider adapters serialize durable `MediaRef`s to wire images.
+TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents}.rs` and existing siblings.
 
 Memory/cache invariants (do not violate):

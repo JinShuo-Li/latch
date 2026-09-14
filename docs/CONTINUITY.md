@@ -130,6 +130,15 @@ conversation span in user turns, the last rotation reason, and the tokens
 retained after that rotation, so context changes are explainable from durable
 events alone.
 
+Image inputs participate honestly: `image_count` and `image_tokens` report how
+many images are visible in the epoch and their estimated visual tokens
+(computed from dimensions, never from base64 length). The image estimate is a
+partition of `recent_tokens`, provider-reported usage remains authoritative
+after the request, and an image with unknown dimensions uses a conservative
+fallback rather than zero. Because durable history stores only a `MediaRef`,
+rotation and resume replay the exact immutable artifact, not the current
+contents of the original path.
+
 ## Episodes
 
 Episodes segment on user intents (a new user message starts a new episode, with

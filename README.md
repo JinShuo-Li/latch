@@ -278,6 +278,47 @@ by range. Long-running development commands use `exec_start`, `exec_poll`, and
 `exec_terminate` instead of blocking shell calls; process lifecycle is durable,
 and a resumed session reports honestly when a child did not survive restart.
 
+## Image input and vision
+
+When the selected model accepts image input, Latch can actually show it
+pictures — both images the user attaches and screenshots the agent inspects
+from the workspace:
+
+- `/attach <path>` validates and ingests a PNG, JPEG, or WebP image (up to
+  5 MiB and 8000 px per side) into the session's immutable artifact store and
+  shows it as a pending attachment above the composer. `/attachments` lists
+  pending images and `/detach <index|all>` removes them. The CLI accepts
+  repeatable `--attach <path>` (alias `--image`) alongside `-p`, or to preload
+  the first interactive prompt.
+- The `read_image` tool inspects an image file in the workspace through the
+  same ingestion path. `read_file` refuses binary images and points to
+  `read_image` instead of dumping bytes; neither tool OCRs or approximates the
+  image — the model sees the original pixels.
+- The next model request carries the image: OpenAI Responses uses `input_image`
+  content parts (user turns and `function_call_output`), Anthropic Messages
+  uses base64 `image` blocks (user turns and inside `tool_result` content), and
+  OpenAI-compatible chat completions uses the multimodal `image_url` content
+  array with an adjacent observation turn for tool output.
+- Images are durable. Events and messages store a compact `MediaRef` (content
+  hash, MIME type, dimensions, artifact path), never base64 or raw bytes.
+  Resume replays the exact original artifact even if the source file changed or
+  was deleted.
+- Image input is explicit model capability metadata (`input_modalities`),
+  resolved with precedence user configuration > built-in catalog > conservative
+  text-only fallback. If the selected model cannot accept images, Latch fails
+  locally with a clear message instead of dropping them; `/model` marks
+  image-capable models with `vision`. OpenCode Go publishes no per-model
+  modalities, so every Go model is conservative text-only by default even
+  though live probing found `kimi-k3` (chat completions) and `qwen3.8-max`
+  (messages) do accept images; opt them in with
+  `input_modalities = ["text", "image"]` in that provider's model table.
+- Context accounting prices images as estimated visual tokens, never as base64
+  text length; provider-reported usage stays authoritative. Historical images
+  are resent inline on later requests in this version, so payload size grows
+  with image-bearing history; provider-side Files API caching is a later
+  optimization. Audio, video, image generation, and PDF understanding are not
+  supported yet.
+
 ## Inspection loops are bounded
 
 The kernel also supervises inspection. Reads, searches, git status/diff, and
@@ -405,6 +446,12 @@ the composer metadata always shows the active model and effort together.
   sent as a new request; it is never left queued. Remaining not-yet-started
   side-effecting calls from the old plan are superseded with a terminal result
   so the model re-plans. Ctrl+C remains the only cancellation.
+- **Images:** `/attach <path>` ingests a PNG/JPEG/WebP image as a pending
+  attachment shown above the composer; `/attachments` lists pending images and
+  `/detach <index|all>` removes them. Sending attaches them to that one user
+  turn, and they can be attached to a steering message while a turn is running.
+  A known text-only model refuses the send locally and keeps the attachment
+  intact until a vision-capable model is selected with `/model`.
 - **Composer scrolling:** when the prompt overflows the visible editor,
   PageUp/PageDown move through it, as does the mouse wheel over the composer.
   Somewhere-hidden content is marked with `↑`/`↓`/`↕`; the cursor stays visible
