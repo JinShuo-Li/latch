@@ -105,15 +105,16 @@ Four crates: `latch-protocol` (durable event/model schema shared by all),
 
 Kernel ownership boundaries — put changes in the right child module:
 `agent.rs` keeps the run loop and public facade, with `agent/{steering,request,
-permissions,dispatch,agent_controls,kernel_tools,validation,supervision}.rs`;
+permissions,dispatch,agent_controls,kernel_tools,group_tools,validation,
+supervision}.rs`;
 root-scoped child ownership is in
-`agents/{supervisor,worker,graph,mailbox,profile}.rs`. `tools.rs` keeps
+`agents/{supervisor,worker,graph,mailbox,profile,group}.rs`. `tools.rs` keeps
 `ToolExecutor` + dispatch, with `tools/{policy,ownership,process,files,write,git}.rs`.
 `continuity.rs` is intentionally one module (rollover, episodes, recall share one
 invariant). `media.rs` owns image validation/ingestion and the artifact media
 resolver; provider adapters serialize durable `MediaRef`s to wire images.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
-theme,runtime,agents}.rs` and existing siblings.
+theme,runtime,agents,group}.rs` and existing siblings.
 
 Memory/cache invariants (do not violate):
 - Memory decides what the model needs to know. Cache decides how cheaply we can
@@ -130,6 +131,11 @@ Memory/cache invariants (do not violate):
 - Child agents are independent durable sessions. Their task/evidence/continuity
   never becomes root truth; only semantic reports cross the boundary. Agent
   notifications are appended to root history only at safe model boundaries.
+- Agent groups are an optional, root-scoped coordination overlay (shared task
+  DAG, atomic claims, durable peer mailbox); they never own workers or replace
+  the supervisor. Group SQLite projections must stay rebuildable from durable
+  group events, claims stay transactional compare-and-set, and group completion
+  is coordination truth, never root evidence.
 - The initial agent architecture has maximum depth 1. All sessions retain one
   stable generic agent-control schema; child control attempts are denied.
 

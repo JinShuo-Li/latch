@@ -167,6 +167,27 @@ the edit so the model must re-read.
 the active working set while retaining raw events, canonical state, memory, and
 evidence. There is no automatic compact event.
 
+## Group coordination durability
+
+Agent-group events are ordinary durable events in the root session. Tasks,
+claims, membership, and queued messages survive resume exactly like the rest of
+history; a claim is committed by the same immediate transaction that appends
+its event, so a restart never loses or duplicates ownership. The SQLite group
+projection is a rebuildable cache over those events and is reconstructed at
+store open; `GroupState::replay` yields the same tasks, dependencies, claims,
+membership, and delivery state from the same ordered events.
+
+Group messages are information-only. A queued message stays pending until its
+recipient reaches a safe model boundary, where delivery appends
+`GroupMessageDelivered` to the recipient's own durable session together with
+its delivery marker in one transaction. FIFO per recipient and exactly-once
+across restarts are properties of the log, not of process memory, and an idle
+agent is never woken by information alone. Messages are not evidence and never
+merge child contexts: delivered text becomes one compact user-role observation.
+
+The `/group` view and the sidebar GROUP block reduce the same events, so live
+and resumed presentation agree.
+
 ## Stress guarantees
 
 The stress tests insert an early constraint, decision, rejected hypothesis, and

@@ -211,6 +211,76 @@ and the durable resume dedupe marker; the TUI renders it as one quiet
 transcript line. Internal graph/mailbox events are also excluded from FTS
 recall.
 
+## Agent groups: durable coordination overlay
+
+Three layers stay separate. `AgentGraph` owns topology and lifecycle,
+`AgentSupervisor` owns execution and control, and `AgentGroup` is an optional,
+root-scoped coordination overlay: a shared task DAG, atomic claims, a durable
+peer mailbox, and replayable progress state. The group never owns workers and
+never replaces the supervisor; children remain independent durable sessions
+created by the existing spawn path.
+
+The group is created lazily on first use (create task, join, message, or a
+spawn delegated with `task_id`), so an ordinary session never grows group
+state. One root session has at most one group in this version. A group id is
+durable and stable across resume.
+
+Group events are ordinary durable events in the root session:
+`AgentGroupCreated`, `AgentGroupMemberJoined`, `GroupTaskCreated`,
+`GroupTaskClaimed`, `GroupTaskStatusChanged`, `GroupTaskReleased`,
+`GroupMessageQueued`, and `GroupMessageDelivered`. A SQLite projection
+(`agent_groups`, `group_members`, `group_tasks`, `group_messages`,
+`group_message_deliveries`) exists for atomic claims and efficient lookup, and
+is rebuilt from the event log at every store open; no group truth lives only in
+the projection. `GroupState::replay` reduces the same events deterministically
+for status, readiness, blockers, and conflict warnings.
+
+A task is a small coordination record: title, description, status, dependency
+ids, optional assignee, `required` (default true), and summary/findings/touched
+paths on completion. A task is *ready* only when it is `Pending` and every
+dependency is `Completed`. The graph is validated as a real DAG at creation:
+unknown ids, self-dependency, duplicates, and cycles are hard local errors, and
+a cyclic graph is never silently repaired. `Blocked` and `Cancelled`
+dependencies never satisfy a dependent task; group status and `group_status`
+surface those dependency failures explicitly.
+
+Claiming is a true atomic compare-and-set. `EventStore::claim_group_task`
+opens `BEGIN IMMEDIATE`, re-reads the projection, verifies `Pending` with
+complete dependencies, appends `GroupTaskClaimed`, and commits — so any number
+of concurrent claimers produce exactly one owner. Release, start, complete,
+block, cancel, and reassignment use the same transactional pattern with the
+ownership check inside the transaction. Only the assignee may transition a
+task; only the root may create, cancel, or reassign one, and only to a group
+member. Completing a group task is coordination truth, never root evidence:
+the child evidence ledger and root certification remain untouched.
+
+Membership is explicit and durable (`AgentGroupMemberJoined`); children of the
+root join when they are delegated a task or first participate. Messages are
+compact text and information-only: no transcript copying and no automatic
+context merging. `GroupMessageQueued` is durable in the root log; delivery
+happens only at a recipient's safe model boundary, where
+`GroupMessageDelivered` is appended to that recipient's own session in the same
+transaction as its delivery marker. FIFO per recipient, exactly-once across
+restarts, and sending never wakes an idle or completed child — an explicit
+`continue_agent` is still required for new work.
+
+The kernel gates terminal root `complete`: while the active group has required
+tasks that are not `Completed` or `Cancelled`, the completion tool returns a
+concise denial and canonical completion does not become terminal. Optional and
+cancelled tasks never block. If a child is interrupted, its claimed task stays
+assigned; only an explicit release, completion, reassignment, or cancellation
+changes ownership. Groups remain coordinated concurrency, not a swarm: there is
+no autonomous scheduler, no automatic claiming, no recursive spawning, and
+depth stays one. The workspace stays shared; overlapping
+`expected_paths`/`touched_files` on concurrently active tasks produces an
+advisory conflict warning only, never a hard edit block.
+
+The model-facing surface is exactly three fixed tools: `group_task` (create,
+list, claim, start, complete, block, release, cancel), `group_message` (send,
+list), and `group_status` (one compact snapshot). `spawn_agent` gained an
+optional `task_id`, so the root can delegate a ready task in one atomic step
+without a new spawn primitive.
+
 ## The validation shift: models express intent, the kernel owns truth
 
 The model names what must hold — `validate {"requirement": "existing unittest
@@ -394,16 +464,19 @@ secondary call.
 
 The kernel keeps its stable public types and the run loop in `agent.rs`, with
 one child module per responsibility: `steering`, `request`, `permissions`,
-`dispatch`, `agent_controls`, `kernel_tools`, `validation`, and `supervision`.
+`dispatch`, `agent_controls`, `kernel_tools`, `group_tools`, `validation`, and
+`supervision`.
 Root graph/runtime ownership lives in `agents/{supervisor,worker,graph,mailbox,
-profile}.rs`. Image ingestion, validation, and the artifact media resolver live
+profile,group}.rs`; `group.rs` owns the deterministic reducer, DAG validation,
+and the root-scoped coordinator. Image ingestion, validation, and the artifact
+media resolver live
 in `media.rs`. Tools keep the
 `ToolExecutor` facade in `tools.rs` and split `policy`, `ownership`,
 `process`, `files`, `write`, and `git` into children. The continuity engine is
 a single module because rollover, episode segmentation, and recall share one
 invariant. The TUI keeps the app state and reducer in `lib.rs` with
 `transcript`, `markdown`, `chrome`, `theme`, and `runtime` alongside the
-existing `composer`, `sidebar`, `diff`, `presentation`, `agents`, and
+existing `composer`, `sidebar`, `diff`, `presentation`, `agents`, `group`, and
 `session_picker` modules.
 Child modules are children of their owner, so private state stays private while
 each file owns one concern.

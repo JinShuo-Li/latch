@@ -266,6 +266,35 @@ and the live parent capability ceiling are shared, while per-call grants and
 managed processes remain isolated. `interrupt_agent` cancels only the current
 turn and leaves the child reusable; `close_agent` shuts it down permanently.
 
+## Agent groups
+
+Agent groups add durable coordination on top of child agents without changing
+how they run. `AgentGraph` stays topology, `AgentSupervisor` stays execution,
+and one optional root-scoped `AgentGroup` adds a shared task DAG, atomic
+claims, a durable peer mailbox, and replayable progress state. The group never
+owns workers; ordinary single-agent and subagent use is unchanged, and group
+state is created lazily on first use.
+
+Three fixed tools expose coordination: `group_task` (create, list, claim,
+start, complete, block, release, cancel), `group_message` (send, list), and
+`group_status` (one compact snapshot). The root creates tasks and dependencies
+as a validated DAG, then delegates ready work with
+`spawn_agent { task_id }`, which joins the child and assigns the task
+atomically. Exactly one agent can claim a task; only the assignee can start,
+complete, block, or release it, and only the root can cancel or reassign.
+Completing a task is coordination truth, never root evidence.
+
+Messages are concise, durable, and information-only: they are delivered at the
+recipient's next safe model boundary, exactly once across restarts, and never
+wake an idle child or copy transcripts. Root terminal `complete` is refused
+while required group tasks are still pending, claimed, in progress, or blocked;
+optional and cancelled tasks never block. An interrupted child keeps its task
+until an explicit release, reassignment, or completion, so crashes cannot
+duplicate work. Workspace conflicts are surfaced as advisory warnings from
+declared paths, never as hard blocks, and groups remain coordinated concurrency
+— no autonomous scheduler and depth stays one. The TUI shows a compact `GROUP`
+block and `/group` prints the full coordination view.
+
 ## Bounded reads, artifacts, and long processes
 
 `read_file` returns a bounded line window (default 400 lines, additionally
@@ -485,7 +514,11 @@ the composer metadata always shows the active model and effort together.
 - **Child profiles:** a child is permanently associated with the inference
   profile it was spawned under; a root profile switch affects only future
   children, and a rebuilt or resumed child returns to its own pinned profile.
-- **Sidebar:** Ctrl+B or `/sidebar` toggles the responsive state sidebar.
+- **Sidebar:** Ctrl+B or `/sidebar` toggles the responsive state sidebar; when
+  an agent group is active it shows a compact `GROUP` block with task counts
+  and active owners.
+- **Group:** `/group` prints the coordination view: task states, owners,
+  dependencies, and dependency/conflict warnings.
 - **Detail:** Ctrl+T or `/raw` toggles the detailed, copy-friendly transcript.
 - **Diff:** `/diff` opens a full-width semantic diff inspector (red deletions,
   green additions, dim metadata). Scroll with Up/Down, PageUp/PageDown,
@@ -505,7 +538,8 @@ fast, deterministic invariant tier in
 truth, cache epochs are not memory boundaries, canonical state stays
 authoritative, no hidden destructive compaction, resume equivalence,
 kernel-owned validation/evidence, safety hard-deny, steering protocol
-correctness, deterministic provider serialization). Detailed correctness and
+correctness, atomic agent-group claims, deterministic provider serialization).
+Detailed correctness and
 sandbox/command execution run locally with `cargo test --workspace`, and
 long-session stress tests stay local by convention; passing CI alone is not
 sufficient for a substantial change.
