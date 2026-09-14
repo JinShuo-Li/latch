@@ -594,6 +594,154 @@ pub struct AgentReport {
     pub unresolved_questions: Vec<String>,
 }
 
+/// Durable identity of one root-scoped agent group. The group is a
+/// coordination overlay: it owns shared tasks, claims, and a peer mailbox, but
+/// never owns the child sessions themselves. Children remain nodes of the
+/// existing agent graph and are executed by the existing supervisor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentGroupIdentity {
+    pub group_id: Uuid,
+    pub root_session_id: Uuid,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Lifecycle of one shared group task.
+///
+/// `Pending` is unowned and claimable once every dependency is `Completed`.
+/// `Claimed` means one agent atomically owns the task but has not started.
+/// `InProgress` is the assignee's "I am working on this now" state. `Blocked`
+/// and `Cancelled` are explicit non-completions: neither ever satisfies a
+/// dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupTaskStatus {
+    Pending,
+    Claimed,
+    InProgress,
+    Completed,
+    Blocked,
+    Cancelled,
+}
+
+impl GroupTaskStatus {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Claimed => "claimed",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Blocked => "blocked",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    /// Terminal states never change again in this version.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled)
+    }
+
+    /// States an assignee is actively holding.
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        matches!(self, Self::Claimed | Self::InProgress)
+    }
+}
+
+impl std::fmt::Display for GroupTaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// One durable shared work item in an agent group. The group task is
+/// coordination state, not root evidence: completing it never certifies a
+/// claim in the root evidence ledger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupTask {
+    pub task_id: Uuid,
+    pub group_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub status: GroupTaskStatus,
+    /// Task ids that must be `Completed` before this task is ready. The graph is
+    /// validated as a real DAG at creation time.
+    #[serde(default)]
+    pub dependencies: Vec<Uuid>,
+    /// Set while a task is claimed/in progress; `None` for a released or
+    /// never-claimed task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<Uuid>,
+    /// Required tasks gate root terminal completion. Optional tasks inform the
+    /// plan without blocking it.
+    #[serde(default = "default_true")]
+    pub required: bool,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    /// Concise completion summary recorded by the assignee on `complete`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Semantic findings reported on completion. These are coordination notes,
+    /// never evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<String>,
+    /// Paths the task expects to touch, used only for advisory conflict
+    /// warnings between concurrently active tasks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expected_paths: Vec<String>,
+    /// Paths reported touched on completion, used only for advisory conflict
+    /// warnings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub touched_files: Vec<String>,
+    /// Why a blocked or cancelled task is not complete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl GroupTask {
+    /// A task is ready exactly when it is pending, unowned, and every
+    /// dependency is truly completed.
+    #[must_use]
+    pub fn is_ready(&self, tasks: &std::collections::BTreeMap<Uuid, GroupTask>) -> bool {
+        self.dependencies.iter().all(|dependency| {
+            tasks
+                .get(dependency)
+                .is_some_and(|task| task.status == GroupTaskStatus::Completed)
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum GroupMessageTarget {
+    /// One specific agent (root or child session id).
+    Agent(Uuid),
+    /// The root session.
+    Root,
+    /// Every current group member plus the root.
+    Group,
+}
+
+/// Compact durable peer message. Messages are information, not evidence, and
+/// never copy transcripts: only the text and its routing metadata are durable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupMessage {
+    pub message_id: Uuid,
+    pub group_id: Uuid,
+    /// Sender session id (the root session or a child session).
+    pub from_agent: Uuid,
+    pub to: GroupMessageTarget,
+    pub text: String,
+    pub created_at: DateTime<Utc>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Usage {
     /// Total prompt tokens as reported by the provider. For OpenAI/DeepSeek
@@ -793,6 +941,65 @@ pub enum EventPayload {
     /// is appended by the parent loop at a safe model boundary.
     AgentNotificationDelivered {
         report: AgentReport,
+    },
+    /// The root session's durable agent group was created. Group state is a
+    /// coordination overlay: every other group event below is a plain durable
+    /// fact, and any projection (task table, delivery markers) is rebuildable
+    /// from these events alone.
+    AgentGroupCreated {
+        identity: AgentGroupIdentity,
+    },
+    /// A child explicitly joined the group. Appended once per agent; joining is
+    /// idempotent and survives resume.
+    AgentGroupMemberJoined {
+        group_id: Uuid,
+        agent_id: Uuid,
+    },
+    GroupTaskCreated {
+        task: GroupTask,
+    },
+    /// One agent won the atomic claim of a task. Exactly one such event exists
+    /// per claim; the task row is updated in the same store transaction.
+    GroupTaskClaimed {
+        task_id: Uuid,
+        agent_id: Uuid,
+    },
+    /// Any other task state transition (`start`, `complete`, `block`,
+    /// `cancel`, or an administrative reassignment). `actor` is the session id
+    /// that made the transition; `assignee` is present only when the
+    /// transition changes ownership (reassignment).
+    GroupTaskStatusChanged {
+        task_id: Uuid,
+        status: GroupTaskStatus,
+        actor: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assignee: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        findings: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        touched_files: Vec<String>,
+    },
+    /// The assignee explicitly returned a task to the pending pool.
+    GroupTaskReleased {
+        task_id: Uuid,
+        agent_id: Uuid,
+    },
+    /// A peer message was durably queued in the root log. Queuing is not
+    /// delivery: the message enters an agent's provider-visible history only
+    /// when `GroupMessageDelivered` is appended to that agent's own session at
+    /// a safe model boundary.
+    GroupMessageQueued {
+        message: GroupMessage,
+    },
+    /// A queued message was delivered to one recipient. Appended to the
+    /// recipient's own session, so it is both the provider-visible turn and the
+    /// exactly-once resume receipt.
+    GroupMessageDelivered {
+        message: GroupMessage,
     },
     UserMessage {
         text: String,
@@ -1972,5 +2179,119 @@ mod tests {
         let modalities: Vec<InputModality> = serde_json::from_str(r#"["text","image"]"#).unwrap();
         assert_eq!(modalities, vec![InputModality::Text, InputModality::Image]);
         assert!(serde_json::from_str::<InputModality>("\"audio\"").is_err());
+    }
+
+    #[test]
+    fn group_types_round_trip_deterministically() {
+        let group_id = Uuid::new_v4();
+        let root = Uuid::new_v4();
+        let agent = Uuid::new_v4();
+        let task = GroupTask {
+            task_id: Uuid::new_v4(),
+            group_id,
+            title: "parser".into(),
+            description: "implement the parser".into(),
+            status: GroupTaskStatus::Claimed,
+            dependencies: vec![Uuid::new_v4()],
+            assignee: Some(agent),
+            required: true,
+            created_by: root,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            summary: None,
+            findings: vec![],
+            expected_paths: vec!["src/parser.rs".into()],
+            touched_files: vec![],
+            reason: None,
+        };
+        let payloads = vec![
+            EventPayload::AgentGroupCreated {
+                identity: AgentGroupIdentity {
+                    group_id,
+                    root_session_id: root,
+                    name: "workspace".into(),
+                    created_at: Utc::now(),
+                },
+            },
+            EventPayload::AgentGroupMemberJoined {
+                group_id,
+                agent_id: agent,
+            },
+            EventPayload::GroupTaskCreated { task: task.clone() },
+            EventPayload::GroupTaskClaimed {
+                task_id: task.task_id,
+                agent_id: agent,
+            },
+            EventPayload::GroupTaskStatusChanged {
+                task_id: task.task_id,
+                status: GroupTaskStatus::Completed,
+                actor: agent,
+                assignee: None,
+                summary: Some("done".into()),
+                reason: None,
+                findings: vec!["used a precedence table".into()],
+                touched_files: vec!["src/parser.rs".into()],
+            },
+            EventPayload::GroupTaskReleased {
+                task_id: task.task_id,
+                agent_id: agent,
+            },
+            EventPayload::GroupMessageQueued {
+                message: GroupMessage {
+                    message_id: Uuid::new_v4(),
+                    group_id,
+                    from_agent: agent,
+                    to: GroupMessageTarget::Root,
+                    text: "parser done".into(),
+                    created_at: Utc::now(),
+                },
+            },
+        ];
+        for payload in payloads {
+            let event = Event {
+                id: Uuid::new_v4(),
+                session_id: root,
+                sequence: 1,
+                timestamp: Utc::now(),
+                parent_id: None,
+                payload,
+            };
+            let encoded = serde_json::to_string(&event).unwrap();
+            let round: Event = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(round, event);
+            // A second serialization is byte-identical: no map iteration or
+            // formatting nondeterminism may leak into durable events.
+            assert_eq!(serde_json::to_string(&round).unwrap(), encoded);
+        }
+    }
+
+    #[test]
+    fn older_events_deserialize_with_no_group_state() {
+        // Any historical payload still deserializes; group events simply do not
+        // exist in old logs, and the new task fields default.
+        let session = Uuid::new_v4();
+        let legacy: EventPayload = serde_json::from_str(
+            &serde_json::to_string(&EventPayload::UserMessage {
+                text: "legacy".into(),
+                media: vec![],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(legacy, EventPayload::UserMessage { .. }));
+        let task: GroupTask = serde_json::from_value(serde_json::json!({
+            "task_id": Uuid::new_v4(),
+            "group_id": Uuid::new_v4(),
+            "title": "t",
+            "description": "d",
+            "status": "pending",
+            "dependencies": [],
+            "created_by": session,
+            "created_at": Utc::now(),
+            "updated_at": Utc::now(),
+        }))
+        .unwrap();
+        assert!(task.required, "required defaults to true for old payloads");
+        assert!(task.assignee.is_none());
     }
 }
