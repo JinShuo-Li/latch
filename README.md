@@ -567,7 +567,10 @@ provider-reported usage, validation outcomes, completion, and elapsed time.
 
 Extensions are explicitly configured executables speaking JSON-RPC 2.0 over
 LSP-style framed stdio. See [docs/PROTOCOL.md](docs/PROTOCOL.md), the minimal
-TypeScript SDK under `sdk/typescript`, and `extensions/example-ts`. V0.2.1 runs
+TypeScript SDK under `sdk/typescript`, and `extensions/example-ts`. The runtime
+platform model that governs extensions, replaceable backends, and future
+clients is [docs/RUNTIME_CAPABILITY_MODEL.md](docs/RUNTIME_CAPABILITY_MODEL.md).
+V0.2.1 runs
 the extension host inside the mandatory sandbox (read-only workspace, masked
 home, network for protocol work); extension tool arguments remain a cooperative
 audit contract, and no syscall isolation is claimed inside the host.

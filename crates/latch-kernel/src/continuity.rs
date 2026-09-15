@@ -1,4 +1,5 @@
 use crate::config::ContextConfig;
+use crate::context::{ContextBudget, ContextEngine, ContextRequest, ContextView};
 use crate::state::{EvidenceLedger, FailureManager};
 use crate::store::EventStore;
 use crate::tokens::TokenEstimator;
@@ -7,9 +8,16 @@ use latch_protocol::{
     ContextStats, Event, EventPayload, KernelContextKind, MemoryKind, MemoryRecord, TaskState,
     Validity,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
+
+/// The context-engine vocabulary lives in [`crate::context`]. These names are
+/// re-exported under the historical continuity names so existing callers,
+/// tests, and durable semantics are untouched by the port extraction.
+pub use crate::context::{
+    ContextBudget as MaterializeBudget, ContextView as MaterializedContext, ConversationBridge,
+    Episode,
+};
 
 /// Upper bound on episode index entries materialized into context.
 const MAX_EPISODE_ENTRIES: usize = 16;
@@ -19,58 +27,6 @@ const EPISODE_MAX_EVENTS: usize = 48;
 const MAX_MEMORY_LINES: usize = 64;
 /// Per-record content truncation for canonical memory lines.
 const MAX_MEMORY_CONTENT: usize = 400;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Episode {
-    pub start_sequence: u64,
-    pub end_sequence: u64,
-    pub topic: String,
-    /// Workspace paths touched or read inside the episode.
-    pub entities: Vec<String>,
-    /// Tool names executed inside the episode.
-    pub tools: Vec<String>,
-    /// Structural markers such as `validation-passed`, `validation-failed`,
-    /// `reground`, `mutation`, `evidence`, `failure`.
-    pub markers: Vec<String>,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ConversationBridge {
-    pub current_topic: String,
-    pub current_user_intent: String,
-    pub unresolved_references: Vec<String>,
-    pub recent_decisions: Vec<String>,
-    pub ongoing_action: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct MaterializedContext {
-    pub system: String,
-    pub canonical: String,
-    pub recalled: String,
-    pub recent: Vec<Event>,
-    pub bridge: ConversationBridge,
-    /// The bounded, scored subset of episodes selected into the index.
-    pub episodes: Vec<Episode>,
-    pub stats: ContextStats,
-}
-
-/// Token budget for one materialized request view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MaterializeBudget {
-    /// Complete request budget (`context window - reserve`).
-    pub request_tokens: usize,
-    /// The model's full context window, for display.
-    pub window_tokens: usize,
-    /// Tokens reserved for the model response plus safety.
-    pub reserve_tokens: usize,
-    /// Upper bound for the verbatim recent transcript.
-    pub recent_tokens: usize,
-    /// Tokens already reserved by the caller for tool schemas and extension
-    /// context; continuity sizes its own sections inside the remainder.
-    pub reserved_tokens: usize,
-}
 
 pub struct ContinuityEngine {
     store: EventStore,
@@ -727,6 +683,53 @@ impl ContinuityEngine {
             },
         )?;
         Ok(())
+    }
+}
+
+/// [`ContinuityEngine`] is the default Latch implementation of the context port.
+/// It delegates to the inherent methods unchanged; the port exists so the agent
+/// runtime depends on the contract rather than this concrete type.
+impl ContextEngine for ContinuityEngine {
+    fn name(&self) -> &str {
+        "continuity"
+    }
+
+    fn config(&self) -> &ContextConfig {
+        ContinuityEngine::config(self)
+    }
+
+    fn set_config(&mut self, config: ContextConfig) {
+        ContinuityEngine::set_config(self, config);
+    }
+
+    fn set_estimator(&mut self, estimator: TokenEstimator) {
+        ContinuityEngine::set_estimator(self, estimator);
+    }
+
+    fn default_budget(&self, window_tokens: usize, reserved_tokens: usize) -> ContextBudget {
+        ContinuityEngine::default_budget(self, window_tokens, reserved_tokens)
+    }
+
+    fn manual_compact(&mut self, session_id: Uuid) -> Result<()> {
+        ContinuityEngine::manual_compact(self, session_id)
+    }
+
+    fn recall(&self, session_id: Uuid, query: &str) -> Result<Vec<Event>> {
+        ContinuityEngine::recall(self, session_id, query)
+    }
+
+    fn materialize(&self, request: ContextRequest<'_>) -> Result<ContextView> {
+        self.materialize_dynamic(
+            request.session_id,
+            request.state,
+            request.query,
+            request.evidence,
+            request.failures,
+            request.system,
+            &request.budget,
+            request.extension_context,
+            request.reground,
+        )
     }
 }
 

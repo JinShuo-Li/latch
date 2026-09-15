@@ -2,6 +2,7 @@
 //! and the volatile kernel-context tail.
 
 use super::*;
+use crate::context::ContextBudget;
 
 /// Provider-valid anchor used when the recent window no longer contains the
 /// original user prompt. Canonical state carries the actual task, so this only
@@ -12,7 +13,7 @@ impl Agent {
     /// Token budget for the complete request, before tool/extension costs are
     /// known.
     #[must_use]
-    pub(super) fn materialize_budget(&self, reserved_tokens: usize) -> MaterializeBudget {
+    pub(super) fn materialize_budget(&self, reserved_tokens: usize) -> ContextBudget {
         self.continuity
             .default_budget(self.context_window_tokens, reserved_tokens)
     }

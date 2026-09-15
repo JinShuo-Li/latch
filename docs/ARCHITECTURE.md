@@ -3,14 +3,20 @@
 | Crate | Responsibility |
 |---|---|
 | `latch-protocol` | Events, task/memory/evidence records, provider and extension types, shared display formatting |
-| `latch-kernel` | Store, continuity, prompts, policy, tools, providers, extensions, validation/evidence, failure and progress supervision, permissions, child-agent graph/workers, token estimation, loop, session resume |
+| `latch-kernel` | Store, context-engine port, continuity, prompts, policy, tools, providers, extensions, validation/evidence, failure and progress supervision, permissions, child-agent graph/workers, capability vocabulary, token estimation, loop, session resume |
 | `latch-tui` | Typed transcript, slash palette, input editor, prompt history, semantic rendering |
 | `latch-cli` | Configuration, resume orchestration, provider setup, slash-command coordination |
+
+The runtime platform model — kernel invariants extensions can never bypass,
+replaceable ports, the capability vocabulary, transport independence, and the
+implemented-versus-deferred port map — is
+[`RUNTIME_CAPABILITY_MODEL.md`](RUNTIME_CAPABILITY_MODEL.md).
 
 ```mermaid
 flowchart LR
     U[User / TUI] --> K[Agent loop]
-    K --> C[Continuity Engine]
+    K --> CE[Context engine port]
+    CE --> C[ContinuityEngine default]
     C --> S[(SQLite events + memory)]
     K --> P[Prompt compiler]
     K --> V[validate: kernel-run validation]
@@ -343,6 +349,26 @@ Managed `exec_*` processes are owned by the kernel, buffered in memory, spilled
 to artifacts past a cap, and durably closed with `ProcessExited`; a resumed
 session reports honestly that children did not survive the restart.
 
+## Context engine port
+
+The agent loop talks to a narrow internal contract rather than to a concrete
+engine: `context.rs` defines `ContextEngine` with `ContextRequest`,
+`ContextBudget`, and `ContextView`, and `ContinuityEngine` implements it while
+keeping its historical `materialize`/`MaterializeBudget`/`MaterializedContext`
+names as aliases. The request carries session id, canonical `TaskState`,
+retrieval query, evidence ledger, failure manager, compiled system prompt,
+budget, extension context, and re-ground instruction; the view returns the
+system prompt, the provider-visible `recent` events of the current durable
+cache epoch, canonical/recalled renderings, episodes, and `ContextStats`. The
+port exposes no `EventStore` or SQLite handle, so a replacement engine (for
+example a remote context service) cannot mutate durable session truth outside
+its structured view. Implementing the port is kernel-authority work and is
+operator-installed, never model- or extension-supplied. `AgentRuntime` accepts
+any engine (the default remains `ContinuityEngine`), and the CI invariant tier
+pins port replaceability, provider-visible parity, and byte-identical default
+behavior. See [`RUNTIME_CAPABILITY_MODEL.md`](RUNTIME_CAPABILITY_MODEL.md) for
+the surrounding capability model and planned ports.
+
 ## Context budgeting
 
 Context is token-native. `latch-kernel::tokens::TokenEstimator` is a
@@ -468,13 +494,17 @@ one child module per responsibility: `steering`, `request`, `permissions`,
 `supervision`.
 Root graph/runtime ownership lives in `agents/{supervisor,worker,graph,mailbox,
 profile,group}.rs`; `group.rs` owns the deterministic reducer, DAG validation,
-and the root-scoped coordinator. Image ingestion, validation, and the artifact
+and the root-scoped coordinator. `context.rs` owns the context-engine port
+(request/budget/view vocabulary plus the `ContextEngine` trait) and
+`capability.rs` owns the kernel-declared runtime capability vocabulary; the
+Latch continuity algorithm stays a single module (`continuity.rs`) because
+rollover, episode segmentation, and recall share one invariant, and implements
+the port. Image ingestion, validation, and the artifact
 media resolver live
 in `media.rs`. Tools keep the
 `ToolExecutor` facade in `tools.rs` and split `policy`, `ownership`,
-`process`, `files`, `write`, and `git` into children. The continuity engine is
-a single module because rollover, episode segmentation, and recall share one
-invariant. The TUI keeps the app state and reducer in `lib.rs` with
+`process`, `files`, `write`, and `git` into children. The TUI keeps the app
+state and reducer in `lib.rs` with
 `transcript`, `markdown`, `chrome`, `theme`, and `runtime` alongside the
 existing `composer`, `sidebar`, `diff`, `presentation`, `agents`, `group`, and
 `session_picker` modules.

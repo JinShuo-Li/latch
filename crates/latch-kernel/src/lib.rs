@@ -2,7 +2,9 @@
 
 pub mod agent;
 pub mod agents;
+pub mod capability;
 pub mod config;
+pub mod context;
 pub mod continuity;
 pub mod credentials;
 pub mod extension;
@@ -23,7 +25,12 @@ pub mod tools;
 
 pub use agent::{Agent, AgentEventSink, AgentRuntime};
 pub use agents::{AgentSnapshot, AgentSupervisor, ProviderBuild, ProviderFactory};
+pub use capability::{
+    CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityLifetime, CapabilityOwner,
+    CapabilityRegistry, CapabilityRequest, CapabilityScope,
+};
 pub use config::Config;
+pub use context::{ContextBudget, ContextEngine, ContextRequest, ContextView};
 pub use continuity::{ContinuityEngine, MaterializeBudget, MaterializedContext};
 pub use credentials::{CredentialRef, CredentialStore};
 pub use media::{ArtifactMediaStore, ImageFormat, ingest_image_bytes, read_image_bytes};

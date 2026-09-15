@@ -20,9 +20,10 @@ use latch_kernel::provider::{
 use latch_kernel::safety::{Context as SafetyContext, Decision as SafetyDecision};
 use latch_kernel::state::StateUpdate;
 use latch_kernel::{
-    Agent, AgentEventSink, AgentRuntime, ContinuityEngine, EventStore, EvidenceLedger,
-    FailureManager, MaterializeBudget, MaterializedContext, PolicyEngine, TaskStateManager,
-    ToolExecutor,
+    Agent, AgentEventSink, AgentRuntime, CapabilityKind, CapabilityLifetime, CapabilityOwner,
+    CapabilityRequest, CapabilityScope, ContextBudget, ContextEngine, ContextRequest, ContextView,
+    ContinuityEngine, EventStore, EvidenceLedger, FailureManager, MaterializeBudget,
+    MaterializedContext, PolicyEngine, TaskStateManager, TokenEstimator, ToolExecutor,
 };
 use latch_protocol::{
     CompletionState, ContextStats, Event, EventPayload, EvidenceStatus, Mode, ModelMessage,
@@ -31,6 +32,7 @@ use latch_protocol::{
 use serde_json::json;
 use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
@@ -1096,4 +1098,284 @@ fn group_claims_are_atomic_and_projection_is_rebuildable() {
     assert_eq!(reclaimed.assignee, Some(second));
     let GroupTask { status, .. } = reclaimed;
     assert_eq!(status, GroupTaskStatus::Claimed);
+}
+
+/// A context engine that proves the port is real: the agent runtime drives the
+/// provider exclusively from this view and never silently falls back to the
+/// default continuity implementation. The canned engine has no store handle
+/// and appends nothing; the port contract is request/result only.
+struct CannedContextEngine {
+    config: ContextConfig,
+    calls: Arc<AtomicUsize>,
+}
+
+impl ContextEngine for CannedContextEngine {
+    fn name(&self) -> &str {
+        "canned"
+    }
+    fn config(&self) -> &ContextConfig {
+        &self.config
+    }
+    fn set_config(&mut self, config: ContextConfig) {
+        self.config = config;
+    }
+    fn set_estimator(&mut self, _estimator: TokenEstimator) {}
+    fn default_budget(&self, window_tokens: usize, reserved_tokens: usize) -> ContextBudget {
+        ContextBudget {
+            request_tokens: window_tokens.saturating_sub(reserved_tokens),
+            window_tokens,
+            reserve_tokens: 0,
+            recent_tokens: 4_000,
+            reserved_tokens,
+        }
+    }
+    fn manual_compact(&mut self, _session_id: uuid::Uuid) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn recall(&self, _session_id: uuid::Uuid, _query: &str) -> anyhow::Result<Vec<Event>> {
+        Ok(Vec::new())
+    }
+    fn materialize(&self, _request: ContextRequest<'_>) -> anyhow::Result<ContextView> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(ContextView {
+            system: "canned context system".into(),
+            canonical: String::new(),
+            recalled: String::new(),
+            recent: Vec::new(),
+            bridge: Default::default(),
+            episodes: Vec::new(),
+            stats: ContextStats::default(),
+        })
+    }
+}
+
+/// The context port is a real boundary, not a wrapper around the default
+/// engine: a replaced engine's view is exactly what the provider sees, and the
+/// kernel neither imports raw store access into the port nor falls back to
+/// continuity behind the caller's back.
+#[tokio::test]
+async fn context_engine_port_is_replaceable_without_kernel_fallbacks() {
+    let dir = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(dir.path()).unwrap();
+    let provider = Arc::new(RecordingProvider::new(vec![response("done", vec![])]));
+    let tools = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: CannedContextEngine {
+            config: ContextConfig::default(),
+            calls: calls.clone(),
+        },
+        retry_budget: 2,
+    });
+    agent.set_context_budget(
+        ContextConfig::default(),
+        latch_kernel::config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+    );
+    agent
+        .run("hello", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    assert!(
+        calls.load(Ordering::SeqCst) >= 1,
+        "the agent must consult the declared context engine"
+    );
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 1, "a plain answer spends one request");
+    assert_eq!(requests[0].system, "canned context system");
+    assert!(
+        requests[0].messages.is_empty(),
+        "the provider sees exactly the port's view"
+    );
+    // Canned materialization appended no kernel context: the default engine did
+    // not run alongside the configured one.
+    assert!(
+        !store
+            .events(session)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::KernelContext { .. })),
+        "kernel context appeared without the configured engine producing it"
+    );
+}
+
+/// The default `ContinuityEngine` satisfies the port byte-for-byte: the same
+/// durable state materializes to the same view, epoch accounting, and recall
+/// whether called directly or through `dyn ContextEngine`.
+#[test]
+fn continuity_conforms_to_the_context_port() {
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(Path::new("/invariants")).unwrap();
+    store
+        .append(
+            session,
+            EventPayload::UserMessage {
+                text: "port parity".into(),
+                media: vec![],
+            },
+        )
+        .unwrap();
+    let mut state = TaskStateManager::default();
+    state.update(StateUpdate {
+        goal: Some("port parity".into()),
+        add_constraints: vec!["keep the port exact".into()],
+        ..Default::default()
+    });
+    let config = ContextConfig {
+        max_request_tokens: Some(16_000),
+        recent_tokens: 2_000,
+        reserve_tokens: 0,
+        output_reserve_tokens: 0,
+    };
+
+    let direct = ContinuityEngine::new(store.clone(), config.clone());
+    let expected = materialize(
+        &direct,
+        session,
+        state.state(),
+        None,
+        &direct.default_budget(64_000, 0),
+    );
+
+    let ported: Box<dyn ContextEngine> =
+        Box::new(ContinuityEngine::new(store.clone(), config.clone()));
+    assert_eq!(ported.name(), "continuity");
+    let through_port = ported
+        .materialize(ContextRequest {
+            session_id: session,
+            state: state.state(),
+            query: None,
+            evidence: &EvidenceLedger::default(),
+            failures: &FailureManager::new(3),
+            system: "invariant system prompt".into(),
+            budget: ported.default_budget(64_000, 0),
+            extension_context: "",
+            reground: None,
+        })
+        .unwrap();
+    assert_eq!(through_port.recent, expected.recent);
+    assert_eq!(through_port.canonical, expected.canonical);
+    assert_eq!(through_port.recalled, expected.recalled);
+    assert_eq!(through_port.episodes, expected.episodes);
+    assert_eq!(through_port.stats, expected.stats);
+    let recalled = ported.recall(session, "port parity").unwrap();
+    assert!(
+        recalled.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::UserMessage { text, .. } if text == "port parity"
+        )),
+        "recall through the port reaches durable history"
+    );
+}
+
+/// Runtime capabilities are declared with explicit kind, owner, lifetime, and
+/// bounded scope. Kernel-owned surfaces and session-owned surfaces are named
+/// apart; a request never resolves outside a declaration, and an unimplemented
+/// surface (Computer Use here) is simply absent rather than silently granted.
+#[test]
+fn session_capabilities_declare_scope_owner_and_lifetime() {
+    use latch_kernel::sandbox::{Capability, CapabilitySet};
+
+    let dir = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(dir.path()).unwrap();
+    let provider = Arc::new(RecordingProvider::new(vec![]));
+    let tools = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider,
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    let capabilities = agent.capabilities();
+    let descriptors = capabilities.descriptors();
+    assert!(!descriptors.is_empty());
+    assert!(
+        descriptors
+            .iter()
+            .all(|descriptor| descriptor.lifetime == CapabilityLifetime::Session(session)),
+        "every declared capability belongs to this session"
+    );
+    for (kind, owner) in [
+        (CapabilityKind::Workspace, CapabilityOwner::Session(session)),
+        (CapabilityKind::Executor, CapabilityOwner::Session(session)),
+        (CapabilityKind::Context, CapabilityOwner::Kernel),
+        (CapabilityKind::Tools, CapabilityOwner::Kernel),
+        (CapabilityKind::Artifacts, CapabilityOwner::Session(session)),
+        (CapabilityKind::Agents, CapabilityOwner::Kernel),
+    ] {
+        let descriptor = descriptors
+            .iter()
+            .find(|descriptor| descriptor.kind == kind)
+            .unwrap_or_else(|| panic!("{kind} is not declared"));
+        assert_eq!(descriptor.owner, owner, "{kind} owner");
+    }
+    assert_eq!(
+        capabilities.get("workspace.primary").unwrap().scope,
+        CapabilityScope::Workspace {
+            root: dir.path().to_path_buf()
+        }
+    );
+    let workspace = capabilities.get("workspace.primary").unwrap();
+    assert!(workspace.permissions.contains(Capability::WorkspaceRead));
+    assert!(
+        !workspace.permissions.contains(Capability::NetworkAccess),
+        "declaring a workspace never silently grants network"
+    );
+
+    let mut read = CapabilitySet::new();
+    read.insert(Capability::WorkspaceRead);
+    let inside = CapabilityRequest {
+        kind: CapabilityKind::Workspace,
+        scope: CapabilityScope::Workspace {
+            root: dir.path().join("src"),
+        },
+        permissions: read.clone(),
+    };
+    assert!(capabilities.resolve(&inside).is_some());
+    let outside = CapabilityRequest {
+        scope: CapabilityScope::Workspace {
+            root: std::path::PathBuf::from("/etc"),
+        },
+        ..inside
+    };
+    assert!(
+        capabilities.resolve(&outside).is_none(),
+        "a workspace request never resolves outside its declared root"
+    );
+    // Computer Use is not implemented and therefore not declared; the
+    // vocabulary can name it but the kernel grants nothing it did not declare.
+    let computer = CapabilityRequest {
+        kind: CapabilityKind::Computer,
+        scope: CapabilityScope::Remote {
+            endpoint: "host:5900".into(),
+        },
+        permissions: CapabilitySet::new(),
+    };
+    assert!(capabilities.resolve(&computer).is_none());
 }

@@ -110,11 +110,21 @@ supervision}.rs`;
 root-scoped child ownership is in
 `agents/{supervisor,worker,graph,mailbox,profile,group}.rs`. `tools.rs` keeps
 `ToolExecutor` + dispatch, with `tools/{policy,ownership,process,files,write,git}.rs`.
-`continuity.rs` is intentionally one module (rollover, episodes, recall share one
-invariant). `media.rs` owns image validation/ingestion and the artifact media
-resolver; provider adapters serialize durable `MediaRef`s to wire images.
+`context.rs` owns the replaceable `ContextEngine` port (request/budget/view
+objects and trait); `capability.rs` owns the kernel-declared runtime capability
+vocabulary (kind/owner/lifetime/scope/permissions); `continuity.rs` is the
+default engine implementation and intentionally one module (rollover, episodes,
+recall share one invariant). `media.rs` owns image validation/ingestion and the
+artifact media resolver; provider adapters serialize durable `MediaRef`s to
+wire images.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,group}.rs` and existing siblings.
+
+Runtime platform rules: kernel invariants, port rules, capability semantics,
+transport independence, and the implemented-vs-deferred port map are normative
+in `docs/RUNTIME_CAPABILITY_MODEL.md`. Keep the `ContextEngine` port narrow
+(request/result objects, no `EventStore`/SQLite in the contract) and keep
+provider-specific serialization in `provider.rs`.
 
 Memory/cache invariants (do not violate):
 - Memory decides what the model needs to know. Cache decides how cheaply we can
@@ -150,9 +160,10 @@ Memory/cache invariants (do not violate):
   --locked --force`. Do not create Git tags or GitHub releases unless asked.
 - Long-horizon task quality outranks cache locality; prefer explicit, deterministic
   behavior and durable provenance over hidden heuristics.
-- When behavior, persistence semantics, or module ownership change, update
-  `docs/ARCHITECTURE.md` / `docs/CONTINUITY.md` and the affected `README.md`
-  section in the same change.
+- When behavior, persistence semantics, module ownership, or runtime
+  port/capability semantics change, update `docs/ARCHITECTURE.md` /
+  `docs/CONTINUITY.md` / `docs/RUNTIME_CAPABILITY_MODEL.md` and the affected
+  `README.md` section in the same change.
 - After completing any work, update this `AGENTS.md` if the change altered
   commands, prerequisites, module ownership, constraints, or working
   preferences. Keep it compact and verified; it is guidance, not a changelog.

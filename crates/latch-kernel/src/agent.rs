@@ -1,8 +1,13 @@
 use crate::agents::{
     AgentSupervisor, ChildMailbox, GroupCoordinator, ProviderFactory, WorkerSettings,
 };
+use crate::capability::{
+    CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityLifetime, CapabilityOwner,
+    CapabilityRegistry, CapabilityScope,
+};
 use crate::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS};
-use crate::continuity::{ContinuityEngine, MaterializeBudget};
+use crate::context::{ContextEngine, ContextRequest};
+use crate::continuity::ContinuityEngine;
 use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
 use crate::permissions::PermissionBroker;
 use crate::progress::{DEFAULT_STAGNATION_BUDGET, ProgressSupervisor, StagnationDecision};
@@ -61,7 +66,10 @@ pub struct Agent {
     store: EventStore,
     provider: Arc<dyn ModelProvider>,
     tools: ToolExecutor,
-    continuity: ContinuityEngine,
+    /// Context-engine port. The concrete engine (today
+    /// [`ContinuityEngine`]) is selected by the caller at construction; the
+    /// loop itself never depends on the implementation.
+    continuity: Box<dyn ContextEngine>,
     state: TaskStateManager,
     evidence: EvidenceLedger,
     extensions: ExtensionRegistry,
@@ -112,19 +120,23 @@ pub struct Agent {
     group: Option<GroupCoordinator>,
     agent_depth: u8,
 }
-pub struct AgentRuntime {
+/// Construction inputs for one agent. The context engine is a type parameter
+/// with [`ContinuityEngine`] as the default, so existing call sites keep
+/// constructing the default engine while a caller that provides a different
+/// [`ContextEngine`] is accepted unchanged at this boundary.
+pub struct AgentRuntime<C: ContextEngine = ContinuityEngine> {
     pub session_id: Uuid,
     pub workspace: PathBuf,
     pub mode: Mode,
     pub store: EventStore,
     pub provider: Arc<dyn ModelProvider>,
     pub tools: ToolExecutor,
-    pub continuity: ContinuityEngine,
+    pub continuity: C,
     pub retry_budget: u32,
 }
 impl Agent {
     #[must_use]
-    pub fn new(runtime: AgentRuntime) -> Self {
+    pub fn new<C: ContextEngine + 'static>(runtime: AgentRuntime<C>) -> Self {
         let settings = WorkerSettings {
             context: runtime.continuity.config().clone(),
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -149,18 +161,21 @@ impl Agent {
         Self::new_inner(runtime, Some(supervisor), 0)
     }
 
-    pub(crate) fn new_child(runtime: AgentRuntime, depth: u8) -> Self {
+    pub(crate) fn new_child<C: ContextEngine + 'static>(
+        runtime: AgentRuntime<C>,
+        depth: u8,
+    ) -> Self {
         Self::new_inner(runtime, None, depth)
     }
 
-    fn new_inner(
-        runtime: AgentRuntime,
+    fn new_inner<C: ContextEngine + 'static>(
+        runtime: AgentRuntime<C>,
         supervisor: Option<AgentSupervisor>,
         agent_depth: u8,
     ) -> Self {
         let estimator = TokenEstimator::for_model(runtime.provider.model());
-        let mut continuity = runtime.continuity;
-        // The request estimator and the continuity budget must agree on the
+        let mut continuity: Box<dyn ContextEngine> = Box::new(runtime.continuity);
+        // The request estimator and the context budget must agree on the
         // provider model.
         continuity.set_estimator(estimator);
         let profile = InferenceProfile::new(
@@ -450,15 +465,102 @@ impl Agent {
         // `/context` has no extension context to include, but tool schemas are
         // part of every real request, so reserve for them here too.
         let reserved = self.estimator.estimate_tools(&self.tool_definitions());
-        self.continuity.materialize(
-            self.session_id,
-            self.state.state(),
+        self.continuity.materialize(ContextRequest {
+            session_id: self.session_id,
+            state: self.state.state(),
             query,
-            &self.evidence,
-            &self.failures,
-            prompt.text,
-            &self.materialize_budget(reserved),
-        )
+            evidence: &self.evidence,
+            failures: &self.failures,
+            system: prompt.text,
+            budget: self.materialize_budget(reserved),
+            extension_context: "",
+            reground: None,
+        })
+    }
+
+    /// The runtime capabilities this session currently declares: kind, owner,
+    /// lifetime, scope, and permission ceiling. Kernel-owned classes are always
+    /// present; capability-gated surfaces (a future Computer backend, browser,
+    /// or service exposure) appear only once their mechanism exists and is
+    /// configured. Introspection is read-only and never grants anything.
+    #[must_use]
+    pub fn capabilities(&self) -> CapabilityRegistry {
+        use crate::sandbox::{Capability, CapabilitySet};
+        let session = CapabilityLifetime::Session(self.session_id);
+        let owner = CapabilityOwner::Session(self.session_id);
+        let workspace_scope = CapabilityScope::Workspace {
+            root: self.workspace.clone(),
+        };
+        let mut workspace_permissions = CapabilitySet::new();
+        workspace_permissions.insert(Capability::WorkspaceRead);
+        let mut executor_permissions = workspace_permissions.clone();
+        executor_permissions.insert(Capability::BuildArtifactWrite);
+        if self.mode.can_mutate() {
+            workspace_permissions.insert(Capability::WorkspaceSourceWrite);
+            executor_permissions.insert(Capability::WorkspaceSourceWrite);
+        }
+        let mut registry = CapabilityRegistry::new();
+        let mut declare = |id: &'static str,
+                           kind: CapabilityKind,
+                           owner: CapabilityOwner,
+                           scope: CapabilityScope,
+                           permissions: CapabilitySet| {
+            registry
+                .declare(CapabilityDescriptor {
+                    id: CapabilityId::kernel(id),
+                    kind,
+                    owner,
+                    lifetime: session.clone(),
+                    scope,
+                    permissions,
+                })
+                .expect("kernel capability declarations are unique and valid");
+        };
+        declare(
+            "workspace.primary",
+            CapabilityKind::Workspace,
+            owner.clone(),
+            workspace_scope.clone(),
+            workspace_permissions,
+        );
+        declare(
+            "executor.sandboxed",
+            CapabilityKind::Executor,
+            owner.clone(),
+            workspace_scope,
+            executor_permissions,
+        );
+        declare(
+            "context.engine",
+            CapabilityKind::Context,
+            CapabilityOwner::Kernel,
+            CapabilityScope::Session,
+            CapabilitySet::new(),
+        );
+        declare(
+            "tools.kernel",
+            CapabilityKind::Tools,
+            CapabilityOwner::Kernel,
+            CapabilityScope::Session,
+            CapabilitySet::new(),
+        );
+        declare(
+            "artifacts.session",
+            CapabilityKind::Artifacts,
+            owner.clone(),
+            CapabilityScope::Session,
+            CapabilitySet::new(),
+        );
+        if self.supervisor.is_some() {
+            declare(
+                "agents.supervisor",
+                CapabilityKind::Agents,
+                CapabilityOwner::Kernel,
+                CapabilityScope::Session,
+                CapabilitySet::new(),
+            );
+        }
+        registry
     }
     pub fn compact(&mut self) -> Result<()> {
         self.continuity.manual_compact(self.session_id)
@@ -845,17 +947,17 @@ impl Agent {
             let tools_tokens = self.estimator.estimate_tools(&tools);
             let extension_tokens = self.estimator.estimate(&extension_json);
             let budget = self.materialize_budget(tools_tokens.saturating_add(extension_tokens));
-            let ctx = self.continuity.materialize_dynamic(
-                self.session_id,
-                self.state.state(),
-                query.as_deref(),
-                &self.evidence,
-                &self.failures,
-                PromptCompiler::compile(self.mode, &self.workspace)?.text,
-                &budget,
-                &extension_json,
-                self.progress.reground_instruction().as_deref(),
-            )?;
+            let ctx = self.continuity.materialize(ContextRequest {
+                session_id: self.session_id,
+                state: self.state.state(),
+                query: query.as_deref(),
+                evidence: &self.evidence,
+                failures: &self.failures,
+                system: PromptCompiler::compile(self.mode, &self.workspace)?.text,
+                budget,
+                extension_context: &extension_json,
+                reground: self.progress.reground_instruction().as_deref(),
+            })?;
             let mut stats = ctx.stats.clone();
             stats.tools_tokens = tools_tokens;
             stats.recompute();

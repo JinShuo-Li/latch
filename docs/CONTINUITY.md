@@ -30,6 +30,25 @@ to recover original events. Retrieval uses explicit relationships, paths,
 entities, decisions, evidence, keywords, and recency. There are no embeddings
 and no vector database.
 
+## Port boundary
+
+The engine below is the default implementation of the internal `ContextEngine`
+port (`crates/latch-kernel/src/context.rs`): `materialize(ContextRequest) ->
+ContextView`, with `config`/`set_config`/`set_estimator`/`default_budget`/
+`manual_compact`/`recall` as the rest of the contract. `ContextRequest`,
+`ContextBudget`, and `ContextView` are the request/result objects; the
+historical `MaterializeBudget`/`MaterializedContext` names remain aliases. The
+port exposes no `EventStore` or SQLite handle, so a replacement engine cannot
+mutate durable session truth outside its structured view, and the agent loop
+never falls back to the default engine when another one is installed.
+
+Everything in this document describes the reference implementation and must
+hold for it exactly as before. The port extraction changed no behavior: the CI
+invariant tier additionally pins that the provider sees exactly the view the
+configured engine returned, that the default engine is byte-identical when
+called directly or through `dyn ContextEngine`, and that the kernel does not
+append default-engine kernel context behind a replacement's back.
+
 ## Bounded materialization
 
 Context budgets are tokens, not bytes. Bytes remain only for internal file,

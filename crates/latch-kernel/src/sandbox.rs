@@ -121,6 +121,14 @@ impl CapabilitySet {
         self.0.contains(&capability)
     }
 
+    /// True when every capability in `self` is also in `other`. Used by the
+    /// runtime capability vocabulary to prove a requested surface stays inside
+    /// a declared one; enforcement remains the sandbox's job.
+    #[must_use]
+    pub fn is_subset(&self, other: &CapabilitySet) -> bool {
+        self.0.is_subset(&other.0)
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
