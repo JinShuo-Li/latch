@@ -70,6 +70,7 @@ pub enum Commands {
     Resume(ResumeArgs),
     /// List or inspect durable sessions without opening the TUI.
     Sessions(SessionsArgs),
+    /// Inspect internal prompt compilation and diagnostics without running a task.
     Debug {
         #[command(subcommand)]
         command: DebugCommand,
