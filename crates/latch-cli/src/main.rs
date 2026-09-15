@@ -1,123 +1,110 @@
 #![forbid(unsafe_code)]
 
-use anyhow::{Context, Result, anyhow, bail};
-use async_trait::async_trait;
-use clap::{Parser, Subcommand};
+mod cli;
+
+use anyhow::{Result, anyhow, bail};
+use clap::Parser;
+use cli::command::{Args, Commands, DebugCommand};
+use cli::session::{
+    InferenceContext, ProfileOverrides, Restored, SelectedSession, SessionInfo, SessionRequest,
+    build_agent, ingest_attachments, pick_session, select_session,
+};
 use latch_kernel::{
-    Agent, AgentRuntime, ArtifactMediaStore, Config, ContinuityEngine, CredentialRef,
-    CredentialStore, EventStore, ModelDescriptor, ModelProvider, PolicyEngine, ProviderRegistry,
-    ToolExecutor,
+    Agent, Config, CredentialRef, ModelDescriptor, ProviderRegistry,
     agent::{AgentOutput, SteeringSubmission},
     config::{InferenceConfig, ProviderKind},
     prompt::PromptCompiler,
-    provider::{MediaStore, StreamSink},
-    session,
 };
-use latch_protocol::{
-    EventPayload, InferenceProfile, MediaRef, Mode, ProviderId, ReasoningEffort, StreamEvent,
-    UserInput,
-};
-use latch_tui::{
-    CatalogModel, CatalogProvider, InferenceCatalog, Input, Output, SLASH_COMMANDS,
-    SetupCredential, SetupKind, SetupPlan,
-};
+use latch_protocol::{InferenceProfile, MediaRef, Mode, ReasoningEffort, StreamEvent, UserInput};
+use latch_tui::{Input, Output, SLASH_COMMANDS, SetupCredential, SetupPlan};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
-
-#[derive(Parser)]
-#[command(
-    name = "latch",
-    version,
-    about = "A quiet, programmable terminal coding agent"
-)]
-struct Args {
-    /// Continue the latest session for this workspace: visible transcript,
-    /// effective mode, task state, evidence, failures, and change ownership.
-    #[arg(long)]
-    resume: bool,
-    /// Resume an exact session UUID or unambiguous UUID prefix.
-    #[arg(long, requires = "resume")]
-    session: Option<String>,
-    /// Resume the most recently active session in this workspace.
-    #[arg(long, requires = "resume", conflicts_with = "session")]
-    latest: bool,
-    #[arg(long,value_parser=parse_mode)]
-    mode: Option<Mode>,
-    /// Override the configured provider for this invocation.
-    #[arg(long)]
-    provider: Option<String>,
-    /// Override the configured model for this invocation.
-    #[arg(long)]
-    model: Option<String>,
-    /// Override the reasoning effort for this invocation.
-    #[arg(long)]
-    effort: Option<String>,
-    #[arg(short = 'p', long)]
-    prompt: Option<String>,
-    /// Attach an image (PNG, JPEG, or WebP) to the prompt. Repeatable. The
-    /// same ingestion path is used by the TUI's `/attach`.
-    #[arg(long = "attach", visible_alias = "image")]
-    attach: Vec<PathBuf>,
-    #[arg(long)]
-    config: Option<PathBuf>,
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-#[derive(Subcommand)]
-enum Commands {
-    Debug {
-        #[command(subcommand)]
-        command: DebugCommand,
-    },
-}
-#[derive(Subcommand)]
-enum DebugCommand {
-    Prompt {
-        #[arg(long)]
-        fragment: Option<String>,
-        #[arg(long,value_parser=parse_mode,default_value="work")]
-        mode: Mode,
-    },
-}
-fn parse_mode(s: &str) -> Result<Mode, String> {
-    Mode::from_str(s)
-}
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .init();
-    let args = Args::parse();
+    let mut args = Args::parse();
+    if args.command.is_some()
+        && (args.resume || args.latest || args.session.is_some() || args.prompt.is_some())
+    {
+        // The top-level one-shot/resume flags describe the compatibility path;
+        // mixing them with an explicit machine command is ambiguous.
+        eprintln!(
+            "error: --resume/--session/--latest/-p apply to the interactive path; \
+             use `latch run` or `latch resume` for machine commands"
+        );
+        return ExitCode::from(2);
+    }
+    match args.command.take() {
+        Some(Commands::Run(run)) => {
+            cli::machine::execute(cli::machine::run_request(&args, run)).await
+        }
+        Some(Commands::Resume(resume)) => {
+            cli::machine::execute(cli::machine::resume_request(&args, resume)).await
+        }
+        Some(Commands::Sessions(sessions)) => cli::sessions::execute(&args, sessions).await,
+        Some(Commands::Debug { command }) => legacy_exit(debug_dispatch(&args, command)),
+        None => legacy_exit(run_legacy(args).await),
+    }
+}
+
+fn legacy_exit(result: Result<ExitCode>) -> ExitCode {
+    match result {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("Error: {error:#}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn debug_dispatch(args: &Args, command: DebugCommand) -> Result<ExitCode> {
+    match command {
+        DebugCommand::Prompt { fragment } => {
+            let workspace = std::env::current_dir()?;
+            debug_prompt(
+                &workspace,
+                args.mode.unwrap_or(Mode::Work),
+                fragment.as_deref(),
+            )?;
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+async fn run_legacy(args: Args) -> Result<ExitCode> {
+    if let Some(prompt) = args.prompt.clone() {
+        // Compatibility path into the machine run implementation: one prompt,
+        // streamed as text, with the same session/provider construction.
+        return Ok(cli::machine::execute(cli::machine::legacy_request(&args, prompt)).await);
+    }
     let config = Config::load(args.config.as_deref())?;
     let mut workspace = std::env::current_dir()?;
-    if let Some(Commands::Debug {
-        command: DebugCommand::Prompt { fragment, mode },
-    }) = args.command
+    let overrides = profile_overrides(&args);
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let mut selected = match select_session(
+        &workspace,
+        &config,
+        &legacy_session_request(&args, !interactive),
+    )
+    .await?
     {
-        return debug_prompt(&workspace, mode, fragment.as_deref());
-    }
-    let mut selected = match select_startup_session(&workspace, &config, &args).await? {
-        ResumeChoice::Session(id, session_workspace) => {
+        SelectedSession::Session(id, session_workspace) => {
             workspace = session_workspace;
             Some(id)
         }
-        ResumeChoice::Fresh => None,
-        ResumeChoice::Exit => return Ok(()),
+        SelectedSession::Fresh => None,
+        SelectedSession::Exit => return Ok(ExitCode::SUCCESS),
     };
-    let interactive =
-        args.prompt.is_none() && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let mut built = build_agent(&workspace, &config, &args, selected, interactive).await?;
-    if let Some(prompt) = args.prompt {
-        let media = ingest_attachments(&config, built.agent.session_id, &args.attach)?;
-        return one_shot(&mut built.agent, &UserInput::new(prompt, media)).await;
-    }
+    let mut built = build_agent(&workspace, &config, &overrides, selected, interactive).await?;
     loop {
         let attachments = ingest_attachments(&config, built.agent.session_id, &args.attach)?;
         match interactive_session(
@@ -130,289 +117,40 @@ async fn main() -> Result<()> {
         )
         .await?
         {
-            InteractiveOutcome::Exit => return Ok(()),
+            InteractiveOutcome::Exit => return Ok(ExitCode::SUCCESS),
             InteractiveOutcome::Resume => {
+                // `/resume` always opens the picker, exactly like before.
                 selected = match pick_session(&workspace, &config).await? {
-                    ResumeChoice::Session(id, session_workspace) => {
+                    SelectedSession::Session(id, session_workspace) => {
                         workspace = session_workspace;
                         Some(id)
                     }
-                    ResumeChoice::Fresh => None,
-                    ResumeChoice::Exit => return Ok(()),
+                    SelectedSession::Fresh => None,
+                    SelectedSession::Exit => return Ok(ExitCode::SUCCESS),
                 };
-                built = build_agent(&workspace, &config, &args, selected, true).await?;
+                built = build_agent(&workspace, &config, &overrides, selected, true).await?;
             }
         }
     }
 }
 
-/// Everything needed to resolve and switch inference profiles at runtime.
-struct InferenceContext {
-    registry: ProviderRegistry,
-    credentials: CredentialStore,
-    context: latch_kernel::config::ContextConfig,
-    config: Config,
-    config_path: Option<PathBuf>,
-}
-
-impl InferenceContext {
-    fn new(config: Config, config_path: Option<PathBuf>) -> Result<Self> {
-        let registry = ProviderRegistry::from_config(&config)?;
-        let credentials = CredentialStore::open(CredentialStore::default_path(&config.state_dir))?;
-        let context = config.context.clone();
-        Ok(Self {
-            registry,
-            credentials,
-            context,
-            config,
-            config_path,
-        })
-    }
-
-    fn resolve(&self, requested: &InferenceProfile) -> Result<(InferenceProfile, ModelDescriptor)> {
-        self.registry.resolve_profile(requested)
-    }
-
-    fn build(
-        &self,
-        profile: &InferenceProfile,
-        descriptor: &ModelDescriptor,
-        session_id: Uuid,
-    ) -> Result<Arc<dyn ModelProvider>> {
-        let media: MediaStore = Arc::new(ArtifactMediaStore::new(artifact_root(
-            &self.config,
-            session_id,
-        )));
-        self.registry.build_provider(
-            profile,
-            descriptor,
-            &self.credentials,
-            session_id,
-            Some(media),
-        )
-    }
-
-    /// Snapshot factory used to rebuild a child session pinned to a profile
-    /// the root no longer runs. On `/setup` the registry is rebuilt, so the
-    /// agent receives a fresh factory.
-    fn provider_factory(&self) -> latch_kernel::ProviderFactory {
-        let registry = Arc::new(self.registry.clone());
-        let credentials = Arc::new(self.credentials.clone());
-        let state_dir = self.config.state_dir.clone();
-        Arc::new(move |profile: &InferenceProfile, session_id: Uuid| {
-            let (resolved, descriptor) = registry.resolve_profile(profile)?;
-            let root = state_dir.join("artifacts").join(session_id.to_string());
-            let media: MediaStore = Arc::new(ArtifactMediaStore::new(root));
-            let provider = registry.build_provider(
-                &resolved,
-                &descriptor,
-                &credentials,
-                session_id,
-                Some(media),
-            )?;
-            Ok(latch_kernel::ProviderBuild {
-                provider,
-                descriptor,
-            })
-        })
-    }
-
-    fn provider_label(&self, id: &str) -> String {
-        self.registry
-            .provider(id)
-            .map(|profile| profile.display_name.clone())
-            .unwrap_or_else(|| id.to_owned())
-    }
-
-    /// Provider-neutral catalog for the live `/model` selector.
-    fn catalog(&self) -> InferenceCatalog {
-        InferenceCatalog {
-            providers: self
-                .registry
-                .available_providers()
-                .into_iter()
-                .map(|provider| CatalogProvider {
-                    id: provider.id.to_string(),
-                    display_name: provider.display_name.clone(),
-                    default_model: provider.default_model.clone(),
-                    models: provider
-                        .available_models()
-                        .into_iter()
-                        .map(catalog_model)
-                        .collect(),
-                })
-                .collect(),
-        }
-    }
-
-    /// Provider kinds and built-in models available to `/setup`.
-    fn setup_catalog(&self) -> Vec<SetupKind> {
-        [
-            ProviderKind::OpenCodeGo,
-            ProviderKind::DeepSeek,
-            ProviderKind::OpenAi,
-            ProviderKind::Anthropic,
-            ProviderKind::OpenAiCompatible,
-        ]
-        .into_iter()
-        .map(|kind| SetupKind {
-            kind: kind.id().to_owned(),
-            label: kind.display_name().to_owned(),
-            default_base_url: kind.default_base_url().to_owned(),
-            credential_label: kind.default_credential().to_owned(),
-            default_model: latch_kernel::providers::builtin_catalog(kind)
-                .first()
-                .map(|descriptor| descriptor.model.clone())
-                .unwrap_or_default(),
-            models: latch_kernel::providers::builtin_catalog(kind)
-                .iter()
-                .map(catalog_model_ref)
-                .collect(),
-        })
-        .collect()
+fn legacy_session_request(args: &Args, non_interactive: bool) -> SessionRequest {
+    SessionRequest {
+        resume: args.resume,
+        session: args.session.clone(),
+        latest: args.latest,
+        non_interactive,
     }
 }
 
-fn catalog_model(descriptor: &ModelDescriptor) -> CatalogModel {
-    catalog_model_ref(descriptor)
-}
-
-fn catalog_model_ref(descriptor: &ModelDescriptor) -> CatalogModel {
-    CatalogModel {
-        id: descriptor.model.clone(),
-        display_name: descriptor.display_name.clone(),
-        efforts: descriptor.supported_efforts.clone(),
-        default_effort: descriptor.default_effort,
-        input_modalities: descriptor.input_modalities.clone(),
+fn profile_overrides(args: &Args) -> ProfileOverrides {
+    ProfileOverrides {
+        mode: args.mode,
+        provider: args.provider.clone(),
+        model: args.model.clone(),
+        effort: args.effort.clone(),
+        config_path: args.config.clone(),
     }
-}
-
-/// One resolved session plus everything the interactive layer needs.
-struct SessionInfo {
-    profile: InferenceProfile,
-    descriptor: ModelDescriptor,
-}
-
-struct BuiltSession {
-    agent: Agent,
-    info: SessionInfo,
-    context: InferenceContext,
-    restored: Option<Restored>,
-}
-
-enum ResumeChoice {
-    Session(Uuid, PathBuf),
-    Fresh,
-    Exit,
-}
-
-async fn select_startup_session(
-    workspace: &Path,
-    config: &Config,
-    args: &Args,
-) -> Result<ResumeChoice> {
-    if !args.resume {
-        return Ok(ResumeChoice::Fresh);
-    }
-    let store = EventStore::open(&config.state_dir.join("latch.sqlite3"))?;
-    if let Some(selector) = &args.session {
-        let selected = store.resolve_session(selector)?;
-        if Path::new(&selected.workspace) != workspace {
-            eprintln!(
-                "resuming session {} from workspace {} (current workspace is {})",
-                &selected.id.to_string()[..8],
-                selected.workspace,
-                workspace.display()
-            );
-        }
-        return Ok(ResumeChoice::Session(
-            selected.id,
-            selected.workspace.into(),
-        ));
-    }
-    if args.latest {
-        return store
-            .latest_session(Some(workspace))?
-            .map(|id| ResumeChoice::Session(id, workspace.to_path_buf()))
-            .ok_or_else(|| {
-                anyhow!(
-                    "no previous session for {}; remove --latest to start fresh",
-                    workspace.display()
-                )
-            });
-    }
-    let matching = store.list_sessions(Some(workspace))?;
-    match matching.as_slice() {
-        [] => Err(anyhow!("no previous session for {}", workspace.display())),
-        [session] => Ok(ResumeChoice::Session(
-            session.id,
-            session.workspace.clone().into(),
-        )),
-        _ if args.prompt.is_some()
-            || !std::io::stdin().is_terminal()
-            || !std::io::stdout().is_terminal() =>
-        {
-            bail!(
-                "{} sessions match {}; choose one with --resume --session <uuid-or-prefix> or use --resume --latest",
-                matching.len(),
-                workspace.display()
-            )
-        }
-        _ => pick_session(workspace, config).await,
-    }
-}
-
-async fn pick_session(workspace: &Path, config: &Config) -> Result<ResumeChoice> {
-    let store = EventStore::open(&config.state_dir.join("latch.sqlite3"))?;
-    let sessions = store
-        .list_sessions(None)?
-        .into_iter()
-        .map(|session| latch_tui::SessionItem {
-            id: session.id,
-            workspace: session.workspace,
-            updated_at: session.updated_at,
-            mode: session
-                .mode
-                .map_or_else(|| config.default_mode.to_string(), |mode| mode.to_string()),
-            model: match (&session.model, session.effort) {
-                (Some(model), Some(effort))
-                    if !matches!(effort, ReasoningEffort::ProviderDefault) =>
-                {
-                    format!("{model} · {}", effort.short())
-                }
-                (Some(model), _) => model.clone(),
-                (None, _) => "—".into(),
-            },
-            prompt: session
-                .prompt_preview
-                .unwrap_or_else(|| "No user prompt".into()),
-            event_count: session.event_count,
-        })
-        .collect();
-    let preview_store = store.clone();
-    let preview = Arc::new(move |id| {
-        preview_store
-            .session_preview(id, 6)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|line| latch_tui::SessionPreviewLine {
-                speaker: line.speaker.into(),
-                text: line.text,
-            })
-            .collect()
-    });
-    Ok(
-        match latch_tui::run_session_picker(sessions, workspace, preview).await? {
-            latch_tui::PickerSelection::Resume(id) => {
-                let selected = store.resolve_session(&id.to_string())?;
-                ResumeChoice::Session(id, selected.workspace.into())
-            }
-            latch_tui::PickerSelection::StartFresh => ResumeChoice::Fresh,
-            latch_tui::PickerSelection::Exit | latch_tui::PickerSelection::Cancel => {
-                ResumeChoice::Exit
-            }
-        },
-    )
 }
 
 fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
@@ -443,280 +181,6 @@ fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
         }
         println!("\n{}", p.text);
     }
-    Ok(())
-}
-
-/// One restored session for the TUI: visible transcript items and prompt
-/// history, both derived from durable events by the shared formatter.
-struct Restored {
-    events: Vec<latch_protocol::Event>,
-    history: Vec<String>,
-}
-
-async fn build_agent(
-    workspace: &Path,
-    config: &Config,
-    args: &Args,
-    resume_session: Option<Uuid>,
-    interactive: bool,
-) -> Result<BuiltSession> {
-    let db = config.state_dir.join("latch.sqlite3");
-    let store = EventStore::open(&db)?;
-    let mut restored = None;
-    let resume = resume_session.is_some();
-    let session_id = if let Some(session) = resume_session {
-        // Approval requests that were pending at exit can no longer be
-        // answered; mark them durably before the transcript replay so resume
-        // shows honest state instead of a phantom prompt.
-        let expired = Agent::expire_pending_permissions(&store, session)?;
-        if expired > 0 {
-            tracing::info!("expired {expired} unresolved permission request(s)");
-        }
-        let events = store.events(session)?;
-        store.append(session, EventPayload::SessionResumed)?;
-        for (id, description) in store.interrupted_operations(session)? {
-            store.append(
-                session,
-                EventPayload::OperationInterrupted {
-                    operation_id: id,
-                    description,
-                },
-            )?;
-            store.mark_operation_reported(id)?;
-        }
-        restored = Some(Restored {
-            events: events.clone(),
-            history: session::prompt_history(&events),
-        });
-        session
-    } else {
-        let session = store.create_session(workspace)?;
-        let (head, dirty_paths) = observe_git(workspace);
-        store.append(
-            session,
-            EventPayload::GitStateObserved { head, dirty_paths },
-        )?;
-        session
-    };
-    let events = store.events(session_id)?;
-    // Mode precedence (both fresh and resumed): explicit CLI --mode > the
-    // session's durable mode history > configured default.
-    let mode = session::resumed_mode(&events, args.mode, config.default_mode);
-
-    // Inference profile precedence: explicit CLI override > the session's own
-    // durable profile > configured default. Credentials are resolved fresh
-    // from the environment/local store at this moment and are never persisted.
-    let context = InferenceContext::new(config.clone(), args.config.clone())?;
-    let (default_profile, _default_descriptor) = context.registry.default_profile(config)?;
-    let resumed_profile = resume
-        .then(|| session::resumed_inference_profile(&events))
-        .flatten();
-    let mut requested = resumed_profile.clone().unwrap_or_default();
-    if !resume || resumed_profile.is_none() {
-        requested = default_profile.clone();
-    }
-    let mut overridden = false;
-    if let Some(provider) = &args.provider {
-        requested.provider = ProviderId::new(provider.clone());
-        requested.model.clear();
-        requested.effort = ReasoningEffort::ProviderDefault;
-        overridden = true;
-    }
-    if let Some(model) = &args.model {
-        requested.model = model.clone();
-        overridden = true;
-    }
-    if let Some(effort) = &args.effort {
-        requested.effort = effort
-            .parse::<ReasoningEffort>()
-            .map_err(anyhow::Error::msg)?;
-        overridden = true;
-    }
-    let (profile, descriptor) = context.resolve(&requested)?;
-    let provider = match context.build(&profile, &descriptor, session_id) {
-        Ok(provider) => provider,
-        Err(error) if interactive => {
-            // First-run UX: rather than failing before the TUI can offer
-            // /setup, start the session with an actionable stub provider.
-            tracing::warn!("{error:#}");
-            Arc::new(UnconfiguredProvider {
-                message: format!("{error:#}"),
-            })
-        }
-        Err(error) => return Err(error),
-    };
-    let policy = PolicyEngine::with_defaults(
-        mode,
-        workspace.to_path_buf(),
-        config.permissions.clone(),
-        config.safety.level,
-    );
-    let artifacts = artifact_root(config, session_id);
-    let tools = ToolExecutor::new(
-        workspace.to_path_buf(),
-        artifacts.clone(),
-        store.clone(),
-        session_id,
-        policy,
-    )?;
-    if resume {
-        // Restore durable change ownership before anything can mutate.
-        let count = tools.restore_ownership().await?;
-        tracing::info!("restored {count} owned change records");
-    }
-    let continuity =
-        ContinuityEngine::for_model(store.clone(), config.context.clone(), &profile.model);
-    let mut agent = Agent::new(AgentRuntime {
-        session_id,
-        workspace: workspace.to_path_buf(),
-        mode,
-        store: store.clone(),
-        provider: provider.clone(),
-        tools,
-        continuity,
-        retry_budget: config.failure.retry_budget,
-    });
-    agent.set_stagnation_budget(config.failure.stagnation_budget);
-    agent.set_max_model_turns(config.failure.max_model_turns);
-    agent.set_provider_factory(context.provider_factory());
-    if overridden {
-        // A command-line override is durable provenance so a later resume
-        // keeps the profile the user actually selected.
-        agent.set_inference_profile(
-            provider,
-            profile.clone(),
-            &descriptor,
-            config.context.clone(),
-            "command line override",
-        )?;
-    } else {
-        agent.restore_inference_profile(
-            provider,
-            profile.clone(),
-            &descriptor,
-            config.context.clone(),
-        );
-    }
-    for extension in config
-        .extensions
-        .iter()
-        .filter(|extension| extension.enabled)
-    {
-        agent
-            .load_extension(extension.name.clone(), &extension.command, &extension.args)
-            .await
-            .with_context(|| format!("initialize extension {}", extension.name))?;
-    }
-    if resume {
-        // Resume restores the exact policy the session ended in; it never
-        // silently broadens or narrows permissions.
-        agent.restore_policy(
-            session::resumed_safety(&events, config.safety.level),
-            session::resumed_permissions(&events, config.permissions.mode),
-        );
-        if let Some(state) = events.iter().rev().find_map(|e| match &e.payload {
-            EventPayload::TaskStateUpdated { state } => Some(state.clone()),
-            _ => None,
-        }) {
-            agent.restore_state(state);
-        }
-        agent.restore_evidence(
-            events
-                .iter()
-                .filter_map(|event| match &event.payload {
-                    EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
-                    _ => None,
-                })
-                .collect(),
-        );
-        // Failure supervision reconstructs its streaks so a stalled loop is
-        // not silently forgotten, and progress supervision reconstructs an
-        // active inspection loop.
-        agent.restore_failures()?;
-        agent.restore_progress()?;
-    }
-    Ok(BuiltSession {
-        agent,
-        info: SessionInfo {
-            profile,
-            descriptor,
-        },
-        context,
-        restored,
-    })
-}
-
-/// Stand-in provider used when no credential is configured and Latch is
-/// interactive: the session starts so `/setup` can run, and any attempt to
-/// use the model fails with the actionable configuration error.
-struct UnconfiguredProvider {
-    message: String,
-}
-
-#[async_trait]
-impl ModelProvider for UnconfiguredProvider {
-    fn name(&self) -> &str {
-        "unconfigured"
-    }
-    fn model(&self) -> &str {
-        "unconfigured"
-    }
-    async fn stream(
-        &self,
-        _request: latch_protocol::ModelRequest,
-        _cancel: CancellationToken,
-        _sink: StreamSink,
-    ) -> Result<latch_protocol::ModelResponse> {
-        bail!("{}", self.message)
-    }
-}
-
-/// One session's immutable artifact store, shared by tool ingestion and the
-/// provider media resolver.
-fn artifact_root(config: &Config, session_id: Uuid) -> PathBuf {
-    config
-        .state_dir
-        .join("artifacts")
-        .join(session_id.to_string())
-}
-
-/// Validates and ingests CLI `--attach` images through exactly the same
-/// kernel path the TUI uses. Identical bytes deduplicate by content hash.
-fn ingest_attachments(
-    config: &Config,
-    session_id: Uuid,
-    paths: &[PathBuf],
-) -> Result<Vec<MediaRef>> {
-    let root = artifact_root(config, session_id);
-    let mut media = Vec::new();
-    for path in paths {
-        let metadata =
-            std::fs::metadata(path).with_context(|| format!("read {}", path.display()))?;
-        latch_kernel::media::ensure_size(metadata.len())
-            .with_context(|| format!("attach {}", path.display()))?;
-        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
-        let reference = latch_kernel::ingest_image_bytes(&root, &bytes, Some(name))
-            .with_context(|| format!("attach {}", path.display()))?;
-        media.push(reference);
-    }
-    Ok(media)
-}
-
-async fn one_shot(agent: &mut Agent, input: &UserInput) -> Result<()> {
-    let sink = Arc::new(|event: latch_kernel::agent::AgentOutput| {
-        if let latch_kernel::agent::AgentOutput::Transient(StreamEvent::TextDelta(text)) = event {
-            print!("{text}");
-        }
-    });
-    agent
-        .run(input.clone(), CancellationToken::new(), sink)
-        .await?;
-    println!();
-    agent.shutdown_extensions().await?;
     Ok(())
 }
 
@@ -1312,34 +776,10 @@ fn git_branch() -> Result<String> {
     Ok(branch)
 }
 
-fn observe_git(workspace: &Path) -> (Option<String>, Vec<String>) {
-    let head = std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(workspace)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_owned());
-    let dirty_paths = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(workspace)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .filter_map(|line| line.get(3..).map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    (head, dirty_paths)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use latch_kernel::CredentialStore;
 
     #[test]
     fn help_lists_every_palette_command() {
@@ -1372,7 +812,7 @@ mod tests {
     async fn mode_override_via_cli_flag_restores_session_mode() {
         // exercises the precedence helper used by build_agent indirectly; the
         // full precedence matrix is covered in latch_kernel::session tests.
-        let mode = session::resumed_mode(&[], Some(Mode::Ask), Mode::Work);
+        let mode = latch_kernel::session::resumed_mode(&[], Some(Mode::Ask), Mode::Work);
         assert_eq!(mode, Mode::Ask);
     }
 

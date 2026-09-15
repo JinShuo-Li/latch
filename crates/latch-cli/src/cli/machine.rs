@@ -1,0 +1,377 @@
+//! Machine-oriented execution: `latch run`, `latch resume`, and the legacy
+//! `-p` one-shot compatibility path.
+//!
+//! Machine mode never opens the TUI and never waits for a human. Permission
+//! decisions the configured policy cannot resolve non-interactively are
+//! denied by the kernel (unchanged); when any such denial occurs the final
+//! structured status is `permission_denied` and the process exits with
+//! [`EXIT_PERMISSION`]. There is no bypass flag.
+
+use crate::cli::command::{Args, OutputFormat, PromptArgs, ResumeArgs, RunArgs};
+use crate::cli::output::{
+    ContextReport, ErrorReport, EventsReport, MachineResult, Reporter, RunStatus, UsageAggregate,
+    exit_code,
+};
+use crate::cli::session::{
+    ProfileOverrides, SelectedSession, SessionRequest, build_agent, ingest_attachments,
+    resolve_workspace, select_session,
+};
+use latch_kernel::{AgentEventSink, Config, EventStore, agent::AgentOutput};
+use latch_protocol::{EventPayload, InferenceProfile, StreamEvent, UserInput};
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
+
+const PERMISSION_MESSAGE: &str = "permission denied: a required operation needs interactive approval, which machine mode \
+     cannot provide; nothing was auto-approved. Choose a narrower operation or configure an \
+     autonomous policy explicitly";
+
+#[derive(Debug, Clone)]
+pub enum PromptSource {
+    Inline(String),
+    File(PathBuf),
+    Stdin,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResumeRequest {
+    Session(String),
+    Latest,
+    NewestInWorkspace,
+}
+
+#[derive(Debug, Clone)]
+pub struct MachineRequest {
+    pub command: &'static str,
+    pub output: OutputFormat,
+    pub config_path: Option<PathBuf>,
+    pub workspace: Option<PathBuf>,
+    pub prompt: Option<PromptSource>,
+    pub attachments: Vec<PathBuf>,
+    pub mode: Option<latch_protocol::Mode>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub resume: Option<ResumeRequest>,
+}
+
+pub fn run_request(args: &Args, run: RunArgs) -> MachineRequest {
+    let mut request = base_request(args, "run");
+    request.workspace = run.workspace;
+    request.prompt = prompt_source(run.prompt);
+    request
+}
+
+pub fn resume_request(args: &Args, resume: ResumeArgs) -> MachineRequest {
+    let mut request = base_request(args, "resume");
+    request.workspace = resume.workspace;
+    request.prompt = prompt_source(resume.prompt);
+    request.resume = Some(match (&resume.session, resume.latest) {
+        (Some(session), _) => ResumeRequest::Session(session.clone()),
+        (None, true) => ResumeRequest::Latest,
+        (None, false) => ResumeRequest::NewestInWorkspace,
+    });
+    request
+}
+
+/// The legacy `latch -p ...` invocation maps onto the machine run
+/// implementation, preserving `--resume`/`--session`/`--latest` selection.
+pub fn legacy_request(args: &Args, prompt: String) -> MachineRequest {
+    let mut request = base_request(args, "run");
+    request.prompt = Some(PromptSource::Inline(prompt));
+    request.resume = if args.resume {
+        Some(match (&args.session, args.latest) {
+            (Some(session), _) => ResumeRequest::Session(session.clone()),
+            (None, true) => ResumeRequest::Latest,
+            (None, false) => ResumeRequest::NewestInWorkspace,
+        })
+    } else {
+        None
+    };
+    request
+}
+
+fn base_request(args: &Args, command: &'static str) -> MachineRequest {
+    MachineRequest {
+        command,
+        output: args.output,
+        config_path: args.config.clone(),
+        workspace: None,
+        prompt: None,
+        attachments: args.attach.clone(),
+        mode: args.mode,
+        provider: args.provider.clone(),
+        model: args.model.clone(),
+        effort: args.effort.clone(),
+        resume: None,
+    }
+}
+
+fn prompt_source(prompt: PromptArgs) -> Option<PromptSource> {
+    if let Some(text) = prompt.prompt {
+        Some(PromptSource::Inline(text))
+    } else if let Some(path) = prompt.prompt_file {
+        Some(PromptSource::File(path))
+    } else if prompt.stdin {
+        Some(PromptSource::Stdin)
+    } else {
+        None
+    }
+}
+
+enum MachineError {
+    Usage(String),
+    Runtime(String),
+}
+
+impl MachineError {
+    fn usage(message: impl std::fmt::Display) -> Self {
+        Self::Usage(message.to_string())
+    }
+
+    fn from_anyhow(error: anyhow::Error) -> Self {
+        Self::Usage(format!("{error:#}"))
+    }
+}
+
+#[derive(Default)]
+struct Telemetry {
+    usage: UsageAggregate,
+    context: Option<ContextReport>,
+    permission_denied: bool,
+}
+
+pub async fn execute(request: MachineRequest) -> ExitCode {
+    let reporter = Reporter::new(request.output);
+    let mut result = MachineResult::new(request.command, workspace_label(&request));
+    if let Err(error) = run(&request, reporter, &mut result).await {
+        match error {
+            MachineError::Usage(message) => {
+                result.fail(RunStatus::ConfigurationError, message);
+            }
+            MachineError::Runtime(message) => {
+                result.fail(RunStatus::Failed, message);
+            }
+        }
+    }
+    if request.output == OutputFormat::Text
+        && let Some(error) = &result.error
+    {
+        eprintln!("error: {}", error.message);
+    }
+    reporter.finish(&result);
+    exit_code(result.status)
+}
+
+async fn run(
+    request: &MachineRequest,
+    reporter: Reporter,
+    result: &mut MachineResult,
+) -> Result<(), MachineError> {
+    let prompt = resolve_prompt(request).await?;
+    let requested_workspace = match &request.workspace {
+        Some(path) => resolve_workspace(path).map_err(MachineError::from_anyhow)?,
+        None => std::env::current_dir()
+            .map_err(|error| MachineError::usage(format!("current directory: {error}")))?,
+    };
+    result.workspace = requested_workspace.display().to_string();
+
+    let config = Config::load(request.config_path.as_deref()).map_err(MachineError::from_anyhow)?;
+    let store = EventStore::open(&config.state_dir.join("latch.sqlite3"))
+        .map_err(|error| MachineError::Runtime(format!("{error:#}")))?;
+
+    let mut workspace = requested_workspace;
+    let mut resume_session = None;
+    if let Some(resume) = &request.resume {
+        let selection = SessionRequest {
+            resume: true,
+            session: match resume {
+                ResumeRequest::Session(selector) => Some(selector.clone()),
+                _ => None,
+            },
+            latest: matches!(resume, ResumeRequest::Latest),
+            non_interactive: true,
+        };
+        match select_session(&workspace, &config, &selection)
+            .await
+            .map_err(MachineError::from_anyhow)?
+        {
+            SelectedSession::Session(id, session_workspace) => {
+                resume_session = Some(id);
+                workspace = session_workspace;
+            }
+            SelectedSession::Fresh => {}
+            SelectedSession::Exit => return Ok(()),
+        }
+        result.workspace = workspace.display().to_string();
+    }
+
+    let overrides = ProfileOverrides {
+        mode: request.mode,
+        provider: request.provider.clone(),
+        model: request.model.clone(),
+        effort: request.effort.clone(),
+        config_path: request.config_path.clone(),
+    };
+    let mut built = build_agent(&workspace, &config, &overrides, resume_session, false)
+        .await
+        .map_err(MachineError::from_anyhow)?;
+    let session_id = built.agent.session_id;
+    result.session_id = Some(session_id);
+    result.profile = Some(profile_report(&built.info.profile));
+
+    let media = ingest_attachments(&config, session_id, &request.attachments)
+        .map_err(MachineError::from_anyhow)?;
+
+    let pre_sequence = store
+        .last_sequence(session_id)
+        .map_err(|error| MachineError::Runtime(format!("{error:#}")))?;
+    let telemetry = Arc::new(Mutex::new(Telemetry::default()));
+    let sink = machine_sink(reporter, Arc::clone(&telemetry));
+
+    let cancel = CancellationToken::new();
+    spawn_ctrl_c(cancel.clone());
+
+    let run_result = built
+        .agent
+        .run(UserInput::new(prompt, media), cancel.clone(), sink)
+        .await;
+    let post_sequence = store.last_sequence(session_id).unwrap_or(pre_sequence);
+
+    let mut run_error = match &run_result {
+        Ok(text) => {
+            result.result.text = Some(text.clone());
+            None
+        }
+        Err(error) => Some(format!("{error:#}")),
+    };
+    if run_result.is_ok()
+        && let Err(error) = built.agent.shutdown_extensions().await
+    {
+        run_error = Some(format!("shutdown extensions: {error:#}"));
+    }
+
+    {
+        let telemetry = telemetry.lock().expect("telemetry mutex poisoned");
+        result.usage = telemetry.usage.report();
+        if let Some(context) = &telemetry.context {
+            result.context = ContextReport {
+                request_tokens: context.request_tokens,
+                common_prefix_tokens: context.common_prefix_tokens,
+                cache_epoch: context.cache_epoch,
+            };
+        }
+        result.events = EventsReport::range(pre_sequence, post_sequence);
+        if telemetry.permission_denied {
+            result.status = RunStatus::PermissionDenied;
+        }
+    }
+
+    if request.output == OutputFormat::Text && run_result.is_ok() {
+        println!();
+    }
+
+    if cancel.is_cancelled() {
+        result.status = RunStatus::Cancelled;
+        result.error = Some(ErrorReport {
+            message: run_error.unwrap_or_else(|| "run cancelled".to_owned()),
+        });
+    } else if let Some(message) = run_error {
+        result.status = RunStatus::Failed;
+        result.error = Some(ErrorReport { message });
+    } else if result.status == RunStatus::PermissionDenied {
+        result.error = Some(ErrorReport {
+            message: PERMISSION_MESSAGE.to_owned(),
+        });
+    } else {
+        result.status = RunStatus::Completed;
+    }
+    Ok(())
+}
+
+async fn resolve_prompt(request: &MachineRequest) -> Result<String, MachineError> {
+    let source = request.prompt.as_ref().ok_or_else(|| {
+        MachineError::Usage("no prompt source: pass --prompt, --prompt-file, or --stdin".to_owned())
+    })?;
+    let text = match source {
+        PromptSource::Inline(text) => text.clone(),
+        PromptSource::File(path) => std::fs::read_to_string(path)
+            .map_err(|error| MachineError::usage(format!("read {}: {error}", path.display())))?,
+        PromptSource::Stdin => {
+            let mut buffer = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)
+                .map_err(|error| MachineError::usage(format!("read stdin: {error}")))?;
+            buffer
+        }
+    };
+    let text = text.trim_end_matches(['\n', '\r']).to_owned();
+    if text.trim().is_empty() {
+        return Err(MachineError::usage("prompt is empty"));
+    }
+    Ok(text)
+}
+
+fn machine_sink(reporter: Reporter, telemetry: Arc<Mutex<Telemetry>>) -> AgentEventSink {
+    Arc::new(move |event| match event {
+        AgentOutput::Transient(StreamEvent::TextDelta(text)) => reporter.text_delta(&text),
+        AgentOutput::Transient(_) => {}
+        AgentOutput::ToolResult(result) => reporter.tool_result(&result),
+        AgentOutput::Durable(event) => {
+            match &event.payload {
+                EventPayload::ModelUsage { usage } => {
+                    telemetry
+                        .lock()
+                        .expect("telemetry mutex poisoned")
+                        .usage
+                        .observe(usage);
+                }
+                EventPayload::ContextMaterialized { stats } => {
+                    telemetry.lock().expect("telemetry mutex poisoned").context =
+                        Some(ContextReport::from_stats(stats));
+                }
+                EventPayload::PermissionResolved {
+                    approved: false,
+                    source,
+                    ..
+                } if source == "non_interactive" => {
+                    telemetry
+                        .lock()
+                        .expect("telemetry mutex poisoned")
+                        .permission_denied = true;
+                }
+                _ => {}
+            }
+            reporter.durable_event(&event);
+        }
+    })
+}
+
+fn spawn_ctrl_c(cancel: CancellationToken) {
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            cancel.cancel();
+        }
+    });
+}
+
+fn profile_report(profile: &InferenceProfile) -> crate::cli::output::ProfileReport {
+    crate::cli::output::ProfileReport {
+        provider: profile.provider.to_string(),
+        model: profile.model.clone(),
+        effort: crate::cli::output::reasoning_effort_name(profile.effort),
+    }
+}
+
+fn workspace_label(request: &MachineRequest) -> String {
+    request
+        .workspace
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.display().to_string())
+        })
+        .unwrap_or_default()
+}

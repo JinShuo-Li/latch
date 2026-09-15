@@ -49,6 +49,9 @@ cargo test --workspace
 
 - Single test: `cargo test -p latch-kernel --lib -- <name>`
 - One integration file: `cargo test -p latch-kernel --test dogfood`
+- CLI machine interface: `cargo test -p latch-cli` spawns the real binary
+  against a loopback SSE mock provider with an isolated state dir; it needs no
+  network, credentials, or TTY. It runs locally, not in CI.
 - `cargo test --workspace` takes ~12s: sandbox/command tests spawn `bwrap`,
   `search` tests need `rg`, and the multi-agent dogfood suites dominate the
   remainder. Keep process fixtures short-lived; a long natural lifetime makes

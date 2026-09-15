@@ -111,6 +111,68 @@ session picker. Resuming a root reconstructs its durable child graph; a child
 whose turn was running when the process ended becomes `Interrupted` and can be
 continued explicitly rather than silently rerunning work.
 
+## Machine interface
+
+`latch run`, `latch resume`, and `latch sessions` are the non-interactive
+surface for scripts, CI, coding agents, and benchmark harnesses. They never
+open the TUI, never wait for a human, and never mix diagnostics into stdout.
+
+```sh
+latch run \
+  --workspace ./fixture \
+  --prompt "Fix the failing test" \
+  --model deepseek-v4.1 \
+  --output json
+```
+
+Prompt sources are exclusive: exactly one of `--prompt`, `--prompt-file`, or
+`--stdin`.
+
+```sh
+cat task.txt | latch run --workspace ./fixture --stdin --output jsonl
+```
+
+`--workspace` resolves and canonicalizes the directory before session
+selection, policy, prompt compilation, and tools, so callers never need to
+`cd` first. `--output text` (the default) preserves the historical one-shot
+behavior and streams assistant text to stdout. `--output json` prints exactly
+one versioned object (`"schema_version": 1`) carrying the command, session id,
+workspace, status, resolved provider/model/effort, result text, provider
+usage, context accounting, and the durable event range of the run.
+`--output jsonl` streams semantic records (`text_delta`, `tool_result`,
+`durable_event`, `final`); every line is standalone JSON and an orderly
+terminal state always ends with the `final` record. Provider usage categories
+the endpoint did not report stay `null` instead of being fabricated as zero.
+Logs and diagnostics always go to stderr, so stdout stays parseable even with
+`RUST_LOG` set.
+
+Durable sessions can be inspected without the TUI or a TTY:
+
+```sh
+latch sessions list --workspace ./fixture --output json
+latch sessions show 550e8400 --output json   # exact UUID or unique prefix
+```
+
+Exit codes are stable and deliberately small; the structured result remains
+the authoritative detail:
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | completed |
+| 1 | runtime/model/tool failure |
+| 2 | CLI or configuration error |
+| 3 | permission unresolved: denied, never auto-approved |
+| 4 | cancelled |
+
+Machine mode is fail-closed for permissions. The TUI remains the only
+interactive approval surface; when an operation reaches an `Ask` that the
+configured policy cannot resolve without a human, it is durably denied, the
+final status is `permission_denied`, and the process exits 3. There is no
+`--yes` or skip-permissions flag. Existing invocations keep working: `latch`
+still launches the TUI, and `latch -p "..."` (also with `--resume`) now runs
+through the same machine implementation, so profile precedence, session
+construction, attachments, and policy are identical everywhere.
+
 ## Terminal interface
 
 The transcript is a semantic conversation rather than a kernel event log.

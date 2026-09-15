@@ -1140,10 +1140,12 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "clap",
  "latch-kernel",
  "latch-protocol",
  "latch-tui",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
