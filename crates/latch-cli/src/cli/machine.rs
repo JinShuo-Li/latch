@@ -231,7 +231,7 @@ async fn run(
     let sink = machine_sink(reporter, Arc::clone(&telemetry));
 
     let cancel = CancellationToken::new();
-    spawn_ctrl_c(cancel.clone());
+    spawn_cancellation_signals(cancel.clone());
 
     let run_result = built
         .agent
@@ -347,11 +347,31 @@ fn machine_sink(reporter: Reporter, telemetry: Arc<Mutex<Telemetry>>) -> AgentEv
     })
 }
 
-fn spawn_ctrl_c(cancel: CancellationToken) {
+/// Maps the standard stop signals onto run cancellation so a machine run ends
+/// with an orderly `cancelled` result (exit 4) instead of vanishing: Ctrl+C
+/// and, on Unix, SIGTERM (what Docker and CI runners send first).
+fn spawn_cancellation_signals(cancel: CancellationToken) {
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            cancel.cancel();
+        #[cfg(unix)]
+        {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut terminate) => {
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {}
+                        _ = terminate.recv() => {}
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!("could not install SIGTERM handler: {error}");
+                    let _ = tokio::signal::ctrl_c().await;
+                }
+            }
         }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+        cancel.cancel();
     });
 }
 

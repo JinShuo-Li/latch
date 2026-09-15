@@ -27,7 +27,11 @@ struct MockProvider {
 }
 
 impl MockProvider {
-    fn start(turns: Vec<Turn>, usage: Option<Value>) -> Self {
+    fn start_with_delay(
+        turns: Vec<Turn>,
+        usage: Option<Value>,
+        delay: std::time::Duration,
+    ) -> Self {
         assert!(
             !turns.is_empty(),
             "the mock provider needs at least one turn"
@@ -46,6 +50,9 @@ impl MockProvider {
                     let Ok(mut stream) = stream else { continue };
                     let _ = read_request_body(&mut stream);
                     let index = hits.fetch_add(1, Ordering::SeqCst);
+                    if !delay.is_zero() {
+                        std::thread::sleep(delay);
+                    }
                     let turn = &turns[index.min(turns.len() - 1)];
                     let response = sse_response(turn, &usage);
                     let _ = stream.write_all(response.as_bytes());
@@ -129,12 +136,21 @@ struct Fixture {
 }
 
 fn fixture(turns: Vec<Turn>, usage: Option<Value>, safety: &str) -> Fixture {
+    fixture_delayed(turns, usage, safety, std::time::Duration::ZERO)
+}
+
+fn fixture_delayed(
+    turns: Vec<Turn>,
+    usage: Option<Value>,
+    safety: &str,
+    delay: std::time::Duration,
+) -> Fixture {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().to_path_buf();
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let state_dir = root.join("state");
-    let mock = MockProvider::start(turns, usage);
+    let mock = MockProvider::start_with_delay(turns, usage, delay);
     let config_path = root.join("config.toml");
     let text = format!(
         "state_dir = \"{state}\"\n\
@@ -837,6 +853,57 @@ fn legacy_flags_cannot_mix_with_machine_subcommands() {
         assert_eq!(output.status.code(), Some(2), "args {args:?}");
         assert!(stderr_text(&output).contains("interactive path"));
     }
+}
+
+#[test]
+fn sigterm_ends_a_run_with_an_orderly_cancelled_result() {
+    // A 30s provider delay keeps the run in flight until the signal lands.
+    let fixture = fixture_delayed(
+        vec![Turn::Text("never returned")],
+        None,
+        "standard",
+        std::time::Duration::from_secs(30),
+    );
+    let workspace = workspace_arg(&fixture);
+    let child = latch_command(&fixture)
+        .current_dir(&fixture.root)
+        .args([
+            "run",
+            "--prompt",
+            "hi",
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ])
+        .spawn()
+        .expect("spawn latch");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while fixture.mock.hits() == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the mock provider never received a request"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let signal = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .expect("send SIGTERM");
+    assert!(signal.success(), "kill -TERM failed");
+
+    let output = child.wait_with_output().expect("wait for latch");
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "SIGTERM must end in the documented cancelled exit\nstderr: {}",
+        stderr_text(&output)
+    );
+    let value = stdout_json(&output);
+    assert_eq!(value["status"], "cancelled");
+    assert!(value["session_id"].is_string());
+    assert!(value["error"]["message"].is_string());
 }
 
 #[test]

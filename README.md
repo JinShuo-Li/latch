@@ -164,6 +164,10 @@ the authoritative detail:
 | 3 | permission unresolved: denied, never auto-approved |
 | 4 | cancelled |
 
+A `SIGINT` (Ctrl+C) or `SIGTERM` during a machine run cancels it and still
+emits the final structured result with status `cancelled` (exit 4), so
+Docker/CI stops and benchmark harnesses never lose the artifact.
+
 Machine mode is fail-closed for permissions. The TUI remains the only
 interactive approval surface; when an operation reaches an `Ask` that the
 configured policy cannot resolve without a human, it is durably denied, the
