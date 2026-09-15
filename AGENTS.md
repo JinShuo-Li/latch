@@ -49,8 +49,10 @@ cargo test --workspace
 
 - Single test: `cargo test -p latch-kernel --lib -- <name>`
 - One integration file: `cargo test -p latch-kernel --test dogfood`
-- `cargo test --workspace` is the slow one (~30s): sandbox/command tests spawn
-  `bwrap`, and `search` tests need `rg`.
+- `cargo test --workspace` takes ~12s: sandbox/command tests spawn `bwrap`,
+  `search` tests need `rg`, and the multi-agent dogfood suites dominate the
+  remainder. Keep process fixtures short-lived; a long natural lifetime makes
+  teardown races expensive under a parallel suite.
 - Cache/long-session stress (run locally, normally not in CI):
   `cargo test -p latch-kernel --lib continuity -- --nocapture`.
 - Live-model acceptance is opt-in and ignored:
