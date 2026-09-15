@@ -6,12 +6,16 @@
 //! models (mode, profile, completion, prompt preview, transcript lines).
 
 use crate::cli::command::{Args, OutputFormat, SessionsArgs, SessionsCommand};
-use crate::cli::output::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, SCHEMA_VERSION};
+use crate::cli::output::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE};
 use crate::cli::session::resolve_workspace;
 use latch_kernel::{Config, EventStore, SessionSummary, session};
 use latch_protocol::EventPayload;
 use serde::Serialize;
 use std::process::ExitCode;
+
+/// The session-inspection payloads are unchanged by the run/resume schema
+/// version 2 bump, so they keep their own, independent version.
+const SESSIONS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Serialize)]
 struct SessionRecord {
@@ -71,7 +75,7 @@ pub async fn execute(args: &Args, sessions: SessionsArgs) -> ExitCode {
         let message = "`sessions` supports --output text or --output json";
         if output.is_machine() {
             print_json(&SessionsError {
-                schema_version: SCHEMA_VERSION,
+                schema_version: SESSIONS_SCHEMA_VERSION,
                 error: message.to_owned(),
             });
         }
@@ -94,7 +98,7 @@ pub async fn execute(args: &Args, sessions: SessionsArgs) -> ExitCode {
 fn report_error(message: &str, output: OutputFormat) {
     if output.is_machine() {
         print_json(&SessionsError {
-            schema_version: SCHEMA_VERSION,
+            schema_version: SESSIONS_SCHEMA_VERSION,
             error: message.to_owned(),
         });
     }
@@ -127,7 +131,7 @@ async fn run(
             match output {
                 OutputFormat::Text => print_list_text(&records),
                 _ => print_json(&SessionsList {
-                    schema_version: SCHEMA_VERSION,
+                    schema_version: SESSIONS_SCHEMA_VERSION,
                     sessions: records,
                 }),
             }
@@ -177,7 +181,7 @@ async fn run(
             match output {
                 OutputFormat::Text => print_show_text(&detail),
                 _ => print_json(&SessionShow {
-                    schema_version: SCHEMA_VERSION,
+                    schema_version: SESSIONS_SCHEMA_VERSION,
                     session: detail,
                 }),
             }
@@ -203,7 +207,10 @@ fn record(
             .effort
             .map(crate::cli::output::reasoning_effort_name),
         event_count: summary.event_count,
-        completion: summary.completion.as_ref().and_then(completion_name),
+        completion: summary
+            .completion
+            .as_ref()
+            .map(crate::cli::output::completion_name),
         prompt_preview: summary.prompt_preview.clone(),
     })
 }
@@ -230,12 +237,6 @@ fn provider_of(store: &EventStore, session_id: uuid::Uuid) -> Option<String> {
 fn compact_timestamp(timestamp: &chrono::DateTime<chrono::Utc>) -> String {
     let text = timestamp.to_rfc3339();
     text.split('.').next().unwrap_or(&text).to_owned()
-}
-
-fn completion_name(completion: &latch_protocol::CompletionState) -> Option<String> {
-    serde_json::to_value(completion)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
 }
 
 fn print_json<T: Serialize>(value: &T) {

@@ -5,6 +5,19 @@
 //! every diagnostic stays on stderr. Secrets never appear here: usage and
 //! context values come from durable events, and provider error strings have
 //! already passed through the kernel's redaction rules.
+//!
+//! Schema version 2 makes durable semantics explicit:
+//!
+//! - `status` describes the CLI invocation only; `task.completion` is the
+//!   durable kernel completion state, which can be `in_progress` after a
+//!   normally terminated run.
+//! - `usage.root` covers the root session; `usage.graph` covers the root plus
+//!   every durable descendant session. Both aggregate durable `ModelUsage`
+//!   events, so children, resumed sessions, and interrupted workers contribute
+//!   what they actually consumed. Version 1 reported only the root session's
+//!   live-observed usage.
+//! - `events.scope` is always `"root"`; `agent_graph` summarizes the durable
+//!   session graph without exposing child transcripts.
 
 use crate::cli::command::OutputFormat;
 use latch_protocol::{ContextStats, Event, ToolResult, Usage};
@@ -13,7 +26,7 @@ use std::process::ExitCode;
 use uuid::Uuid;
 
 /// Version of the machine-readable schemas emitted by this binary.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Success or a cleanly terminal run (canonical completion state is detailed
 /// in the JSON result, not in the exit code).
@@ -64,7 +77,7 @@ pub struct ProfileReport {
     pub effort: String,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct UsageReport {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
@@ -73,10 +86,30 @@ pub struct UsageReport {
     pub cache_miss_tokens: Option<u64>,
 }
 
+/// Usage for one machine result, with unambiguous scopes. `root` is the root
+/// session only; `graph` is the root plus every durable descendant session of
+/// its agent graph. `scope` names the aggregate this invocation reports.
+#[derive(Debug, Serialize)]
+pub struct UsageScopes {
+    pub scope: &'static str,
+    pub root: UsageReport,
+    pub graph: UsageReport,
+}
+
+impl Default for UsageScopes {
+    fn default() -> Self {
+        Self {
+            scope: "graph",
+            root: UsageReport::default(),
+            graph: UsageReport::default(),
+        }
+    }
+}
+
 /// Accumulates provider-reported usage exactly as durable `ModelUsage` events
 /// report it. A category no provider reported stays `null`; it is never
 /// fabricated as zero.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct UsageAggregate {
     seen: bool,
     input_tokens: u64,
@@ -94,6 +127,21 @@ impl UsageAggregate {
         merge(&mut self.cache_read_tokens, usage.cache_read_tokens);
         merge(&mut self.cache_write_tokens, usage.cache_write_tokens);
         merge(&mut self.cache_miss_tokens, usage.cache_miss_tokens);
+    }
+
+    /// Merges another durable aggregate into this one. Categories are combined
+    /// only when at least one side actually reported them, so an absent
+    /// category stays `None` instead of becoming zero.
+    pub fn merge(&mut self, other: &Self) {
+        if !other.seen {
+            return;
+        }
+        self.seen = true;
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        merge(&mut self.cache_read_tokens, other.cache_read_tokens);
+        merge(&mut self.cache_write_tokens, other.cache_write_tokens);
+        merge(&mut self.cache_miss_tokens, other.cache_miss_tokens);
     }
 
     #[must_use]
@@ -117,6 +165,36 @@ fn merge(total: &mut Option<u64>, value: Option<u64>) {
     }
 }
 
+/// Durable kernel task state at the end of the invocation. `status` says the
+/// run terminated normally; this section says what the kernel's canonical
+/// state actually is.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskReport {
+    pub completion: String,
+    pub goal: Option<String>,
+    pub evidence_count: u64,
+    pub validation: ValidationReport,
+}
+
+/// Current kernel-derived validation status of the task's required
+/// validations. Passed/failed come only from kernel-observed validation
+/// evidence; everything without terminal evidence counts as pending.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ValidationReport {
+    pub passed: u64,
+    pub failed: u64,
+    pub pending: u64,
+}
+
+/// Compact durable session-graph summary. No child transcripts or raw event
+/// logs are exposed here.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentGraphReport {
+    pub sessions: u64,
+    pub child_sessions: u64,
+    pub events: u64,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct ContextReport {
     pub request_tokens: Option<u64>,
@@ -135,11 +213,25 @@ impl ContextReport {
     }
 }
 
-#[derive(Debug, Default, Serialize)]
+/// Durable event range of one invocation. `scope` is always `"root"`: this
+/// range covers the root session's stream only, never child sessions.
+#[derive(Debug, Serialize)]
 pub struct EventsReport {
+    pub scope: &'static str,
     pub first_sequence: u64,
     pub last_sequence: u64,
     pub count: u64,
+}
+
+impl Default for EventsReport {
+    fn default() -> Self {
+        Self {
+            scope: "root",
+            first_sequence: 0,
+            last_sequence: 0,
+            count: 0,
+        }
+    }
 }
 
 impl EventsReport {
@@ -149,6 +241,7 @@ impl EventsReport {
             return Self::default();
         }
         Self {
+            scope: "root",
             first_sequence: pre + 1,
             last_sequence: post,
             count: post - pre,
@@ -174,10 +267,12 @@ pub struct MachineResult {
     pub workspace: String,
     pub status: RunStatus,
     pub profile: Option<ProfileReport>,
+    pub task: Option<TaskReport>,
     pub result: ResultReport,
-    pub usage: UsageReport,
+    pub usage: UsageScopes,
     pub context: ContextReport,
     pub events: EventsReport,
+    pub agent_graph: Option<AgentGraphReport>,
     pub error: Option<ErrorReport>,
 }
 
@@ -191,10 +286,12 @@ impl MachineResult {
             workspace,
             status: RunStatus::ConfigurationError,
             profile: None,
+            task: None,
             result: ResultReport::default(),
-            usage: UsageReport::default(),
+            usage: UsageScopes::default(),
             context: ContextReport::default(),
             events: EventsReport::default(),
+            agent_graph: None,
             error: None,
         }
     }
@@ -300,6 +397,16 @@ pub fn reasoning_effort_name(effort: latch_protocol::ReasoningEffort) -> String 
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| effort.label().to_owned())
+}
+
+/// The wire (snake_case) name of a durable completion state. Never a debug
+/// string.
+#[must_use]
+pub fn completion_name(completion: &latch_protocol::CompletionState) -> String {
+    serde_json::to_value(completion)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 /// The snake_case serde tag stored for a durable event payload, derived from

@@ -9,8 +9,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 enum Turn {
@@ -21,9 +21,16 @@ enum Turn {
     },
 }
 
+/// One scripted model response.
+struct MockResponse {
+    turn: Turn,
+    usage: Option<Value>,
+}
+
 struct MockProvider {
     base_url: String,
     hits: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockProvider {
@@ -36,26 +43,44 @@ impl MockProvider {
             !turns.is_empty(),
             "the mock provider needs at least one turn"
         );
+        let turns = Arc::new(turns);
+        let usage = Arc::new(usage);
+        Self::start_with_responder(delay, move |index, _body| {
+            let turn = turns[index.min(turns.len() - 1)].clone();
+            MockResponse {
+                turn,
+                usage: (*usage).clone(),
+            }
+        })
+    }
+
+    /// Serves responses from a per-request responder that sees the request
+    /// body. The responder index is the request ordinal across all sessions.
+    fn start_with_responder<F>(delay: std::time::Duration, responder: F) -> Self
+    where
+        F: Fn(usize, &str) -> MockResponse + Send + Sync + 'static,
+    {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock provider");
         let addr = listener.local_addr().expect("mock provider address");
-        let turns = Arc::new(turns);
         let hits = Arc::new(AtomicUsize::new(0));
-        let usage = Arc::new(usage);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let responder = Arc::new(responder);
         {
-            let turns = Arc::clone(&turns);
             let hits = Arc::clone(&hits);
-            let usage = Arc::clone(&usage);
+            let requests = Arc::clone(&requests);
+            let responder = Arc::clone(&responder);
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
                     let Ok(mut stream) = stream else { continue };
-                    let _ = read_request_body(&mut stream);
+                    let body = read_request_body(&mut stream).unwrap_or_default();
                     let index = hits.fetch_add(1, Ordering::SeqCst);
+                    requests.lock().expect("request log").push(body.clone());
                     if !delay.is_zero() {
                         std::thread::sleep(delay);
                     }
-                    let turn = &turns[index.min(turns.len() - 1)];
-                    let response = sse_response(turn, &usage);
-                    let _ = stream.write_all(response.as_bytes());
+                    let response = responder(index, &body);
+                    let sse = sse_response(&response.turn, &response.usage);
+                    let _ = stream.write_all(sse.as_bytes());
                     let _ = stream.flush();
                 }
             });
@@ -63,11 +88,16 @@ impl MockProvider {
         Self {
             base_url: format!("http://{addr}/v1"),
             hits,
+            requests,
         }
     }
 
     fn hits(&self) -> usize {
         self.hits.load(Ordering::SeqCst)
+    }
+
+    fn requests(&self) -> Vec<String> {
+        self.requests.lock().expect("request log").clone()
     }
 }
 
@@ -145,12 +175,19 @@ fn fixture_delayed(
     safety: &str,
     delay: std::time::Duration,
 ) -> Fixture {
+    fixture_with_mock(
+        MockProvider::start_with_delay(turns, usage, delay),
+        safety,
+        "",
+    )
+}
+
+fn fixture_with_mock(mock: MockProvider, safety: &str, extra_config: &str) -> Fixture {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().to_path_buf();
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let state_dir = root.join("state");
-    let mock = MockProvider::start_with_delay(turns, usage, delay);
     let config_path = root.join("config.toml");
     let text = format!(
         "state_dir = \"{state}\"\n\
@@ -170,7 +207,8 @@ fn fixture_delayed(
          mode = \"human\"\n\
          \n\
          [safety]\n\
-         level = \"{safety}\"\n",
+         level = \"{safety}\"\n\
+         {extra_config}",
         state = state_dir.display(),
         base = mock.base_url,
     );
@@ -343,7 +381,7 @@ fn run_json_emits_one_versioned_object() {
         "secrets must never appear in structured output"
     );
     let value = stdout_json(&output);
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["command"], "run");
     assert_eq!(value["status"], "completed");
     assert_eq!(value["workspace"], workspace);
@@ -351,15 +389,188 @@ fn run_json_emits_one_versioned_object() {
     assert_eq!(value["profile"]["provider"], "mock");
     assert_eq!(value["profile"]["model"], "mock-model");
     assert_eq!(value["result"]["text"], "json answer");
-    assert_eq!(value["usage"]["input_tokens"], 11);
-    assert_eq!(value["usage"]["output_tokens"], 7);
-    assert_eq!(value["usage"]["cache_read_tokens"], 3);
-    assert_eq!(value["usage"]["cache_miss_tokens"], 8);
-    assert!(value["usage"]["cache_write_tokens"].is_null());
+    // `status` describes the invocation; `task` is the durable kernel state,
+    // which is still in progress because the model never claimed completion.
+    assert_eq!(value["task"]["completion"], "in_progress");
+    assert_eq!(value["task"]["goal"], "hi there");
+    assert_eq!(value["task"]["evidence_count"], 0);
+    assert_eq!(value["task"]["validation"]["passed"], 0);
+    assert_eq!(value["task"]["validation"]["failed"], 0);
+    assert_eq!(value["task"]["validation"]["pending"], 0);
+    // Usage is scoped: root only vs. the whole durable session graph.
+    assert_eq!(value["usage"]["scope"], "graph");
+    assert_eq!(value["usage"]["root"]["input_tokens"], 11);
+    assert_eq!(value["usage"]["root"]["output_tokens"], 7);
+    assert_eq!(value["usage"]["root"]["cache_read_tokens"], 3);
+    assert_eq!(value["usage"]["root"]["cache_miss_tokens"], 8);
+    assert!(value["usage"]["root"]["cache_write_tokens"].is_null());
+    assert_eq!(value["usage"]["graph"]["input_tokens"], 11);
+    assert_eq!(value["usage"]["graph"]["output_tokens"], 7);
+    assert_eq!(value["usage"]["graph"]["cache_read_tokens"], 3);
+    assert_eq!(value["usage"]["graph"]["cache_miss_tokens"], 8);
+    assert!(value["usage"]["graph"]["cache_write_tokens"].is_null());
     assert!(value["context"]["request_tokens"].as_u64().unwrap() > 0);
     assert!(value["context"]["cache_epoch"].is_u64());
+    assert_eq!(value["events"]["scope"], "root");
     assert!(value["events"]["count"].as_u64().unwrap() >= 2);
+    assert_eq!(value["agent_graph"]["sessions"], 1);
+    assert_eq!(value["agent_graph"]["child_sessions"], 0);
+    assert!(value["agent_graph"]["events"].as_u64().unwrap() >= 2);
     assert!(value["error"].is_null());
+}
+
+#[test]
+fn durable_task_state_is_reported_after_the_model_updates_it() {
+    let fixture = fixture(
+        vec![
+            Turn::ToolCall {
+                name: "task_update",
+                arguments: json!({"required_validations": ["unit tests pass"]}),
+            },
+            Turn::ToolCall {
+                name: "record_evidence",
+                arguments: json!({
+                    "claim": "kept a note",
+                    "status": "pending",
+                    "detail": "not verified yet",
+                }),
+            },
+            Turn::ToolCall {
+                name: "complete",
+                arguments: json!({"implementation_done": true}),
+            },
+            Turn::Text("finished"),
+        ],
+        None,
+        "standard",
+    );
+    let workspace = workspace_arg(&fixture);
+    let output = run_latch(
+        &fixture,
+        &[
+            "run",
+            "--prompt",
+            "implement the change",
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr_text(&output));
+    let value = stdout_json(&output);
+    assert_eq!(value["status"], "completed");
+    // The durable state the kernel actually holds, not the run outcome.
+    assert_eq!(value["task"]["completion"], "implemented_not_verified");
+    assert_eq!(value["task"]["goal"], "implement the change");
+    assert_eq!(value["task"]["evidence_count"], 1);
+    assert_eq!(value["task"]["validation"]["passed"], 0);
+    assert_eq!(value["task"]["validation"]["failed"], 0);
+    assert_eq!(value["task"]["validation"]["pending"], 1);
+}
+
+const ROOT_MARKER: &str = "ROOT-ORCHESTRATE-MARKER-7";
+
+#[test]
+fn multi_agent_usage_aggregates_root_and_graph() {
+    let root_usage = json!({
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "prompt_cache_hit_tokens": 40,
+        "prompt_cache_miss_tokens": 60,
+    });
+    let child_usage = json!({
+        "prompt_tokens": 50,
+        "completion_tokens": 5,
+    });
+    let root_requests = Arc::new(AtomicUsize::new(0));
+    let mock = {
+        let root_requests = Arc::clone(&root_requests);
+        MockProvider::start_with_responder(std::time::Duration::ZERO, move |_index, body| {
+            if body.contains(ROOT_MARKER) {
+                let request = root_requests.fetch_add(1, Ordering::SeqCst);
+                let turn = match request {
+                    0 => Turn::ToolCall {
+                        name: "spawn_agent",
+                        arguments: json!({
+                            "task_name": "child work",
+                            "message": "Do the child work. Reply with CHILD-DONE.",
+                        }),
+                    },
+                    1 => Turn::ToolCall {
+                        name: "wait_agents",
+                        arguments: json!({"timeout_ms": 30_000}),
+                    },
+                    _ => Turn::Text("root answer"),
+                };
+                MockResponse {
+                    turn,
+                    usage: Some(root_usage.clone()),
+                }
+            } else {
+                assert!(body.contains("CHILD-DONE"), "unexpected request: {body}");
+                MockResponse {
+                    turn: Turn::Text("child answer"),
+                    usage: Some(child_usage.clone()),
+                }
+            }
+        })
+    };
+    let fixture = fixture_with_mock(mock, "standard", "");
+    let workspace = workspace_arg(&fixture);
+    let output = run_latch(
+        &fixture,
+        &[
+            "run",
+            "--prompt",
+            ROOT_MARKER,
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr_text(&output));
+
+    let requests = fixture.mock.requests();
+    let root_hits = requests
+        .iter()
+        .filter(|body| body.contains(ROOT_MARKER))
+        .count() as u64;
+    let child_hits = requests.len() as u64 - root_hits;
+    assert!(root_hits >= 3, "spawn, wait, and final: {root_hits}");
+    assert_eq!(child_hits, 1, "the child makes exactly one request");
+
+    let value = stdout_json(&output);
+    // Every root response reports the same usage, so totals are exact.
+    assert_eq!(value["usage"]["root"]["input_tokens"], root_hits * 100);
+    assert_eq!(value["usage"]["root"]["output_tokens"], root_hits * 10);
+    assert_eq!(value["usage"]["root"]["cache_read_tokens"], root_hits * 40);
+    assert_eq!(value["usage"]["root"]["cache_miss_tokens"], root_hits * 60);
+    assert!(value["usage"]["root"]["cache_write_tokens"].is_null());
+    assert_eq!(
+        value["usage"]["graph"]["input_tokens"],
+        root_hits * 100 + child_hits * 50
+    );
+    assert_eq!(
+        value["usage"]["graph"]["output_tokens"],
+        root_hits * 10 + child_hits * 5
+    );
+    // The child never reported cache categories: they stay the root's known
+    // values instead of being fabricated as zero.
+    assert_eq!(value["usage"]["graph"]["cache_read_tokens"], root_hits * 40);
+    assert_eq!(value["usage"]["graph"]["cache_miss_tokens"], root_hits * 60);
+    assert!(value["usage"]["graph"]["cache_write_tokens"].is_null());
+    assert_eq!(value["usage"]["scope"], "graph");
+
+    assert_eq!(value["events"]["scope"], "root");
+    assert_eq!(value["agent_graph"]["sessions"], 2);
+    assert_eq!(value["agent_graph"]["child_sessions"], 1);
+    assert!(
+        value["agent_graph"]["events"].as_u64().unwrap()
+            > value["events"]["count"].as_u64().unwrap(),
+        "the graph summary covers child events the root range does not"
+    );
 }
 
 #[test]
@@ -931,4 +1142,104 @@ fn sessions_reject_jsonl_output() {
     let output = run_latch(&fixture, &["sessions", "list", "--output", "jsonl"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr_text(&output).contains("text or --output json"));
+}
+
+#[test]
+fn malformed_config_is_a_configuration_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    std::fs::write(&config_path, "this is not = = toml").expect("write config");
+    let output = Command::new(env!("CARGO_BIN_EXE_latch"))
+        .arg("--config")
+        .arg(&config_path)
+        .args(["run", "--prompt", "hi", "--output", "json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run latch");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr: {}",
+        stderr_text(&output)
+    );
+    let value = stdout_json(&output);
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["status"], "configuration_error");
+    assert!(value["task"].is_null());
+    assert!(value["error"]["message"].is_string());
+}
+
+#[test]
+fn unknown_provider_selection_is_a_configuration_error() {
+    let fixture = fixture(vec![Turn::Text("unused")], None, "standard");
+    let workspace = workspace_arg(&fixture);
+    let output = run_latch(
+        &fixture,
+        &[
+            "run",
+            "--prompt",
+            "hi",
+            "--provider",
+            "missing",
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr: {}",
+        stderr_text(&output)
+    );
+    let value = stdout_json(&output);
+    assert_eq!(value["status"], "configuration_error");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing")
+    );
+}
+
+#[test]
+fn extension_initialization_failure_is_a_runtime_failure() {
+    let mock =
+        MockProvider::start_with_delay(vec![Turn::Text("unused")], None, std::time::Duration::ZERO);
+    let fixture = fixture_with_mock(
+        mock,
+        "standard",
+        "\n[[extensions]]\nname = \"broken\"\ncommand = \"/nonexistent/latch-extension\"\nargs = []\n",
+    );
+    let workspace = workspace_arg(&fixture);
+    let output = run_latch(
+        &fixture,
+        &[
+            "run",
+            "--prompt",
+            "hi",
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "runtime initialization failure must exit 1, not 2\nstderr: {}",
+        stderr_text(&output)
+    );
+    let value = stdout_json(&output);
+    assert_eq!(value["status"], "failed");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("initialize extension broken"), "{message}");
+    assert_eq!(
+        fixture.mock.hits(),
+        0,
+        "initialization fails before any model request"
+    );
 }

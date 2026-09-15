@@ -9,19 +9,23 @@
 
 use crate::cli::command::{Args, OutputFormat, PromptArgs, ResumeArgs, RunArgs};
 use crate::cli::output::{
-    ContextReport, ErrorReport, EventsReport, MachineResult, Reporter, RunStatus, UsageAggregate,
-    exit_code,
+    AgentGraphReport, ContextReport, ErrorReport, EventsReport, MachineResult, Reporter, RunStatus,
+    TaskReport, UsageAggregate, UsageScopes, ValidationReport, completion_name, exit_code,
 };
 use crate::cli::session::{
-    ProfileOverrides, SelectedSession, SessionRequest, build_agent, ingest_attachments,
-    resolve_workspace, select_session,
+    ProfileOverrides, SelectedSession, SessionBuildError, SessionRequest, build_agent,
+    ingest_attachments, resolve_workspace, select_session,
 };
-use latch_kernel::{AgentEventSink, Config, EventStore, agent::AgentOutput};
-use latch_protocol::{EventPayload, InferenceProfile, StreamEvent, UserInput};
+use latch_kernel::{AgentEventSink, Config, EventStore, EvidenceLedger, agent::AgentOutput};
+use latch_protocol::{
+    EventPayload, EvidenceStatus, InferenceProfile, StreamEvent, TaskState, UserInput,
+};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 const PERMISSION_MESSAGE: &str = "permission denied: a required operation needs interactive approval, which machine mode \
      cannot provide; nothing was auto-approved. Choose a narrower operation or configure an \
@@ -121,23 +125,38 @@ fn prompt_source(prompt: PromptArgs) -> Option<PromptSource> {
 }
 
 enum MachineError {
-    Usage(String),
+    /// Invalid CLI input, config, provider/model selection, or selectors:
+    /// nothing about the runtime can fix it (exit 2).
+    Configuration(String),
+    /// The configuration resolved, but initialization or execution failed
+    /// (exit 1): durable storage, tool/extension setup, provider startup, or
+    /// the kernel run itself.
     Runtime(String),
 }
 
 impl MachineError {
-    fn usage(message: impl std::fmt::Display) -> Self {
-        Self::Usage(message.to_string())
+    fn configuration(message: impl std::fmt::Display) -> Self {
+        Self::Configuration(message.to_string())
+    }
+
+    fn runtime(message: impl std::fmt::Display) -> Self {
+        Self::Runtime(message.to_string())
     }
 
     fn from_anyhow(error: anyhow::Error) -> Self {
-        Self::Usage(format!("{error:#}"))
+        Self::Configuration(format!("{error:#}"))
+    }
+
+    fn from_build(error: SessionBuildError) -> Self {
+        match error {
+            SessionBuildError::Configuration(error) => Self::Configuration(format!("{error:#}")),
+            SessionBuildError::Runtime(error) => Self::Runtime(format!("{error:#}")),
+        }
     }
 }
 
 #[derive(Default)]
 struct Telemetry {
-    usage: UsageAggregate,
     context: Option<ContextReport>,
     permission_denied: bool,
 }
@@ -147,7 +166,7 @@ pub async fn execute(request: MachineRequest) -> ExitCode {
     let mut result = MachineResult::new(request.command, workspace_label(&request));
     if let Err(error) = run(&request, reporter, &mut result).await {
         match error {
-            MachineError::Usage(message) => {
+            MachineError::Configuration(message) => {
                 result.fail(RunStatus::ConfigurationError, message);
             }
             MachineError::Runtime(message) => {
@@ -173,7 +192,7 @@ async fn run(
     let requested_workspace = match &request.workspace {
         Some(path) => resolve_workspace(path).map_err(MachineError::from_anyhow)?,
         None => std::env::current_dir()
-            .map_err(|error| MachineError::usage(format!("current directory: {error}")))?,
+            .map_err(|error| MachineError::configuration(format!("current directory: {error}")))?,
     };
     result.workspace = requested_workspace.display().to_string();
 
@@ -216,7 +235,7 @@ async fn run(
     };
     let mut built = build_agent(&workspace, &config, &overrides, resume_session, false)
         .await
-        .map_err(MachineError::from_anyhow)?;
+        .map_err(MachineError::from_build)?;
     let session_id = built.agent.session_id;
     result.session_id = Some(session_id);
     result.profile = Some(profile_report(&built.info.profile));
@@ -252,9 +271,40 @@ async fn run(
         run_error = Some(format!("shutdown extensions: {error:#}"));
     }
 
+    // Durable semantics after the run. `status` describes this invocation;
+    // `task` is the kernel's canonical state, which can still be in progress.
+    result.task = Some(task_report(built.agent.state(), built.agent.evidence()));
+
+    // Usage is aggregated from durable `ModelUsage` events, never from the
+    // live sink, so child sessions, resumed workers, and interrupted agents
+    // contribute exactly what they consumed and never twice.
+    let root_usage = durable_usage(&store, session_id).map_err(MachineError::runtime)?;
+    let mut graph_usage = root_usage.clone();
+    let children = graph_children(&store, session_id).map_err(MachineError::runtime)?;
+    let mut graph_events = store
+        .event_count(session_id)
+        .map_err(|error| MachineError::runtime(format!("{error:#}")))?
+        as u64;
+    for child in &children {
+        graph_usage.merge(&durable_usage(&store, *child).map_err(MachineError::runtime)?);
+        graph_events += store
+            .event_count(*child)
+            .map_err(|error| MachineError::runtime(format!("{error:#}")))?
+            as u64;
+    }
+    result.usage = UsageScopes {
+        scope: "graph",
+        root: root_usage.report(),
+        graph: graph_usage.report(),
+    };
+    result.agent_graph = Some(AgentGraphReport {
+        sessions: children.len() as u64 + 1,
+        child_sessions: children.len() as u64,
+        events: graph_events,
+    });
+
     {
         let telemetry = telemetry.lock().expect("telemetry mutex poisoned");
-        result.usage = telemetry.usage.report();
         if let Some(context) = &telemetry.context {
             result.context = ContextReport {
                 request_tokens: context.request_tokens,
@@ -292,24 +342,71 @@ async fn run(
 
 async fn resolve_prompt(request: &MachineRequest) -> Result<String, MachineError> {
     let source = request.prompt.as_ref().ok_or_else(|| {
-        MachineError::Usage("no prompt source: pass --prompt, --prompt-file, or --stdin".to_owned())
+        MachineError::configuration(
+            "no prompt source: pass --prompt, --prompt-file, or --stdin".to_owned(),
+        )
     })?;
     let text = match source {
         PromptSource::Inline(text) => text.clone(),
-        PromptSource::File(path) => std::fs::read_to_string(path)
-            .map_err(|error| MachineError::usage(format!("read {}: {error}", path.display())))?,
+        PromptSource::File(path) => std::fs::read_to_string(path).map_err(|error| {
+            MachineError::configuration(format!("read {}: {error}", path.display()))
+        })?,
         PromptSource::Stdin => {
             let mut buffer = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)
-                .map_err(|error| MachineError::usage(format!("read stdin: {error}")))?;
+                .map_err(|error| MachineError::configuration(format!("read stdin: {error}")))?;
             buffer
         }
     };
     let text = text.trim_end_matches(['\n', '\r']).to_owned();
     if text.trim().is_empty() {
-        return Err(MachineError::usage("prompt is empty"));
+        return Err(MachineError::configuration("prompt is empty"));
     }
     Ok(text)
+}
+
+/// One session's durable usage, summed exactly as `ModelUsage` events report
+/// it. Absent categories stay `None`.
+fn durable_usage(store: &EventStore, session: Uuid) -> anyhow::Result<UsageAggregate> {
+    let mut aggregate = UsageAggregate::default();
+    for event in store.events_of_kinds(session, &["model_usage"])? {
+        if let EventPayload::ModelUsage { usage } = &event.payload {
+            aggregate.observe(usage);
+        }
+    }
+    Ok(aggregate)
+}
+
+/// Durable child sessions of a root, derived from the persisted spawn graph
+/// (`AgentSpawned` identity), deduplicated. The kernel's maximum depth is 1,
+/// and every spawn records the root, so this covers the whole graph.
+fn graph_children(store: &EventStore, root: Uuid) -> anyhow::Result<Vec<Uuid>> {
+    let mut children = BTreeSet::new();
+    for event in store.agent_events(root)? {
+        if let EventPayload::AgentSpawned { identity, .. } = &event.payload
+            && identity.root_session_id == root
+        {
+            children.insert(identity.agent_id);
+        }
+    }
+    Ok(children.into_iter().collect())
+}
+
+fn task_report(state: &TaskState, evidence: &EvidenceLedger) -> TaskReport {
+    let mut validation = ValidationReport::default();
+    for requirement in &state.required_validations {
+        match evidence.status_of(requirement) {
+            Some(EvidenceStatus::Passed) => validation.passed += 1,
+            Some(EvidenceStatus::Failed) => validation.failed += 1,
+            _ => validation.pending += 1,
+        }
+    }
+    TaskReport {
+        completion: completion_name(&state.completion),
+        goal: (!state.goal.trim().is_empty()).then(|| state.goal.clone()),
+        evidence_count: evidence.entries().len() as u64,
+        validation,
+    }
 }
 
 fn machine_sink(reporter: Reporter, telemetry: Arc<Mutex<Telemetry>>) -> AgentEventSink {
@@ -319,13 +416,6 @@ fn machine_sink(reporter: Reporter, telemetry: Arc<Mutex<Telemetry>>) -> AgentEv
         AgentOutput::ToolResult(result) => reporter.tool_result(&result),
         AgentOutput::Durable(event) => {
             match &event.payload {
-                EventPayload::ModelUsage { usage } => {
-                    telemetry
-                        .lock()
-                        .expect("telemetry mutex poisoned")
-                        .usage
-                        .observe(usage);
-                }
                 EventPayload::ContextMaterialized { stats } => {
                     telemetry.lock().expect("telemetry mutex poisoned").context =
                         Some(ContextReport::from_stats(stats));

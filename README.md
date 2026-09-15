@@ -136,15 +136,36 @@ cat task.txt | latch run --workspace ./fixture --stdin --output jsonl
 selection, policy, prompt compilation, and tools, so callers never need to
 `cd` first. `--output text` (the default) preserves the historical one-shot
 behavior and streams assistant text to stdout. `--output json` prints exactly
-one versioned object (`"schema_version": 1`) carrying the command, session id,
-workspace, status, resolved provider/model/effort, result text, provider
-usage, context accounting, and the durable event range of the run.
+one versioned object (`"schema_version": 2`) carrying the command, session id,
+workspace, run status, resolved provider/model/effort, durable task state,
+result text, scoped usage, context accounting, and event/graph summaries.
 `--output jsonl` streams semantic records (`text_delta`, `tool_result`,
 `durable_event`, `final`); every line is standalone JSON and an orderly
-terminal state always ends with the `final` record. Provider usage categories
-the endpoint did not report stay `null` instead of being fabricated as zero.
-Logs and diagnostics always go to stderr, so stdout stays parseable even with
-`RUST_LOG` set.
+terminal state always ends with the `final` record. Logs and diagnostics
+always go to stderr, so stdout stays parseable even with `RUST_LOG` set.
+
+Two distinctions matter for benchmark consumers:
+
+```text
+run status != durable task completion
+root usage != graph usage
+```
+
+`status` describes the invocation only: `status=completed` means it terminated
+normally, not that the task is done. Use `task.completion` for Latch's durable
+kernel state (`in_progress`, `implemented_not_verified`, `verified`, or
+`blocked`), alongside `task.goal`, `task.evidence_count`, and a
+`task.validation` passed/failed/pending summary.
+
+Usage is explicitly scoped. `usage.scope` is `"graph"`; `usage.root`
+aggregates durable `ModelUsage` events for the root session only, while
+`usage.graph` adds every durable child session belonging to that root. Both
+aggregate durable history, so resumed, interrupted, and failed children
+contribute exactly what they consumed and never twice, and provider categories
+that were never reported stay `null` instead of being fabricated as zero.
+`events.scope` is always `"root"`: its range and count cover the root session's
+stream only. `agent_graph` reports `sessions`, `child_sessions`, and total
+graph `events` without exposing child transcripts.
 
 Durable sessions can be inspected without the TUI or a TTY:
 
@@ -159,8 +180,8 @@ the authoritative detail:
 | Code | Meaning |
 | ---- | ------- |
 | 0 | completed |
-| 1 | runtime/model/tool failure |
-| 2 | CLI or configuration error |
+| 1 | runtime failure: storage, tool/extension setup, provider startup, or the run itself |
+| 2 | CLI/configuration error: arguments, config, provider/model/profile, workspace, prompt source, session selector |
 | 3 | permission unresolved: denied, never auto-approved |
 | 4 | cancelled |
 

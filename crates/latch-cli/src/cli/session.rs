@@ -33,6 +33,46 @@ pub struct ProfileOverrides {
     pub config_path: Option<PathBuf>,
 }
 
+/// Why constructing a session failed, classified for the machine CLI:
+///
+/// - [`Self::Configuration`]: invalid CLI/config/provider/model/credential
+///   input that no runtime setup can fix (exit 2).
+/// - [`Self::Runtime`]: the configuration resolved, but durable storage,
+///   tools, extensions, or the agent graph failed to initialize or restore
+///   (exit 1).
+///
+/// The interactive TUI does not distinguish them; it collapses both into one
+/// `anyhow` error through the [`From`] conversion.
+#[derive(Debug)]
+pub enum SessionBuildError {
+    Configuration(anyhow::Error),
+    Runtime(anyhow::Error),
+}
+
+impl std::fmt::Display for SessionBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Configuration(error) | Self::Runtime(error) => write!(f, "{error:#}"),
+        }
+    }
+}
+
+impl std::error::Error for SessionBuildError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Configuration(error) | Self::Runtime(error) => error.source(),
+        }
+    }
+}
+
+fn configuration<T>(result: anyhow::Result<T>) -> Result<T, SessionBuildError> {
+    result.map_err(SessionBuildError::Configuration)
+}
+
+fn runtime<T>(result: anyhow::Result<T>) -> Result<T, SessionBuildError> {
+    result.map_err(SessionBuildError::Runtime)
+}
+
 /// Everything needed to resolve and switch inference profiles at runtime.
 pub struct InferenceContext {
     pub registry: ProviderRegistry,
@@ -330,30 +370,30 @@ pub async fn build_agent(
     overrides: &ProfileOverrides,
     resume_session: Option<Uuid>,
     interactive: bool,
-) -> Result<BuiltSession> {
+) -> Result<BuiltSession, SessionBuildError> {
     let db = config.state_dir.join("latch.sqlite3");
-    let store = EventStore::open(&db)?;
+    let store = runtime(EventStore::open(&db))?;
     let mut restored = None;
     let resume = resume_session.is_some();
     let session_id = if let Some(session) = resume_session {
         // Approval requests that were pending at exit can no longer be
         // answered; mark them durably before the transcript replay so resume
         // shows honest state instead of a phantom prompt.
-        let expired = Agent::expire_pending_permissions(&store, session)?;
+        let expired = runtime(Agent::expire_pending_permissions(&store, session))?;
         if expired > 0 {
             tracing::info!("expired {expired} unresolved permission request(s)");
         }
-        let events = store.events(session)?;
-        store.append(session, EventPayload::SessionResumed)?;
-        for (id, description) in store.interrupted_operations(session)? {
-            store.append(
+        let events = runtime(store.events(session))?;
+        runtime(store.append(session, EventPayload::SessionResumed))?;
+        for (id, description) in runtime(store.interrupted_operations(session))? {
+            runtime(store.append(
                 session,
                 EventPayload::OperationInterrupted {
                     operation_id: id,
                     description,
                 },
-            )?;
-            store.mark_operation_reported(id)?;
+            ))?;
+            runtime(store.mark_operation_reported(id))?;
         }
         restored = Some(Restored {
             events: events.clone(),
@@ -361,15 +401,15 @@ pub async fn build_agent(
         });
         session
     } else {
-        let session = store.create_session(workspace)?;
+        let session = runtime(store.create_session(workspace))?;
         let (head, dirty_paths) = observe_git(workspace);
-        store.append(
+        runtime(store.append(
             session,
             EventPayload::GitStateObserved { head, dirty_paths },
-        )?;
+        ))?;
         session
     };
-    let events = store.events(session_id)?;
+    let events = runtime(store.events(session_id))?;
     // Mode precedence (both fresh and resumed): explicit CLI --mode > the
     // session's durable mode history > configured default.
     let mode = session::resumed_mode(&events, overrides.mode, config.default_mode);
@@ -377,8 +417,12 @@ pub async fn build_agent(
     // Inference profile precedence: explicit CLI override > the session's own
     // durable profile > configured default. Credentials are resolved fresh
     // from the environment/local store at this moment and are never persisted.
-    let context = InferenceContext::new(config.clone(), overrides.config_path.clone())?;
-    let (default_profile, _default_descriptor) = context.registry.default_profile(config)?;
+    let context = configuration(InferenceContext::new(
+        config.clone(),
+        overrides.config_path.clone(),
+    ))?;
+    let (default_profile, _default_descriptor) =
+        configuration(context.registry.default_profile(config))?;
     let resumed_profile = resume
         .then(|| session::resumed_inference_profile(&events))
         .flatten();
@@ -398,12 +442,14 @@ pub async fn build_agent(
         overridden = true;
     }
     if let Some(effort) = &overrides.effort {
-        requested.effort = effort
-            .parse::<ReasoningEffort>()
-            .map_err(anyhow::Error::msg)?;
+        requested.effort = configuration(
+            effort
+                .parse::<ReasoningEffort>()
+                .map_err(anyhow::Error::msg),
+        )?;
         overridden = true;
     }
-    let (profile, descriptor) = context.resolve(&requested)?;
+    let (profile, descriptor) = configuration(context.resolve(&requested))?;
     let provider = match context.build(&profile, &descriptor, session_id) {
         Ok(provider) => provider,
         Err(error) if interactive => {
@@ -414,7 +460,7 @@ pub async fn build_agent(
                 message: format!("{error:#}"),
             })
         }
-        Err(error) => return Err(error),
+        Err(error) => return Err(SessionBuildError::Configuration(error)),
     };
     let policy = PolicyEngine::with_defaults(
         mode,
@@ -423,16 +469,16 @@ pub async fn build_agent(
         config.safety.level,
     );
     let artifacts = artifact_root(config, session_id);
-    let tools = ToolExecutor::new(
+    let tools = runtime(ToolExecutor::new(
         workspace.to_path_buf(),
         artifacts.clone(),
         store.clone(),
         session_id,
         policy,
-    )?;
+    ))?;
     if resume {
         // Restore durable change ownership before anything can mutate.
-        let count = tools.restore_ownership().await?;
+        let count = runtime(tools.restore_ownership().await)?;
         tracing::info!("restored {count} owned change records");
     }
     let continuity =
@@ -453,13 +499,13 @@ pub async fn build_agent(
     if overridden {
         // A command-line override is durable provenance so a later resume
         // keeps the profile the user actually selected.
-        agent.set_inference_profile(
+        runtime(agent.set_inference_profile(
             provider,
             profile.clone(),
             &descriptor,
             config.context.clone(),
             "command line override",
-        )?;
+        ))?;
     } else {
         agent.restore_inference_profile(
             provider,
@@ -473,10 +519,12 @@ pub async fn build_agent(
         .iter()
         .filter(|extension| extension.enabled)
     {
-        agent
-            .load_extension(extension.name.clone(), &extension.command, &extension.args)
-            .await
-            .with_context(|| format!("initialize extension {}", extension.name))?;
+        runtime(
+            agent
+                .load_extension(extension.name.clone(), &extension.command, &extension.args)
+                .await
+                .with_context(|| format!("initialize extension {}", extension.name)),
+        )?;
     }
     if resume {
         // Resume restores the exact policy the session ended in; it never
@@ -503,8 +551,8 @@ pub async fn build_agent(
         // Failure supervision reconstructs its streaks so a stalled loop is
         // not silently forgotten, and progress supervision reconstructs an
         // active inspection loop.
-        agent.restore_failures()?;
-        agent.restore_progress()?;
+        runtime(agent.restore_failures())?;
+        runtime(agent.restore_progress())?;
     }
     Ok(BuiltSession {
         agent,
