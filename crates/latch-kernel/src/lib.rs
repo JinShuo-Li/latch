@@ -30,8 +30,13 @@ pub use capability::{
     CapabilityRegistry, CapabilityRequest, CapabilityScope,
 };
 pub use config::Config;
-pub use context::{ContextBudget, ContextEngine, ContextRequest, ContextView};
-pub use continuity::{ContinuityEngine, MaterializeBudget, MaterializedContext};
+pub use context::{
+    ContextBudget, ContextEngine, ContextEngineFactory, ContextEngineSpec, ContextRequest,
+    ContextView,
+};
+pub use continuity::{
+    ContinuityEngine, MaterializeBudget, MaterializedContext, continuity_context_engine_factory,
+};
 pub use credentials::{CredentialRef, CredentialStore};
 pub use media::{ArtifactMediaStore, ImageFormat, ingest_image_bytes, read_image_bytes};
 pub use permissions::PermissionBroker;

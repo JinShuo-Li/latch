@@ -42,12 +42,23 @@ port exposes no `EventStore` or SQLite handle, so a replacement engine cannot
 mutate durable session truth outside its structured view, and the agent loop
 never falls back to the default engine when another one is installed.
 
+Child sessions construct through one explicit policy: the root supervisor
+holds a single `ContextEngineFactory` — by default
+`continuity_context_engine_factory`, which is exactly
+`ContinuityEngine::for_model(...)` — and every child spawn, worker
+reconstruction, and resume builds the child engine through it from the child's
+durable/effective profile. The supervisor never constructs `ContinuityEngine`
+directly and never falls back to it when another factory is configured; a
+non-default root engine without a child policy fails child spawn instead.
+
 Everything in this document describes the reference implementation and must
 hold for it exactly as before. The port extraction changed no behavior: the CI
 invariant tier additionally pins that the provider sees exactly the view the
 configured engine returned, that the default engine is byte-identical when
-called directly or through `dyn ContextEngine`, and that the kernel does not
-append default-engine kernel context behind a replacement's back.
+called directly or through `dyn ContextEngine`, that the kernel does not
+append default-engine kernel context behind a replacement's back, that a
+configured factory governs spawned and resumed children, and that the default
+factory matches `ContinuityEngine::for_model(...)`.
 
 ## Bounded materialization
 

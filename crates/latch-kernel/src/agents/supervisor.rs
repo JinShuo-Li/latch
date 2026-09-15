@@ -5,7 +5,7 @@ use super::profile::{DelegationContext, delegation_brief};
 use super::worker::{WorkerCommand, run_worker};
 use crate::agent::Agent;
 use crate::config::ContextConfig;
-use crate::continuity::ContinuityEngine;
+use crate::context::{ContextEngineFactory, ContextEngineSpec};
 use crate::provider::ModelProvider;
 use crate::providers::ModelDescriptor;
 use crate::store::{AgentSessionSpec, EventStore};
@@ -68,6 +68,11 @@ pub(super) struct SupervisorInner {
     /// Rebuilds a provider from a child's durable profile. `None` means the
     /// process cannot reconstruct non-current profiles.
     pub provider_factory: RwLock<Option<ProviderFactory>>,
+    /// The one context-engine policy for every child of this root: spawns,
+    /// worker reconstruction, and resume all construct through it. It defaults
+    /// to the Latch continuity policy and is replaced explicitly when a caller
+    /// selects a different root context engine.
+    context_factory: RwLock<ContextEngineFactory>,
     pub tools: ToolExecutor,
     pub settings: RwLock<WorkerSettings>,
     pub graph: Mutex<AgentGraph>,
@@ -118,6 +123,7 @@ impl AgentSupervisor {
         provider: Arc<dyn ModelProvider>,
         tools: ToolExecutor,
         settings: WorkerSettings,
+        context_factory: ContextEngineFactory,
     ) -> Result<Self> {
         let graph_events = store.agent_events(root_session_id)?;
         let mut graph = AgentGraph::replay(&graph_events);
@@ -158,6 +164,7 @@ impl AgentSupervisor {
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "group".into());
         let group = GroupCoordinator::new(store.clone(), root_session_id, group_name)?;
+        let context_factory = RwLock::new(context_factory);
         Ok(Self {
             inner: Arc::new(SupervisorInner {
                 root_session_id,
@@ -165,6 +172,7 @@ impl AgentSupervisor {
                 store,
                 provider: RwLock::new(provider),
                 provider_factory: RwLock::new(None),
+                context_factory,
                 tools,
                 settings: RwLock::new(settings),
                 graph: Mutex::new(graph),
@@ -206,6 +214,16 @@ impl AgentSupervisor {
         *self
             .inner
             .provider_factory
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = factory;
+    }
+
+    /// Replaces the context-engine policy for every child constructed from now
+    /// on, including workers rebuilt after a restart and resumed children.
+    pub(crate) fn set_context_engine_factory(&self, factory: ContextEngineFactory) {
+        *self
+            .inner
+            .context_factory
             .write()
             .unwrap_or_else(|e| e.into_inner()) = factory;
     }
@@ -687,11 +705,31 @@ impl AgentSupervisor {
             (build.provider, Some(build.descriptor))
         };
         let tools = self.inner.tools.for_child(identity.agent_id)?;
-        let continuity = ContinuityEngine::for_model(
-            self.inner.store.clone(),
-            settings.context.clone(),
-            provider.model(),
-        );
+        // The child's context engine always comes from the root's configured
+        // policy, priced for the child's effective profile. There is no direct
+        // `ContinuityEngine` construction here and no fallback path: if the
+        // factory fails, the child fails to start.
+        let context_engine = {
+            let factory = self
+                .inner
+                .context_factory
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            factory(&ContextEngineSpec {
+                session_id: identity.agent_id,
+                profile: &profile,
+                context: &settings.context,
+            })
+            .map_err(|error| {
+                // Tool results surface only the top-level message, so the
+                // whole cause chain must be visible here.
+                anyhow!(
+                    "build context engine for child {}: {error:#}",
+                    identity.agent_id
+                )
+            })?
+        };
         let mut agent = Agent::new_child(
             crate::agent::AgentRuntime {
                 session_id: identity.agent_id,
@@ -700,7 +738,7 @@ impl AgentSupervisor {
                 store: self.inner.store.clone(),
                 provider,
                 tools,
-                continuity,
+                continuity: context_engine,
                 retry_budget: settings.retry_budget,
             },
             identity.depth,

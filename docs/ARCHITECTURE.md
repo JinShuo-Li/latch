@@ -364,10 +364,18 @@ port exposes no `EventStore` or SQLite handle, so a replacement engine (for
 example a remote context service) cannot mutate durable session truth outside
 its structured view. Implementing the port is kernel-authority work and is
 operator-installed, never model- or extension-supplied. `AgentRuntime` accepts
-any engine (the default remains `ContinuityEngine`), and the CI invariant tier
-pins port replaceability, provider-visible parity, and byte-identical default
-behavior. See [`RUNTIME_CAPABILITY_MODEL.md`](RUNTIME_CAPABILITY_MODEL.md) for
-the surrounding capability model and planned ports.
+any engine (the default remains `ContinuityEngine`), and replacement is
+runtime-wide: `Agent::set_context_engine_factory` installs the single
+`ContextEngineFactory` policy that `AgentSupervisor` applies to every child
+spawn, worker reconstruction, and process resume, priced for the child's
+effective inference profile. `ContinuityEngine` roots default to the identical
+continuity factory (`ContinuityEngine::for_model(...)`), and a non-default root
+engine without a configured child policy fails child spawn instead of silently
+falling back. The CI invariant tier pins port replaceability, provider-visible
+parity, byte-identical default behavior, child propagation, resume
+reconstruction, and fail-closed behavior. See
+[`RUNTIME_CAPABILITY_MODEL.md`](RUNTIME_CAPABILITY_MODEL.md) for the
+surrounding capability model and planned ports.
 
 ## Context budgeting
 

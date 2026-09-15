@@ -150,6 +150,19 @@ ContextEngine::{config, set_config, set_estimator, default_budget,
 - The historical names `MaterializedContext` and `MaterializeBudget` remain
   valid aliases (`ContextView` / `ContextBudget`) so durable semantics and
   existing callers are untouched.
+- Replacement is **runtime-wide**. `AgentRuntime` selects the root engine;
+  `Agent::set_context_engine_factory` installs the one `ContextEngineFactory`
+  policy that `AgentSupervisor` uses to build the engine for every child
+  session — new spawns, workers rebuilt after a restart, and children
+  reconstructed on process resume. The factory receives only a
+  `ContextEngineSpec` (child session id, effective inference profile, and
+  context configuration), never an agent, mutable kernel state, or a storage
+  handle. `ContinuityEngine` roots default to
+  `continuity_context_engine_factory`, which is exactly
+  `ContinuityEngine::for_model(...)`, so ordinary construction stays simple.
+  Any other root engine must install a matching factory; until it does, child
+  spawn fails closed instead of silently running a different engine than the
+  root. `AgentSupervisor` never constructs `ContinuityEngine` directly.
 
 Port-specific kernel invariants, enforced by tests in
 `crates/latch-kernel/tests/invariants.rs`:
@@ -161,7 +174,14 @@ Port-specific kernel invariants, enforced by tests in
 3. the default engine produces byte-identical views, epoch accounting, and
    recall when called directly or through `dyn ContextEngine`;
 4. the port exposes no store handle, so a replacement cannot mutate durable
-   session truth outside the structured view it returns.
+   session truth outside the structured view it returns;
+5. a configured child policy governs every child: the factory-built engine
+   serves child requests, no continuity kernel context appears in the child
+   session, and a resumed child reconstructs through the same factory from its
+   durable/effective profile;
+6. the default factory is behaviorally equivalent to
+   `ContinuityEngine::for_model(...)`, and a non-default root engine without a
+   child policy fails child spawn loudly rather than falling back.
 
 A radically different engine (for example a remote service that materializes
 context from an external index) is possible because the contract has no
@@ -174,7 +194,7 @@ bounded views and is installed by the operator, not by the model.
 |---|---|---|---|
 | `ProviderAdapter` | **implemented as `ModelProvider`** | `provider.rs` (`OpenAiProvider`, `OpenAiResponsesProvider`, `AnthropicProvider`), `ProviderRegistry`, `ProviderFactory` | Keep the trait; add adapters, not a second abstraction |
 | `ToolProvider` | **implemented as `ToolExecutor` + extension registration** | `tools.rs` dispatch; `extension.rs` registered tools; kernel tools in `agent/request.rs` | A future `ToolProvider` port sources tool definitions + execution into the same dispatch and policy pipeline |
-| `ContextEngine` | **implemented** (`context.rs`) | `ContinuityEngine` | New implementations replace the default; contract stable |
+| `ContextEngine` | **implemented** (`context.rs`) | `ContinuityEngine`; `ContextEngineFactory` propagates the policy to all child sessions (default: continuity) | New implementations replace the default at root and child level; contract stable |
 | `Coordinator` | **partially implemented, concrete** | `AgentSupervisor` (execution/lifecycle), `GroupCoordinator` (durable claims/mailbox) | A `Coordinator` port would let an alternative coordination strategy plug in while root truth, child sessions, and group durability stay kernel-owned |
 | `PreferenceProvider` | **partially implemented, concrete** | `Config`, `PolicyEngine`, `PermissionBroker` (approval resolution) | A port for user/operator preferences (approvals, model preference, safety defaults) with the same durable resolution rules |
 | `WorkspaceBackend` | **deferred** | local filesystem inside `ToolExecutor`; sandbox mounts | Planned: path operations (`read`/`write`/`list`/`hash`/`watch`) with change-ledger and guarded-edit semantics owned by the kernel |
@@ -313,7 +333,7 @@ disturb the other.
 |---|---|
 | Capability vocabulary (`capability.rs`): kinds, descriptors, scope containment, handles, registry | **implemented**, with unit tests and an invariant test |
 | `Agent::capabilities()` audit surface | **implemented** (read-only introspection) |
-| `ContextEngine` port + `ContextRequest`/`ContextBudget`/`ContextView`; default `ContinuityEngine` | **implemented**, behavior-preserving; port invariants in CI |
+| `ContextEngine` port + `ContextRequest`/`ContextBudget`/`ContextView`; default `ContinuityEngine`; runtime-wide `ContextEngineFactory` for root and child sessions | **implemented**, behavior-preserving; port invariants in CI |
 | Provider adapter boundary (`ModelProvider`) and tool boundary (`ToolExecutor`, extensions) | already existed; mapped, unchanged |
 | Transport-agnostic framing (`FramedReader`/`FramedWriter` over generic `AsyncRead`/`AsyncWrite`) | already existed; documented as the transport seam |
 | Remote extension transports, authentication, lifecycle | deferred |
@@ -334,7 +354,7 @@ disturb the other.
 | Evidence provenance | `agent/validation.rs`, `state.rs`, `agent/kernel_tools.rs` |
 | Tool-call integrity | `agent/dispatch.rs`, `agent/request.rs` (`sanitize_tool_history`) |
 | Secret isolation | `credentials.rs`, provider redaction |
-| Context port invariants | `context.rs`, `tests/invariants.rs` (port parity, replaceability, capability scope) |
+| Context port invariants | `context.rs`, `continuity.rs` (default factory), `agents/supervisor.rs` (child policy), `tests/invariants.rs` (port parity, replaceability, child propagation, resume, fail-closed) |
 
 Related documents: [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full subsystem
 map, [`CONTINUITY.md`](CONTINUITY.md) for the default context engine's memory

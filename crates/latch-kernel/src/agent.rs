@@ -6,8 +6,8 @@ use crate::capability::{
     CapabilityRegistry, CapabilityScope,
 };
 use crate::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS};
-use crate::context::{ContextEngine, ContextRequest};
-use crate::continuity::ContinuityEngine;
+use crate::context::{ContextEngine, ContextEngineFactory, ContextEngineSpec, ContextRequest};
+use crate::continuity::{ContinuityEngine, continuity_context_engine_factory};
 use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
 use crate::permissions::PermissionBroker;
 use crate::progress::{DEFAULT_STAGNATION_BUDGET, ProgressSupervisor, StagnationDecision};
@@ -21,7 +21,7 @@ use crate::state::{
 use crate::store::EventStore;
 use crate::tokens::TokenEstimator;
 use crate::tools::{CapabilityGrant, ToolExecutor};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use latch_protocol::{
     AgentEvidenceRef, AgentIdentity, AgentReport, AgentStatus, CompletionState, Event,
@@ -31,6 +31,7 @@ use latch_protocol::{
 };
 use request::{common_prefix_bytes, context_messages, request_signature};
 use serde_json::json;
+use std::any::TypeId;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -134,6 +135,28 @@ pub struct AgentRuntime<C: ContextEngine = ContinuityEngine> {
     pub continuity: C,
     pub retry_budget: u32,
 }
+/// The initial child-context policy for a root agent.
+///
+/// The kernel's own [`ContinuityEngine`] gets the exact continuity default the
+/// supervisor used before the factory existed, so ordinary construction stays
+/// simple. Any other engine type must state its child policy explicitly with
+/// [`Agent::set_context_engine_factory`]; until then children fail closed
+/// instead of silently running a different engine than the root.
+fn initial_context_engine_factory<C: ContextEngine + 'static>(
+    runtime: &AgentRuntime<C>,
+) -> ContextEngineFactory {
+    if TypeId::of::<C>() == TypeId::of::<ContinuityEngine>() {
+        return continuity_context_engine_factory(runtime.store.clone());
+    }
+    let engine = runtime.continuity.name().to_owned();
+    Arc::new(move |_spec: &ContextEngineSpec<'_>| {
+        bail!(
+            "root context engine `{engine}` defines no child-session policy; \
+             install one with Agent::set_context_engine_factory"
+        )
+    })
+}
+
 impl Agent {
     #[must_use]
     pub fn new<C: ContextEngine + 'static>(runtime: AgentRuntime<C>) -> Self {
@@ -149,6 +172,7 @@ impl Agent {
                 ReasoningEffort::ProviderDefault,
             ),
         };
+        let context_factory = initial_context_engine_factory(&runtime);
         let supervisor = AgentSupervisor::new(
             runtime.session_id,
             runtime.workspace.clone(),
@@ -156,6 +180,7 @@ impl Agent {
             runtime.provider.clone(),
             runtime.tools.clone(),
             settings,
+            context_factory,
         )
         .expect("reconstruct durable agent graph");
         Self::new_inner(runtime, Some(supervisor), 0)
@@ -295,6 +320,19 @@ impl Agent {
     pub fn set_provider_factory(&mut self, factory: ProviderFactory) {
         if let Some(supervisor) = &self.supervisor {
             supervisor.set_provider_factory(Some(factory));
+        }
+    }
+
+    /// Installs the context-engine policy for every child of this root: future
+    /// spawns, workers rebuilt after a restart, and resumed children all
+    /// construct through it. [`ContinuityEngine`] roots already default to the
+    /// continuity policy; a caller that selects any other root context engine
+    /// must install the matching factory, otherwise child spawn fails closed
+    /// rather than silently running a different engine than the root.
+    /// This applies to the root only; children cannot spawn grandchildren.
+    pub fn set_context_engine_factory(&mut self, factory: ContextEngineFactory) {
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.set_context_engine_factory(factory);
         }
     }
 

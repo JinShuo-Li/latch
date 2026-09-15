@@ -21,19 +21,22 @@ use latch_kernel::safety::{Context as SafetyContext, Decision as SafetyDecision}
 use latch_kernel::state::StateUpdate;
 use latch_kernel::{
     Agent, AgentEventSink, AgentRuntime, CapabilityKind, CapabilityLifetime, CapabilityOwner,
-    CapabilityRequest, CapabilityScope, ContextBudget, ContextEngine, ContextRequest, ContextView,
-    ContinuityEngine, EventStore, EvidenceLedger, FailureManager, MaterializeBudget,
-    MaterializedContext, PolicyEngine, TaskStateManager, TokenEstimator, ToolExecutor,
+    CapabilityRequest, CapabilityScope, ContextBudget, ContextEngine, ContextEngineFactory,
+    ContextEngineSpec, ContextRequest, ContextView, ContinuityEngine, EventStore, EvidenceLedger,
+    FailureManager, MaterializeBudget, MaterializedContext, PolicyEngine, TaskStateManager,
+    TokenEstimator, ToolExecutor, continuity_context_engine_factory,
 };
 use latch_protocol::{
-    CompletionState, ContextStats, Event, EventPayload, EvidenceStatus, Mode, ModelMessage,
-    ModelRequest, ModelResponse, Safety, StreamEvent, TaskState, ToolCall, ToolResult, Usage,
+    CompletionState, ContextStats, Event, EventPayload, EvidenceStatus, InferenceProfile, Mode,
+    ModelMessage, ModelRequest, ModelResponse, ReasoningEffort, Safety, StreamEvent, TaskState,
+    ToolCall, ToolResult, Usage,
 };
 use serde_json::json;
 use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
@@ -58,9 +61,10 @@ fn call(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
 }
 
 /// Provider that records every request so tests can compare the exact
-/// provider-facing history the kernel would send.
+/// provider-facing history the kernel would send. Child providers share the
+/// same log, so root and child requests are observable together.
 struct RecordingProvider {
-    requests: Mutex<Vec<ModelRequest>>,
+    requests: Arc<Mutex<Vec<ModelRequest>>>,
     responses: Mutex<VecDeque<ModelResponse>>,
     /// Separate script handed to child sessions via `for_session`, so root and
     /// child turns never race one shared response queue.
@@ -70,7 +74,7 @@ struct RecordingProvider {
 impl RecordingProvider {
     fn new(responses: Vec<ModelResponse>) -> Self {
         Self {
-            requests: Mutex::new(Vec::new()),
+            requests: Arc::new(Mutex::new(Vec::new())),
             responses: Mutex::new(responses.into()),
             child_responses: None,
         }
@@ -86,6 +90,13 @@ impl RecordingProvider {
     fn requests(&self) -> Vec<ModelRequest> {
         self.requests.lock().unwrap().clone()
     }
+
+    fn request_systems(&self) -> Vec<String> {
+        self.requests()
+            .iter()
+            .map(|request| request.system.clone())
+            .collect()
+    }
 }
 
 #[async_trait::async_trait]
@@ -97,9 +108,13 @@ impl ModelProvider for RecordingProvider {
         "deepseek-invariants"
     }
     fn for_session(&self, _session_id: uuid::Uuid) -> Option<Arc<dyn ModelProvider>> {
-        self.child_responses
-            .as_ref()
-            .map(|script| Arc::new(Self::new(script.clone())) as Arc<dyn ModelProvider>)
+        self.child_responses.as_ref().map(|script| {
+            Arc::new(Self {
+                requests: self.requests.clone(),
+                responses: Mutex::new(script.clone().into()),
+                child_responses: None,
+            }) as Arc<dyn ModelProvider>
+        })
     }
     async fn stream(
         &self,
@@ -1103,10 +1118,13 @@ fn group_claims_are_atomic_and_projection_is_rebuildable() {
 /// A context engine that proves the port is real: the agent runtime drives the
 /// provider exclusively from this view and never silently falls back to the
 /// default continuity implementation. The canned engine has no store handle
-/// and appends nothing; the port contract is request/result only.
+/// and appends nothing; the port contract is request/result only. Each engine
+/// carries a distinguishable system prompt so tests can attribute provider
+/// requests to the session (and therefore the policy) that produced them.
 struct CannedContextEngine {
     config: ContextConfig,
     calls: Arc<AtomicUsize>,
+    system: String,
 }
 
 impl ContextEngine for CannedContextEngine {
@@ -1138,7 +1156,7 @@ impl ContextEngine for CannedContextEngine {
     fn materialize(&self, _request: ContextRequest<'_>) -> anyhow::Result<ContextView> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ContextView {
-            system: "canned context system".into(),
+            system: self.system.clone(),
             canonical: String::new(),
             recalled: String::new(),
             recent: Vec::new(),
@@ -1147,6 +1165,24 @@ impl ContextEngine for CannedContextEngine {
             stats: ContextStats::default(),
         })
     }
+}
+
+/// A `ContextEngineFactory` that stamps every child engine with the child's
+/// session id and counts construction and materialization.
+fn canned_child_factory(
+    label: &str,
+    builds: Arc<AtomicUsize>,
+    calls: Arc<AtomicUsize>,
+) -> ContextEngineFactory {
+    let label = label.to_owned();
+    Arc::new(move |spec: &ContextEngineSpec<'_>| {
+        builds.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(CannedContextEngine {
+            config: spec.context.clone(),
+            calls: calls.clone(),
+            system: format!("{label} {}", spec.session_id),
+        }))
+    })
 }
 
 /// The context port is a real boundary, not a wrapper around the default
@@ -1178,6 +1214,7 @@ async fn context_engine_port_is_replaceable_without_kernel_fallbacks() {
         continuity: CannedContextEngine {
             config: ContextConfig::default(),
             calls: calls.clone(),
+            system: "canned context system".into(),
         },
         retry_budget: 2,
     });
@@ -1378,4 +1415,403 @@ fn session_capabilities_declare_scope_owner_and_lifetime() {
         permissions: CapabilitySet::new(),
     };
     assert!(capabilities.resolve(&computer).is_none());
+}
+
+fn spawned_child_id(store: &EventStore, session: uuid::Uuid, call_id: &str) -> uuid::Uuid {
+    store
+        .events(session)
+        .unwrap()
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ToolCompleted { result } if result.call_id == call_id => {
+                serde_json::from_str::<serde_json::Value>(&result.output)
+                    .ok()
+                    .and_then(|value| value.get("agent_id")?.as_str().map(str::to_owned))
+            }
+            _ => None,
+        })
+        .expect("spawn result carries the child id")
+        .parse::<uuid::Uuid>()
+        .unwrap()
+}
+
+/// A custom context-engine policy configured on the root governs every spawned
+/// child: the child's requests are produced by factory-built engines, and the
+/// default continuity engine never runs in the child session as a fallback.
+#[tokio::test]
+async fn custom_context_engine_policy_propagates_to_spawned_children() {
+    let dir = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(dir.path()).unwrap();
+    let provider = Arc::new(RecordingProvider::with_children(
+        vec![
+            response(
+                "",
+                vec![call(
+                    "spawn-1",
+                    "spawn_agent",
+                    json!({"task_name":"policy","message":"bounded check"}),
+                )],
+            ),
+            response(
+                "",
+                vec![call("wait-1", "wait_agents", json!({"timeout_ms": 2_000}))],
+            ),
+            response("root done", vec![]),
+        ],
+        vec![response("child done", vec![])],
+    ));
+    let tools = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let root_calls = Arc::new(AtomicUsize::new(0));
+    let child_builds = Arc::new(AtomicUsize::new(0));
+    let child_calls = Arc::new(AtomicUsize::new(0));
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: CannedContextEngine {
+            config: ContextConfig::default(),
+            calls: root_calls.clone(),
+            system: "canned root context system".into(),
+        },
+        retry_budget: 2,
+    });
+    agent.set_context_engine_factory(canned_child_factory(
+        "canned child context system",
+        child_builds.clone(),
+        child_calls.clone(),
+    ));
+    agent.set_context_budget(
+        ContextConfig::default(),
+        latch_kernel::config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+    );
+    agent
+        .run("delegate", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    let child_id = spawned_child_id(&store, session, "spawn-1");
+    assert_eq!(
+        child_builds.load(Ordering::SeqCst),
+        1,
+        "one child engine built"
+    );
+    assert!(
+        child_calls.load(Ordering::SeqCst) >= 1,
+        "the child materialized through its factory-built engine"
+    );
+    let systems = provider.request_systems();
+    assert!(
+        systems
+            .iter()
+            .any(|system| system == "canned root context system"),
+        "the root used its configured engine"
+    );
+    assert!(
+        systems
+            .iter()
+            .any(|system| { system == &format!("canned child context system {child_id}") }),
+        "the child request came from the factory-built engine: {systems:?}"
+    );
+    // Continuity appends kernel context and epoch events; the canned child
+    // engine appends neither, so their absence proves no silent fallback.
+    let child_events = store.events(child_id).unwrap();
+    assert!(
+        !child_events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::KernelContext { .. })),
+        "the default continuity engine must not run in the child session"
+    );
+    assert!(
+        !child_events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. })),
+        "no continuity cache epoch may be created in the child session"
+    );
+}
+
+/// A resumed child (fresh root over the same durable log, no surviving worker)
+/// is reconstructed through the configured factory, not the default engine.
+#[tokio::test]
+async fn resumed_child_reconstructs_through_the_configured_factory() {
+    let dir = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(dir.path()).unwrap();
+    let provider = Arc::new(RecordingProvider::with_children(
+        vec![
+            response(
+                "",
+                vec![call(
+                    "spawn-1",
+                    "spawn_agent",
+                    json!({"task_name":"resume-policy","message":"bounded check"}),
+                )],
+            ),
+            response(
+                "",
+                vec![call("wait-1", "wait_agents", json!({"timeout_ms": 2_000}))],
+            ),
+            response("root done", vec![]),
+        ],
+        vec![response("child done", vec![])],
+    ));
+    let tools = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: provider.clone(),
+        tools,
+        continuity: CannedContextEngine {
+            config: ContextConfig::default(),
+            calls: calls.clone(),
+            system: "canned root context system".into(),
+        },
+        retry_budget: 2,
+    });
+    agent.set_context_engine_factory(canned_child_factory(
+        "canned child context system",
+        Arc::new(AtomicUsize::new(0)),
+        calls.clone(),
+    ));
+    agent.set_context_budget(
+        ContextConfig::default(),
+        latch_kernel::config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+    );
+    agent
+        .run("delegate", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    let child_id = spawned_child_id(&store, session, "spawn-1");
+    // End the first runtime: its supervisor drops and aborts the idle worker,
+    // exactly like a process exit between runs.
+    drop(agent);
+
+    let resumed_provider = Arc::new(RecordingProvider::with_children(
+        vec![],
+        vec![response("resumed child done", vec![])],
+    ));
+    let resumed_tools = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let resumed_calls = Arc::new(AtomicUsize::new(0));
+    let resumed_builds = Arc::new(AtomicUsize::new(0));
+    let mut resumed = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: resumed_provider,
+        tools: resumed_tools,
+        continuity: CannedContextEngine {
+            config: ContextConfig::default(),
+            calls: resumed_calls.clone(),
+            system: "canned resumed root context system".into(),
+        },
+        retry_budget: 2,
+    });
+    resumed.set_context_engine_factory(canned_child_factory(
+        "canned resumed child context system",
+        resumed_builds.clone(),
+        resumed_calls.clone(),
+    ));
+    let supervisor = resumed.agent_supervisor().unwrap();
+    supervisor
+        .continue_agent(child_id, "resume the child".into())
+        .await
+        .unwrap();
+    // `continue_agent` rebuilds a missing worker synchronously, so this proves
+    // the factory ran for the resumed child before the worker task started.
+    assert_eq!(
+        resumed_builds.load(Ordering::SeqCst),
+        1,
+        "the resumed child must reconstruct through the configured factory"
+    );
+    let wait = supervisor
+        .wait_agents(&[child_id], Duration::from_millis(2_000))
+        .await
+        .unwrap();
+    assert_eq!(wait.agents.len(), 1);
+    assert!(
+        !store
+            .events(child_id)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::KernelContext { .. })),
+        "no default continuity fallback in the resumed child session"
+    );
+    drop(resumed);
+}
+
+/// The default factory is behaviorally equivalent to the constructor it
+/// replaces: `ContinuityEngine::for_model(...)` over the session store, priced
+/// for the requested model.
+#[test]
+fn default_context_engine_factory_matches_continuity_for_model() {
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(Path::new("/invariants")).unwrap();
+    store
+        .append(
+            session,
+            EventPayload::UserMessage {
+                text: "factory parity".into(),
+                media: vec![],
+            },
+        )
+        .unwrap();
+    let config = ContextConfig {
+        max_request_tokens: Some(16_000),
+        recent_tokens: 2_000,
+        reserve_tokens: 0,
+        output_reserve_tokens: 0,
+    };
+    let profile = InferenceProfile::new(
+        "provider",
+        "factory-model",
+        ReasoningEffort::ProviderDefault,
+    );
+    let factory = continuity_context_engine_factory(store.clone());
+    let through_factory = factory(&ContextEngineSpec {
+        session_id: session,
+        profile: &profile,
+        context: &config,
+    })
+    .unwrap();
+    assert_eq!(through_factory.name(), "continuity");
+    let direct = ContinuityEngine::for_model(store.clone(), config.clone(), "factory-model");
+    assert_eq!(
+        through_factory.default_budget(64_000, 123),
+        direct.default_budget(64_000, 123),
+        "the factory engine uses the same budget derivation"
+    );
+
+    let state = TaskState::default();
+    let budget = through_factory.default_budget(64_000, 0);
+    let first = through_factory
+        .materialize(ContextRequest {
+            session_id: session,
+            state: &state,
+            query: None,
+            evidence: &EvidenceLedger::default(),
+            failures: &FailureManager::new(3),
+            system: "invariant system prompt".into(),
+            budget,
+            extension_context: "",
+            reground: None,
+        })
+        .unwrap();
+    let second = direct
+        .materialize(
+            session,
+            &state,
+            None,
+            &EvidenceLedger::default(),
+            &FailureManager::new(3),
+            "invariant system prompt".into(),
+            &budget,
+        )
+        .unwrap();
+    assert_eq!(first.recent, second.recent);
+    assert_eq!(first.canonical, second.canonical);
+    assert_eq!(first.stats, second.stats);
+}
+
+/// A root running a non-default context engine without a configured child
+/// policy fails child spawn loudly. It never silently gives the child the
+/// default continuity engine.
+#[tokio::test]
+async fn custom_root_engine_without_child_policy_fails_closed() {
+    let dir = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(dir.path()).unwrap();
+    let provider = Arc::new(RecordingProvider::with_children(
+        vec![
+            response(
+                "",
+                vec![call(
+                    "spawn-1",
+                    "spawn_agent",
+                    json!({"task_name":"no-policy","message":"bounded check"}),
+                )],
+            ),
+            response("continued after the refused spawn", vec![]),
+        ],
+        vec![],
+    ));
+    let tools = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: session,
+        workspace: dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider,
+        tools,
+        continuity: CannedContextEngine {
+            config: ContextConfig::default(),
+            calls: Arc::new(AtomicUsize::new(0)),
+            system: "canned root context system".into(),
+        },
+        retry_budget: 2,
+    });
+    agent.set_context_budget(
+        ContextConfig::default(),
+        latch_kernel::config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+    );
+    agent
+        .run("delegate", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    let events = store.events(session).unwrap();
+    let failure = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ToolFailed { result } if result.call_id == "spawn-1" => {
+                Some(result.output.clone())
+            }
+            _ => None,
+        })
+        .expect("a root without a child policy must not silently spawn");
+    assert!(
+        failure.contains("defines no child-session policy"),
+        "the refusal must be actionable: {failure}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::ToolCompleted { result } if result.call_id == "spawn-1"
+        )),
+        "no successful spawn result may be fabricated"
+    );
 }

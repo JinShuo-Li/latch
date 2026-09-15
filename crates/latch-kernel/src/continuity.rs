@@ -1,5 +1,8 @@
 use crate::config::ContextConfig;
-use crate::context::{ContextBudget, ContextEngine, ContextRequest, ContextView};
+use crate::context::{
+    ContextBudget, ContextEngine, ContextEngineFactory, ContextEngineSpec, ContextRequest,
+    ContextView,
+};
 use crate::state::{EvidenceLedger, FailureManager};
 use crate::store::EventStore;
 use crate::tokens::TokenEstimator;
@@ -9,6 +12,7 @@ use latch_protocol::{
     Validity,
 };
 use std::collections::HashSet;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// The context-engine vocabulary lives in [`crate::context`]. These names are
@@ -731,6 +735,21 @@ impl ContextEngine for ContinuityEngine {
             request.reground,
         )
     }
+}
+
+/// The default child-session context policy: a fresh [`ContinuityEngine`]
+/// priced for the child's effective model over the session's durable store.
+/// This is exactly the constructor the kernel used for children before the
+/// factory was introduced, so the default remains behaviorally identical.
+#[must_use]
+pub fn continuity_context_engine_factory(store: EventStore) -> ContextEngineFactory {
+    Arc::new(move |spec: &ContextEngineSpec<'_>| {
+        Ok(Box::new(ContinuityEngine::for_model(
+            store.clone(),
+            spec.context.clone(),
+            &spec.profile.model,
+        )))
+    })
 }
 
 /// Selects the bounded relevant subset of episodes for the index. Scoring is

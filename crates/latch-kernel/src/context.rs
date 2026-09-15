@@ -33,8 +33,9 @@ use crate::state::{EvidenceLedger, FailureManager};
 use crate::tokens::TokenEstimator;
 use anyhow::Result;
 use latch_protocol::Event;
-use latch_protocol::{ContextStats, TaskState};
+use latch_protocol::{ContextStats, InferenceProfile, TaskState};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// One scored archival episode: a bounded, navigational summary over an intent
@@ -124,6 +125,32 @@ pub struct ContextView {
     pub stats: ContextStats,
 }
 
+/// Minimal, trusted inputs for constructing a child session's context engine.
+///
+/// The factory receives only what a context-engine policy genuinely needs: the
+/// child's durable session id, its effective inference profile (so token
+/// estimation, context windows, and budgeting stay aligned with the child's
+/// actual model), and the session's context configuration. It never receives
+/// an agent, mutable kernel state, or a storage handle; a policy that needs
+/// durable history captures its own backend when it is constructed.
+pub struct ContextEngineSpec<'a> {
+    pub session_id: Uuid,
+    pub profile: &'a InferenceProfile,
+    pub context: &'a ContextConfig,
+}
+
+/// Builds the context engine for one child session under the root's
+/// context-engine policy.
+///
+/// The root supervisor stores exactly one factory and calls it for every
+/// spawn, worker reconstruction, and process resume, so root and children
+/// share one explicit policy and a resumed child never silently falls back to
+/// a different engine. The default factory is
+/// [`crate::continuity::continuity_context_engine_factory`], which preserves
+/// the kernel's historical `ContinuityEngine::for_model(...)` behavior.
+pub type ContextEngineFactory =
+    Arc<dyn Fn(&ContextEngineSpec<'_>) -> Result<Box<dyn ContextEngine>> + Send + Sync>;
+
 /// Replaceable context engine: the mechanism that turns durable session state
 /// into one bounded provider-visible view. See the module docs for the port
 /// rules; `docs/RUNTIME_CAPABILITY_MODEL.md` maps it onto the kernel invariant
@@ -156,4 +183,41 @@ pub trait ContextEngine: Send + Sync {
 
     /// Materializes one bounded request view.
     fn materialize(&self, request: ContextRequest<'_>) -> Result<ContextView>;
+}
+
+/// A boxed engine is still an engine. This lets the runtime pass a
+/// factory-built `Box<dyn ContextEngine>` back through the generic
+/// [`crate::agent::AgentRuntime`] construction path without erasing the port.
+impl<T: ContextEngine + ?Sized> ContextEngine for Box<T> {
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn config(&self) -> &ContextConfig {
+        (**self).config()
+    }
+
+    fn set_config(&mut self, config: ContextConfig) {
+        (**self).set_config(config);
+    }
+
+    fn set_estimator(&mut self, estimator: TokenEstimator) {
+        (**self).set_estimator(estimator);
+    }
+
+    fn default_budget(&self, window_tokens: usize, reserved_tokens: usize) -> ContextBudget {
+        (**self).default_budget(window_tokens, reserved_tokens)
+    }
+
+    fn manual_compact(&mut self, session_id: Uuid) -> Result<()> {
+        (**self).manual_compact(session_id)
+    }
+
+    fn recall(&self, session_id: Uuid, query: &str) -> Result<Vec<Event>> {
+        (**self).recall(session_id, query)
+    }
+
+    fn materialize(&self, request: ContextRequest<'_>) -> Result<ContextView> {
+        (**self).materialize(request)
+    }
 }
