@@ -1195,9 +1195,15 @@ async fn managed_process_start_poll_and_terminate() {
         "process exit is durable"
     );
 
+    // The fixture only has to still be running when `exec_terminate` is
+    // issued; it does not test patience with an unkillable process. Keeping
+    // its natural lifetime short bounds the test's worst case: when the
+    // sandbox leader is killed but a namespaced grandchild still holds the
+    // output pipes, teardown waits for the grandchild to exit. A 30-second
+    // sleep turned that rare race into a ~30-second test in a loaded suite.
     let long = e
         .execute(
-            &call("exec_start", json!({"command":"sleep 30"})),
+            &call("exec_start", json!({"command":"sleep 2"})),
             CancellationToken::new(),
         )
         .await;
