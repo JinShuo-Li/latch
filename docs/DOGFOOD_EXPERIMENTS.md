@@ -106,6 +106,40 @@ and the iteration-1 reproduction are the primary evidence.
 | cache miss tokens | - | 2081 | 2110 |
 | result file correct | no | yes | yes |
 
+## Iteration 3 - read-only Git queries (accepted, ed73507)
+
+**Bottleneck.** A purely read-only task ("report branch, last commit, and
+configured Git user.name/user.email; modify nothing") exited 3. Durable events
+showed `git config user.name`, `git config --get user.email`, and
+`git config user.email; echo "email_lookup_exit=$?"` denied as Git metadata
+writes; the model then spent turns working around the denials.
+
+**Hypothesis.** Only the first `git` verb in a command is classified, and
+command separators are dropped during tokenization, so (a) later `git`
+invocations are judged by the first verb, and (b) trailing shell words are
+absorbed as arguments of the preceding `git config`. Read-only `config`
+queries are therefore classified as writes.
+
+**Change.** Tokenization now keeps a `;` boundary token for shell control
+operators, and every `git` invocation is classified separately. `git config`
+queries (`--get`, `--get-all`, `--get-regexp`, `--list`, `-l`, `--show-origin`,
+…) and a single bare key (`git config user.name`) are read-only; mutating flags
+(`--add`, `--unset`, `--replace-all`, `--edit`, …), `key=value`, and
+two-argument forms still classify. All-flag listing forms for
+branch/remote/tag/stash no longer absorb trailing commands. The sandbox keeps
+`.git` read-only regardless.
+
+**Result.**
+
+| Metric | Before (iter3 probe) | After (iter3 fixed) |
+| --- | --- | --- |
+| exit | 3 | 0 |
+| status | permission_denied | completed |
+| events | 99 | 32 |
+| input tokens | 52862 | 16051 |
+| output tokens | 2961 | 492 |
+| cache miss tokens | 2086 | 606 |
+
 ## Rejected / no-change experiments
 
 - **Host-side CONNECT proxy** was needed to run the real provider from a
@@ -119,13 +153,15 @@ and the iteration-1 reproduction are the primary evidence.
 
 ## Remaining bottlenecks
 
-- Reads of `.git` (`cat .git/HEAD`) are still classified as metadata writes and
-  ask for approval; distinguishing read-only from mutating commands would need
-  a broader, riskier classifier change.
+- `cat .git/HEAD` or `cat .git/config` are still classified as Git metadata
+  writes and ask for approval: the `.git` path scan does not distinguish
+  read-only readers (`cat`, `head`, `ls`) from writers. Fixing that needs a
+  broader read/write command classifier and was not attempted.
 - Any genuinely unresolved Ask still marks an otherwise verified run as
-  `permission_denied` (exit 3) by design; the fix removed a false positive, not
-  the fail-closed policy.
+  `permission_denied` (exit 3) by design; the changes removed false positives,
+  not the fail-closed policy.
 - The runtime image has no language toolchains beyond Python 3; Rust/Node/Go
   dogfood tasks need a derived image.
 - Real-provider runs depend on host egress and are slower and more variable
-  than the deterministic mock path.
+  than the deterministic mock path; wall-clock timings here are not comparable
+  across runs.
