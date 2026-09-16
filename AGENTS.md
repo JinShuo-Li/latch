@@ -70,11 +70,18 @@ cargo test --workspace
   so edit it by hand and keep `cargo test -p latch-tui --lib` green.
 - Extension fixture tests need `python3`; the reference TS extension needs
   `node` + `npm ci && npm run build` in `sdk/typescript` and `extensions/example-ts`.
+- Docker dogfood harness (local, not in CI): `./scripts/dogfood.sh "<task>"`
+  runs the machine CLI in an isolated, non-root container against a disposable
+  workspace; `./scripts/dogfood-test.sh` builds the `test` image stage and runs
+  the deterministic, credential-free integration checks. See
+  `docs/DOGFOOD_DOCKER.md`.
 
 Runtime prerequisites are mandatory, not optional: system `bwrap` (all command
 execution is sandboxed; there is no unsandboxed fallback) and `rg` (the `search`
 tool; it must fail with an actionable message, never bare ENOENT). State lives in
-`~/.local/state/latch/`; config example is `config.example.toml`.
+`~/.local/state/latch/`; config example is `config.example.toml`. Docker (or a
+compatible CLI via `DOCKER=…`) is required only for the optional dogfood harness,
+never by Latch itself.
 
 ## Testing philosophy
 
