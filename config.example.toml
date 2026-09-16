@@ -14,7 +14,7 @@ default_mode = "WORK"
 # keyring:NAME parses for forward compatibility but is not available in this
 # build and is never advertised by /setup.
 # default_model = "deepseek-v4-flash"
-# base_url = "https://opencode.ai/zen/go"   # optional override
+# base_url = "https://opencode.ai/zen/go/v1"   # optional override
 #
 # [providers.opencode-go.models."deepseek-v4-flash"]
 # display_name = "DeepSeek V4 Flash"
@@ -45,7 +45,7 @@ kind = "openai-compatible" # or "anthropic"
 model = "gpt-5-mini"
 # base_url = "https://api.openai.com/v1"
 # api_key_env = "OPENAI_API_KEY"
-# OpenCode Go (base_url under https://opencode.ai/zen/go) uses the same
+# OpenCode Go (base_url under https://opencode.ai/zen/go/v1) uses the same
 # provider and additionally receives a stable x-opencode-session header.
 
 [safety]

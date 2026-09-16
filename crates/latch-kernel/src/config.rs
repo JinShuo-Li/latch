@@ -166,7 +166,7 @@ impl ProviderKind {
             Self::OpenAi => "https://api.openai.com/v1",
             Self::Anthropic => "https://api.anthropic.com",
             Self::DeepSeek => "https://api.deepseek.com",
-            Self::OpenCodeGo => "https://opencode.ai/zen/go",
+            Self::OpenCodeGo => "https://opencode.ai/zen/go/v1",
             Self::OpenAiCompatible => "",
         }
     }
@@ -588,6 +588,20 @@ mod tests {
             DEFAULT_CONTEXT_WINDOW_TOKENS - config.reserve_tokens()
         );
         assert!(config.models.is_empty(), "pricing is optional");
+    }
+
+    #[test]
+    fn opencode_go_default_base_url_targets_the_versioned_gateway() {
+        // The OpenCode Go gateway is served under /zen/go/v1; a bare /zen/go
+        // base 404s every request. Detection (session header, replay) still
+        // matches the default because it is a path-boundary prefix check.
+        assert_eq!(
+            ProviderKind::OpenCodeGo.default_base_url(),
+            "https://opencode.ai/zen/go/v1"
+        );
+        assert!(is_opencode_go_url(
+            ProviderKind::OpenCodeGo.default_base_url()
+        ));
     }
 
     #[test]
