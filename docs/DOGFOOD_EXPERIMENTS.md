@@ -226,6 +226,51 @@ post-tools message tail would make the prefix reusable across sessions and
 across mode/instruction changes. That is a larger, provider-facing change and
 was deliberately not attempted here.
 
+## Iteration 6 - session-independent system prefix (accepted, see commit)
+
+**Bottleneck.** Cross-session cache reuse was structurally impossible. The
+compiled `system` field contained the workspace, repository instructions, and
+mode, and it precedes the tool schemas and messages in the provider prefix, so
+any session difference invalidated the entire cacheable prefix. Iteration 5's
+per-request data showed the first request of every run is fully uncached.
+
+**Hypothesis (falsifiable).** If the session-specific fragments move out of the
+`system` field into the first provider-visible message, then `system` + tools
+becomes byte-identical across sessions, and the first request of a later session
+whose repository instructions differ will read the shared prefix from the
+provider cache instead of missing it entirely.
+
+**Change.** `PromptCompiler` now returns `stable` (cacheable behavioral core,
+used as the provider `system` field) and `session` (workspace, repository
+instructions, mode). `ContextRequest`/`ContextView` carry `session_context`;
+continuity accounts it under `instructions_tokens` so budgets and stats are
+unchanged; `context_messages` opens the transcript with the session context,
+merged with the original user turn. `latch debug prompt` shows the split, and
+`ARCHITECTURE.md`, `CONTINUITY.md`, and `RUNTIME_CAPABILITY_MODEL.md` were
+updated.
+
+**Experiment.** Two fixtures, one task: `calc-fixture` and
+`calc-agents-fixture` (identical plus an `AGENTS.md` with a unique marker). Run
+the first to warm the prefix, then the second immediately.
+
+| Run | fixture | req 0 input | req 0 read | aggregate read/input |
+| --- | --- | --- | --- | --- |
+| pre-A (iter 5 image) | calc | 4583 | 0 | 0.798 |
+| pre-B (iter 5 image) | calc + AGENTS.md | 4611 | **0** | 0.769 |
+| new-A (iter 6 image) | calc | 4586 | 0 | 0.806 |
+| new-B (iter 6 image) | calc + AGENTS.md | 4618 | **4096 (88.7%)** | **0.922** |
+
+Before the split, differing repository instructions forced a full first-request
+miss (`pre-B` read 0). After the split the same pair reused 4096 tokens of the
+`system` + tools prefix (`new-B`) and the aggregate rose from 0.769 to 0.922.
+The first request is no longer unavoidably uncached.
+
+**Second observation.** In the pre-split `new-B` counterpart the read is 4096, a
+multiple of the provider's 128-token cache block: the shared prefix is cached
+through the last block before the session-message divergence. Reuse still
+depends on the gateway routing the request to an instance holding the prefix and
+on its TTL, so it is an expected improvement, not a guarantee.
+
 ## Rejected / no-change experiments
 
 - **Host-side CONNECT proxy** was needed to run the real provider from a
@@ -239,16 +284,17 @@ was deliberately not attempted here.
 
 ## Remaining bottlenecks
 
-- Cache-read proportion is prefix-bound: the first request is uncached and
-  later requests are already ~91-96% cached, so the aggregate ~0.80 is the
-  first request plus per-turn new tokens. The structural lever is making the
-  `system`+tools prefix **session-independent** (move workspace, repository
-  instructions, and mode out of the `system` field into the post-tools tail);
-  the measured best case when the prefix is reused is ~0.94. That is a
-  provider-facing change and needs its own iteration.
-- Mode and per-session fragments now trail the cacheable core, so a mode switch
-  rewrites only the tail; this is asserted by the prompt tests but not
-  measurable in the single-mode harness.
+- Cache-read proportion is now session-aware: the `system` + tools prefix is
+  session-independent and reused across sessions when the gateway holds it, so
+  a first request is no longer always fully uncached (measured 88.7% on a
+  cross-session pair). Per-request reads remain ~91-96% after the first
+  request; the residual miss is the per-turn new tokens.
+- Cross-session reuse still depends on the provider's cache TTL and instance
+  routing, which Latch cannot control; treat it as an expected benefit, not a
+  guarantee.
+- Mode and per-session fragments trail the cacheable core and travel as the
+  first message, so a mode switch rewrites only that opening message; this is
+  asserted by tests but not measurable in the single-mode harness.
 - `cat .git/HEAD` or `cat .git/config` are still classified as Git metadata
   writes and ask for approval: the `.git` path scan does not distinguish
   read-only readers (`cat`, `head`, `ls`) from writers. Fixing that needs a

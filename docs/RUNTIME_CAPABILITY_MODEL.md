@@ -136,12 +136,17 @@ ContextEngine::{config, set_config, set_estimator, default_budget,
 ```
 
 - `ContextRequest` carries the session id, canonical `TaskState`, retrieval
-  query, evidence ledger, failure manager, compiled system prompt,
-  `ContextBudget`, extension context, and re-ground instruction. It borrows
-  live kernel state but holds no storage handle.
-- `ContextView` carries the compiled system prompt, the provider-visible
-  `recent` events of the current durable cache epoch, rendered canonical /
-  recalled text, episodes, bridge, and `ContextStats`.
+  query, evidence ledger, failure manager, the session-independent compiled
+  system prompt and the session-specific context, `ContextBudget`, extension
+  context, and re-ground instruction. It borrows live kernel state but holds no
+  storage handle.
+- `ContextView` carries the session-independent system prompt, the
+  session-specific context, the provider-visible `recent` events of the current
+  durable cache epoch, rendered canonical / recalled text, episodes, bridge,
+  and `ContextStats`. The agent sends `system` as the provider system field and
+  renders `session_context` (workspace, repository instructions, mode) as the
+  first provider-visible message, keeping the `system` + tools prefix
+  session-independent and cacheable.
 - The default implementation is `ContinuityEngine`; every behavior of the
   existing engine is unchanged — L0–L3 memory, canonical authority, SQLite FTS
   recall, episodes, cache epochs, hysteretic rotation, `/compact`, resume

@@ -148,6 +148,11 @@ Memory/cache invariants (do not violate):
 - Provider-visible history is append-only within an epoch; kernel context is
   durable `KernelContext` snapshot/delta events, and rotation is hysteretic,
   whole-unit, and replayable.
+- The provider `system` field is session-independent (behavioral core + kernel
+  semantics only). Per-session context (workspace, repository instructions,
+  mode) is the first provider-visible message, so `system` + tools stays
+  cacheable across sessions and mode switches; keep `PromptCompiler`'s
+  `stable`/`session` split and `ContextEngine`'s `session_context` intact.
 - Transitions that must survive resume fail closed: a live state change must not
   be reported successful before its durable event commits.
 - Child agents are independent durable sessions. Their task/evidence/continuity

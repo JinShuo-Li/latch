@@ -38,9 +38,13 @@ ContextView`, with `config`/`set_config`/`set_estimator`/`default_budget`/
 `manual_compact`/`recall` as the rest of the contract. `ContextRequest`,
 `ContextBudget`, and `ContextView` are the request/result objects; the
 historical `MaterializeBudget`/`MaterializedContext` names remain aliases. The
-port exposes no `EventStore` or SQLite handle, so a replacement engine cannot
-mutate durable session truth outside its structured view, and the agent loop
-never falls back to the default engine when another one is installed.
+request separates the session-independent system prompt from the session
+context (workspace, repository instructions, mode); the agent keeps the former
+in the provider `system` field and renders the latter as the first
+provider-visible message, so `system` + tools stays cacheable across sessions.
+The port exposes no `EventStore` or SQLite handle, so a replacement engine
+cannot mutate durable session truth outside its structured view, and the agent
+loop never falls back to the default engine when another one is installed.
 
 Child sessions construct through one explicit policy: the root supervisor
 holds a single `ContextEngineFactory` — by default
