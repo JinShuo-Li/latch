@@ -373,14 +373,14 @@ fn inferred_command_capabilities(command: &str) -> CapabilitySet {
             capabilities.insert(Capability::NetworkAccess);
         }
     }
-    if let Some(verb) = git_verb(&tokens) {
+    for (verb, args) in git_invocations(&tokens) {
         if GIT_NETWORK_VERBS.contains(&verb.as_str()) {
             capabilities.insert(Capability::NetworkAccess);
         }
         if GIT_REMOTE_VERBS.contains(&verb.as_str()) {
             capabilities.insert(Capability::RemoteSideEffect);
         }
-        if GIT_WRITE_VERBS.contains(&verb.as_str()) && !git_listing_form(&tokens, &verb) {
+        if GIT_WRITE_VERBS.contains(&verb.as_str()) && !git_read_form(&verb, args) {
             capabilities.insert(Capability::GitMetadataWrite);
         }
     }
@@ -473,55 +473,140 @@ const GIT_WRITE_VERBS: &[&str] = &[
 const GIT_NETWORK_VERBS: &[&str] = &["fetch", "pull", "push", "clone", "ls-remote", "submodule"];
 const GIT_REMOTE_VERBS: &[&str] = &["push", "fetch", "pull", "clone"];
 
-/// Splits a command into lowercased word tokens, ignoring quoting noise. This
-/// is a heuristic only: enforcement remains the sandbox's job.
+/// Splits a command into lowercased word tokens. Quotes are dropped and shell
+/// control operators become a single `;` boundary token so chained commands can
+/// be classified invocation by invocation (for example, a trailing
+/// `; echo "$?"` must not become an argument of the preceding `git config`).
+/// This is a heuristic only: enforcement remains the sandbox's job.
 fn command_tokens(command: &str) -> Vec<String> {
-    command
-        .split_whitespace()
-        .map(|token| {
-            token
-                .trim_matches(|ch: char| {
-                    ch == '"' || ch == '\'' || ch == ';' || ch == '&' || ch == '(' || ch == ')'
-                })
-                .to_ascii_lowercase()
-        })
-        .filter(|token| !token.is_empty())
-        .collect()
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for ch in command.chars() {
+        match ch {
+            ch if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            ';' | '|' | '&' | '(' | ')' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                if tokens.last().map(String::as_str) != Some(";") {
+                    tokens.push(";".to_owned());
+                }
+            }
+            '"' | '\'' => {}
+            _ => current.push(ch.to_ascii_lowercase()),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
-/// `git branch`, `git remote`, `git tag`, `git stash`, and `git config` are
-/// read-only when every remaining token is a flag.
-fn git_listing_form(tokens: &[String], verb: &str) -> bool {
-    if !matches!(verb, "branch" | "remote" | "tag" | "stash" | "config") {
+/// Every `git` invocation in a command as `(verb, args)` pairs. Each `git`
+/// token and each `;` boundary starts a new invocation. Judging every
+/// invocation keeps a chained read-only command from being misclassified by
+/// whichever verb happened to come first.
+fn git_invocations(tokens: &[String]) -> Vec<(String, &[String])> {
+    let mut invocations = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if tokens[index] != "git" {
+            index += 1;
+            continue;
+        }
+        let mut verb_index = index + 1;
+        while verb_index < tokens.len() && tokens[verb_index].starts_with('-') {
+            // Skip options and their arguments (`-C path`, `-c key=value`).
+            verb_index += if matches!(tokens[verb_index].as_str(), "-c" | "-C") {
+                2
+            } else {
+                1
+            };
+        }
+        if verb_index >= tokens.len() || tokens[verb_index] == ";" {
+            index += 1;
+            continue;
+        }
+        let end = tokens[verb_index + 1..]
+            .iter()
+            .position(|token| token == "git" || token == ";")
+            .map_or(tokens.len(), |offset| verb_index + 1 + offset);
+        invocations.push((tokens[verb_index].clone(), &tokens[verb_index + 1..end]));
+        index = end;
+    }
+    invocations
+}
+
+/// True when this Git invocation cannot mutate repository metadata. `branch`,
+/// `remote`, `tag`, and `stash` are read-only in their all-flag listing forms;
+/// `config` is read-only for queries (`--get`, `--list`, …) and for a single
+/// bare key.
+fn git_read_form(verb: &str, args: &[String]) -> bool {
+    if verb == "config" {
+        return git_config_is_read_only(args);
+    }
+    if !matches!(verb, "branch" | "remote" | "tag" | "stash") {
         return false;
     }
-    let position = tokens.iter().position(|token| token == "git");
-    let Some(position) = position else {
-        return false;
-    };
-    let after = &tokens[position + 1..];
-    let verb_position = after.iter().position(|token| token == verb);
-    let Some(verb_position) = verb_position else {
-        return false;
-    };
-    after[verb_position + 1..]
-        .iter()
+    args.iter()
         .all(|token| token.starts_with('-') || token.is_empty())
 }
 
-fn git_verb(tokens: &[String]) -> Option<String> {
-    let position = tokens.iter().position(|token| token == "git")?;
-    let mut index = position + 1;
-    while index < tokens.len() {
-        let token = &tokens[index];
-        if token.starts_with('-') {
-            // Skip options and their arguments (`-C path`, `-c key=value`).
-            index += if token == "-c" || token == "-C" { 2 } else { 1 };
-            continue;
-        }
-        return Some(token.clone());
+/// `git config` is commonly used for read-only queries. A query flag is
+/// unconditional; otherwise a single bare key reads and two arguments (or a
+/// `key=value`) write. Mutating flags always classify as writes.
+fn git_config_is_read_only(args: &[String]) -> bool {
+    const QUERY_FLAGS: &[&str] = &[
+        "--get",
+        "--get-all",
+        "--get-regexp",
+        "--get-color",
+        "--get-colorbool",
+        "--list",
+        "-l",
+        "-z",
+        "--null",
+        "--name-only",
+        "--show-origin",
+        "--show-scope",
+    ];
+    const MUTATING_FLAGS: &[&str] = &[
+        "--add",
+        "--unset",
+        "--unset-all",
+        "--replace-all",
+        "--rename-section",
+        "--remove-section",
+        "--edit",
+        "-e",
+        "--set",
+        "--fixed-value",
+    ];
+    let flag_names: Vec<String> = args
+        .iter()
+        .map(|token| token.split('=').next().unwrap_or(token.as_str()).to_owned())
+        .collect();
+    if flag_names
+        .iter()
+        .any(|flag| MUTATING_FLAGS.contains(&flag.as_str()))
+    {
+        return false;
     }
-    None
+    if flag_names
+        .iter()
+        .any(|flag| QUERY_FLAGS.contains(&flag.as_str()))
+    {
+        return true;
+    }
+    let positional: Vec<&String> = args
+        .iter()
+        .filter(|token| !token.starts_with('-'))
+        .collect();
+    positional.len() <= 1 && positional.iter().all(|token| !token.contains('='))
 }
 
 fn is_git_metadata_path(workspace: &Path, path: &Path) -> bool {
@@ -867,6 +952,69 @@ mod tests {
             assert!(
                 capabilities.contains(Capability::GitMetadataWrite),
                 "metadata mutation was not detected: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_git_config_queries_are_not_metadata_writes() {
+        // A purely read-only Git report was denied in machine mode because
+        // `git config user.name` and `git config --get user.email` were
+        // classified as metadata writes.
+        for command in [
+            "git config user.name",
+            "git config user.email",
+            "git config --get user.name",
+            "git config --get-all user.email",
+            "git config --list",
+            "git config -l",
+            "git config --global user.name",
+            "git config user.email; echo \"email_lookup_exit=$?\"",
+            r#"git config user.name; echo "name_exit=$?"; git config user.email; echo "email_exit=$?"; git config --list --show-origin | grep -i user"#,
+            "git branch -a; echo done",
+            r#"git branch --show-current && git log -1 --format=%s && git config user.name && git config user.email"#,
+        ] {
+            let capabilities = inferred_command_capabilities(command);
+            assert!(
+                !capabilities.contains(Capability::GitMetadataWrite),
+                "read-only git query misclassified as a metadata write: {command}"
+            );
+        }
+        for command in [
+            "git config user.name value",
+            "git config --global user.email a@b",
+            "git config --unset user.name",
+            "git config --add user.email a@b",
+            "git config core.editor=vim",
+            "git config --replace-all user.name x",
+            "git config user.name value; echo done",
+        ] {
+            let capabilities = inferred_command_capabilities(command);
+            assert!(
+                capabilities.contains(Capability::GitMetadataWrite),
+                "git metadata mutation was not detected: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_git_report_shell_command_is_allowed() {
+        let command = r#"git branch --show-current && git log -1 --format=%s && git config user.name && git config user.email"#;
+        for safety in [Safety::Standard, Safety::Autonomous] {
+            let classification = classify(
+                "shell",
+                &json!({"command": command}),
+                context(Mode::Work, safety, Path::new("/tmp/ws")),
+            );
+            assert!(
+                !classification
+                    .capabilities
+                    .contains(Capability::GitMetadataWrite)
+            );
+            assert!(
+                matches!(classification.decision, Decision::Allow),
+                "{safety:?} must allow a read-only Git report: {:?}",
+                classification.decision
             );
         }
     }
