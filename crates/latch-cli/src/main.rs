@@ -166,8 +166,10 @@ fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
         );
     } else {
         println!(
-            "fragments: {}  estimated tokens: ≈{}\n",
+            "fragments: {}  stable ≈{}  session ≈{}  total ≈{}\n",
             p.fragments.len(),
+            estimator.estimate(&p.stable),
+            estimator.estimate(&p.session),
             estimator.estimate(&p.text)
         );
         for f in &p.fragments {
@@ -179,7 +181,14 @@ fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {
                 estimator.estimate(&f.content)
             );
         }
-        println!("\n{}", p.text);
+        println!(
+            "\n=== stable system (session-independent) ===\n{}",
+            p.stable
+        );
+        println!(
+            "\n=== session context (first provider-visible message) ===\n{}",
+            p.session
+        );
     }
     Ok(())
 }

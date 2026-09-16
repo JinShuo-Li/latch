@@ -2281,6 +2281,7 @@ mod tests {
         let resumed = crate::store::EventStore::open(&db).unwrap();
         let ctx = crate::continuity::MaterializedContext {
             system: String::new(),
+            session_context: String::new(),
             canonical: String::new(),
             recalled: String::new(),
             recent: resumed.events(session).unwrap(),

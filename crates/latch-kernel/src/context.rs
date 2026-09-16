@@ -98,8 +98,15 @@ pub struct ContextRequest<'a> {
     pub query: Option<&'a str>,
     pub evidence: &'a EvidenceLedger,
     pub failures: &'a FailureManager,
-    /// Compiled system prompt for this request.
+    /// Compiled session-independent system prompt for this request. It is
+    /// identical across sessions, modes, and workspaces so the `system` + tools
+    /// prefix stays reusable in the provider's prompt cache.
     pub system: String,
+    /// Session-specific prompt content (workspace, repository instructions,
+    /// and mode). The agent renders it as the first provider-visible message
+    /// after the tools instead of inside `system`, so a session difference
+    /// cannot invalidate the cacheable prefix.
+    pub session_context: String,
     pub budget: ContextBudget,
     /// Serialized extension context sources for this turn, or `""`.
     pub extension_context: &'a str,
@@ -116,6 +123,9 @@ pub struct ContextRequest<'a> {
 /// `recent` protocol-valid and bounded.
 pub struct ContextView {
     pub system: String,
+    /// Session-specific prompt content carried as the first provider-visible
+    /// message. See [`ContextRequest::session_context`].
+    pub session_context: String,
     pub canonical: String,
     pub recalled: String,
     pub recent: Vec<Event>,

@@ -546,6 +546,7 @@ fn context_messages_anchor_mid_task_windows_instead_of_dropping_them() {
     );
     let base = crate::continuity::MaterializedContext {
         system: "system".into(),
+        session_context: String::new(),
         canonical: String::new(),
         recalled: String::new(),
         recent: vec![assistant.clone(), tool.clone()],
@@ -590,6 +591,63 @@ fn context_messages_anchor_mid_task_windows_instead_of_dropping_them() {
     let messages = context_messages(&with_user);
     assert_eq!(messages[0].role, "user");
     assert_eq!(messages[0].content, "do it");
+}
+
+#[test]
+fn session_context_is_the_first_provider_message() {
+    fn event(sequence: u64, payload: EventPayload) -> Event {
+        Event {
+            id: Uuid::new_v4(),
+            session_id: Uuid::nil(),
+            sequence,
+            timestamp: Utc::now(),
+            parent_id: None,
+            payload,
+        }
+    }
+    let user = event(
+        1,
+        EventPayload::UserMessage {
+            text: "fix the bug".into(),
+            media: vec![],
+        },
+    );
+    let ctx = crate::continuity::MaterializedContext {
+        system: "stable core".into(),
+        session_context: "Workspace: /w\n\nWORK permits policy-approved changes".into(),
+        canonical: String::new(),
+        recalled: String::new(),
+        recent: vec![user],
+        bridge: crate::continuity::ConversationBridge::default(),
+        episodes: vec![],
+        stats: latch_protocol::ContextStats::default(),
+    };
+    // The session context is not in `system`; it opens the message stream and
+    // merges with the original user turn into one provider user message.
+    let messages = context_messages(&ctx);
+    assert_eq!(
+        messages.len(),
+        1,
+        "session context merges with the opening user turn"
+    );
+    assert_eq!(messages[0].role, "user");
+    assert!(messages[0].content.starts_with("Workspace: /w"));
+    assert!(
+        messages[0]
+            .content
+            .contains("WORK permits policy-approved changes")
+    );
+    assert!(messages[0].content.contains("fix the bug"));
+    // A mid-task window with no durable user turn still opens with a user
+    // message, so the provider never sees an assistant/tool turn first.
+    let no_user = crate::continuity::MaterializedContext {
+        recent: vec![],
+        ..ctx
+    };
+    let messages = context_messages(&no_user);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "user");
+    assert!(messages[0].content.starts_with("Workspace: /w"));
 }
 
 #[tokio::test]
@@ -749,6 +807,7 @@ async fn encrypted_reasoning_survives_durable_persistence_and_resume_materializa
     // Resume materialization rebuilds the artifact unchanged.
     let ctx = crate::continuity::MaterializedContext {
         system: String::new(),
+        session_context: String::new(),
         canonical: String::new(),
         recalled: String::new(),
         recent: events,
@@ -2283,9 +2342,11 @@ async fn request_prefix_is_append_only_and_cacheable_within_an_epoch() {
         "append-only requests share a large prefix: {cacheability}"
     );
 
-    // The compiled stable prefix is byte-identical across ordinary turns,
-    // and it is the head of every request's system block.
-    let compiled = PromptCompiler::compile(Mode::Work, d.path()).unwrap().text;
+    // The compiled stable prefix (the session-independent system block) is
+    // byte-identical across ordinary turns, and it is the whole system block.
+    let compiled = PromptCompiler::compile(Mode::Work, d.path())
+        .unwrap()
+        .stable;
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[0].system, requests[1].system,

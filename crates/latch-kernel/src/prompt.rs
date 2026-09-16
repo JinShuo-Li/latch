@@ -12,7 +12,16 @@ pub struct PromptFragment {
 }
 #[derive(Debug, Default)]
 pub struct CompiledPrompt {
+    /// Full compiled prompt (stable prefix followed by session context), for
+    /// diagnostics such as `latch debug prompt`.
     pub text: String,
+    /// Session-independent provider system prompt: the cacheable fragments
+    /// only. Byte-identical across modes and workspaces.
+    pub stable: String,
+    /// Session-specific prompt content (workspace, repository instructions,
+    /// mode), rendered by the agent as the first provider-visible message so
+    /// it never invalidates the stable `system` + tools prefix.
+    pub session: String,
     pub fragments: Vec<PromptFragment>,
 }
 impl CompiledPrompt {
@@ -170,12 +179,27 @@ impl PromptCompiler {
         // Fragment ids and versions are compiler metadata (shown by
         // `latch debug prompt`); the model only needs the instructions, so the
         // provider-facing text carries no per-fragment headers.
-        let text = f
-            .iter()
-            .map(|x| x.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        Ok(CompiledPrompt { text, fragments: f })
+        let render = |fragments: &[&PromptFragment]| -> String {
+            fragments
+                .iter()
+                .map(|x| x.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
+        let all: Vec<&PromptFragment> = f.iter().collect();
+        let text = render(&all);
+        // `stable` is the cacheable, session-independent behavioral core; the
+        // agent sends it as the provider `system` field so the `system` + tools
+        // prefix is byte-identical across sessions. `session` (workspace,
+        // repository instructions, mode) travels as the first message instead.
+        let stable = render(&f.iter().filter(|x| x.cacheable).collect::<Vec<_>>());
+        let session = render(&f.iter().filter(|x| !x.cacheable).collect::<Vec<_>>());
+        Ok(CompiledPrompt {
+            text,
+            stable,
+            session,
+            fragments: f,
+        })
     }
 }
 fn fragment(id: &str, priority: i32, cacheable: bool, content: &str) -> PromptFragment {
@@ -456,6 +480,32 @@ mod tests {
         // The mode is the most volatile fragment and must sit last, after the
         // workspace and repository instructions it must not invalidate.
         assert_eq!(p.fragments.last().map(|f| f.id.as_str()), Some("mode.work"));
+    }
+
+    #[test]
+    fn stable_prefix_is_session_independent() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("AGENTS.md"), "repo rule A").unwrap();
+        let work = PromptCompiler::compile(Mode::Work, a.path()).unwrap();
+        let plan = PromptCompiler::compile(Mode::Plan, b.path()).unwrap();
+        // The provider `system` field is identical across mode and workspace,
+        // so the `system` + tools prefix is reused by the provider cache.
+        assert_eq!(
+            work.stable, plan.stable,
+            "the system block must not vary by session"
+        );
+        assert!(!work.stable.contains("Workspace:"));
+        assert!(!work.stable.contains("PLAN is deep read-only"));
+        assert!(!work.stable.contains("repo rule A"));
+        // Every session-specific fragment lives in the message tail instead.
+        assert!(work.session.contains("Workspace:"));
+        assert!(work.session.contains("WORK permits policy-approved"));
+        assert!(work.session.contains("repo rule A"));
+        assert!(plan.session.contains("PLAN is deep read-only"));
+        assert_ne!(work.session, plan.session);
+        // `text` remains the full concatenation for diagnostics.
+        assert_eq!(work.text, format!("{}\n\n{}", work.stable, work.session));
     }
 
     #[test]
