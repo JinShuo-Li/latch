@@ -380,19 +380,49 @@ fn inferred_command_capabilities(command: &str) -> CapabilitySet {
         if GIT_REMOTE_VERBS.contains(&verb.as_str()) {
             capabilities.insert(Capability::RemoteSideEffect);
         }
-        if (GIT_WRITE_VERBS.contains(&verb.as_str()) && !git_listing_form(&tokens, &verb))
-            || command.contains(".git/")
-        {
+        if GIT_WRITE_VERBS.contains(&verb.as_str()) && !git_listing_form(&tokens, &verb) {
             capabilities.insert(Capability::GitMetadataWrite);
         }
     }
-    if tokens
-        .iter()
-        .any(|token| token == ".git" || token.contains(".git/"))
-    {
+    if targets_git_metadata(&tokens) {
         capabilities.insert(Capability::GitMetadataWrite);
     }
     capabilities
+}
+
+/// Flags whose following argument is a read-only search/exclusion pattern. A
+/// `.git` path mentioned only as such a pattern (for example
+/// `find . -not -path "*/.git/*"` or `rg --glob '!.git/'`) is not a metadata
+/// write, and treating it as one denies ordinary inspection commands.
+const READ_PATH_FILTER_FLAGS: &[&str] = &[
+    "-path",
+    "-not",
+    "!",
+    "--glob",
+    "--iglob",
+    "--exclude",
+    "--exclude-dir",
+    "--exclude-from",
+    "--ignore",
+    "--ignore-file",
+];
+
+/// True when a token names Git metadata as a target rather than as a read-only
+/// filter pattern. The sandbox still keeps `.git` read-only unless a metadata
+/// grant was approved, so this only decides whether the kernel asks first.
+fn targets_git_metadata(tokens: &[String]) -> bool {
+    tokens.iter().enumerate().any(|(index, token)| {
+        !is_read_filter_argument(tokens, index) && (token == ".git" || token.contains(".git/"))
+    })
+}
+
+fn is_read_filter_argument(tokens: &[String], index: usize) -> bool {
+    let token = &tokens[index];
+    let flag_name = token.split('=').next().unwrap_or(token);
+    if READ_PATH_FILTER_FLAGS.contains(&flag_name) {
+        return true;
+    }
+    index > 0 && READ_PATH_FILTER_FLAGS.contains(&tokens[index - 1].as_str())
 }
 
 const NETWORK_TOOLS: &[&str] = &[
@@ -773,6 +803,72 @@ mod tests {
         let read = inferred_command_capabilities("git status --short");
         assert!(!read.contains(Capability::GitMetadataWrite));
         assert!(!read.contains(Capability::NetworkAccess));
+    }
+
+    #[test]
+    fn read_only_git_filter_shell_command_is_allowed() {
+        // Reproduces the real dogfood failure: this exact read-only command was
+        // classified as a Git metadata mutation and denied in machine mode.
+        let command = r#"ls -la && find . -name "*.py" -not -path "*/.git/*" | head -50"#;
+        for safety in [Safety::Strict, Safety::Standard, Safety::Autonomous] {
+            let classification = classify(
+                "shell",
+                &json!({"command": command}),
+                context(Mode::Work, safety, Path::new("/tmp/ws")),
+            );
+            assert!(
+                !classification
+                    .capabilities
+                    .contains(Capability::GitMetadataWrite)
+            );
+        }
+        // Standard is the machine-dogfood default: the command must be allowed
+        // rather than denied for Git metadata it only filters out. (Strict asks
+        // for every shell workspace write by design, independently of this.)
+        for safety in [Safety::Standard, Safety::Autonomous] {
+            let classification = classify(
+                "shell",
+                &json!({"command": command}),
+                context(Mode::Work, safety, Path::new("/tmp/ws")),
+            );
+            assert!(
+                matches!(classification.decision, Decision::Allow),
+                "{safety:?} must allow a read-only filter: {:?}",
+                classification.decision
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_git_path_filters_are_not_metadata_writes() {
+        // A `.git` path used only as a read-only exclusion pattern must not be
+        // treated as a Git metadata mutation: doing so denies ordinary
+        // inspection commands in machine mode.
+        for command in [
+            r#"ls -la && find . -name "*.py" -not -path "*/.git/*" | head -50"#,
+            r#"rg --glob '**/.git/**' TODO"#,
+            "find . -path ./.git/objects -prune -o -name '*.rs' -print",
+            "grep -r TODO --exclude=*/.git/* .",
+        ] {
+            let capabilities = inferred_command_capabilities(command);
+            assert!(
+                !capabilities.contains(Capability::GitMetadataWrite),
+                "read-only filter misclassified as a metadata write: {command}"
+            );
+        }
+        // Real metadata targets still require explicit approval.
+        for command in [
+            "rm -rf .git",
+            "rm .git/*",
+            "echo x > .git/config",
+            "git commit -m x",
+        ] {
+            let capabilities = inferred_command_capabilities(command);
+            assert!(
+                capabilities.contains(Capability::GitMetadataWrite),
+                "metadata mutation was not detected: {command}"
+            );
+        }
     }
 
     #[test]
