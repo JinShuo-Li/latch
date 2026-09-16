@@ -140,6 +140,41 @@ branch/remote/tag/stash no longer absorb trailing commands. The sandbox keeps
 | output tokens | 2961 | 492 |
 | cache miss tokens | 2086 | 606 |
 
+## Iteration 4 - system prompt trimming (accepted, see commit)
+
+**Bottleneck.** The compiled system prompt was ~1489 estimated tokens: verbose
+prose plus a `[id vN]` header on all 16 fragments sent to the provider every
+request.
+
+**Hypothesis.** Dropping the provider-facing fragment headers and tightening
+prose-only fragments cuts per-request token spend without losing any behavioral
+rule, and the smaller stable prefix does not harm the prefix cache.
+
+**Change.** Fragment content was tightened and the `[id vN]` headers were
+removed from the provider-facing text (ids/versions remain compiler metadata
+shown by `latch debug prompt`). Every rule asserted by the prompt tests is
+preserved; the budget test was lowered from 1380/1520 to 1295/1305 tokens and
+now also asserts the headers are gone.
+
+**Result.**
+
+| Metric | Baseline | Iter 4 (matched 79 events) |
+| --- | --- | --- |
+| compiled prompt tokens | 1489 | 1298 (-12.8%) |
+| per-request `request_tokens` | 6806 | 6589 (-3.2%) |
+| aggregate input tokens | 33361 | 32446 (-2.7%) |
+| provider `cache_read/input` | 0.798 | 0.797 |
+| task success | verified | verified |
+
+**Cache-read proportion.** Trimming the stable prefix is ratio-neutral by
+construction: per-request, the cached prefix and the request both shrink by the
+same amount. The durable usage events show the first request is entirely
+uncached (~4.6k tokens) and every later request is already ~91-94% cached, so
+the aggregate ~0.80 is dominated by the first request plus small per-turn
+misses. Raising the aggregate proportion requires shrinking per-turn volatile
+content or the number of turns, not the system prompt; that is recorded as the
+remaining bottleneck.
+
 ## Rejected / no-change experiments
 
 - **Host-side CONNECT proxy** was needed to run the real provider from a
@@ -153,6 +188,10 @@ branch/remote/tag/stash no longer absorb trailing commands. The sandbox keeps
 
 ## Remaining bottlenecks
 
+- Cache-read proportion is prefix-bound: the first request is always fully
+  uncached and later requests are already ~91-94% cached. The lever is per-turn
+  volatile content (tool output, state deltas, narration) or fewer turns, not
+  the stable system prompt.
 - `cat .git/HEAD` or `cat .git/config` are still classified as Git metadata
   writes and ask for approval: the `.git` path scan does not distinguish
   read-only readers (`cat`, `head`, `ls`) from writers. Fixing that needs a

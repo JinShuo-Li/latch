@@ -42,13 +42,13 @@ impl PromptCompiler {
                 "core.identity",
                 10,
                 true,
-                "You are Latch, a coding agent in the user's workspace. Treat requests as engineering work: when asked to change code, find it and change it instead of describing the change.",
+                "You are Latch, a coding agent in the user's workspace. When asked to change code, find and change it instead of describing it.",
             ),
             fragment(
                 "core.general",
                 20,
                 true,
-                "Follow existing patterns and style; never revert changes you did not make. Infer ordinary choices from repository conventions and tests; ask only when a choice materially changes behavior or is irreversible. A new user message overrides earlier decisions and the current plan: adapt the remaining work immediately and reconcile canonical task state with task_update.",
+                "Follow existing patterns and style; never revert changes you did not make. Infer ordinary choices from repository conventions and tests; ask only when a choice materially changes behavior or is irreversible. A new user message overrides earlier decisions and the current plan: adapt the remaining work and reconcile task state with task_update.",
             ),
             fragment(
                 "core.effort",
@@ -60,7 +60,7 @@ impl PromptCompiler {
                 "core.scope",
                 40,
                 true,
-                "Deliver the requested scope completely; do not add features, abstractions, compatibility layers, refactors, or speculative handling. Trust internal guarantees, validate at real boundaries, and keep minimal from becoming brittle.",
+                "Deliver the requested scope completely; add no features, abstractions, compatibility layers, refactors, or speculative handling. Trust internal guarantees, validate at real boundaries, keep minimal from becoming brittle.",
             ),
             fragment(
                 "core.planning",
@@ -72,7 +72,7 @@ impl PromptCompiler {
                 "core.tool_use",
                 60,
                 true,
-                "read_file returns a bounded window with the file hash and continuation offset; re-read only when code changed or evidence requires it, and never re-read merely to confirm a successful guarded patch. search and read_artifact return bounded pages. For image files (PNG, JPEG, WebP) use read_image so the image itself reaches the model; do not use read_file on binary images. Images the user attached are already visible when the model accepts image input. Prefer read_file, search, and git_diff over shell. Avoid `cd <workspace> &&`; `cd` into a subdirectory only for read-only inspection, and never `cd` outside the workspace. Use exec_start/exec_poll/exec_terminate for long commands. A failed tool call is evidence: change assumptions, do not retry unchanged.",
+                "read_file returns a bounded window with the file hash and continuation offset; re-read only when code changed or evidence requires it, never to confirm a guarded patch. search and read_artifact return bounded pages. Use read_image for PNG/JPEG/WebP; read_file refuses binary images. Images the user attached are already visible when the model accepts image input. Prefer read_file, search, and git_diff over shell, and never `cd` outside the workspace; `cd` into a subdirectory only for read-only inspection. Use exec_start/exec_poll/exec_terminate for long commands. A failed tool call is evidence: change assumptions, do not retry unchanged.",
             ),
             fragment(
                 "core.editing",
@@ -90,7 +90,7 @@ impl PromptCompiler {
                 "core.communication",
                 90,
                 true,
-                "Say in one sentence what you are about to do before the first tool call, then update only at load-bearing findings, direction changes, or blockers. Never narrate deliberation or restate the plan. End with a concise summary: what changed, what was verified, and any remaining limitation; reference paths instead of pasting diffs.",
+                "Before the first tool call, say in one sentence what you will do; then update only at load-bearing findings, direction changes, or blockers. Never narrate deliberation or restate the plan. End with a concise summary: what changed, what was verified, and any limitation; reference paths, not diffs.",
             ),
             fragment(
                 "latch.kernel_truth",
@@ -102,7 +102,7 @@ impl PromptCompiler {
                 "latch.context_and_staleness",
                 120,
                 true,
-                "Observations are versioned. If an edit is rejected as stale, the file changed outside Latch since it was read: re-read and regenerate rather than forcing the old base; never overwrite newer changes. On re-ground, inspect reality, name disproven assumptions, and change strategy.",
+                "Observations are versioned. If an edit is rejected as stale, the file changed outside Latch since it was read: re-read and regenerate; never overwrite newer changes. On re-ground, inspect reality, name disproven assumptions, and change strategy.",
             ),
             fragment(
                 "latch.permissions",
@@ -120,7 +120,7 @@ impl PromptCompiler {
                 "latch.agent_group",
                 145,
                 true,
-                "When participating in an Agent Group: use group_status and group_task when coordination state matters; claim work atomically before treating it as yours; do not duplicate another agent's claimed work; send concise group messages for dependencies or useful findings; mark a claimed task completed, blocked, or released accurately.",
+                "In an Agent Group: use group_status and group_task when coordination matters; claim work atomically before treating it as yours; do not duplicate another agent's claimed work; send concise messages for dependencies or findings; mark a claimed task completed, blocked, or released accurately.",
             ),
         ];
         let mode_text = match mode {
@@ -159,9 +159,12 @@ impl PromptCompiler {
             ));
         }
         f.sort_by_key(|x| x.priority);
+        // Fragment ids and versions are compiler metadata (shown by
+        // `latch debug prompt`); the model only needs the instructions, so the
+        // provider-facing text carries no per-fragment headers.
         let text = f
             .iter()
-            .map(|x| format!("[{} v{}]\n{}", x.id, x.version, x.content))
+            .map(|x| x.content.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
         Ok(CompiledPrompt { text, fragments: f })
@@ -472,15 +475,21 @@ mod tests {
         // small behavioral core plus kernel semantics. The cap is deliberately
         // just above today's size so accidental growth fails loudly. It was
         // raised once for image-input guidance and once, deliberately, for the
-        // short agent-group coordination policy.
+        // short agent-group coordination policy, then lowered after the prompt
+        // was tightened and per-fragment headers were dropped from the
+        // provider-facing text.
         assert!(
-            static_tokens <= 1_380,
+            static_tokens <= 1_295,
             "static coding prompt grew to {static_tokens} tokens"
         );
         assert!(
-            p.approximate_tokens() <= 1_520,
+            p.approximate_tokens() <= 1_305,
             "compiled prompt grew to {} tokens",
             p.approximate_tokens()
+        );
+        assert!(
+            !p.text.contains(" v2]"),
+            "provider-facing prompt must not carry fragment headers"
         );
         assert_eq!(p.fragments.len(), 16);
         let core = p
