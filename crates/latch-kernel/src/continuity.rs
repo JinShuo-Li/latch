@@ -133,7 +133,16 @@ impl ContinuityEngine {
         budget: &MaterializeBudget,
     ) -> Result<MaterializedContext> {
         self.materialize_dynamic(
-            session_id, state, query, evidence, failures, system, budget, "", None,
+            session_id,
+            state,
+            query,
+            evidence,
+            failures,
+            system,
+            String::new(),
+            budget,
+            "",
+            None,
         )
     }
 
@@ -161,6 +170,7 @@ impl ContinuityEngine {
         evidence: &EvidenceLedger,
         failures: &FailureManager,
         system: String,
+        session_context: String,
         budget: &MaterializeBudget,
         extension_context: &str,
         reground: Option<&str>,
@@ -168,7 +178,12 @@ impl ContinuityEngine {
         let estimator = self.estimator;
         let own_budget = budget.request_tokens.saturating_sub(budget.reserved_tokens);
         let memories = self.store.memories(session_id)?;
-        let instructions_tokens = estimator.estimate(&system);
+        // The session context is a provider-visible message, not part of the
+        // system prefix, but it still consumes request budget: account for it
+        // with the instructions.
+        let instructions_tokens = estimator
+            .estimate(&system)
+            .saturating_add(estimator.estimate(&session_context));
         // A deterministic canonical cap keeps emitted kernel state independent
         // of per-turn extension/tool reservations, so unchanged state does not
         // churn the durable kernel history.
@@ -635,6 +650,7 @@ impl ContinuityEngine {
         stats.recompute();
         Ok(MaterializedContext {
             system,
+            session_context,
             canonical,
             recalled: recalled_text,
             recent,
@@ -730,6 +746,7 @@ impl ContextEngine for ContinuityEngine {
             request.evidence,
             request.failures,
             request.system,
+            request.session_context,
             &request.budget,
             request.extension_context,
             request.reground,

@@ -208,6 +208,29 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
             normalized.push(message);
         }
     }
+    // Session-specific instructions (workspace, repository instructions, mode)
+    // are carried as the first provider-visible message rather than inside the
+    // system prompt. This keeps `system` + tools byte-identical across sessions
+    // and mode switches, so the provider's prefix cache survives them. Merge
+    // with the following user turn (the original prompt or the continuation
+    // anchor) so the provider still sees a single opening user turn.
+    if !ctx.session_context.trim().is_empty() {
+        let mut opening = ModelMessage::text("user", ctx.session_context.clone());
+        let merge = normalized.first().is_some_and(|next| {
+            next.role == "user" && next.tool_calls.is_empty() && next.tool_call_id.is_none()
+        });
+        if merge {
+            let next = normalized.remove(0);
+            if !next.content.is_empty() {
+                if !opening.content.is_empty() {
+                    opening.content.push_str("\n\n");
+                }
+                opening.content.push_str(&next.content);
+            }
+            opening.media.extend(next.media);
+        }
+        normalized.insert(0, opening);
+    }
     normalized
 }
 

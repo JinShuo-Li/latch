@@ -509,7 +509,8 @@ impl Agent {
             query,
             evidence: &self.evidence,
             failures: &self.failures,
-            system: prompt.text,
+            system: prompt.stable,
+            session_context: prompt.session,
             budget: self.materialize_budget(reserved),
             extension_context: "",
             reground: None,
@@ -985,13 +986,15 @@ impl Agent {
             let tools_tokens = self.estimator.estimate_tools(&tools);
             let extension_tokens = self.estimator.estimate(&extension_json);
             let budget = self.materialize_budget(tools_tokens.saturating_add(extension_tokens));
+            let prompt = PromptCompiler::compile(self.mode, &self.workspace)?;
             let ctx = self.continuity.materialize(ContextRequest {
                 session_id: self.session_id,
                 state: self.state.state(),
                 query: query.as_deref(),
                 evidence: &self.evidence,
                 failures: &self.failures,
-                system: PromptCompiler::compile(self.mode, &self.workspace)?.text,
+                system: prompt.stable,
+                session_context: prompt.session,
                 budget,
                 extension_context: &extension_json,
                 reground: self.progress.reground_instruction().as_deref(),

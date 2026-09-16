@@ -1157,6 +1157,7 @@ impl ContextEngine for CannedContextEngine {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ContextView {
             system: self.system.clone(),
+            session_context: String::new(),
             canonical: String::new(),
             recalled: String::new(),
             recent: Vec::new(),
@@ -1299,6 +1300,7 @@ fn continuity_conforms_to_the_context_port() {
             evidence: &EvidenceLedger::default(),
             failures: &FailureManager::new(3),
             system: "invariant system prompt".into(),
+            session_context: String::new(),
             budget: ported.default_budget(64_000, 0),
             extension_context: "",
             reground: None,
@@ -1719,6 +1721,7 @@ fn default_context_engine_factory_matches_continuity_for_model() {
             evidence: &EvidenceLedger::default(),
             failures: &FailureManager::new(3),
             system: "invariant system prompt".into(),
+            session_context: String::new(),
             budget,
             extension_context: "",
             reground: None,
