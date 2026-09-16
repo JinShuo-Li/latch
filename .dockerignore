@@ -1,0 +1,10 @@
+# Keep the Docker build context minimal and deterministic. The image build only
+# reads the workspace manifests, crate sources, and harness files under docker/.
+# Everything else (target/, .git/, .references/, node_modules/, docs/) is
+# excluded so context upload stays fast and no local state leaks into image
+# layers.
+*
+!Cargo.toml
+!Cargo.lock
+!crates/
+!docker/

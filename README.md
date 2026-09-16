@@ -650,6 +650,27 @@ long-horizon run. Each writes `target/live-acceptance/<scenario>.json` with
 turns, tool calls, input/output/cache tokens, pre-request estimated context,
 provider-reported usage, validation outcomes, completion, and elapsed time.
 
+## Docker dogfood harness
+
+An optional, non-privileged Docker environment runs the machine CLI against a
+disposable workspace, for manual dogfooding (including on a Raspberry Pi 5) and
+deterministic, credential-free integration checks:
+
+```sh
+docker build --target runtime -t latch-dogfood:local -f docker/Dockerfile .
+./scripts/dogfood-test.sh                 # deterministic, no network/keys/TTY
+cp docker/config.dogfood.toml /tmp/latch-dogfood.toml   # configure a provider
+OPENCODE_API_KEY=… ./scripts/dogfood.sh --config /tmp/latch-dogfood.toml \
+  --provider-env OPENCODE_API_KEY "Fix the failing test and run it"
+```
+
+The harness only prepares the image, workspace, mounts, and explicitly
+forwarded environment; it drives the same `latch run`/`resume`/`sessions`
+machine interface. Credentials are never baked into the image and the
+container runs non-root without `--privileged` or `--network host`. See
+[docs/DOGFOOD_DOCKER.md](docs/DOGFOOD_DOCKER.md) for the trust boundary, mount
+behavior, cleanup, ARM64 notes, and limitations.
+
 ## Extensions
 
 Extensions are explicitly configured executables speaking JSON-RPC 2.0 over

@@ -1,0 +1,54 @@
+# Provider-neutral config template for the Docker dogfood harness.
+#
+# The runner mounts this file read-only at /config/config.toml and forwards only
+# the environment variables you name with --provider-env. Secrets never live in
+# this file, in the image, or in the durable event log.
+#
+# Configure exactly one provider below (uncomment and edit), then run, for
+# example:
+#
+#   OPENCODE_API_KEY=... ./scripts/dogfood.sh \
+#     --provider-env OPENCODE_API_KEY \
+#     --prompt "Fix the failing test and run it"
+
+# Container-local state. The runner mounts a host directory here for
+# inspection, so this path must stay /state.
+state_dir = "/state"
+
+default_mode = "WORK"
+
+# Example: OpenCode Go (set credential to env:OPENCODE_API_KEY and forward it).
+# [providers.opencode-go]
+# kind = "opencode-go"
+# credential = "env:OPENCODE_API_KEY"
+# default_model = "deepseek-v4-flash"
+
+# Example: any OpenAI-compatible endpoint (local servers included). Because the
+# harness deliberately does not use --network host, a provider on the host must
+# be reachable through a published/published-safe address; a container-local
+# endpoint can be reached at 127.0.0.1.
+# [providers.openai-compatible]
+# kind = "openai-compatible"
+# base_url = "https://example.invalid/v1"
+# credential = "env:OPENAI_API_KEY"
+# default_model = "gpt-4o-mini"
+
+# Example: Anthropic.
+# [providers.anthropic]
+# kind = "anthropic"
+# credential = "env:ANTHROPIC_API_KEY"
+# default_model = "claude-3-5-sonnet-latest"
+
+# Select the active provider/model. Precedence is unchanged: CLI override >
+# durable session profile > this config > built-in default.
+# [inference]
+# provider = "opencode-go"
+# model = "deepseek-v4-flash"
+
+[permissions]
+# Machine mode is fail-closed: an Ask that no human can resolve is denied
+# (exit 3) rather than auto-approved.
+mode = "human"
+
+[safety]
+level = "standard"
