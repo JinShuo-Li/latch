@@ -30,12 +30,17 @@ impl CompiledPrompt {
 
 pub struct PromptCompiler;
 impl PromptCompiler {
-    /// Proportional coding-agent architecture. The stable prefix is a small
-    /// behavioral core (identity, general, effort, scope, planning, tools,
-    /// editing, validation, communication) followed by Latch's kernel
-    /// semantics, then mode and per-session context. Effort is the load-bearing
-    /// rule: the smallest amount of inspection, implementation, reasoning, and
-    /// validation that solves the task.
+    /// Proportional coding-agent architecture. Fragments are ordered
+    /// least-volatile first so the provider's prefix cache survives the most
+    /// change: the session-independent behavioral core (identity, general,
+    /// effort, scope, planning, tools, editing, validation, communication)
+    /// and Latch's kernel semantics lead, then per-session context
+    /// (workspace, repository instructions), and finally the mode. A mode
+    /// change (Ask/Plan/Work) rewrites only the tiny trailing fragment
+    /// instead of invalidating the workspace and repository instructions that
+    /// follow it in the request. Effort is the load-bearing rule: the smallest
+    /// amount of inspection, implementation, reasoning, and validation that
+    /// solves the task.
     pub fn compile(mode: Mode, workspace: &Path) -> Result<CompiledPrompt> {
         let mut f = vec![
             fragment(
@@ -72,7 +77,7 @@ impl PromptCompiler {
                 "core.tool_use",
                 60,
                 true,
-                "read_file returns a bounded window with the file hash and continuation offset; re-read only when code changed or evidence requires it, never to confirm a guarded patch. search and read_artifact return bounded pages. Use read_image for PNG/JPEG/WebP; read_file refuses binary images. Images the user attached are already visible when the model accepts image input. Prefer read_file, search, and git_diff over shell, and never `cd` outside the workspace; `cd` into a subdirectory only for read-only inspection. Use exec_start/exec_poll/exec_terminate for long commands. A failed tool call is evidence: change assumptions, do not retry unchanged.",
+                "read_file returns a bounded window with the file hash and continuation offset; re-read only when code changed or evidence requires it, never to confirm a guarded patch. search and read_artifact return bounded pages. Use read_image for PNG/JPEG/WebP; read_file refuses binary images. Images the user attached are already visible when the model accepts image input. Prefer read_file, search, and git_diff over shell, and never `cd` outside the workspace; `cd` into a subdirectory only for read-only inspection. Use exec_start/exec_poll/exec_terminate for long commands. Batch independent reads, searches, and probes into one turn. A failed tool call is evidence: change assumptions, do not retry unchanged.",
             ),
             fragment(
                 "core.editing",
@@ -136,14 +141,17 @@ impl PromptCompiler {
         };
         f.push(fragment(
             &format!("mode.{}", mode.to_string().to_ascii_lowercase()),
-            150,
-            true,
+            200,
+            false,
             mode_text,
         ));
-        // Per-session context follows the stable coding-agent behavior above.
+        // Per-session context follows the stable coding-agent behavior above,
+        // and the mode is the trailing fragment: a mode switch rewrites only
+        // this tail, so the workspace and repository instructions ahead of it
+        // stay in the cached prefix.
         f.push(fragment(
             "environment.workspace",
-            160,
+            150,
             false,
             &format!("Workspace: {}", workspace.display()),
         ));
@@ -153,7 +161,7 @@ impl PromptCompiler {
         {
             f.push(fragment(
                 &format!("environment.instructions.{name}"),
-                180 + index as i32,
+                160 + index as i32,
                 false,
                 &format!("Repository instructions from {name}:\n{content}"),
             ));
@@ -237,8 +245,8 @@ mod tests {
                 "latch.permissions",
                 "latch.subagents",
                 "latch.agent_group",
-                "mode.work",
                 "environment.workspace",
+                "mode.work",
             ]
         );
         let effort = p.fragment("core.effort").unwrap();
@@ -429,26 +437,25 @@ mod tests {
         // Canonical task state is no longer part of the compiled prompt; it is
         // rendered once by the continuity engine after the stable prefix.
         assert!(p.fragment("task.state").is_none());
-        let dynamic = ["environment.workspace"];
-        let lowest_static = p
+        // The cacheable behavioral core leads; every per-session (non-cacheable)
+        // fragment follows it, so changing one cannot invalidate the prefix.
+        let highest_static = p
             .fragments
             .iter()
-            .filter(|f| !dynamic.contains(&f.id.as_str()))
+            .filter(|f| f.cacheable)
             .map(|f| f.priority)
             .max()
             .unwrap();
-        for fragment in p
-            .fragments
-            .iter()
-            .filter(|f| dynamic.contains(&f.id.as_str()))
-        {
+        for fragment in p.fragments.iter().filter(|f| !f.cacheable) {
             assert!(
-                fragment.priority > lowest_static,
-                "{} must follow stable behavior",
+                fragment.priority > highest_static,
+                "{} must follow the cacheable behavior core",
                 fragment.id
             );
-            assert!(!fragment.cacheable);
         }
+        // The mode is the most volatile fragment and must sit last, after the
+        // workspace and repository instructions it must not invalidate.
+        assert_eq!(p.fragments.last().map(|f| f.id.as_str()), Some("mode.work"));
     }
 
     #[test]
@@ -477,13 +484,15 @@ mod tests {
         // raised once for image-input guidance and once, deliberately, for the
         // short agent-group coordination policy, then lowered after the prompt
         // was tightened and per-fragment headers were dropped from the
-        // provider-facing text.
+        // provider-facing text. The mode and per-session fragments are no
+        // longer counted: they are ordered last so a session change cannot
+        // invalidate the cached behavioral prefix.
         assert!(
-            static_tokens <= 1_295,
+            static_tokens <= 1_279,
             "static coding prompt grew to {static_tokens} tokens"
         );
         assert!(
-            p.approximate_tokens() <= 1_305,
+            p.approximate_tokens() <= 1_321,
             "compiled prompt grew to {} tokens",
             p.approximate_tokens()
         );
