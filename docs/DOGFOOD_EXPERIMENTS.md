@@ -175,6 +175,57 @@ misses. Raising the aggregate proportion requires shrinking per-turn volatile
 content or the number of turns, not the system prompt; that is recorded as the
 remaining bottleneck.
 
+## Iteration 5 - prompt sequence, tool schemas, and batching (accepted, see commit)
+
+**Bottleneck.** Two costs dominated every request: the tool-schema block
+(measured `tools_tokens` 3405, ~73% of the first request) and a system prefix
+whose ordering mixed session-specific fragments into the cacheable middle.
+
+**Hypothesis.** (a) Tightening tool descriptions cuts every request without
+changing any tool name, parameter, or semantic. (b) Ordering fragments
+least-volatile first, with the mode as the trailing fragment, preserves the
+cached prefix across a mode switch. (c) A short "batch independent probes"
+rule reduces turns.
+
+**Change.** `prompt.rs`: fragments are now core/latch (cacheable, session-
+independent) then `environment.workspace`, `environment.instructions.*`, and
+finally `mode.*` (priority 200); mode is no longer marked cacheable. Added one
+terse batching rule to `core.tool_use`. `request.rs`: tightened the verbose
+kernel/agent/group tool descriptions (names, required fields, enums, and
+semantics unchanged) and added a `tool_definitions_stay_within_budget` guard.
+The budget test now asserts the volatility ordering and mode-last position.
+
+**Result** (real provider, disposable `calc.py` fixture):
+
+| Metric | Iter 4 baseline | Iter 5 (matched 79 events / 6 requests) |
+| --- | --- | --- |
+| tool schema tokens (estimate) | 3494 | 3395 (-2.8%) |
+| in-run `tools_tokens` | 3405 | 3310 (-95) |
+| per-request `request_tokens` | 6567 | 6450 (-117) |
+| aggregate input tokens | 32441 | 31842 (-1.8%) |
+| provider `cache_read/input` | 0.797 | 0.788 |
+| task success | verified | verified |
+
+**Cache-read proportion (measured per request).** With the same 6 requests the
+durable `model_usage` events show: request 0 is fully uncached (4590 tokens);
+requests 1-5 read 91-96% of their input; aggregate 0.79. The aggregate is
+dominated by the unavoidable first request plus the ~230-590 new tokens each
+turn adds. Shrinking the stable prefix is ratio-neutral, so this iteration
+reduced absolute spend, not the ratio.
+
+**Cross-session observation.** When two consecutive runs share a byte-identical
+system+tools prefix *and* the provider's cache is still warm, request 0 can hit:
+one sample read 4352 of 4590 first-request tokens and aggregate
+`cache_read/input` rose to 0.94. That reuse is not reliable (it depends on the
+gateway routing/TTL and needs an identical prefix), but it identifies the real
+lever: a **session-independent** system+tools prefix. Today `environment.
+workspace`, repository instructions, and mode live inside the `system` field,
+which precedes the tools and messages, so any session difference invalidates
+the whole cached prefix. Moving those fragments out of `system` into the
+post-tools message tail would make the prefix reusable across sessions and
+across mode/instruction changes. That is a larger, provider-facing change and
+was deliberately not attempted here.
+
 ## Rejected / no-change experiments
 
 - **Host-side CONNECT proxy** was needed to run the real provider from a
@@ -188,10 +239,16 @@ remaining bottleneck.
 
 ## Remaining bottlenecks
 
-- Cache-read proportion is prefix-bound: the first request is always fully
-  uncached and later requests are already ~91-94% cached. The lever is per-turn
-  volatile content (tool output, state deltas, narration) or fewer turns, not
-  the stable system prompt.
+- Cache-read proportion is prefix-bound: the first request is uncached and
+  later requests are already ~91-96% cached, so the aggregate ~0.80 is the
+  first request plus per-turn new tokens. The structural lever is making the
+  `system`+tools prefix **session-independent** (move workspace, repository
+  instructions, and mode out of the `system` field into the post-tools tail);
+  the measured best case when the prefix is reused is ~0.94. That is a
+  provider-facing change and needs its own iteration.
+- Mode and per-session fragments now trail the cacheable core, so a mode switch
+  rewrites only the tail; this is asserted by the prompt tests but not
+  measurable in the single-mode harness.
 - `cat .git/HEAD` or `cat .git/config` are still classified as Git metadata
   writes and ask for approval: the `.git` path scan does not distinguish
   read-only readers (`cat`, `head`, `ls`) from writers. Fixing that needs a
