@@ -100,8 +100,14 @@ user config > built-in defaults.
 
 ## Prompt architecture
 
-`PromptCompiler` assembles the model-facing system prompt from prioritized
-fragments. The architecture follows publicly documented Codex CLI prompt
+`PromptCompiler` assembles the model-facing prompt from prioritized fragments
+and splits it into a session-independent system prefix (the cacheable
+behavioral core and kernel semantics) and a session context (workspace,
+repository instructions, mode). The agent passes the prefix as the provider
+`system` field and renders the session context as the first provider-visible
+message, so the `system` + tools prefix is byte-identical across sessions and
+mode switches and stays in the provider's prompt cache. The architecture
+follows publicly documented Codex CLI prompt
 structure (small behavioral core, explicit autonomy-and-persistence and
 validation sections) and Anthropic's official proportional-effort guidance
 (skip planning for straightforward work, verify with the narrowest meaningful
@@ -198,7 +204,7 @@ stable tools but every agent control call fails with a normal terminal tool
 result.
 
 Child context begins fresh: its first user turn is the delegation brief, and
-its system prompt independently loads workspace repository instructions. Task
+its session context independently loads workspace repository instructions. Task
 state, evidence, failure and progress supervision, continuity, and cache epochs
 are reconstructed solely from that child session. `AgentReport` exposes only
 semantic evidence references; it never imports evidence into the parent ledger.
@@ -356,10 +362,11 @@ engine: `context.rs` defines `ContextEngine` with `ContextRequest`,
 `ContextBudget`, and `ContextView`, and `ContinuityEngine` implements it while
 keeping its historical `materialize`/`MaterializeBudget`/`MaterializedContext`
 names as aliases. The request carries session id, canonical `TaskState`,
-retrieval query, evidence ledger, failure manager, compiled system prompt,
-budget, extension context, and re-ground instruction; the view returns the
-system prompt, the provider-visible `recent` events of the current durable
-cache epoch, canonical/recalled renderings, episodes, and `ContextStats`. The
+retrieval query, evidence ledger, failure manager, the session-independent
+compiled system prompt and the session context, budget, extension context, and
+re-ground instruction; the view returns the system prompt, the session context,
+the provider-visible `recent` events of the current durable cache epoch,
+canonical/recalled renderings, episodes, and `ContextStats`. The
 port exposes no `EventStore` or SQLite handle, so a replacement engine (for
 example a remote context service) cannot mutate durable session truth outside
 its structured view. Implementing the port is kernel-authority work and is
@@ -410,9 +417,15 @@ reason, and the tokens retained by that rotation.
 
 ### Prompt cache layout
 
-The compiled system prompt is session-stable by construction: behavioral core,
-Latch kernel semantics, mode, workspace identity, and repository instructions.
-Canonical task state is rendered exactly once by continuity and travels as a
+The provider `system` field is session-independent by construction: the
+behavioral core and Latch kernel semantics only, byte-identical across
+workspaces, repositories, and modes. Session-specific content (workspace
+identity, repository instructions, and mode) travels as the first
+provider-visible user message, after the tool schemas, merged with the opening
+user turn; a different session therefore does not invalidate the
+`system` + tools prefix, and the provider can serve the first request of a
+later session from cache. Canonical task state is rendered exactly once by
+continuity and travels as a
 final kernel-context user turn together with recalled originals and extension
 context, so frequently changing state/evidence never invalidates the reusable
 prefix. Tool schemas are stable and serialized before the messages. The
@@ -428,7 +441,8 @@ prefix caching.
 The provider-visible conversation is organized into durable **cache epochs**.
 Within one epoch every request is an exact append-only extension of the
 previous one: no already-sent message is removed, reordered, or rewritten. The
-system prompt and tool schemas are session-stable, and kernel-owned context is
+`system` field and tool schemas are session-independent (session-specific
+content is the first message), and kernel-owned context is
 sent as durable [`KernelContext`] messages instead of a synthetic trailing
 turn, so the reusable prefix does not break on ordinary turns.
 
