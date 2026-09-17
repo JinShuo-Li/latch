@@ -381,7 +381,7 @@ fn run_json_emits_one_versioned_object() {
         "secrets must never appear in structured output"
     );
     let value = stdout_json(&output);
-    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["schema_version"], 3);
     assert_eq!(value["command"], "run");
     assert_eq!(value["status"], "completed");
     assert_eq!(value["workspace"], workspace);
@@ -398,7 +398,7 @@ fn run_json_emits_one_versioned_object() {
     assert_eq!(value["task"]["validation"]["failed"], 0);
     assert_eq!(value["task"]["validation"]["pending"], 0);
     // Usage is scoped: root only vs. the whole durable session graph.
-    assert_eq!(value["usage"]["scope"], "graph");
+    assert_eq!(value["usage"]["scope"], "invocation_graph");
     assert_eq!(value["usage"]["root"]["input_tokens"], 11);
     assert_eq!(value["usage"]["root"]["output_tokens"], 7);
     assert_eq!(value["usage"]["root"]["cache_read_tokens"], 3);
@@ -561,7 +561,7 @@ fn multi_agent_usage_aggregates_root_and_graph() {
     assert_eq!(value["usage"]["graph"]["cache_read_tokens"], root_hits * 40);
     assert_eq!(value["usage"]["graph"]["cache_miss_tokens"], root_hits * 60);
     assert!(value["usage"]["graph"]["cache_write_tokens"].is_null());
-    assert_eq!(value["usage"]["scope"], "graph");
+    assert_eq!(value["usage"]["scope"], "invocation_graph");
 
     assert_eq!(value["events"]["scope"], "root");
     assert_eq!(value["agent_graph"]["sessions"], 2);
@@ -571,6 +571,159 @@ fn multi_agent_usage_aggregates_root_and_graph() {
             > value["events"]["count"].as_u64().unwrap(),
         "the graph summary covers child events the root range does not"
     );
+}
+
+#[test]
+fn resume_usage_is_scoped_to_the_invocation() {
+    let usage = json!({
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "prompt_cache_hit_tokens": 40,
+        "prompt_cache_miss_tokens": 60,
+    });
+    let fixture = fixture(vec![Turn::Text("resumed")], Some(usage), "standard");
+    let workspace = workspace_arg(&fixture);
+
+    let first = run_latch(
+        &fixture,
+        &[
+            "run",
+            "--prompt",
+            "first invocation",
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ],
+    );
+    assert!(first.status.success(), "stderr: {}", stderr_text(&first));
+    let first_value = stdout_json(&first);
+    let session = first_value["session_id"].as_str().unwrap().to_owned();
+    assert_eq!(first_value["usage"]["scope"], "invocation_graph");
+    assert_eq!(first_value["usage"]["root"]["input_tokens"], 100);
+
+    let second = run_latch(
+        &fixture,
+        &[
+            "resume",
+            "--session",
+            &session,
+            "--prompt",
+            "second invocation",
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ],
+    );
+    assert!(second.status.success(), "stderr: {}", stderr_text(&second));
+    let second_value = stdout_json(&second);
+    assert_eq!(second_value["session_id"], first_value["session_id"]);
+    // The second invocation reports only its own usage, never 100 + 100.
+    assert_eq!(
+        second_value["usage"]["root"]["input_tokens"], 100,
+        "{second_value}"
+    );
+    assert_eq!(second_value["usage"]["graph"]["input_tokens"], 100);
+    assert_eq!(second_value["usage"]["root"]["output_tokens"], 10);
+    assert_eq!(
+        second_value["usage"]["root"]["cache_read_tokens"], 40,
+        "cache categories are also invocation-scoped"
+    );
+}
+
+#[test]
+fn resumed_root_excludes_existing_child_history_from_usage() {
+    let root_usage = json!({
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+    });
+    let child_usage = json!({
+        "prompt_tokens": 50,
+        "completion_tokens": 5,
+    });
+    let root_requests = Arc::new(AtomicUsize::new(0));
+    let mock = {
+        let root_requests = Arc::clone(&root_requests);
+        MockProvider::start_with_responder(std::time::Duration::ZERO, move |_index, body| {
+            if body.contains(ROOT_MARKER) {
+                let request = root_requests.fetch_add(1, Ordering::SeqCst);
+                let turn = match request {
+                    0 => Turn::ToolCall {
+                        name: "spawn_agent",
+                        arguments: json!({
+                            "task_name": "child work",
+                            "message": "Do the child work. Reply with CHILD-DONE.",
+                        }),
+                    },
+                    1 => Turn::ToolCall {
+                        name: "wait_agents",
+                        arguments: json!({"timeout_ms": 30_000}),
+                    },
+                    _ => Turn::Text("root answer"),
+                };
+                MockResponse {
+                    turn,
+                    usage: Some(root_usage.clone()),
+                }
+            } else {
+                assert!(body.contains("CHILD-DONE"), "unexpected request: {body}");
+                MockResponse {
+                    turn: Turn::Text("child answer"),
+                    usage: Some(child_usage.clone()),
+                }
+            }
+        })
+    };
+    let fixture = fixture_with_mock(mock, "standard", "");
+    let workspace = workspace_arg(&fixture);
+
+    let first = run_latch(
+        &fixture,
+        &[
+            "run",
+            "--prompt",
+            ROOT_MARKER,
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ],
+    );
+    assert!(first.status.success(), "stderr: {}", stderr_text(&first));
+    let first_value = stdout_json(&first);
+    let session = first_value["session_id"].as_str().unwrap().to_owned();
+    assert_eq!(first_value["usage"]["root"]["input_tokens"], 300);
+    assert_eq!(first_value["usage"]["graph"]["input_tokens"], 350);
+
+    // The resumed invocation spawns nothing: the existing child's first-run
+    // usage must not leak into this invocation's totals.
+    let second = run_latch(
+        &fixture,
+        &[
+            "resume",
+            "--session",
+            &session,
+            "--prompt",
+            ROOT_MARKER,
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ],
+    );
+    assert!(second.status.success(), "stderr: {}", stderr_text(&second));
+    let second_value = stdout_json(&second);
+    assert_eq!(second_value["usage"]["scope"], "invocation_graph");
+    assert_eq!(
+        second_value["usage"]["root"]["input_tokens"], 100,
+        "{second_value}"
+    );
+    assert_eq!(
+        second_value["usage"]["graph"]["input_tokens"], 100,
+        "the existing child's prior usage must be excluded"
+    );
+    assert_eq!(second_value["agent_graph"]["child_sessions"], 1);
 }
 
 #[test]
@@ -1165,7 +1318,7 @@ fn malformed_config_is_a_configuration_error() {
         stderr_text(&output)
     );
     let value = stdout_json(&output);
-    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["schema_version"], 3);
     assert_eq!(value["status"], "configuration_error");
     assert!(value["task"].is_null());
     assert!(value["error"]["message"].is_string());

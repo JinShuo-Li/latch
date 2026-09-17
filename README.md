@@ -136,7 +136,7 @@ cat task.txt | latch run --workspace ./fixture --stdin --output jsonl
 selection, policy, prompt compilation, and tools, so callers never need to
 `cd` first. `--output text` (the default) preserves the historical one-shot
 behavior and streams assistant text to stdout. `--output json` prints exactly
-one versioned object (`"schema_version": 2`) carrying the command, session id,
+one versioned object (`"schema_version": 3`) carrying the command, session id,
 workspace, run status, resolved provider/model/effort, durable task state,
 result text, scoped usage, context accounting, and event/graph summaries.
 `--output jsonl` streams semantic records (`text_delta`, `tool_result`,
@@ -157,12 +157,15 @@ kernel state (`in_progress`, `implemented_not_verified`, `verified`, or
 `blocked`), alongside `task.goal`, `task.evidence_count`, and a
 `task.validation` passed/failed/pending summary.
 
-Usage is explicitly scoped. `usage.scope` is `"graph"`; `usage.root`
-aggregates durable `ModelUsage` events for the root session only, while
-`usage.graph` adds every durable child session belonging to that root. Both
-aggregate durable history, so resumed, interrupted, and failed children
-contribute exactly what they consumed and never twice, and provider categories
-that were never reported stay `null` instead of being fabricated as zero.
+Usage is scoped to the current CLI invocation. `usage.scope` is
+`"invocation_graph"`; `usage.root` aggregates durable `ModelUsage` events the
+root session emitted during this invocation, while `usage.graph` adds the same
+for every durable child session of that root. Each session counts only events
+emitted after a per-session durable sequence mark captured when the invocation
+began, so a resumed root or child never re-reports an earlier run's tokens and a
+child spawned mid-invocation counts from its own beginning. Provider categories
+that were never reported stay `null` instead of being fabricated as zero; the
+durable `model_usage` events remain the session's full lifetime record.
 `events.scope` is always `"root"`: its range and count cover the root session's
 stream only. `agent_graph` reports `sessions`, `child_sessions`, and total
 graph `events` without exposing child transcripts.

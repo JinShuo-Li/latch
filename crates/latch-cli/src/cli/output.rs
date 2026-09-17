@@ -6,16 +6,20 @@
 //! context values come from durable events, and provider error strings have
 //! already passed through the kernel's redaction rules.
 //!
-//! Schema version 2 makes durable semantics explicit:
+//! Schema version 3 scopes usage to the current CLI invocation:
 //!
 //! - `status` describes the CLI invocation only; `task.completion` is the
 //!   durable kernel completion state, which can be `in_progress` after a
 //!   normally terminated run.
-//! - `usage.root` covers the root session; `usage.graph` covers the root plus
-//!   every durable descendant session. Both aggregate durable `ModelUsage`
-//!   events, so children, resumed sessions, and interrupted workers contribute
-//!   what they actually consumed. Version 1 reported only the root session's
-//!   live-observed usage.
+//! - `usage.scope` is `"invocation_graph"`. `usage.root` covers the root
+//!   session's usage during this invocation; `usage.graph` covers the root plus
+//!   every durable descendant session's usage during this invocation. Both
+//!   aggregate durable `ModelUsage` events strictly after a per-session
+//!   high-water mark captured when the invocation began, so a resumed session
+//!   never re-reports earlier runs' tokens. Children spawned during the
+//!   invocation count from their beginning. Version 2 summed the whole session
+//!   history (so a resume double-counted); version 1 reported only live-observed
+//!   root usage.
 //! - `events.scope` is always `"root"`; `agent_graph` summarizes the durable
 //!   session graph without exposing child transcripts.
 
@@ -26,7 +30,7 @@ use std::process::ExitCode;
 use uuid::Uuid;
 
 /// Version of the machine-readable schemas emitted by this binary.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Success or a cleanly terminal run (canonical completion state is detailed
 /// in the JSON result, not in the exit code).
@@ -87,8 +91,9 @@ pub struct UsageReport {
 }
 
 /// Usage for one machine result, with unambiguous scopes. `root` is the root
-/// session only; `graph` is the root plus every durable descendant session of
-/// its agent graph. `scope` names the aggregate this invocation reports.
+/// session's usage during this invocation; `graph` is the root plus every
+/// durable descendant session's usage during this invocation. `scope` names the
+/// aggregate this invocation reports.
 #[derive(Debug, Serialize)]
 pub struct UsageScopes {
     pub scope: &'static str,
@@ -99,7 +104,7 @@ pub struct UsageScopes {
 impl Default for UsageScopes {
     fn default() -> Self {
         Self {
-            scope: "graph",
+            scope: "invocation_graph",
             root: UsageReport::default(),
             graph: UsageReport::default(),
         }
