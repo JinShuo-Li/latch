@@ -719,12 +719,15 @@ async fn recent_window_without_user_prompt_still_replays_history() {
         "a window without the user prompt must never replay as empty"
     );
     assert_eq!(second.messages[0].role, "user");
+    // The kernel session block opens every transcript; because the original
+    // user prompt has scrolled out of the recent window, the continuation
+    // anchor follows it as the next provider-visible turn.
     assert!(
-        second.messages[0]
+        second.messages.iter().any(|message| message
             .content
-            .contains("scrolled out of the active recent window"),
-        "provider-valid kernel continuation anchor: {}",
-        second.messages[0].content
+            .contains("scrolled out of the active recent window")),
+        "provider-valid kernel continuation anchor missing: {:?}",
+        second.messages
     );
     assert!(
         second
