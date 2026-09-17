@@ -20,7 +20,7 @@ use latch_kernel::{AgentEventSink, Config, EventStore, EvidenceLedger, agent::Ag
 use latch_protocol::{
     EventPayload, EvidenceStatus, InferenceProfile, StreamEvent, TaskState, UserInput,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -246,6 +246,22 @@ async fn run(
     let pre_sequence = store
         .last_sequence(session_id)
         .map_err(|error| MachineError::Runtime(format!("{error:#}")))?;
+    // Invocation boundary for child usage: snapshot the durable high-water mark
+    // of every child session that already exists, so a resumed child's earlier
+    // usage is not re-counted. Children spawned during this run are absent here
+    // and therefore count from their own beginning (mark 0).
+    let child_start: BTreeMap<Uuid, u64> = {
+        let mut marks = BTreeMap::new();
+        for child in graph_children(&store, session_id).map_err(MachineError::runtime)? {
+            marks.insert(
+                child,
+                store
+                    .last_sequence(child)
+                    .map_err(|error| MachineError::Runtime(format!("{error:#}")))?,
+            );
+        }
+        marks
+    };
     let telemetry = Arc::new(Mutex::new(Telemetry::default()));
     let sink = machine_sink(reporter, Arc::clone(&telemetry));
 
@@ -275,10 +291,13 @@ async fn run(
     // `task` is the kernel's canonical state, which can still be in progress.
     result.task = Some(task_report(built.agent.state(), built.agent.evidence()));
 
-    // Usage is aggregated from durable `ModelUsage` events, never from the
-    // live sink, so child sessions, resumed workers, and interrupted agents
-    // contribute exactly what they consumed and never twice.
-    let root_usage = durable_usage(&store, session_id).map_err(MachineError::runtime)?;
+    // Usage describes this invocation, not the session's lifetime: durable
+    // `ModelUsage` events are counted only after the per-session sequence mark
+    // captured when the invocation began. Root marks precede the run; child
+    // marks were snapshotted above (new children start at 0). Resumed sessions
+    // therefore do not re-report historical usage.
+    let root_usage =
+        durable_usage_after(&store, session_id, pre_sequence).map_err(MachineError::runtime)?;
     let mut graph_usage = root_usage.clone();
     let children = graph_children(&store, session_id).map_err(MachineError::runtime)?;
     let mut graph_events = store
@@ -286,14 +305,16 @@ async fn run(
         .map_err(|error| MachineError::runtime(format!("{error:#}")))?
         as u64;
     for child in &children {
-        graph_usage.merge(&durable_usage(&store, *child).map_err(MachineError::runtime)?);
+        let after = child_start.get(child).copied().unwrap_or(0);
+        graph_usage
+            .merge(&durable_usage_after(&store, *child, after).map_err(MachineError::runtime)?);
         graph_events += store
             .event_count(*child)
             .map_err(|error| MachineError::runtime(format!("{error:#}")))?
             as u64;
     }
     result.usage = UsageScopes {
-        scope: "graph",
+        scope: "invocation_graph",
         root: root_usage.report(),
         graph: graph_usage.report(),
     };
@@ -365,11 +386,16 @@ async fn resolve_prompt(request: &MachineRequest) -> Result<String, MachineError
     Ok(text)
 }
 
-/// One session's durable usage, summed exactly as `ModelUsage` events report
-/// it. Absent categories stay `None`.
-fn durable_usage(store: &EventStore, session: Uuid) -> anyhow::Result<UsageAggregate> {
+/// One session's durable usage for this invocation: `ModelUsage` events strictly
+/// after `after_sequence`, summed exactly as they report it. Absent categories
+/// stay `None`.
+fn durable_usage_after(
+    store: &EventStore,
+    session: Uuid,
+    after_sequence: u64,
+) -> anyhow::Result<UsageAggregate> {
     let mut aggregate = UsageAggregate::default();
-    for event in store.events_of_kinds(session, &["model_usage"])? {
+    for event in store.events_after(session, after_sequence)? {
         if let EventPayload::ModelUsage { usage } = &event.payload {
             aggregate.observe(usage);
         }
