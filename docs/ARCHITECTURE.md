@@ -135,7 +135,8 @@ Only the stable fragments are cacheable; dynamic context is never mixed into
 them. The compiled prompt is intentionally bounded and covered by tests that
 pin the fragment order, forbid obsolete blanket-persistence text, keep
 Latch-specific tool/runtime guidance and kernel semantics, and cap its size
-(the static prefix must stay within 1,220 estimated tokens).
+(the cacheable static prefix is pinned by a test cap of 1,279 estimated tokens;
+the session and mode fragments are ordered after it and are not counted).
 
 ## Live steering
 
@@ -421,8 +422,9 @@ The provider `system` field is session-independent by construction: the
 behavioral core and Latch kernel semantics only, byte-identical across
 workspaces, repositories, and modes. Session-specific content (workspace
 identity, repository instructions, and mode) travels as the first
-provider-visible user message, after the tool schemas, merged with the opening
-user turn; a different session therefore does not invalidate the
+provider-visible message, after the tool schemas, as an explicitly delimited
+`[Latch session instructions]` block kept distinct from the user's own request
+that follows it; a different session therefore does not invalidate the
 `system` + tools prefix, and the provider can serve the first request of a
 later session from cache. Canonical task state is rendered exactly once by
 continuity and travels as a
