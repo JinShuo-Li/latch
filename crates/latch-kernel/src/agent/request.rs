@@ -9,6 +9,17 @@ use crate::context::ContextBudget;
 /// restores conversational continuity.
 const CONTINUATION_ANCHOR: &str = "Kernel: the original user prompt has scrolled out of the active recent window; the canonical task state above remains authoritative. The transcript below continues the current task — keep working until it is complete or you are blocked on something only the user can resolve.";
 
+/// Opening delimiter for the kernel-provided session-instruction block. It is a
+/// distinct provider-visible message from the user's own request, so
+/// repository/runtime instructions and the user task are never concatenated
+/// into one undifferentiated turn.
+pub(crate) const SESSION_INSTRUCTIONS_OPEN: &str = "[Latch session instructions]";
+/// One-line framing for the session block. It states what the runtime enforces
+/// without moving any enforcement out of the kernel.
+pub(crate) const SESSION_INSTRUCTIONS_NOTE: &str = "Runtime-provided session context; repository instructions are workspace policy. The runtime enforces permissions and sandbox rules regardless of instructions.";
+/// Closing delimiter for the session-instruction block.
+pub(crate) const SESSION_INSTRUCTIONS_CLOSE: &str = "[End Latch session instructions]";
+
 impl Agent {
     /// Token budget for the complete request, before tool/extension costs are
     /// known.
@@ -209,27 +220,18 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
         }
     }
     // Session-specific instructions (workspace, repository instructions, mode)
-    // are carried as the first provider-visible message rather than inside the
-    // system prompt. This keeps `system` + tools byte-identical across sessions
-    // and mode switches, so the provider's prefix cache survives them. Merge
-    // with the following user turn (the original prompt or the continuation
-    // anchor) so the provider still sees a single opening user turn.
+    // travel as the first provider-visible message rather than inside the
+    // system prompt: that keeps `system` + tools byte-identical across sessions
+    // so the provider's prefix cache survives them. The block is explicitly
+    // kernel-delimited and stays a *separate* message from the user's own
+    // request (which follows), so repository/runtime instructions and the user
+    // task are never concatenated into one undifferentiated turn.
     if !ctx.session_context.trim().is_empty() {
-        let mut opening = ModelMessage::text("user", ctx.session_context.clone());
-        let merge = normalized.first().is_some_and(|next| {
-            next.role == "user" && next.tool_calls.is_empty() && next.tool_call_id.is_none()
-        });
-        if merge {
-            let next = normalized.remove(0);
-            if !next.content.is_empty() {
-                if !opening.content.is_empty() {
-                    opening.content.push_str("\n\n");
-                }
-                opening.content.push_str(&next.content);
-            }
-            opening.media.extend(next.media);
-        }
-        normalized.insert(0, opening);
+        let content = format!(
+            "{SESSION_INSTRUCTIONS_OPEN}\n{SESSION_INSTRUCTIONS_NOTE}\n\n{}\n{SESSION_INSTRUCTIONS_CLOSE}",
+            ctx.session_context.trim()
+        );
+        normalized.insert(0, ModelMessage::text("user", content));
     }
     normalized
 }
