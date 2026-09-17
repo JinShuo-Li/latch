@@ -24,6 +24,32 @@ recorded here or committed anywhere.
   proxy on the bridge gateway was used to let the container run the real
   provider. That proxy is test infrastructure only and is not part of Latch.
 
+## Infrastructure honesty rules
+
+These rules govern every iteration recorded below.
+
+- **Provenance is mandatory.** Every dogfood run must identify the exact source
+  revision and the image revision it actually executed. The runner records
+  `source_commit`, `image_commit`, `dirty`, `built`, and `provenance_ok` in
+  `target/dogfood/<run-id>/provenance.json`, and the Dockerfile embeds the
+  source revision as the `org.opencontainers.image.revision` label. A result
+  from a stale image, a `--no-build` reuse whose recorded revision does not match
+  the source, or an image whose provenance is `unknown` is **invalid** and must
+  not be cited as evidence.
+- **`auto` rebuilds.** The runner always rebuilds from the current source tree
+  (BuildKit makes source-only rebuilds cheap); "image exists" is never treated as
+  "image is current".
+- **Cache measurements distinguish fresh from resumed sessions.** A cross-session
+  cache result must state whether session 2 was fresh or a resume, and usage is
+  invocation-scoped, so a resumed run reports only its own tokens.
+- **Instruction-following outranks cache.** A provider cache-hit improvement is
+  not accepted if it regresses instruction-following semantics: the
+  repository/instruction block and the user request must stay distinct, and the
+  stable `system` + tools prefix must stay session-independent.
+- **No fabricated numbers.** Only measurements actually rerun after these fixes
+  are recorded. The iterations below predate the provenance harness; their
+  figures are historical and were not re-validated under these rules.
+
 ## Baseline (commit e391633, before any iteration)
 
 | Metric | Value |
