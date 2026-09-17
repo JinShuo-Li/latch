@@ -10,8 +10,15 @@
 # The default (last) stage is `test` so the deterministic harness builds with a
 # plain `docker build`. The developer-facing runner targets `runtime`.
 #
+# Provenance: LATCH_SOURCE_REVISION is passed by the harness as the source Git
+# SHA (with a `-dirty` suffix for a dirty tree) and is embedded both as the
+# `org.opencontainers.image.revision` label and as an ENV, so a built image can
+# be traced back to the source revision it came from.
+#
 # Multi-arch: `rust:1-bookworm` and `debian:bookworm-slim` both publish arm64
 # and amd64, so the same file works on a Raspberry Pi 5 and on amd64 Linux.
+
+ARG LATCH_SOURCE_REVISION=unknown
 
 FROM rust:1-bookworm AS builder
 # Optional cap on parallel codegen for memory-constrained hosts (Raspberry Pi).
@@ -51,6 +58,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
+ARG LATCH_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$LATCH_SOURCE_REVISION \
+      org.opencontainers.image.title="latch-dogfood" \
+      org.opencontainers.image.description="Latch dogfood runtime; source revision label for run provenance"
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bubblewrap \
@@ -66,7 +77,8 @@ COPY --from=builder /out/latch /usr/local/bin/latch
 # The sandbox and search tooling are mandatory; make the expectations explicit.
 ENV HOME=/home/latch \
     LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+    LC_ALL=C.UTF-8 \
+    LATCH_SOURCE_REVISION=$LATCH_SOURCE_REVISION
 WORKDIR /home/latch
 
 # Non-root by default. The dogfood runner additionally matches the host uid/gid
@@ -76,6 +88,8 @@ ENTRYPOINT ["latch"]
 CMD ["--help"]
 
 FROM runtime AS test
+ARG LATCH_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$LATCH_SOURCE_REVISION
 COPY --from=builder /out/mock_provider /usr/local/bin/latch-mock-provider
 COPY docker/test-entrypoint.sh /usr/local/bin/latch-dogfood-test
 # The runtime stage already dropped to the non-root latch user.

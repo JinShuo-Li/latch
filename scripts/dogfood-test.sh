@@ -20,6 +20,10 @@ docker="${DOCKER:-docker}"
 image="${LATCH_DOGFOOD_TEST_IMAGE:-latch-dogfood:test}"
 build="auto"
 
+# Shared run-id validation and deletion guard, exercised directly below.
+# shellcheck source=dogfood-lib.sh
+. "$root/scripts/dogfood-lib.sh"
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) build="never"; shift ;;
@@ -43,6 +47,16 @@ fail=0
 ok() { echo "ok   - $*"; pass=$((pass + 1)); }
 bad() { echo "FAIL - $*" >&2; fail=$((fail + 1)); }
 
+# Source provenance for the image this test builds and runs.
+if git -C "$root" rev-parse --verify HEAD >/dev/null 2>&1; then
+    source_commit="$(git -C "$root" rev-parse HEAD)"
+    if [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+        source_commit="${source_commit}-dirty"
+    fi
+else
+    source_commit="unknown"
+fi
+
 work="$root/target/dogfood-test/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$work"
 
@@ -55,20 +69,16 @@ fi
 
 # --- build ---------------------------------------------------------------
 case "$build" in
-    always) do_build=1 ;;
+    # `auto` always rebuilds from the current source; BuildKit cache keeps a
+    # source-only rebuild cheap. `--no-build` is the explicit stale-image path.
+    always|auto) do_build=1 ;;
     never) do_build=0 ;;
-    auto)
-        if "$docker" image inspect "$image" >/dev/null 2>&1; then
-            do_build=0
-        else
-            do_build=1
-        fi
-        ;;
 esac
 
 if [ "$do_build" -eq 1 ]; then
-    echo "building $image (target: test) ..."
-    if "$docker" build --target test -t "$image" -f "$root/docker/Dockerfile" "$root"; then
+    echo "building $image (target: test, revision: $source_commit) ..."
+    if "$docker" build --target test -t "$image" -f "$root/docker/Dockerfile" \
+        --build-arg "LATCH_SOURCE_REVISION=$source_commit" "$root"; then
         ok "image build (target: test)"
     else
         bad "image build (target: test)"
@@ -76,16 +86,32 @@ if [ "$do_build" -eq 1 ]; then
         exit 1
     fi
 else
-    ok "reused existing image $image"
+    ok "reused existing image $image (--no-build)"
+fi
+
+# The image must identify the exact source revision it was built from.
+image_commit="$("$docker" image inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+    "$image" 2>/dev/null || true)"
+image_commit="${image_commit:-unknown}"
+if [ "$image_commit" = "$source_commit" ]; then
+    ok "image provenance matches source revision ($image_commit)"
+else
+    bad "image provenance '$image_commit' != source '$source_commit'"
 fi
 
 # Latch's mandatory Bubblewrap sandbox needs unprivileged user namespaces;
 # Docker's default seccomp and system-path masking block the nested mounts.
+# On top of that compatibility baseline the harness drops all capabilities,
+# forbids privilege escalation, and caps the process count.
 declare -a base=(
     --rm
     --network none
     --security-opt seccomp=unconfined
     --security-opt systempaths=unconfined
+    --security-opt no-new-privileges:true
+    --cap-drop ALL
+    --pids-limit "${LATCH_DOGFOOD_PIDS_LIMIT:-512}"
     --user "$host_uid:$host_gid"
     -e HOME=/home/latch
 )
@@ -249,10 +275,18 @@ fi
 
 caps="$("$docker" run "${base[@]}" --entrypoint sh "$image" \
     -c 'grep CapEff /proc/self/status' 2>/dev/null || true)"
-if printf '%s' "$caps" | grep -q '000001ffffffffff'; then
-    bad "container appears privileged (full capability set): $caps"
+if printf '%s' "$caps" | grep -q '0000000000000000'; then
+    ok "capability set is empty (--cap-drop ALL): $caps"
 else
-    ok "container capability set is not privileged"
+    bad "expected an empty capability set with --cap-drop ALL: $caps"
+fi
+
+nnp="$("$docker" run "${base[@]}" --entrypoint sh "$image" \
+    -c 'grep NoNewPrivs /proc/self/status' 2>/dev/null || true)"
+if printf '%s' "$nnp" | grep -q 'NoNewPrivs:.*1'; then
+    ok "no-new-privileges is enforced (NoNewPrivs=1)"
+else
+    bad "no-new-privileges not enforced: $nnp"
 fi
 
 if "$docker" run "${base[@]}" --entrypoint sh "$image" -c \
@@ -261,6 +295,59 @@ if "$docker" run "${base[@]}" --entrypoint sh "$image" -c \
     ok "Bubblewrap sandbox runs inside the container"
 else
     bad "Bubblewrap sandbox failed inside the container"; sed 's/^/       /' "$work/inner-sandbox.log" >&2
+fi
+
+# --- run-id hardening (no Docker required) ------------------------------
+# The same library the runner uses is exercised directly.
+guard_root="$root/target/dogfood"
+mkdir -p "$guard_root"
+for bad in '' '..' '../tmp' 'a/b' '/foo' 'a b' 'a..b' '-x' 'a;rm -rf /' 'a$b'; do
+    if [ -n "$(dogfood_run_id_error "$bad")" ]; then
+        ok "run id rejected: '$bad'"
+    else
+        bad "run id accepted but must be rejected: '$bad'"
+    fi
+done
+for good in 'run-1' 'a.b_c-9' 'ABC123' 'a.'; do
+    if [ -z "$(dogfood_run_id_error "$good")" ]; then
+        ok "run id accepted: '$good'"
+    else
+        bad "run id rejected but must be accepted: '$good'"
+    fi
+done
+
+# The runner itself rejects a hostile id before touching Docker or the
+# filesystem (exit 2 with an explicit message) for every escape shape the
+# task calls out.
+for bad in '../../tmp' '/foo' '..' 'a/b'; do
+    escape_out="$("$root/scripts/dogfood.sh" --run-id "$bad" --prompt x 2>&1 || true)"
+    case "$escape_out" in
+        *"invalid --run-id"*) ok "runner rejects --run-id '$bad'" ;;
+        *) bad "runner did not reject --run-id '$bad': $escape_out" ;;
+    esac
+done
+
+# Deletion guard: a symlink inside the dogfood root that points outside it must
+# never cause the outside directory to be removed.
+guard_outside="$work/guard-outside"
+mkdir -p "$guard_outside"
+touch "$guard_outside/keep.txt"
+ln -sfn "$guard_outside" "$guard_root/latch-escape-link"
+dogfood_safe_remove "$guard_root" "$guard_root/latch-escape-link" >/dev/null 2>&1 || true
+if [ -e "$guard_outside/keep.txt" ]; then
+    ok "recursive deletion refuses a symlink escaping the dogfood root"
+else
+    bad "recursive deletion escaped the dogfood root"
+fi
+rm -f "$guard_root/latch-escape-link"
+
+# A real descendant is removed as expected.
+mkdir -p "$guard_root/latch-removable/child"
+dogfood_safe_remove "$guard_root" "$guard_root/latch-removable" >/dev/null 2>&1 || true
+if [ ! -e "$guard_root/latch-removable" ]; then
+    ok "recursive deletion removes a real dogfood descendant"
+else
+    bad "recursive deletion left a real dogfood descendant"
 fi
 
 # --- summary -------------------------------------------------------------

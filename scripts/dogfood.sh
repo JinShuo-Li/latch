@@ -23,6 +23,7 @@ model=""
 workspace=""
 fixture=""
 run_id=""
+run_id_set=0
 prompt=""
 build="auto" # auto | always | never
 remove=0
@@ -68,6 +69,21 @@ die() {
     exit 2
 }
 
+# Run-id validation and the recursive-deletion guard live in a shared library
+# so scripts/dogfood-test.sh can cover them deterministically without Docker.
+# shellcheck source=dogfood-lib.sh
+. "$root/scripts/dogfood-lib.sh"
+
+validate_run_id() {
+    local reason
+    reason="$(dogfood_run_id_error "$1")"
+    [ -z "$reason" ] || die "$reason"
+}
+
+safe_remove_run_dir() {
+    dogfood_safe_remove "$root/target/dogfood" "$1"
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --prompt) prompt="$2"; shift 2 ;;
@@ -83,7 +99,7 @@ while [ $# -gt 0 ]; do
         --image) image="$2"; shift 2 ;;
         --build) build="always"; shift ;;
         --no-build) build="never"; shift ;;
-        --run-id) run_id="$2"; shift 2 ;;
+        --run-id) run_id="$2"; run_id_set=1; shift 2 ;;
         --shell) shell=1; shift ;;
         --keep) shift ;;
         --remove) remove=1; shift ;;
@@ -96,6 +112,24 @@ done
 
 if [ -z "$prompt" ] && [ $# -gt 0 ]; then
     prompt="$*"
+fi
+
+# Reject a hostile or accidental run id before touching Docker or the
+# filesystem. Deletion is guarded again by safe_remove_run_dir below.
+if [ "$run_id_set" -eq 1 ]; then
+    validate_run_id "$run_id"
+fi
+
+# Source provenance: the exact revision the image must correspond to. A dirty
+# tree is recorded explicitly so a result is never silently attributed to a
+# clean commit.
+if git -C "$root" rev-parse --verify HEAD >/dev/null 2>&1; then
+    source_commit="$(git -C "$root" rev-parse HEAD)"
+    if [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+        source_commit="${source_commit}-dirty"
+    fi
+else
+    source_commit="unknown"
 fi
 
 if ! command -v "$docker" >/dev/null 2>&1; then
@@ -150,31 +184,72 @@ if "$docker" image inspect "$image" >/dev/null 2>&1; then
 fi
 
 case "$build" in
-    always) do_build=1 ;;
+    # `auto` rebuilds from the current source every time: "image exists" does
+    # not mean "image is current". BuildKit decides which layers are reusable,
+    # so source-only changes stay cheap while the image provenance always
+    # tracks the current tree.
+    always|auto) do_build=1 ;;
     never) do_build=0 ;;
-    auto) do_build=$((1 - image_present)) ;;
 esac
 
 if [ "$do_build" -eq 1 ]; then
-    echo "building $image (target: runtime) ..." >&2
+    echo "building $image (target: runtime, revision: $source_commit) ..." >&2
+    declare -a build_args=(
+        build --target runtime -t "$image" -f "$root/docker/Dockerfile"
+        --build-arg "LATCH_SOURCE_REVISION=$source_commit"
+    )
     if [ -n "${CARGO_BUILD_JOBS:-}" ]; then
-        "$docker" build --target runtime -t "$image" -f "$root/docker/Dockerfile" \
-            --build-arg "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" "$root"
-    else
-        "$docker" build --target runtime -t "$image" -f "$root/docker/Dockerfile" "$root"
+        build_args+=(--build-arg "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS")
     fi
+    "$docker" "${build_args[@]}" "$root"
 elif [ "$image_present" -eq 0 ]; then
     die "image $image not found; run without --no-build first"
 fi
 
+# Provenance: read back what the image actually says it was built from, so a
+# stale or unknown image can never be mistaken for the current source.
+image_commit="$("$docker" image inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+    "$image" 2>/dev/null || true)"
+image_commit="${image_commit:-unknown}"
+if [ "$image_commit" != "$source_commit" ]; then
+    if [ "$do_build" -eq 1 ]; then
+        die "built image provenance ($image_commit) does not match source ($source_commit)"
+    fi
+    echo "warning: image $image records '$image_commit' but source is '$source_commit';" >&2
+    echo "         --no-build reuses a possibly stale image and results may be invalid" >&2
+fi
+
+# Record provenance in the run directory so every result is attributable to an
+# exact source revision and image. `image_commit == source_commit` (including
+# the `-dirty` suffix) is the harness's trust precondition.
+dirty=false
+case "$source_commit" in *-dirty) dirty=true ;; esac
+cat > "$run_dir/provenance.json" <<EOF
+{
+  "source_commit": "$source_commit",
+  "image_commit": "$image_commit",
+  "image": "$image",
+  "dirty": $dirty,
+  "built": $([ "$do_build" -eq 1 ] && echo true || echo false),
+  "provenance_ok": $([ "$image_commit" = "$source_commit" ] && echo true || echo false)
+}
+EOF
+
 # Latch's mandatory Bubblewrap sandbox needs unprivileged user namespaces;
 # Docker's default seccomp and system-path masking block the nested mounts.
-# Neither flag is `--privileged`, and the container stays non-root.
+# Neither flag is `--privileged`, and the container stays non-root. On top of
+# that baseline the harness drops all Linux capabilities, forbids privilege
+# escalation, and caps the process count; none of these interferes with
+# unprivileged nested Bubblewrap (verified by scripts/dogfood-test.sh).
 declare -a run_args=(
     --rm
     --network "$network"
     --security-opt seccomp=unconfined
     --security-opt systempaths=unconfined
+    --security-opt no-new-privileges:true
+    --cap-drop ALL
+    --pids-limit "${LATCH_DOGFOOD_PIDS_LIMIT:-512}"
     --user "$host_uid:$host_gid"
     -v "$workspace:/workspace"
     -v "$state_dir:/state"
@@ -224,7 +299,7 @@ if [ "$disposable" -eq 1 ] && [ -d "$workspace/.git" ]; then
 fi
 
 if [ "$remove" -eq 1 ] && [ "$disposable" -eq 1 ]; then
-    rm -rf "$run_dir"
+    safe_remove_run_dir "$run_dir"
     echo "removed:   $run_dir" >&2
 elif [ "$remove" -eq 0 ]; then
     echo "kept:      $run_dir (use --remove to delete)" >&2
