@@ -70,11 +70,21 @@ pub enum Commands {
     Resume(ResumeArgs),
     /// List or inspect durable sessions without opening the TUI.
     Sessions(SessionsArgs),
+    /// Check runtime prerequisites, configuration, and credentials without
+    /// running a task or contacting the provider.
+    Doctor(DoctorArgs),
     /// Inspect internal prompt compilation and diagnostics without running a task.
     Debug {
         #[command(subcommand)]
         command: DebugCommand,
     },
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct DoctorArgs {
+    /// Diagnose this workspace instead of the current directory.
+    #[arg(long, value_name = "PATH")]
+    pub workspace: Option<PathBuf>,
 }
 
 /// Exactly one prompt source is required for machine commands. Ambiguous

@@ -52,6 +52,10 @@ cargo test --workspace
 - CLI machine interface: `cargo test -p latch-cli` spawns the real binary
   against a loopback SSE mock provider with an isolated state dir; it needs no
   network, credentials, or TTY. It runs locally, not in CI.
+- Preflight: `latch doctor` is a read-only check of `bwrap`, `rg`, Git, config,
+  state dir, profile, and credential. It never contacts the provider; exit 0
+  (all pass), 1 (runtime prerequisite), 2 (config/CLI). Keep it in sync when
+  adding a prerequisite.
 - `cargo test --workspace` takes ~12s: sandbox/command tests spawn `bwrap`,
   `search` tests need `rg`, and the multi-agent dogfood suites dominate the
   remainder. Keep process fixtures short-lived; a long natural lifetime makes

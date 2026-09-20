@@ -1359,6 +1359,82 @@ fn unknown_provider_selection_is_a_configuration_error() {
 }
 
 #[test]
+fn doctor_reports_profile_and_credential() {
+    let fixture = fixture(vec![Turn::Text("unused")], None, "standard");
+    let output = run_latch(&fixture, &["doctor", "--output", "json"]);
+    assert_eq!(
+        fixture.mock.hits(),
+        0,
+        "doctor must never contact the provider"
+    );
+    let value = stdout_json(&output);
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["provider"], "mock");
+    assert_eq!(value["model"], "mock-model");
+    let checks = value["checks"].as_array().expect("checks array");
+    let find = |id: &str| {
+        checks
+            .iter()
+            .find(|check| check["id"] == id)
+            .unwrap_or_else(|| panic!("check {id} missing"))
+    };
+    assert_eq!(find("provider")["status"], "ok");
+    assert_eq!(find("credential")["status"], "ok");
+    assert_eq!(find("credential")["summary"], "env:MOCK_API_KEY");
+    // Configuration is valid here, so a nonzero exit can only be an
+    // environment prerequisite (1), never a usage error (2).
+    assert!(
+        matches!(output.status.code(), Some(0 | 1)),
+        "unexpected exit: stderr {}",
+        stderr_text(&output)
+    );
+}
+
+#[test]
+fn doctor_missing_credential_is_a_configuration_error() {
+    let fixture = fixture(vec![Turn::Text("unused")], None, "standard");
+    let output = latch_command(&fixture)
+        .env_remove("MOCK_API_KEY")
+        .args(["doctor", "--output", "json"])
+        .output()
+        .expect("run latch");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr: {}",
+        stderr_text(&output)
+    );
+    let value = stdout_json(&output);
+    assert_eq!(value["ok"], false);
+    let checks = value["checks"].as_array().expect("checks array");
+    let credential = checks
+        .iter()
+        .find(|check| check["id"] == "credential")
+        .expect("credential check");
+    assert_eq!(credential["status"], "failed");
+    assert_eq!(credential["summary"], "env:MOCK_API_KEY is not set");
+}
+
+#[test]
+fn doctor_rejects_jsonl_output() {
+    let fixture = fixture(vec![Turn::Text("unused")], None, "standard");
+    let output = run_latch(&fixture, &["doctor", "--output", "jsonl"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr_text(&output).contains("text or --output json"));
+}
+
+#[test]
+fn doctor_rejects_unknown_workspace() {
+    let fixture = fixture(vec![Turn::Text("unused")], None, "standard");
+    let output = run_latch(
+        &fixture,
+        &["doctor", "--workspace", "/definitely/not/a/workspace"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr_text(&output).contains("workspace"));
+}
+
+#[test]
 fn extension_initialization_failure_is_a_runtime_failure() {
     let mock =
         MockProvider::start_with_delay(vec![Turn::Text("unused")], None, std::time::Duration::ZERO);

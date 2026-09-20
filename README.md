@@ -113,9 +113,10 @@ continued explicitly rather than silently rerunning work.
 
 ## Machine interface
 
-`latch run`, `latch resume`, and `latch sessions` are the non-interactive
-surface for scripts, CI, coding agents, and benchmark harnesses. They never
-open the TUI, never wait for a human, and never mix diagnostics into stdout.
+`latch run`, `latch resume`, `latch sessions`, and `latch doctor` are the
+non-interactive surface for scripts, CI, coding agents, and benchmark
+harnesses. They never open the TUI, never wait for a human, and never mix
+diagnostics into stdout.
 
 ```sh
 latch run \
@@ -200,6 +201,29 @@ final status is `permission_denied`, and the process exits 3. There is no
 still launches the TUI, and `latch -p "..."` (also with `--resume`) now runs
 through the same machine implementation, so profile precedence, session
 construction, attachments, and policy are identical everywhere.
+
+## Preflight doctor
+
+`latch doctor` is a read-only preflight for the machine a run depends on. It
+checks the mandatory Bubblewrap sandbox (by probing a minimal sandboxed
+command), the `rg` search runtime, Git, the effective config path and state
+directory, the resolved provider/model/effort, and that the provider credential
+resolves. It never contacts the provider, never runs a task, and never prints
+secret material: a credential is reported only by its symbolic reference
+(`env:NAME`, `file:NAME`).
+
+```sh
+latch doctor
+latch doctor --output json                                  # one versioned object for CI
+latch doctor --provider opencode-go --model deepseek-v4-flash
+```
+
+Each check reports `ok`, `warn`, or `fail` with an actionable detail, and the
+report names the workspace, config path, state directory, and resolved profile.
+Exit codes are stable: `0` when every required check passes, `1` when a runtime
+prerequisite is missing or unusable, and `2` for a CLI or configuration error
+(bad workspace, unreadable config, unresolvable provider/profile, or a missing
+credential).
 
 ## Terminal interface
 
