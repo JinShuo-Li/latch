@@ -135,7 +135,7 @@ Only the stable fragments are cacheable; dynamic context is never mixed into
 them. The compiled prompt is intentionally bounded and covered by tests that
 pin the fragment order, forbid obsolete blanket-persistence text, keep
 Latch-specific tool/runtime guidance and kernel semantics, and cap its size
-(the cacheable static prefix is pinned by a test cap of 1,279 estimated tokens;
+(the cacheable static prefix is pinned by a test cap of 1,329 estimated tokens;
 the session and mode fragments are ordered after it and are not counted).
 
 ## Live steering

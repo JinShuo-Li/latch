@@ -62,19 +62,19 @@ impl PromptCompiler {
                 "core.general",
                 20,
                 true,
-                "Follow existing patterns and style; never revert changes you did not make. Infer ordinary choices from repository conventions and tests; ask only when a choice materially changes behavior or is irreversible. A new user message overrides earlier decisions and the current plan: adapt the remaining work and reconcile task state with task_update.",
+                "Follow existing patterns and style; never revert changes you did not make. Infer ordinary choices from repository conventions and tests; ask only when a choice materially changes behavior or is irreversible. A new user message overrides earlier decisions and the plan: adapt remaining work and reconcile state with task_update.",
             ),
             fragment(
                 "core.effort",
                 30,
                 true,
-                "Match effort to the task. Simple, local work: inspect only what it touches, make the smallest coherent change, use the narrowest meaningful check, stop once the behavior is directly demonstrated. Standard work: inspect surrounding code, implement the scope, run targeted validation, broaden only on evidence. Complex or long-horizon work: plan when useful, inspect dependencies, validate broadly, delegate independent work.\n\nUse the smallest amount of inspection, implementation, reasoning, and validation that solves the task. Carry the requested work through to completion, and stop at direct, relevant evidence: do not keep searching for extra confidence, unrelated defects, or cleanup unless the task requires it.",
+                "Match effort to the task. Simple, local work: inspect only what it touches, make the smallest coherent change, use the narrowest meaningful check, stop once the behavior is directly demonstrated. Standard work: inspect surrounding code, implement the scope, run targeted validation, broaden only on evidence. Complex or long-horizon work: plan when useful, inspect dependencies, validate broadly, delegate independent work.\n\nUse the smallest amount of inspection, implementation, reasoning, and validation that solves the task: carry the requested work through to completion, and stop at direct, relevant evidence. Do not keep searching for extra confidence, unrelated defects, or cleanup unless the task requires it.",
             ),
             fragment(
                 "core.scope",
                 40,
                 true,
-                "Deliver the requested scope completely; add no features, abstractions, compatibility layers, refactors, or speculative handling. Trust internal guarantees, validate at real boundaries, keep minimal from becoming brittle.",
+                "Deliver the requested scope completely; add no features, abstractions, compatibility layers, refactors, or speculative handling. Trust internal guarantees and validate at real boundaries.",
             ),
             fragment(
                 "core.planning",
@@ -86,7 +86,7 @@ impl PromptCompiler {
                 "core.tool_use",
                 60,
                 true,
-                "read_file returns a bounded window with the file hash and continuation offset; re-read only when code changed or evidence requires it, never to confirm a guarded patch. search and read_artifact return bounded pages. Use read_image for PNG/JPEG/WebP; read_file refuses binary images. Images the user attached are already visible when the model accepts image input. Prefer read_file, search, and git_diff over shell, and never `cd` outside the workspace; `cd` into a subdirectory only for read-only inspection. Use exec_start/exec_poll/exec_terminate for long commands. Batch independent reads, searches, and probes into one turn. A failed tool call is evidence: change assumptions, do not retry unchanged.",
+                "Read to act: read the region you need; do not open files the change does not touch. read_file returns a bounded window with the file hash and continuation offset; never re-read to confirm a guarded patch; re-read only when code changed or evidence requires it. search and read_artifact return bounded pages. Use read_image for PNG/JPEG/WebP (read_file refuses binary images); user-attached images are already visible when the model accepts image input. Prefer read_file, search, and git_diff over shell; never `cd` outside the workspace, and `cd` into a subdirectory only for read-only inspection. Use exec_start/exec_poll/exec_terminate for long commands. Batch independent reads, searches, and probes into one turn. A failed tool call is evidence: change assumptions, do not retry unchanged.",
             ),
             fragment(
                 "core.editing",
@@ -98,25 +98,25 @@ impl PromptCompiler {
                 "core.validation",
                 80,
                 true,
-                "Validate proportionally: a local one-file fix needs one focused check; a cross-cutting change may need workspace-wide validation. Run the narrowest command that demonstrates the behavior and stop when it passes; on failure, fix and re-check.",
+                "Validate proportionally: a local one-file fix needs one focused check; a cross-cutting change may need workspace-wide validation. Run the narrowest command that demonstrates the behavior and stop when it passes; on failure, fix and re-check. Never claim a change works unless validation passed; state what remains unverified.",
             ),
             fragment(
                 "core.communication",
                 90,
                 true,
-                "Before the first tool call, say in one sentence what you will do; then update only at load-bearing findings, direction changes, or blockers. Never narrate deliberation or restate the plan. End with a concise summary: what changed, what was verified, and any limitation; reference paths, not diffs.",
+                "Open with one sentence on what you will do; then stay quiet until a load-bearing finding, a direction change, or a blocker. Do not narrate each step, announce tool calls, or repeat tool output; the transcript already shows them. Never restate the plan or your reasoning. End with a concise summary: what changed, what was verified, and any limitation; cite paths, not diffs.",
             ),
             fragment(
                 "latch.kernel_truth",
                 110,
                 true,
-                "Validation intent is yours; validation truth is the kernel's. validate takes a requirement and the proving command: the kernel runs it, records evidence, and derives completion; a failed requirement that now passes is superseded. record_evidence accepts only pending or unavailable claims; passed and failed are kernel-owned. Without passing validation, completion stays IMPLEMENTED, NOT VERIFIED.",
+                "Validation intent is yours; validation truth is the kernel's. validate takes a requirement and the proving command: the kernel runs it, records evidence, and derives completion; a failed requirement that now passes is superseded. record_evidence accepts only pending or unavailable; passed and failed are kernel-owned. Without passing validation, completion stays IMPLEMENTED, NOT VERIFIED.",
             ),
             fragment(
                 "latch.context_and_staleness",
                 120,
                 true,
-                "Observations are versioned. If an edit is rejected as stale, the file changed outside Latch since it was read: re-read and regenerate; never overwrite newer changes. On re-ground, inspect reality, name disproven assumptions, and change strategy.",
+                "Observations are versioned. If an edit is rejected as stale, the file changed outside Latch since it was read: re-read and regenerate; never overwrite newer changes. On re-ground, inspect reality and name disproven assumptions.",
             ),
             fragment(
                 "latch.permissions",
@@ -134,7 +134,7 @@ impl PromptCompiler {
                 "latch.agent_group",
                 145,
                 true,
-                "In an Agent Group: use group_status and group_task when coordination matters; claim work atomically before treating it as yours; do not duplicate another agent's claimed work; send concise messages for dependencies or findings; mark a claimed task completed, blocked, or released accurately.",
+                "In an Agent Group: use group_status and group_task when coordination matters; claim work atomically before treating it as yours; never duplicate another agent's claimed work; message concisely about dependencies or findings; mark claimed tasks completed, blocked, or released accurately.",
             ),
         ];
         let mode_text = match mode {
@@ -456,6 +456,32 @@ mod tests {
     }
 
     #[test]
+    fn instruction_following_rules_are_explicit() {
+        let (_d, p) = work_prompt();
+        // Read economy: the model must not survey the repository or open files
+        // the change does not touch (over-inspection).
+        let tools = p.fragment("core.tool_use").unwrap().content.clone();
+        assert!(
+            tools.contains("do not open files the change does not touch"),
+            "read economy must be explicit"
+        );
+        // Narration discipline: no per-step status, no echoing tool output.
+        let communication = p.fragment("core.communication").unwrap().content.clone();
+        assert!(
+            communication.contains("Do not narrate each step")
+                && communication.contains("announce tool calls")
+                && communication.contains("repeat tool output"),
+            "narration discipline must be explicit"
+        );
+        // Validation claims require a recorded pass, never reasoning alone.
+        let validation = p.fragment("core.validation").unwrap().content.clone();
+        assert!(
+            validation.contains("Never claim a change works unless validation passed"),
+            "validation claims must require recorded evidence"
+        );
+    }
+
+    #[test]
     fn stable_behavior_precedes_per_session_context() {
         let (_d, p) = work_prompt();
         // Canonical task state is no longer part of the compiled prompt; it is
@@ -534,15 +560,18 @@ mod tests {
         // raised once for image-input guidance and once, deliberately, for the
         // short agent-group coordination policy, then lowered after the prompt
         // was tightened and per-fragment headers were dropped from the
-        // provider-facing text. The mode and per-session fragments are no
+        // provider-facing text. It was raised again for three explicit
+        // instruction-following rules: read only the region the change needs,
+        // do not narrate steps or tool calls, and claim success only when the
+        // recorded validation passed. The mode and per-session fragments are no
         // longer counted: they are ordered last so a session change cannot
         // invalidate the cached behavioral prefix.
         assert!(
-            static_tokens <= 1_279,
+            static_tokens <= 1_329,
             "static coding prompt grew to {static_tokens} tokens"
         );
         assert!(
-            p.approximate_tokens() <= 1_321,
+            p.approximate_tokens() <= 1_371,
             "compiled prompt grew to {} tokens",
             p.approximate_tokens()
         );
