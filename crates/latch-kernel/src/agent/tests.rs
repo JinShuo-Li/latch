@@ -407,6 +407,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
         ModelMessage::text("user", "inspect"),
         ModelMessage {
             role: "assistant".into(),
+            is_error: false,
             content: "thinking".into(),
             tool_calls: vec![
                 ToolCall {
@@ -428,6 +429,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
         },
         ModelMessage {
             role: "tool".into(),
+            is_error: false,
             content: "b result".into(),
             tool_calls: vec![],
             tool_call_id: Some("b".into()),
@@ -454,6 +456,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
         ModelMessage::text("user", "inspect"),
         ModelMessage {
             role: "assistant".into(),
+            is_error: false,
             content: "thinking".into(),
             tool_calls: vec![
                 ToolCall {
@@ -475,6 +478,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
         },
         ModelMessage {
             role: "tool".into(),
+            is_error: false,
             content: "a denied".into(),
             tool_calls: vec![],
             tool_call_id: Some("a".into()),
@@ -485,6 +489,7 @@ fn sanitizer_keeps_reasoning_on_corrupt_history_and_whole_transactions() {
         },
         ModelMessage {
             role: "tool".into(),
+            is_error: false,
             content: "b result".into(),
             tool_calls: vec![],
             tool_call_id: Some("b".into()),
@@ -964,6 +969,202 @@ async fn stable_system_and_tools_are_byte_identical_across_workspaces() {
     assert!(b.messages[0].content.contains("repository rule B"));
     assert!(a.messages[0].content.starts_with(SESSION_INSTRUCTIONS_OPEN));
     assert!(a.messages.iter().any(|m| m.content.contains("task A")));
+}
+
+/// One hand-made durable event for provider-view tests.
+fn view_event(sequence: u64, payload: EventPayload) -> Event {
+    Event {
+        id: Uuid::new_v4(),
+        session_id: Uuid::nil(),
+        sequence,
+        timestamp: Utc::now(),
+        parent_id: None,
+        payload,
+    }
+}
+
+/// A provider-visible view over exactly the events given, so the kernel's
+/// projection can be asserted on directly.
+fn view_for(events: Vec<Event>) -> crate::continuity::MaterializedContext {
+    crate::continuity::MaterializedContext {
+        system: String::new(),
+        session_context: String::new(),
+        canonical: String::new(),
+        recalled: String::new(),
+        recent: events,
+        bridge: crate::continuity::ConversationBridge::default(),
+        episodes: vec![],
+        stats: latch_protocol::ContextStats::default(),
+    }
+}
+
+fn assistant_proposing(sequence: u64, id: &str) -> Event {
+    view_event(
+        sequence,
+        EventPayload::AssistantMessageCompleted {
+            text: String::new(),
+            tool_calls: vec![ToolCall {
+                id: id.into(),
+                name: "read_file".into(),
+                arguments: json!({"path": "a.txt"}),
+            }],
+            reasoning_content: None,
+            reasoning: vec![],
+        },
+    )
+}
+
+/// A terminal tool event whose durable variant matches `is_error`, exactly as
+/// the executor records it: `ToolFailed` and `is_error: true` always agree.
+fn tool_outcome(
+    sequence: u64,
+    id: &str,
+    output: &str,
+    is_error: bool,
+    media: Vec<latch_protocol::MediaRef>,
+) -> Event {
+    let result = ToolResult {
+        call_id: id.into(),
+        name: "read_file".into(),
+        output: output.into(),
+        is_error,
+        artifact_id: None,
+        media,
+    };
+    let payload = if is_error {
+        EventPayload::ToolFailed { result }
+    } else {
+        EventPayload::ToolCompleted { result }
+    };
+    view_event(sequence, payload)
+}
+
+fn test_media(id: &str) -> latch_protocol::MediaRef {
+    latch_protocol::MediaRef {
+        id: id.into(),
+        kind: latch_protocol::MediaKind::Image,
+        mime_type: "image/png".into(),
+        artifact_path: format!("media/{id}.png"),
+        sha256: id.into(),
+        byte_len: 8,
+        width: Some(2),
+        height: Some(2),
+        display_name: None,
+    }
+}
+
+#[test]
+fn failed_tool_result_keeps_failure_status_in_the_provider_view() {
+    let ctx = view_for(vec![
+        view_event(
+            1,
+            EventPayload::UserMessage {
+                text: "check it".into(),
+                media: vec![],
+            },
+        ),
+        assistant_proposing(2, "a"),
+        // Output prose that reads like success must not be able to change the
+        // status: the kernel recorded a failure and that is what the model sees.
+        tool_outcome(3, "a", "all good, nothing to report", true, vec![]),
+    ]);
+    let messages = context_messages(&ctx);
+    let tool = messages
+        .iter()
+        .find(|message| message.role == "tool")
+        .expect("tool message reaches the provider");
+    assert!(
+        tool.is_error,
+        "a failed tool result must stay failed across the provider boundary"
+    );
+    assert_eq!(
+        tool.content, "all good, nothing to report",
+        "the tool's own output is preserved verbatim"
+    );
+}
+
+#[test]
+fn completed_tool_result_keeps_success_status_in_the_provider_view() {
+    let ctx = view_for(vec![
+        view_event(
+            1,
+            EventPayload::UserMessage {
+                text: "check it".into(),
+                media: vec![],
+            },
+        ),
+        assistant_proposing(2, "a"),
+        // Prose that reads like failure must not flip a recorded success.
+        tool_outcome(3, "a", "exit code 1\nno such file", false, vec![]),
+    ]);
+    let messages = context_messages(&ctx);
+    let tool = messages
+        .iter()
+        .find(|message| message.role == "tool")
+        .expect("tool message reaches the provider");
+    assert!(
+        !tool.is_error,
+        "a completed tool result must stay successful across the provider boundary"
+    );
+    assert_eq!(tool.content, "exit code 1\nno such file");
+}
+
+#[test]
+fn sanitization_and_multimodal_tool_results_keep_the_outcome_status() {
+    // A failed multimodal result whose assistant call is still present keeps
+    // its media and its status; a dangling one is still dropped entirely, so a
+    // provider can never observe a stranded tool result.
+    let kept = tool_outcome(
+        3,
+        "a",
+        "image failed to decode",
+        true,
+        vec![test_media("img-a")],
+    );
+    let ctx = view_for(vec![
+        view_event(
+            1,
+            EventPayload::UserMessage {
+                text: "look".into(),
+                media: vec![],
+            },
+        ),
+        assistant_proposing(2, "a"),
+        kept,
+    ]);
+    let messages = context_messages(&ctx);
+    let tool = messages
+        .iter()
+        .find(|message| message.role == "tool")
+        .expect("paired tool result is kept");
+    assert!(tool.is_error);
+    assert_eq!(tool.media.len(), 1, "multimodal tool output survives");
+    assert_eq!(tool.media[0].id, "img-a");
+
+    // The same failed result with no preceding assistant call is dangling and
+    // must not reach the provider at all.
+    let dangling = view_for(vec![
+        view_event(
+            1,
+            EventPayload::UserMessage {
+                text: "look".into(),
+                media: vec![],
+            },
+        ),
+        tool_outcome(
+            2,
+            "orphan",
+            "image failed to decode",
+            true,
+            vec![test_media("img-b")],
+        ),
+    ]);
+    assert!(
+        context_messages(&dangling)
+            .iter()
+            .all(|message| message.role != "tool"),
+        "a tool result with no owning call is still sanitized away"
+    );
 }
 
 #[tokio::test]

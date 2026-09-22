@@ -1546,6 +1546,21 @@ pub struct ModelMessage {
     /// the wire boundary. Text-only messages keep this empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub media: Vec<MediaRef>,
+    /// Kernel tool outcome for a `role: "tool"` message: true when the durable
+    /// record is `ToolFailed` rather than `ToolCompleted`. The kernel keeps the
+    /// distinction typed across this boundary so the model never has to infer
+    /// failure from the wording of arbitrary command output. Providers with a
+    /// native tool-result error signal map it directly; providers without one
+    /// carry it in the message content. Always false for non-tool roles.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_error: bool,
+}
+
+/// `skip_serializing_if` predicate: a false tool-error flag stays off the wire
+/// and out of the canonical request signature, so only real failures cost
+/// bytes. Legacy messages that predate the field deserialize to `false`.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl ModelMessage {
@@ -1559,6 +1574,28 @@ impl ModelMessage {
             reasoning_content: None,
             reasoning: Vec::new(),
             media: Vec::new(),
+            is_error: false,
+        }
+    }
+
+    /// A `role: "tool"` result message. `is_error` is the kernel's typed tool
+    /// outcome, never a guess derived from the output text.
+    #[must_use]
+    pub fn tool_result(
+        call_id: impl Into<String>,
+        content: impl Into<String>,
+        is_error: bool,
+        media: Vec<MediaRef>,
+    ) -> Self {
+        Self {
+            role: "tool".into(),
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: Some(call_id.into()),
+            reasoning_content: None,
+            reasoning: Vec::new(),
+            media,
+            is_error,
         }
     }
 
@@ -2105,6 +2142,7 @@ mod tests {
         let media = vec![image_ref()];
         let message = ModelMessage {
             role: "user".into(),
+            is_error: false,
             content: "look".into(),
             tool_calls: vec![],
             tool_call_id: None,

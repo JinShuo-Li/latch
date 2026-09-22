@@ -613,6 +613,7 @@ fn provider_serialization_is_deterministic() {
             ModelMessage::text("user", "inspect"),
             ModelMessage {
                 role: "assistant".into(),
+                is_error: false,
                 content: "working".into(),
                 tool_calls: vec![call("c1", "read_file", json!({"path":"a.txt"}))],
                 tool_call_id: None,
@@ -623,6 +624,7 @@ fn provider_serialization_is_deterministic() {
             },
             ModelMessage {
                 role: "tool".into(),
+                is_error: false,
                 content: "contents".into(),
                 tool_calls: vec![],
                 tool_call_id: Some("c1".into()),

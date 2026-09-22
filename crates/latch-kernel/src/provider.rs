@@ -15,6 +15,29 @@ pub const USER_AGENT: &str = "latch/0.2.1";
 const OPENCODE_GO_BASE: &str = "https://opencode.ai/zen/go";
 const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
+/// Tool-outcome envelope for provider transports that define no error field on
+/// a tool result (OpenAI-compatible Chat Completions and the Responses API).
+///
+/// Adapter-local by design: this is a wire-format workaround, not a kernel
+/// concept. The kernel's typed status stays in `ModelMessage::is_error`, and
+/// providers with a native signal (Anthropic's `is_error`) never see it. The
+/// envelope is deterministic and always the first line, so the model can read
+/// the outcome without parsing arbitrary command prose, and the original tool
+/// output follows unmodified.
+const TOOL_STATUS_OK: &str = "[latch:tool:ok]\n";
+const TOOL_STATUS_ERROR: &str = "[latch:tool:error]\n";
+
+/// Renders `content` for a transport with no native tool-error field, prefixing
+/// the stable status envelope. Non-tool messages are returned unchanged.
+fn tool_status_envelope(content: &str, is_error: bool) -> String {
+    let status = if is_error {
+        TOOL_STATUS_ERROR
+    } else {
+        TOOL_STATUS_OK
+    };
+    format!("{status}{content}")
+}
+
 /// Resolves durable, provider-neutral media references to their immutable
 /// bytes at the provider boundary. The kernel's artifact store implements
 /// this; tests use an in-memory store. Bytes never enter the event log.
@@ -694,19 +717,20 @@ pub fn responses_request(
                 }
             }
             "tool" => {
+                // `function_call_output` carries only `output`, with no error
+                // field, so the status travels in the same content envelope the
+                // Chat Completions adapter uses.
+                let output = tool_status_envelope(&message.content, message.is_error);
                 if message.media.is_empty() {
                     input.push(json!({
                         "type": "function_call_output",
                         "call_id": message.tool_call_id.clone().unwrap_or_default(),
-                        "output": message.content,
+                        "output": output,
                     }));
                 } else {
                     // Documented array form: text and images as input content
                     // parts, so the terminal tool transaction stays valid.
-                    let mut parts = Vec::new();
-                    if !message.content.is_empty() {
-                        parts.push(json!({"type": "input_text", "text": message.content}));
-                    }
+                    let mut parts = vec![json!({"type": "input_text", "text": output})];
                     for media_ref in &message.media {
                         parts.push(json!({
                             "type": "input_image",
@@ -1380,7 +1404,10 @@ fn openai_message(message: &latch_protocol::ModelMessage, reasoning: ReasoningRe
         "tool" => json!({
             "role":"tool",
             "tool_call_id": message.tool_call_id.clone().unwrap_or_default(),
-            "content": message.content,
+            // Chat Completions gives a tool message no field to carry failure,
+            // and inventing one would be rejected by strict endpoints, so the
+            // status travels in the content envelope instead.
+            "content": tool_status_envelope(&message.content, message.is_error),
         }),
         role => json!({"role": role, "content": message.content}),
     }
@@ -1507,6 +1534,10 @@ pub fn anthropic_request_with_config(
                         "type":"tool_result",
                         "tool_use_id": tool.tool_call_id.clone().unwrap_or_default(),
                         "content": content,
+                        // Anthropic has a native tool-result error signal, so the
+                        // kernel's typed status maps onto the wire directly and
+                        // the model never has to read failure out of the output.
+                        "is_error": tool.is_error,
                     }));
                     index += 1;
                 }
@@ -1673,6 +1704,7 @@ mod tests {
                 ModelMessage::text("user", "inspect"),
                 ModelMessage {
                     role: "assistant".into(),
+                    is_error: false,
                     content: "working".into(),
                     tool_calls: vec![ToolCall {
                         id: "call-1".into(),
@@ -1687,6 +1719,7 @@ mod tests {
                 },
                 ModelMessage {
                     role: "tool".into(),
+                    is_error: false,
                     content: "contents".into(),
                     tool_calls: vec![],
                     tool_call_id: Some("call-1".into()),
@@ -1711,7 +1744,10 @@ mod tests {
         let tool = &body["messages"][3];
         assert_eq!(tool["role"], "tool");
         assert_eq!(tool["tool_call_id"], "call-1");
-        assert_eq!(tool["content"], "contents");
+        // Chat Completions has no tool-error field, so the kernel's success
+        // status is carried in the Latch-owned content envelope ahead of the
+        // unmodified output.
+        assert_eq!(tool["content"], "[latch:tool:ok]\ncontents");
     }
 
     #[test]
@@ -1724,6 +1760,7 @@ mod tests {
                 ModelMessage::text("user", "inspect"),
                 ModelMessage {
                     role: "assistant".into(),
+                    is_error: false,
                     content: "working".into(),
                     tool_calls: vec![],
                     tool_call_id: None,
@@ -1787,6 +1824,7 @@ mod tests {
                 ModelMessage::text("user", "inspect"),
                 ModelMessage {
                     role: "assistant".into(),
+                    is_error: false,
                     content: "working".into(),
                     tool_calls: vec![ToolCall {
                         id: "call-1".into(),
@@ -1801,6 +1839,7 @@ mod tests {
                 },
                 ModelMessage {
                     role: "tool".into(),
+                    is_error: false,
                     content: "contents".into(),
                     tool_calls: vec![],
                     tool_call_id: Some("call-1".into()),
@@ -1824,6 +1863,142 @@ mod tests {
         assert_eq!(tool["role"], "user");
         assert_eq!(tool["content"][0]["type"], "tool_result");
         assert_eq!(tool["content"][0]["tool_use_id"], "call-1");
+    }
+
+    /// An assistant turn proposing one `read_file` call.
+    fn tool_call_turn(call_id: &str) -> ModelMessage {
+        ModelMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: vec![ToolCall {
+                id: call_id.into(),
+                name: "read_file".into(),
+                arguments: json!({"path": "a.txt"}),
+            }],
+            tool_call_id: None,
+            reasoning_content: None,
+            reasoning: vec![],
+            media: Vec::new(),
+            is_error: false,
+        }
+    }
+
+    /// One tool-result request with `output` and the kernel's outcome flag.
+    fn tool_result_request(call_id: &str, output: &str, is_error: bool) -> ModelRequest {
+        ModelRequest {
+            system: "s".into(),
+            messages: vec![
+                ModelMessage::text("user", "check"),
+                tool_call_turn(call_id),
+                ModelMessage::tool_result(call_id, output, is_error, vec![]),
+            ],
+            tools: vec![],
+        }
+    }
+
+    #[test]
+    fn anthropic_marks_failed_tool_results_with_the_native_error_field() {
+        let body = anthropic_request(
+            &tool_result_request("call-1", "exit code 1\nboom", true),
+            "m",
+        )
+        .unwrap();
+        let block = &body["messages"][2]["content"][0];
+        assert_eq!(block["type"], "tool_result");
+        assert_eq!(block["tool_use_id"], "call-1");
+        // Anthropic has a native signal, so the model reads failure from the
+        // wire rather than from the wording of the command output.
+        assert_eq!(block["is_error"], true);
+        assert_eq!(block["content"], "exit code 1\nboom");
+    }
+
+    #[test]
+    fn anthropic_successful_tool_results_are_not_marked_failed() {
+        let body = anthropic_request(&tool_result_request("call-1", "3 tests passed", false), "m")
+            .unwrap();
+        let block = &body["messages"][2]["content"][0];
+        assert_eq!(block["type"], "tool_result");
+        assert_eq!(block["is_error"], false);
+        assert_eq!(block["content"], "3 tests passed");
+    }
+
+    #[test]
+    fn openai_tool_messages_make_failure_visible_at_the_wire_level() {
+        // Identical tool output text, opposite kernel outcomes: the two wire
+        // messages must still be unambiguously different.
+        let ok = openai_request(
+            &tool_result_request("call-1", "same output text", false),
+            "m",
+            ReasoningReplay::Omit,
+        )
+        .unwrap();
+        let failed = openai_request(
+            &tool_result_request("call-1", "same output text", true),
+            "m",
+            ReasoningReplay::Omit,
+        )
+        .unwrap();
+        // 0 = system, 1 = user, 2 = assistant call, 3 = the tool result.
+        let ok_tool = &ok["messages"][3];
+        let failed_tool = &failed["messages"][3];
+        assert_eq!(ok_tool["role"], "tool");
+        assert_eq!(failed_tool["role"], "tool");
+        assert_ne!(
+            ok_tool["content"], failed_tool["content"],
+            "success and failure must differ at the wire level"
+        );
+        assert_eq!(ok_tool["content"], "[latch:tool:ok]\nsame output text");
+        assert_eq!(
+            failed_tool["content"],
+            "[latch:tool:error]\nsame output text"
+        );
+        // The documented fallback envelope is used precisely because Chat
+        // Completions has no such field: none may be invented.
+        assert!(failed_tool.get("is_error").is_none());
+        assert!(ok_tool.get("is_error").is_none());
+        assert_eq!(failed_tool["tool_call_id"], "call-1");
+    }
+
+    #[test]
+    fn responses_tool_output_carries_the_status_envelope_including_with_images() {
+        // The stateless Responses transport has no tool-error field either, so
+        // the status must survive both the plain and the multimodal form.
+        let plain = responses_request(
+            &tool_result_request("call-1", "boom", true),
+            "m",
+            None,
+            None,
+        )
+        .unwrap();
+        let output = plain["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call_output")
+            .expect("function_call_output present");
+        assert_eq!(output["call_id"], "call-1");
+        assert_eq!(output["output"], "[latch:tool:error]\nboom");
+
+        // Multimodal form: the envelope leads the text part, images follow, and
+        // the terminal tool transaction stays intact.
+        let mut request = tool_result_request("call-1", "boom", true);
+        request.messages[2] =
+            ModelMessage::tool_result("call-1", "boom", true, vec![image_ref("img-a")]);
+        let store = media_store();
+        let multimodal = responses_request(&request, "m", None, Some(&store)).unwrap();
+        let output = multimodal["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call_output")
+            .expect("function_call_output present");
+        let parts = output["output"].as_array().expect("array content form");
+        assert_eq!(parts[0]["type"], "input_text");
+        assert_eq!(parts[0]["text"], "[latch:tool:error]\nboom");
+        assert!(
+            parts.iter().any(|part| part["type"] == "input_image"),
+            "tool images survive alongside the status envelope"
+        );
     }
 
     #[test]
@@ -1948,6 +2123,7 @@ mod tests {
                 ModelMessage::text("user", "do it"),
                 ModelMessage {
                     role: "assistant".into(),
+                    is_error: false,
                     content: String::new(),
                     tool_calls: vec![latch_protocol::ToolCall {
                         id: "c1".into(),
@@ -1962,6 +2138,7 @@ mod tests {
                 },
                 ModelMessage {
                     role: "tool".into(),
+                    is_error: false,
                     content: "contents".into(),
                     tool_calls: vec![],
                     tool_call_id: Some("c1".into()),
@@ -2038,6 +2215,7 @@ mod tests {
                 ModelMessage::text("user", "fix it"),
                 ModelMessage {
                     role: "assistant".into(),
+                    is_error: false,
                     content: "working".into(),
                     tool_calls: vec![ToolCall {
                         id: "call-1".into(),
@@ -2053,6 +2231,7 @@ mod tests {
                 },
                 ModelMessage {
                     role: "tool".into(),
+                    is_error: false,
                     content: "contents".into(),
                     tool_calls: vec![],
                     tool_call_id: Some("call-1".into()),
@@ -2358,6 +2537,7 @@ mod tests {
                 ModelMessage::text("user", "weather?"),
                 ModelMessage {
                     role: "assistant".into(),
+                    is_error: false,
                     content: "checking".into(),
                     tool_calls: vec![ToolCall {
                         id: "call-1".into(),
@@ -2379,6 +2559,7 @@ mod tests {
                 },
                 ModelMessage {
                     role: "tool".into(),
+                    is_error: false,
                     content: "18C".into(),
                     tool_calls: vec![],
                     tool_call_id: Some("call-1".into()),
@@ -2509,6 +2690,7 @@ mod tests {
     fn multimodal_request() -> ModelRequest {
         let user = ModelMessage {
             role: "user".into(),
+            is_error: false,
             content: "inspect".into(),
             tool_calls: vec![],
             tool_call_id: None,
@@ -2518,6 +2700,7 @@ mod tests {
         };
         let assistant = ModelMessage {
             role: "assistant".into(),
+            is_error: false,
             content: String::new(),
             tool_calls: vec![
                 ToolCall {
@@ -2538,6 +2721,7 @@ mod tests {
         };
         let tool_media = ModelMessage {
             role: "tool".into(),
+            is_error: false,
             content: "image: [image: shot.png · 1440×900]".into(),
             tool_calls: vec![],
             tool_call_id: Some("call-media".into()),
@@ -2547,6 +2731,7 @@ mod tests {
         };
         let tool_text = ModelMessage {
             role: "tool".into(),
+            is_error: false,
             content: "contents".into(),
             tool_calls: vec![],
             tool_call_id: Some("call-text".into()),
@@ -2643,6 +2828,7 @@ mod tests {
             1,
             ModelMessage {
                 role: "user".into(),
+                is_error: false,
                 content: "kernel context".into(),
                 tool_calls: vec![],
                 tool_call_id: None,
@@ -2725,6 +2911,7 @@ mod tests {
                 ModelMessage::text("user", "hi"),
                 ModelMessage {
                     role: "assistant".into(),
+                    is_error: false,
                     content: "working".into(),
                     tool_calls: vec![ToolCall {
                         id: "call-1".into(),
@@ -2738,6 +2925,7 @@ mod tests {
                 },
                 ModelMessage {
                     role: "tool".into(),
+                    is_error: false,
                     content: "contents".into(),
                     tool_calls: vec![],
                     tool_call_id: Some("call-1".into()),

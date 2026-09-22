@@ -110,6 +110,7 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
         .filter_map(|e| match &e.payload {
             EventPayload::UserMessage { text, media } => Some(ModelMessage {
                 role: "user".into(),
+                is_error: false,
                 content: text.clone(),
                 tool_calls: vec![],
                 tool_call_id: None,
@@ -127,6 +128,7 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
                 reasoning,
             } => Some(ModelMessage {
                 role: "assistant".into(),
+                is_error: false,
                 content: text.clone(),
                 tool_calls: tool_calls.clone(),
                 tool_call_id: None,
@@ -134,17 +136,24 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
                 reasoning: reasoning.clone(),
                 media: Vec::new(),
             }),
-            EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } => {
-                Some(ModelMessage {
-                    role: "tool".into(),
-                    content: result.output.clone(),
-                    tool_calls: vec![],
-                    tool_call_id: Some(result.call_id.clone()),
-                    reasoning_content: None,
-                    reasoning: Vec::new(),
-                    media: result.media.clone(),
-                })
-            }
+            // The kernel distinguishes a completed tool result from a failed one
+            // structurally, and that distinction survives to the provider. The
+            // two durable events are mapped separately rather than merged so the
+            // status is never re-inferred from the tool's output prose. The
+            // event variant is authoritative: it is the kernel's own
+            // classification, and `ToolResult.is_error` records the same fact.
+            EventPayload::ToolCompleted { result } => Some(ModelMessage::tool_result(
+                result.call_id.clone(),
+                result.output.clone(),
+                false,
+                result.media.clone(),
+            )),
+            EventPayload::ToolFailed { result } => Some(ModelMessage::tool_result(
+                result.call_id.clone(),
+                result.output.clone(),
+                true,
+                result.media.clone(),
+            )),
             EventPayload::RegroundRequested { signature } => Some(ModelMessage::text("user", format!("Kernel re-ground required after repeated failure {signature}. Re-read current reality, identify disproven assumptions, and form a materially different strategy before another mutation."))),
             // Durable kernel context is rendered in history order so the
             // provider-visible request stays append-only within a cache epoch.

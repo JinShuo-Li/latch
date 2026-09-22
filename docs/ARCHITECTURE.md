@@ -621,6 +621,20 @@ API boundary. Durable state remains provider-neutral. Assistant reasoning
 endpoints (DeepSeek, OpenCode Go) through a small wire profile; replay is
 decoupled from tool-call structure so a defensive history transform can never
 drop required reasoning state. Reasoning is never displayed in the transcript.
+
+Tool outcome stays typed across the same boundary. The kernel records
+`ToolCompleted` and `ToolFailed` as distinct durable events and the request
+builder maps them separately, so `ModelMessage.is_error` carries the kernel's
+own classification rather than leaving the model to infer failure from the
+wording of command output. Anthropic Messages has a native `tool_result.is_error`
+field and uses it. Chat completions and the Responses API define no such field,
+so those adapters prefix the tool content with a short, stable, adapter-local
+`[latch:tool:ok]` / `[latch:tool:error]` envelope and leave the tool output
+itself unmodified; no unsupported JSON field is invented. The adapter-local
+envelope is a wire-format workaround only — the provider-neutral
+`ModelMessage::is_error` remains the kernel concept, and multimodal tool results
+carry images unchanged in every transport.
+
 Repository instruction precedence is `CLAUDE.md`, `AGENTS.md`, then
 `.latch/instructions.md`; current user input follows them. Kernel invariants
 override project text.

@@ -312,6 +312,7 @@ mod tests {
         let estimator = TokenEstimator::generic();
         let plain = vec![ModelMessage {
             role: "assistant".into(),
+            is_error: false,
             content: "thinking".into(),
             tool_calls: vec![],
             tool_call_id: None,
@@ -322,6 +323,7 @@ mod tests {
         }];
         let rich = vec![ModelMessage {
             role: "assistant".into(),
+            is_error: false,
             content: "thinking".into(),
             tool_calls: vec![latch_protocol::ToolCall {
                 id: "c1".into(),
