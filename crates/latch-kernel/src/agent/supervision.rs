@@ -3,6 +3,30 @@
 
 use super::*;
 
+/// Kernel-owned instruction issued at most once per run when implementation has
+/// changed the workspace but the run is about to end with no passing
+/// validation. It never asserts the work is wrong and never asks for more than
+/// the kernel can justify: it asks for the evidence the model is responsible
+/// for producing, and names the honest exit when verification genuinely is not
+/// available.
+const VERIFICATION_CORRECTION: &str = "Kernel verification check: this run changed the workspace, but completion is IMPLEMENTED, NOT VERIFIED — no required validation has passed. Before finishing, do one of two things. Either run the validation that proves the change (validate takes a requirement name and the command that demonstrates it holds), or, if the change genuinely cannot be verified in this environment, record that with record_evidence so completion states the reason honestly. If the change needs no validation at all, say why in your final answer.";
+
+/// True when a durable event records a workspace mutation Latch itself made
+/// during the run: a guarded edit, a mutating shell command, or an extension
+/// write. External edits are somebody else's change and pre-existing dirt was
+/// not made by this run, so neither counts as the implementation changing the
+/// workspace.
+fn is_workspace_mutation(payload: &EventPayload) -> bool {
+    matches!(
+        payload,
+        EventPayload::FileChanged { owner, .. }
+            if !matches!(
+                owner,
+                latch_protocol::ChangeOwner::External | latch_protocol::ChangeOwner::PreExisting
+            )
+    )
+}
+
 impl Agent {
     /// Feeds every durable event appended since the watermark to the progress
     /// supervisor and advances the watermark. Live supervision and replay
@@ -20,10 +44,49 @@ impl Agent {
             .store
             .events_after(self.session_id, self.progress_watermark)?;
         for event in &events {
+            if is_workspace_mutation(&event.payload) {
+                // Kernel-owned mutation state: the workspace really changed,
+                // asserted from the durable log rather than from the model's
+                // own `touched_files`.
+                self.run_mutated_workspace = true;
+            }
             self.progress.observe_event(event);
         }
         self.progress_watermark = last;
         Ok(())
+    }
+
+    /// Issues the one-shot verification correction for this run.
+    ///
+    /// Returns true when the loop should spend one more turn asking for the
+    /// evidence a terminal claim is missing. Every condition is kernel-owned:
+    /// the completion state is kernel-derived, and the mutation is read from
+    /// durable change events. An empty `required_validations` is deliberately
+    /// not itself a failure — a read-only, explanatory, or documentation task
+    /// may legitimately require none, and such a run mutates nothing, so it
+    /// never reaches this path.
+    pub(super) fn take_verification_correction(&mut self) -> bool {
+        if self.verification_correction_issued
+            || !self.run_mutated_workspace
+            || self.state.state().completion != CompletionState::ImplementedNotVerified
+        {
+            return false;
+        }
+        self.verification_correction_issued = true;
+        self.verification_correction = Some(VERIFICATION_CORRECTION.to_owned());
+        true
+    }
+
+    /// The kernel instruction attached to the next request: the verification
+    /// correction when one is pending, progress re-ground when inspection has
+    /// stalled, and both when they apply together.
+    pub(super) fn combined_reground_instruction(&self) -> Option<String> {
+        let progress = self.progress.reground_instruction();
+        match (&self.verification_correction, progress) {
+            (Some(correction), Some(progress)) => Some(format!("{correction}\n\n{progress}")),
+            (Some(correction), None) => Some(correction.clone()),
+            (None, progress) => progress,
+        }
     }
 
     /// Deterministic inspection-loop supervision. Every durable event produced

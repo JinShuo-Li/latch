@@ -313,6 +313,20 @@ now passes supersedes the failure. Completion is derived, never declared:
 required validation has current passing evidence, `Blocked` when a required
 validation is unavailable, and `ImplementedNotVerified` otherwise.
 
+Completion state and loop termination are deliberately separate. A `complete`
+claim sets the terminal flag only so the loop can exit in the same turn; the
+loop resolves it against the derived completion, and only `Verified` ends the
+run on the strength of its own claim. When the kernel has recorded a
+workspace mutation during the run — read from durable `FileChanged` events and
+never from model-authored `touched_files` — and completion is still
+`ImplementedNotVerified`, the loop spends exactly one corrective turn instead
+of exiting: the instruction travels the same durable `KernelContext` re-ground
+channel as progress supervision, asking the model to validate the change or
+record why verification is unavailable. A one-shot flag bounds it, so a model
+that keeps claiming completion is honored on the next claim and the run still
+ends `ImplementedNotVerified`. A run that mutated nothing exits immediately;
+an empty required-validation set is never by itself a reason to keep going.
+
 ## State, memory, and supervision
 
 Model `task_update` constraints are `TaskConstraint` memory; only actual user

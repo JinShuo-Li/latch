@@ -4322,3 +4322,269 @@ fn completion_gate_requires_required_tasks_resolved() {
     assert!(!allowed.is_error, "{}", allowed.output);
     assert!(root.terminal_complete);
 }
+
+// --- Verification is separate from loop termination. -------------------------
+//
+// `Verified` is the only completion that ends a run on the strength of its own
+// claim. An implementation claim that mutated the workspace but never passed a
+// validation is still a real, honestly-labelled state; the kernel spends at
+// most one turn asking for the missing evidence before honoring it.
+
+/// One assistant turn with no tool calls: the model's final answer.
+fn final_response(text: &str) -> ModelResponse {
+    ModelResponse {
+        text: text.into(),
+        tool_calls: vec![],
+        stop_reason: "stop".into(),
+        usage: None,
+        reasoning_content: None,
+        reasoning: vec![],
+    }
+}
+
+/// Provider requests the run actually issued.
+fn model_request_count(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::ModelRequestStarted { .. }))
+        .count()
+}
+
+/// Durable kernel-context turns carrying the one-shot verification correction.
+fn verification_correction_count(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|event| match &event.payload {
+            EventPayload::KernelContext { content, .. } => {
+                content.contains("Kernel verification check")
+            }
+            _ => false,
+        })
+        .count()
+}
+
+/// A new file in the sandboxed workspace, which is a kernel-owned mutation.
+fn write_new_file_response(id: &str) -> ModelResponse {
+    tool_response(
+        "adding the file",
+        id,
+        "write",
+        json!({"path":"added.txt","base_hash":null,"content":"hello"}),
+    )
+}
+
+fn complete_response(id: &str) -> ModelResponse {
+    tool_response(
+        "implementation is done",
+        id,
+        "complete",
+        json!({"implementation_done": true}),
+    )
+}
+
+#[tokio::test]
+async fn an_unverified_mutation_is_not_terminal_on_the_completion_claim_alone() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w1"),
+            complete_response("c1"),
+            final_response("Added the file; I could not verify it."),
+        ],
+    );
+    agent
+        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified,
+        "an unvalidated mutation stays honestly unverified"
+    );
+    let events = store.events(sid).unwrap();
+    // The claim alone did not end the run: the kernel spent its one correction
+    // turn, so three requests were made rather than two.
+    assert_eq!(model_request_count(&events), 3);
+    assert_eq!(
+        verification_correction_count(&events),
+        1,
+        "the kernel asked once for the missing evidence"
+    );
+}
+
+#[tokio::test]
+async fn the_run_exits_with_exactly_one_verification_opportunity() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w1"),
+            complete_response("c1"),
+            final_response("Still skipping validation."),
+            // Never reached: the run is already bounded.
+            final_response("A further answer."),
+        ],
+    );
+    agent
+        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    let events = store.events(sid).unwrap();
+    assert_eq!(
+        verification_correction_count(&events),
+        1,
+        "one corrective opportunity, never more"
+    );
+    assert_eq!(model_request_count(&events), 3);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+}
+
+#[tokio::test]
+async fn a_passing_validation_still_terminates_as_verified() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w1"),
+            tool_response(
+                "checking",
+                "v1",
+                "validate",
+                json!({
+                    "requirement": "added.txt holds hello",
+                    "command": "test \"$(cat added.txt)\" = hello"
+                }),
+            ),
+            complete_response("c1"),
+            final_response("Done and verified."),
+        ],
+    );
+    agent
+        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+    let events = store.events(sid).unwrap();
+    assert_eq!(
+        verification_correction_count(&events),
+        0,
+        "verified work needs no correction"
+    );
+    // `complete` on verified work still ends the run in its own turn.
+    assert_eq!(model_request_count(&events), 3);
+}
+
+#[tokio::test]
+async fn a_run_that_mutated_nothing_can_finish_unverified() {
+    let d = tempdir().unwrap();
+    // A read-only or explanatory task may legitimately require no validation.
+    // It mutates nothing, so the correction never applies and the claim is
+    // honored immediately even though completion is not `Verified`.
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            complete_response("c1"),
+            final_response("Explained, changed nothing."),
+        ],
+    );
+    agent
+        .run(
+            "Explain the code.",
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    let events = store.events(sid).unwrap();
+    assert_eq!(
+        verification_correction_count(&events),
+        0,
+        "no mutation means nothing to verify"
+    );
+    assert_eq!(model_request_count(&events), 1);
+}
+
+#[tokio::test]
+async fn the_correction_can_never_promote_an_unverified_run_to_verified() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w1"),
+            complete_response("c1"),
+            final_response("No validation was run."),
+        ],
+    );
+    agent
+        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    let events = store.events(sid).unwrap();
+    assert!(
+        !events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::CompletionChanged { completion } if *completion == CompletionState::Verified
+        )),
+        "only kernel validation evidence can produce Verified"
+    );
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    // No validation ran, so no requirement can claim a pass.
+    assert!(agent.state().required_validations.is_empty());
+}
+
+#[tokio::test]
+async fn the_verification_correction_cannot_loop_forever() {
+    let d = tempdir().unwrap();
+    // A model that keeps claiming completion must not be able to spin: the
+    // second claim is honored, still unverified.
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w1"),
+            complete_response("c1"),
+            complete_response("c2"),
+            complete_response("c3"),
+            complete_response("c4"),
+            final_response("unused"),
+        ],
+    );
+    agent
+        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    let events = store.events(sid).unwrap();
+    assert_eq!(
+        verification_correction_count(&events),
+        1,
+        "the correction is one-shot"
+    );
+    // write, complete (correction), complete (honored) — then the run ends.
+    assert_eq!(model_request_count(&events), 3);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+}

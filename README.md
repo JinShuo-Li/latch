@@ -359,6 +359,19 @@ failed and now passes supersedes the failure; historical attempts stay in the
 raw event log. Completion states: `InProgress`, `ImplementedNotVerified`,
 `Verified`, `Blocked` (a required validation could not run).
 
+Completion state and loop termination are separate. `Verified` is the only
+completion that ends the run on the strength of its own claim;
+`ImplementedNotVerified` stays a real and honestly-labelled state, but it is
+not verified success. When a run actually changed the workspace — judged from
+durable change events, never from the model's own `touched_files` — and is
+about to finish with an implementation claim and no passing validation, the
+kernel spends one corrective turn through the same durable kernel-context
+channel as progress re-ground: validate the change, or record why verification
+is unavailable. One opportunity per run, never a loop. A run that mutated
+nothing (read-only, explanatory, or documentation work) needs no validation and
+finishes exactly as before, and no correction can ever promote an unverified
+run to `Verified` — only kernel validation evidence does that.
+
 ## Durable child agents
 
 The root model has seven stable control tools: `spawn_agent`,

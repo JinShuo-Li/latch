@@ -101,6 +101,19 @@ pub struct Agent {
     /// completion is terminal. Lets the loop exit in the same turn instead of
     /// spending another provider request on a summary already produced.
     terminal_complete: bool,
+    /// True when a kernel-owned workspace mutation was recorded during the
+    /// current run. Derived only from durable `FileChanged` events, never from
+    /// model-authored `touched_files`, so "implementation changed the
+    /// workspace" is never a model claim.
+    run_mutated_workspace: bool,
+    /// The one-shot verification correction has been issued for this run. Reset
+    /// at the start of every run so the mechanism can never loop.
+    verification_correction_issued: bool,
+    /// Kernel-owned instruction asking for the validation an unverified
+    /// implementation claim is missing. Injected through the same durable
+    /// context channel as progress re-ground, so it is append-only, replayed on
+    /// resume, and never mistaken for user input.
+    verification_correction: Option<String>,
     permissions: PermissionBroker,
     /// Messages queued while the loop is running; drained only at safe model
     /// boundaries.
@@ -234,6 +247,9 @@ impl Agent {
             profile,
             input_modalities: vec![InputModality::Text],
             terminal_complete: false,
+            run_mutated_workspace: false,
+            verification_correction_issued: false,
+            verification_correction: None,
             permissions: PermissionBroker::new(),
             steering: SteeringQueue::new(),
             child_mailbox: ChildMailbox::default(),
@@ -899,6 +915,12 @@ impl Agent {
         let start = self.store.last_sequence(self.session_id)?;
         self.progress_watermark = start;
         self.forward_watermark.store(start, Ordering::Relaxed);
+        // Mutation and correction state are per-run. A mutation from an earlier
+        // run must not make a later read-only run look like it changed the
+        // workspace, and a correction already spent must not be spent again.
+        self.run_mutated_workspace = false;
+        self.verification_correction_issued = false;
+        self.verification_correction = None;
         let initial_agent_messages = self.child_mailbox.drain();
         let effective_user_text = if initial_agent_messages.is_empty() {
             self.record_user_message(input, &sink).await?;
@@ -997,7 +1019,11 @@ impl Agent {
                 session_context: prompt.session,
                 budget,
                 extension_context: &extension_json,
-                reground: self.progress.reground_instruction().as_deref(),
+                // Progress re-ground and the verification correction travel the
+                // same durable kernel-context channel. Both are kernel-owned
+                // instructions, never user input, and the engine dedups them by
+                // body so neither is emitted twice inside a cache epoch.
+                reground: self.combined_reground_instruction().as_deref(),
             })?;
             let mut stats = ctx.stats.clone();
             stats.tools_tokens = tools_tokens;
@@ -1121,6 +1147,16 @@ impl Agent {
                     && notifications == 0
                     && group_messages == 0
                 {
+                    // A final answer with no tool call normally ends the run. It
+                    // does not when implementation actually changed the
+                    // workspace and the kernel-derived completion is still
+                    // `ImplementedNotVerified`: the kernel spends its single
+                    // correction turn rather than silently accepting an
+                    // unverified change. A run that mutated nothing (read-only
+                    // or explanatory work) exits here exactly as before.
+                    if self.take_verification_correction() {
+                        continue;
+                    }
                     break;
                 }
                 if !late.is_empty() {
@@ -1150,6 +1186,15 @@ impl Agent {
             // messages, and undelivered child reports keep the run open.
             if self.terminal_complete {
                 self.terminal_complete = false;
+                // `Verified` is the only completion that ends the run on the
+                // strength of its own claim. An implementation claim with no
+                // passing validation stays a real, honestly-labelled state, but
+                // it is not verified success, so the kernel asks once for the
+                // missing evidence before honoring it. The correction is
+                // resolved here, after supervision has observed this turn's
+                // mutation events, so a `patch` and `complete` in the same
+                // response are judged on kernel-observed reality.
+                let correction = self.take_verification_correction();
                 let late = self.steering.close_and_drain();
                 let agent_messages = self.child_mailbox.drain();
                 if !agent_messages.is_empty() {
@@ -1169,6 +1214,9 @@ impl Agent {
                     && notifications == 0
                     && group_messages == 0
                 {
+                    if correction {
+                        continue;
+                    }
                     break;
                 }
                 if !late.is_empty() {

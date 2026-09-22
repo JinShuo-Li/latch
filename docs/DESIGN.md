@@ -48,6 +48,15 @@ required validation that cannot run yields Blocked rather than a pretense of
 verification. `complete` only records the implementation claim; the kernel
 computes the result and announces changes durably.
 
+Verified completion is also what ends a run. An implementation claim is not a
+substitute for evidence, so `ImplementedNotVerified` no longer terminates the
+loop by itself: when the run actually changed the workspace and no required
+validation has passed, the kernel spends one corrective turn asking the model to
+validate the change or state why verification is unavailable. The state stays
+honest either way, and the correction is one-shot — it can never loop, and it
+can never promote an unverified run to Verified. Read-only work is untouched:
+nothing was mutated, so there is nothing to verify.
+
 ## Failure supervision
 
 Failure signatures are normalized deterministically and tracked per validation
