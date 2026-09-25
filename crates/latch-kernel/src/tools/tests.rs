@@ -93,6 +93,33 @@ fn configured_state_dir_reaches_commands_extensions_and_children() {
         state_dir
     );
 }
+
+#[test]
+fn approval_is_not_offered_for_protected_or_unmountable_targets() {
+    let (workspace, executor) = setup_with_workspace_state_dir(Mode::Work);
+    let secret = workspace.path().join("state/secrets.toml");
+    for (tool, args) in [
+        (
+            "write",
+            json!({"path": secret.to_string_lossy(), "content": "x", "base_hash": null}),
+        ),
+        (
+            "shell",
+            json!({"command": format!("printf x > {}", secret.display())}),
+        ),
+        (
+            "shell",
+            json!({"command": "printf x", "capabilities": ["external_filesystem_write"]}),
+        ),
+        ("nonexistent_tool", json!({})),
+    ] {
+        let decision = executor.classify_call(tool, &args).decision;
+        assert!(
+            matches!(decision, crate::safety::Decision::Deny(_)),
+            "{tool}: {decision:?}"
+        );
+    }
+}
 #[tokio::test]
 async fn ask_and_plan_deny_mutation() {
     for mode in [Mode::Ask, Mode::Plan] {
@@ -1441,6 +1468,57 @@ async fn approved_outside_write_succeeds_and_records_absolute_path() {
 }
 
 #[tokio::test]
+async fn approved_shell_external_write_uses_only_its_call_scoped_mount() {
+    let workspace = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let target = outside.path().join("shell.txt");
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(workspace.path()).unwrap();
+    let executor = ToolExecutor::new(
+        workspace.path().into(),
+        workspace.path().join("artifacts"),
+        store,
+        session,
+        PolicyEngine::new(
+            Mode::Work,
+            workspace.path().into(),
+            PermissionConfig {
+                outside_workspace: OutsidePolicy::Ask,
+                ..PermissionConfig::default()
+            },
+        ),
+    )
+    .unwrap();
+    let shell = call_as(
+        "external-shell",
+        "shell",
+        json!({
+            "command": format!("printf approved > {}", target.display())
+        }),
+    );
+    let classification = executor.classify_call(&shell.name, &shell.arguments);
+    assert!(matches!(
+        classification.decision,
+        crate::safety::Decision::Ask(_)
+    ));
+    let denied = executor.execute(&shell, CancellationToken::new()).await;
+    assert!(denied.is_error);
+    assert!(!target.exists());
+    executor.grant_call(
+        &shell.id,
+        CapabilityGrant {
+            capabilities: classification.capabilities,
+            external_roots: classification.external_roots,
+        },
+    );
+    let allowed = executor.execute(&shell, CancellationToken::new()).await;
+    assert!(!allowed.is_error, "{}", allowed.output);
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "approved");
+    let reused = executor.execute(&shell, CancellationToken::new()).await;
+    assert!(reused.is_error);
+}
+
+#[tokio::test]
 async fn read_file_supports_ranges_and_continuation() {
     let (d, e) = setup(Mode::Ask);
     let content = (1..=10)
@@ -1815,21 +1893,23 @@ async fn managed_process_start_poll_and_terminate() {
     // issued; it does not test patience with an unkillable process. Keeping
     // its natural lifetime short bounds the test's worst case: when the
     // sandbox leader is killed but a namespaced grandchild still holds the
-    // output pipes, teardown waits for the grandchild to exit. A 30-second
-    // sleep turned that rare race into a ~30-second test in a loaded suite.
+    // output pipes, teardown waits for the grandchild to exit.
     let long = e
         .execute(
-            &call("exec_start", json!({"command":"sleep 2"})),
+            &call("exec_start", json!({"command":"sleep 0.5"})),
             CancellationToken::new(),
         )
         .await;
     let long_id = long.output.split_whitespace().nth(1).unwrap().to_owned();
-    let terminated = e
-        .execute(
+    let terminated = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        e.execute(
             &call("exec_terminate", json!({"id": long_id})),
             CancellationToken::new(),
-        )
-        .await;
+        ),
+    )
+    .await
+    .expect("managed-process fixture termination exceeded 5 seconds");
     assert!(!terminated.is_error, "{}", terminated.output);
     assert!(
         terminated.output.contains("terminated"),

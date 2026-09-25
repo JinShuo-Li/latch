@@ -63,7 +63,11 @@ impl Classification {
         }
     }
 
-    fn deny(capabilities: CapabilitySet, operation: String, reason: impl Into<String>) -> Self {
+    pub(crate) fn deny(
+        capabilities: CapabilitySet,
+        operation: String,
+        reason: impl Into<String>,
+    ) -> Self {
         let reason = reason.into();
         Self {
             decision: Decision::Deny(reason.clone()),
@@ -134,11 +138,10 @@ pub fn classify(tool: &str, args: &Value, context: Context<'_>) -> Classificatio
         _ => {
             let mut capabilities = CapabilitySet::new();
             capabilities.insert(Capability::UnknownCapability);
-            Classification::ask(
+            Classification::deny(
                 capabilities,
-                Vec::new(),
                 format!("{tool} (unclassified tool)"),
-                "unclassified tool requires explicit approval",
+                "unknown tool cannot execute; approval cannot add a tool implementation",
             )
         }
     }
@@ -303,6 +306,13 @@ fn classify_command(tool: &str, args: &Value, context: Context<'_>) -> Classific
     }
     capabilities.extend(&requested_capabilities(args));
     capabilities.extend(&inferred_command_capabilities(&command));
+    if capabilities.contains(Capability::ExternalFilesystemWrite) {
+        return Classification::deny(
+            capabilities,
+            operation,
+            "external write target could not be identified; approval cannot create a safe sandbox mount",
+        );
+    }
     match safety_decision(&capabilities, context) {
         Decision::Allow => Classification::allow(capabilities, operation),
         Decision::Ask(reason) => Classification::ask(capabilities, Vec::new(), operation, reason),
@@ -330,7 +340,7 @@ fn safety_decision(capabilities: &CapabilitySet, context: Context<'_>) -> Decisi
         return Decision::Ask("Git metadata mutation requires explicit approval".into());
     }
     if capabilities.contains(Capability::UnknownCapability) {
-        return Decision::Ask("unknown capability requires explicit approval".into());
+        return Decision::Deny("unknown capability has no executable sandbox grant".into());
     }
     if capabilities.contains(Capability::NetworkAccess) && context.safety != Safety::Autonomous {
         return Decision::Ask("network access requires explicit approval".into());
@@ -660,7 +670,15 @@ fn system_destructive_target(path: &Path) -> bool {
 /// A conservative best-effort detection of a shell command that names an
 /// absolute write target outside the workspace. The sandbox is the real
 /// boundary; this exists so the capability escalation becomes an `Ask`.
-fn inferred_external_write(command: &str, workspace: &Path) -> Option<PathBuf> {
+pub(crate) fn inferred_external_write(command: &str, workspace: &Path) -> Option<PathBuf> {
+    let path = inferred_write_target(command)?;
+    if path.starts_with(workspace) {
+        return None;
+    }
+    Some(path)
+}
+
+pub(crate) fn inferred_write_target(command: &str) -> Option<PathBuf> {
     let tokens = command.split_whitespace().collect::<Vec<_>>();
     let mut candidate: Option<String> = None;
     for (index, token) in tokens.iter().enumerate() {
@@ -686,10 +704,7 @@ fn inferred_external_write(command: &str, workspace: &Path) -> Option<PathBuf> {
     }
     let candidate = candidate?;
     let path = PathBuf::from(candidate);
-    if !path.is_absolute() || path.starts_with(workspace) {
-        return None;
-    }
-    Some(path)
+    path.is_absolute().then_some(path)
 }
 
 const WRITE_COMMANDS: &[&str] = &[
@@ -1063,7 +1078,7 @@ mod tests {
             context(Mode::Work, Safety::Autonomous, workspace),
         );
         assert!(unknown.capabilities.contains(Capability::UnknownCapability));
-        assert!(matches!(unknown.decision, Decision::Ask(_)));
+        assert!(matches!(unknown.decision, Decision::Deny(_)));
     }
 
     #[test]

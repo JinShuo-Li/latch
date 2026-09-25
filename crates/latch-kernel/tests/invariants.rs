@@ -768,9 +768,9 @@ fn hard_deny_is_independent_of_safety_profile() {
             matches!(classification.decision, SafetyDecision::Deny(_)),
             "hard deny must not depend on {safety:?}"
         );
-        // Unclassified tools remain an explicit Ask in every profile.
+        // An unknown tool has no implementation, so approval cannot help.
         let unknown = latch_kernel::safety::classify("mystery_tool", &json!({}), context);
-        assert!(matches!(unknown.decision, SafetyDecision::Ask(_)));
+        assert!(matches!(unknown.decision, SafetyDecision::Deny(_)));
     }
 }
 

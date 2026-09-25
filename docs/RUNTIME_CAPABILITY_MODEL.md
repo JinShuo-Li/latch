@@ -18,6 +18,12 @@ vocabulary), and documented as a port map where it is intentionally deferred.
 
 ## 1. Kernel invariants that no extension, backend, or client may bypass
 
+An approval resolves a policy `Ask` for one call. The resulting grant names
+only capabilities with an executable sandbox mapping, including a call-scoped
+mount for the known outside write target. Unknown tools,
+unmountable external writes, and Latch state or credential targets are refused
+before a normal approval prompt; a grant cannot override those refusals.
+
 These are properties of the kernel, not policies extensions opt into. Every
 mechanism added under this model must preserve all of them.
 

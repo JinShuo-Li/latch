@@ -262,7 +262,7 @@ impl ToolExecutor {
     /// policy, merged with any single-use grant the resolver approved.
     #[must_use]
     pub fn sandbox_profile(&self, call: &ToolCall) -> SandboxProfile {
-        let classification = self.policy.classify(&call.name, &call.arguments);
+        let classification = self.classify_call(&call.name, &call.arguments);
         let mut capabilities = classification.capabilities;
         let mut external_roots = classification.external_roots;
         if let Some(grant) = self.grant_for(&call.id) {
@@ -345,7 +345,33 @@ impl ToolExecutor {
     }
     #[must_use]
     pub fn classify_call(&self, tool: &str, args: &Value) -> safety::Classification {
-        self.policy.classify(tool, args)
+        let classification = self.policy.classify(tool, args);
+        let target = if matches!(tool, "write" | "patch") {
+            args.get("path").and_then(Value::as_str).map(|raw| {
+                if Path::new(raw).is_absolute() {
+                    PathBuf::from(raw)
+                } else {
+                    self.workspace.join(raw)
+                }
+            })
+        } else if matches!(tool, "shell" | "validate" | "exec_start") {
+            args.get("command")
+                .and_then(Value::as_str)
+                .and_then(safety::inferred_write_target)
+        } else {
+            None
+        };
+        if target
+            .as_ref()
+            .is_some_and(|path| self.is_protected_path(path))
+        {
+            return safety::Classification::deny(
+                classification.capabilities,
+                classification.operation,
+                "Latch protected state directory and credentials cannot be accessed by approval",
+            );
+        }
+        classification
     }
     #[must_use]
     pub fn policy_decision(&self, tool: &str, args: &Value) -> PolicyDecision {
@@ -418,7 +444,7 @@ impl ToolExecutor {
         ]
     }
     pub async fn execute(&self, call: &ToolCall, cancel: CancellationToken) -> ToolResult {
-        let classification = self.policy.classify(&call.name, &call.arguments);
+        let classification = self.classify_call(&call.name, &call.arguments);
         // A resolved `Ask` executes exactly once with its scoped grant. A
         // grant never converts `Deny`: hard deny stays denied.
         let decision = match classification.decision.clone() {
