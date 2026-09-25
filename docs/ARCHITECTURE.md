@@ -71,7 +71,11 @@ metadata, while per-model config tables store sparse user overrides. An
 unknown model gets no invented context window, pricing, cache shape, or
 reasoning parameters. `ProviderConfig` entries carry a symbolic credential
 reference (`env:NAME`, `file:NAME`, `keyring:NAME`), and
-`kernel/src/credentials.rs` resolves it at process start from the environment
+`providers.<id>.default_model` selects a model when switching provider;
+`[inference]` is the new-session default, seeded only when absent or invalid.
+The live session profile is durable in the event log and never writes either
+default back to config. `kernel/src/credentials.rs` resolves credential
+references at process start from the environment
 or a `0600` local secrets file. Secret values never enter the config file, the
 durable event log, the model context, the transcript, or ordinary logs, and
 provider error bodies are redacted.

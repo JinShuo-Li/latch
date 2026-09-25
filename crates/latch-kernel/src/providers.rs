@@ -986,8 +986,7 @@ impl ProviderProfile {
             .default_model
             .clone()
             .filter(|model| !model.trim().is_empty())
-            .or_else(|| builtin_models(kind).first().map(|m| m.id.to_owned()))
-            .unwrap_or_else(|| "unknown".to_owned());
+            .unwrap_or_default();
         if entry
             .enabled_models
             .as_ref()
@@ -1268,6 +1267,9 @@ impl ProviderRegistry {
             .get(&provider_id)
             .ok_or_else(|| anyhow!("unknown provider {provider_id:?}"))?;
         let model = if requested.model.trim().is_empty() {
+            if profile.default_model.is_empty() {
+                bail!("provider {provider_id} needs a default_model before it can be selected");
+            }
             profile.default_model.clone()
         } else {
             profile.resolve_model_name(&requested.model)
@@ -1416,6 +1418,45 @@ mod tests {
                 "{selected}"
             );
         }
+    }
+
+    #[test]
+    fn provider_switch_uses_its_configured_default_and_never_catalog_order() {
+        let (config, catalog) = registry(
+            r#"
+            [providers.openai]
+            kind = "openai"
+            default_model = "gpt-5.5"
+
+            [providers.deepseek]
+            kind = "deepseek"
+            default_model = "deepseek-v4-pro"
+
+            [inference]
+            provider = "openai"
+            model = "gpt-5.5"
+            "#,
+        );
+        let (new_session, _) = catalog.default_profile(&config).unwrap();
+        assert_eq!(new_session.provider.as_str(), "openai");
+        let (switched, _) = catalog
+            .resolve_profile(&InferenceProfile::new(
+                "deepseek",
+                "",
+                ReasoningEffort::ProviderDefault,
+            ))
+            .unwrap();
+        assert_eq!(switched.model, "deepseek-v4-pro");
+
+        let (_config, missing_default) = registry("[providers.deepseek]\nkind = 'deepseek'\n");
+        let error = missing_default
+            .resolve_profile(&InferenceProfile::new(
+                "deepseek",
+                "",
+                ReasoningEffort::ProviderDefault,
+            ))
+            .unwrap_err();
+        assert!(error.to_string().contains("needs a default_model"));
     }
 
     #[test]

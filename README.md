@@ -53,6 +53,9 @@ effort = "low"
 the full built-in catalog plus custom entries is offered. Per-model tables
 contain only fields the user overrides. Latch does not write built-in model
 facts into the config.
+Each provider's `default_model` is used when switching to that provider.
+`[inference]` seeds new sessions and is set by the first usable setup; later
+provider saves preserve it. A running session's `/model` choice is separate.
 
 Credentials are symbolic (`env:NAME`, `file:NAME`, or `keyring:NAME`) and are
 never stored in the config, the durable event log, the transcript, or logs.

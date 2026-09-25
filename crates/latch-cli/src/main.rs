@@ -512,6 +512,9 @@ fn persist_setup(
     } else {
         name.trim().to_owned()
     };
+    if model.trim().is_empty() {
+        bail!("provider {provider_id:?} needs a default_model before saving");
+    }
     let credential_ref = match credential {
         SetupCredential::Env(name) => CredentialRef::Env(name),
         SetupCredential::Secret(secret) => {
@@ -534,11 +537,33 @@ fn persist_setup(
     entry.base_url = base_url;
     entry.credential = Some(credential_ref.display());
     entry.default_model = Some(model.clone());
-    context.config.inference = InferenceConfig {
-        provider: Some(provider_id.clone()),
-        model: Some(model.clone()),
-        effort,
-    };
+    let valid_inference = context
+        .config
+        .inference
+        .provider
+        .as_deref()
+        .zip(context.config.inference.model.as_deref())
+        .is_some_and(|(provider, model)| {
+            ProviderRegistry::from_config(&context.config)
+                .ok()
+                .and_then(|registry| {
+                    registry
+                        .resolve_profile(&InferenceProfile::new(
+                            provider,
+                            model,
+                            context.config.inference.effort,
+                        ))
+                        .ok()
+                })
+                .is_some()
+        });
+    if !valid_inference {
+        context.config.inference = InferenceConfig {
+            provider: Some(provider_id.clone()),
+            model: Some(model.clone()),
+            effort,
+        };
+    }
     save_config(context)?;
     Ok((provider_id, model, effort))
 }
@@ -552,31 +577,13 @@ fn remove_provider(context: &mut InferenceContext, name: &str) -> Result<Option<
         bail!("no provider named {name:?}");
     }
     let active = context.config.inference.provider.as_deref() == Some(name);
-    if active && context.config.providers.len() == 1 {
-        bail!("cannot remove the only configured provider; configure a replacement first");
+    if active {
+        bail!(
+            "provider {name:?} is the new-session default; set another provider as the new-session default before removing it"
+        );
     }
     context.config.providers.remove(name);
-    let replacement = if active {
-        let next = context
-            .config
-            .providers
-            .keys()
-            .next()
-            .cloned()
-            .expect("checked non-empty above");
-        context.config.inference = InferenceConfig {
-            provider: Some(next.clone()),
-            model: None,
-            effort: ReasoningEffort::ProviderDefault,
-        };
-        Some(InferenceProfile::new(
-            next,
-            String::new(),
-            ReasoningEffort::ProviderDefault,
-        ))
-    } else {
-        None
-    };
+    let replacement = None;
     save_config(context)?;
     Ok(replacement)
 }
@@ -1045,65 +1052,71 @@ mod tests {
             ..Config::default()
         };
         let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
-        for (name, kind) in [("openai-main", "openai"), ("deepseek", "deepseek")] {
+        for (name, kind, model) in [
+            ("openai-main", "openai", "gpt-5.5"),
+            ("deepseek", "deepseek", "deepseek-flash"),
+        ] {
             persist_setup(
                 &mut context,
                 &setup_plan(
                     name,
                     kind,
                     SetupCredential::Env("KEY".into()),
-                    "",
+                    model,
                     ReasoningEffort::ProviderDefault,
                 ),
             )
             .unwrap();
         }
-        // The last applied provider is active (`deepseek`).
+        // The first usable provider seeds the new-session default. Later
+        // provider saves keep it unchanged.
         assert_eq!(
             context.config.inference.provider.as_deref(),
-            Some("deepseek")
+            Some("openai-main")
         );
-        // Metadata on a non-active instance survives removal of a sibling.
+        // Metadata on the default instance survives removal of a sibling.
         context
             .config
             .providers
-            .get_mut("deepseek")
+            .get_mut("openai-main")
             .unwrap()
             .models
             .insert(
-                "deepseek-flash".into(),
+                "gpt-5.5".into(),
                 latch_kernel::config::ModelConfig {
                     context_window_tokens: Some(555),
                     ..Default::default()
                 },
             );
-        let replacement = remove_provider(&mut context, "openai-main").unwrap();
+        let replacement = remove_provider(&mut context, "deepseek").unwrap();
         assert!(replacement.is_none(), "non-active removal needs no switch");
         assert_eq!(
             context.config.inference.provider.as_deref(),
-            Some("deepseek")
+            Some("openai-main")
         );
         assert!(remove_provider(&mut context, "missing").is_err());
 
-        // Removing the active provider picks a replacement and keeps
-        // [inference] pointing at an existing provider.
+        // Adding and removing another provider does not rewrite [inference].
         persist_setup(
             &mut context,
             &setup_plan(
                 "lab",
-                "openai-compatible",
+                "openai",
                 SetupCredential::Env("LAB_KEY".into()),
-                "lab-model",
+                "gpt-5.5",
                 ReasoningEffort::ProviderDefault,
             ),
         )
         .unwrap();
-        assert_eq!(context.config.inference.provider.as_deref(), Some("lab"));
-        let replacement = remove_provider(&mut context, "lab").unwrap().unwrap();
-        assert_eq!(replacement.provider.as_str(), "deepseek");
         assert_eq!(
             context.config.inference.provider.as_deref(),
-            Some("deepseek")
+            Some("openai-main")
+        );
+        let replacement = remove_provider(&mut context, "lab").unwrap();
+        assert!(replacement.is_none());
+        assert_eq!(
+            context.config.inference.provider.as_deref(),
+            Some("openai-main")
         );
 
         // The persisted config reloads, resolves a default profile, and the
@@ -1111,17 +1124,16 @@ mod tests {
         let reloaded = Config::load(Some(&config_path)).unwrap();
         let registry = ProviderRegistry::from_config(&reloaded).unwrap();
         let (profile, _) = registry.default_profile(&reloaded).unwrap();
-        assert_eq!(profile.provider.as_str(), "deepseek");
+        assert_eq!(profile.provider.as_str(), "openai-main");
         assert_eq!(
-            reloaded.providers["deepseek"].models["deepseek-flash"].context_window_tokens,
+            reloaded.providers["openai-main"].models["gpt-5.5"].context_window_tokens,
             Some(555)
         );
 
-        // Removing the only remaining provider is refused rather than leaving
-        // [inference] dangling.
-        let error = remove_provider(&mut context, "deepseek").unwrap_err();
-        assert!(error.to_string().contains("cannot remove the only"));
-        assert!(context.config.providers.contains_key("deepseek"));
+        // Removing the default provider requires an explicit default change.
+        let error = remove_provider(&mut context, "openai-main").unwrap_err();
+        assert!(error.to_string().contains("new-session default"));
+        assert!(context.config.providers.contains_key("openai-main"));
     }
 
     #[test]
