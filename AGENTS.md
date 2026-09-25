@@ -118,6 +118,9 @@ changes. Cache locality must never override long-horizon correctness.
 Four crates: `latch-protocol` (durable event/model schema shared by all),
 `latch-kernel` (agent loop, providers, tools, sandbox, continuity, SQLite store),
 `latch-tui` (Ratatui app), `latch-cli` (wiring and `latch` binary).
+The static GitHub Pages site lives in `site/` and is published by
+`.github/workflows/pages.yml`; its terminal captures come from TUI snapshots.
+Keep its version and install commands aligned with the README.
 
 Kernel ownership boundaries — put changes in the right child module:
 `agent.rs` keeps the run loop and public facade, with `agent/{steering,request,

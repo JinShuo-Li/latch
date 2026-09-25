@@ -1,5 +1,7 @@
 # Latch
 
+[Website and install guide](https://jinshuo-li.github.io/latch/)
+
 Latch is a quiet, programmable terminal coding agent built around explicit state,
 evidence, controlled execution, and continuous long-session memory. V0.2.2 is a
 Linux-first Rust implementation with a native streamed tool loop, durable SQLite
