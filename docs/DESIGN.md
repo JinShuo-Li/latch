@@ -198,3 +198,213 @@ area, and
 shell-like prompt history recalled with Up/Down that survives resume from user
 events. Scrolling stays visual-row based with PageUp/PageDown, Home/End, mouse
 wheel, auto-follow at the bottom, and a subtle newer-content indicator.
+
+## Guided setup
+
+`/setup` is the only place a user must configure a provider, its credential,
+its models, and its thinking policy; a first run with no usable provider opens
+it directly. The current wizard is linear — kind, name, endpoint, credential,
+one model, one default effort — and persists only the provider row and
+`[inference]`; typed model metadata is discarded. Guided setup replaces it with
+a branch-first flow that defines several models per provider, separates the
+display name from the request name, records the context window, maps thinking
+levels onto the provider's wire values, and persists everything through the
+canonical `[providers.*]` tables. One run configures one provider with any
+number of models; repeating the flow configures more endpoints.
+
+### Flow
+
+```text
+/setup
+  Providers
+    Add provider…
+    Edit provider…          prefilled from persisted configuration
+    Remove provider…        config only; stored credentials are kept
+  Add provider
+    OpenCode subscription
+      Go                    https://opencode.ai/zen/go/v1
+      Zen                   https://opencode.ai/zen/v1
+        credential          environment variable name | masked secret
+        models              multi-select from the service catalog
+                            + "Refresh from provider…"
+        per model           display name, context, thinking levels
+        active model        becomes [inference].model
+    Other provider
+      endpoint type         OpenAI | Anthropic | DeepSeek | OpenAI-compatible
+      instance id           stable config key, unique
+      display name
+      base URL              prefilled, editable
+      credential            environment variable name | masked secret
+      models                repeatable definition:
+                              request name   wire model id sent on the wire
+                              display name   what the TUI shows
+                              context        tokens, optional
+                              thinking       levels + wire mapping + default
+      active model
+  Review                    no secret is ever shown
+  Apply & save              one atomic config write + credential store write
+```
+
+Keyboard: Up/Down move, space toggles in a multi-select, Enter advances,
+Backspace/Esc goes back one step (and cancels at the first step). Every list
+uses the windowed choice surface, so long catalogs scroll instead of clipping.
+
+### Provider families
+
+OpenCode Go and Zen are subscription services with published model lists and
+per-model transports. Go keeps its versioned gateway URL,
+`x-opencode-session` header, and per-model transport/replay semantics; setup
+only changes how models are selected. Zen becomes a first-class kind
+(`opencode-zen`, base `https://opencode.ai/zen/v1`), and its models resolve
+transport per model like Go. Both branches list models from a built-in catalog
+and can refresh live.
+
+Other providers are the four existing kinds. The endpoint type fixes the
+default transport and credential label; an OpenAI-compatible endpoint may
+override the transport per model.
+
+### Model definitions
+
+The request name is the wire identity
+(`[providers.<id>.models."<request>"]` and `[inference].model`); the display
+name is presentation only. A definition carries the context window, the
+exposed thinking levels, the wire mapping, the transport, replay policy, and
+input modalities through the existing `ModelConfig` fields. Setup writes only
+the fields it owns and preserves metadata for untouched models when editing.
+
+### Thinking levels and wire mapping
+
+The neutral vocabulary stays `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/
+`max`; `efforts` names the levels a model exposes and `default_effort` the
+level a fresh selection starts on. When a provider does not speak those names,
+`effort_map` maps each exposed level to its wire form:
+
+```toml
+[providers.acme.models."acme-pro"]
+efforts = ["low", "medium", "high"]
+default_effort = "medium"
+
+[providers.acme.models."acme-pro".effort_map]
+low = { value = "1" }
+medium = { value = "2" }
+high = { budget_tokens = 32768 }
+```
+
+Three wire forms, owned and validated by the transport adapter:
+
+- `value = "…"` — the transport's documented effort field
+  (`reasoning_effort`, `reasoning.effort`, `output_config.effort`,
+  `thinkingConfig.thinkingLevel`).
+- `budget_tokens = N` — the transport's documented token budget
+  (`thinking.budget_tokens`, `thinkingConfig.thinkingBudget`).
+- `disabled = true` — the transport's documented off switch
+  (`thinking.type = "disabled"`, `thinkingConfig.thinkingBudget = 0`).
+
+Rules: a map covers every exposed level or is absent (absent means the neutral
+identity for transports that speak the neutral names); `default_effort` must be
+one of `efforts`; budget and disabled forms are rejected for transports that
+have no such field, with an actionable setup message; mapping is serialization,
+so it lives in the adapter and the kernel loop and memory never see it.
+
+The setup UI turns "how many levels" into a generated table. The user picks a
+preset — neutral names, a numeric sequence, token budgets, or custom per level
+— and the wizard creates the mapping automatically; every level stays editable,
+and the review prints the mapping without any secret.
+
+### Discovery
+
+Go and Zen publish `GET /models` (public, and account-filtered when a
+credential is entered). Built-in catalogs keep setup deterministic and
+offline; a "refresh from provider" row asks the CLI to fetch and merge by id.
+The TUI never performs network I/O: discovery is a request/response over the
+existing channel (`Action::DiscoverModels` → `Output::SetupModels`), with a
+timeout and a fall-back to the built-in list. Ids the catalog does not know
+arrive with the id as label and conservative capabilities, and the per-model
+editor fills in the rest.
+
+### Zen and Gemini
+
+Zen serves some models over Google's Generative Language API. Supporting them
+adds a `Gemini` transport: streaming `generateContent` requests
+(`models/{model}:streamGenerateContent?alt=sse`), `contents` with
+`functionCall`/`functionResponse` parts, `inlineData` images, and
+`thinkingConfig` for thinking. Gemini function calls carry no provider id, so
+the adapter synthesizes deterministic per-turn call ids and maps tool results
+by name; thinking has no replay requirement. Gateway auth shape and the exact
+SSE chunk format are verified against the live endpoint before the adapter is
+declared complete.
+
+### Storage root and secrets
+
+Everything Latch owns defaults to one root, `~/.latch/`, created `0700` on
+first use:
+
+```text
+~/.latch/
+  config.toml      profiles, models, policy; never a secret
+  secrets.toml     provider API keys, 0600, atomic write
+  latch.sqlite3    durable sessions and events
+  artifacts/       session artifacts
+```
+
+Resolution stays explicit and predictable: an explicit `--config` path (or an
+explicit `state_dir` in configuration) wins; otherwise `~/.latch/config.toml`
+is the default. Existing installs keep working: when `~/.latch/config.toml`
+does not exist but the legacy XDG files do (`~/.config/latch/config.toml`,
+`~/.local/state/latch/`), Latch reads them in place and reports the legacy
+root in `latch doctor`; `latch migrate` performs an explicit, non-destructive
+move (config and secrets rewritten under `~/.latch/`, the session database
+copied with SQLite's backup semantics, the legacy files left untouched as a
+backup). No run silently relocates a user's sessions or credentials.
+
+Secrets stay symbolic in configuration (`env:NAME`, `file:<provider>`). A
+value typed in setup lives only in TUI memory until Apply, is masked in
+display and debug output, is written atomically to `secrets.toml` under the
+provider instance key with `0600`, and is refused on read if the file is
+group- or world-readable. The whole root is masked inside the mandatory
+sandbox, so sandboxed commands and extensions cannot read a key even when the
+workspace or HOME changes. `latch doctor` reports the effective root and the
+credential reference (never the value), and the setup review names the root it
+will write to. `README.md`, `AGENTS.md`, and `config.example.toml` record the
+same layout when this lands.
+
+### Persistence and editing
+
+`SetupPlan::Apply` carries the provider identity, its models, and the active
+model. Apply upserts `[providers.<id>]`, every
+`[providers.<id>.models.<request>]`, then `[inference]` once, and saves
+atomically; a directly entered secret goes to the 0600 credential store under
+the provider instance, and the config keeps only `env:`/`file:` references.
+Editing prefills the flow from persisted configuration (credentials by
+symbolic reference only) and preserves unrelated metadata. Removing a provider
+never deletes stored credentials.
+
+### Security and validation
+
+Secrets exist only in TUI memory until Apply, are masked in display and debug
+output, never enter `config.toml`, the event log, the transcript, or logs, and
+are redacted from every error path. The storage root is `0700`, `secrets.toml`
+is `0600` and written atomically, and every surface that names a credential
+prints only its symbolic reference. Validation is explicit and actionable:
+instance ids are unique and `[a-z0-9._-]`; URLs parse as http(s); environment
+variable names are identifiers; secrets and request names are non-empty;
+context windows are positive token counts; a provider has at least one model
+and exactly one active model; a wire map is complete and transport-compatible.
+
+### Phases
+
+- **P0 — foundation:** the `~/.latch` default storage root (config, secrets,
+  sessions, artifacts) with the legacy XDG read-in-place fallback and explicit
+  `latch migrate`; multi-model `SetupPlan`; branch-first flow with edit;
+  per-model definition (request/display/context); Zen kind for
+  chat/responses/messages; built-in catalogs; validation; persistence; tests
+  and user docs.
+- **P1 — wire mapping:** `effort_map` config, adapter emission rules, and the
+  mapping editor and review.
+- **P2 — discovery:** the refresh round trip and catalog merge.
+- **P3 — Gemini:** the transport adapter and Zen Gemini models.
+
+Each phase is independently releasable, keeps the kernel's provider-neutral
+memory and event types untouched, and updates `README.md`,
+`config.example.toml`, and `ARCHITECTURE.md` where behavior or ownership
+changes.
