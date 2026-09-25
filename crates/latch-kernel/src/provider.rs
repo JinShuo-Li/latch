@@ -10,8 +10,9 @@ use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::config::{EffortForm, EffortMapping};
+use crate::config::{EffortForm, EffortForms, EffortMapping};
 use latch_protocol::ReasoningEffort;
+use serde::{Deserialize, Serialize};
 
 /// One user-defined per-level effort map at the adapter boundary.
 pub type EffortMap = BTreeMap<ReasoningEffort, EffortMapping>;
@@ -1320,30 +1321,173 @@ pub enum GeminiThinking {
     Budget(u64),
 }
 
-/// Resolves the Gemini wire form. Neutral levels map onto the documented
-/// `ThinkingLevel` enum, `none` maps onto the documented zero-budget off
-/// switch, and a user map takes precedence field for field.
+/// Gemini thinking wire capability declared for one model. The transport has
+/// no global thinking default: an undeclared model emits no thinking controls
+/// and accepts no effort map, and every built-in Gemini row declares its
+/// documented capability. Sources checked 2026-09:
+/// `ai.google.dev/gemini-api/docs/generate-content/thinking`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum GeminiThinkingCapability {
+    /// `thinkingConfig.thinkingLevel` models. `levels` lists the documented
+    /// level values the neutral vocabulary maps onto; `off` names the
+    /// documented no-thinking level when the model has one.
+    Levels {
+        levels: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        off: Option<String>,
+    },
+    /// `thinkingConfig.thinkingBudget` models. `zero_allowed` is the
+    /// documented `thinkingBudget = 0` off switch.
+    Budget {
+        #[serde(default)]
+        zero_allowed: bool,
+    },
+}
+
+impl GeminiThinkingCapability {
+    /// The effort-map forms this capability can serialize. Gemini models are
+    /// either level-based or budget-based, never both, and `disabled` is
+    /// accepted only when the model documents an off switch.
+    #[must_use]
+    pub fn effort_forms(&self) -> EffortForms {
+        match self {
+            Self::Levels { off, .. } => EffortForms {
+                value: true,
+                budget_tokens: false,
+                disabled: off.is_some(),
+            },
+            Self::Budget { zero_allowed } => EffortForms {
+                value: false,
+                budget_tokens: true,
+                disabled: *zero_allowed,
+            },
+        }
+    }
+
+    /// The documented off switch, when the model has one.
+    #[must_use]
+    pub fn off_switch(&self) -> Option<GeminiThinking> {
+        match self {
+            Self::Levels {
+                off: Some(level), ..
+            } => Some(GeminiThinking::Level(level.clone())),
+            Self::Levels { off: None, .. } => None,
+            Self::Budget { zero_allowed: true } => Some(GeminiThinking::Budget(0)),
+            Self::Budget {
+                zero_allowed: false,
+            } => None,
+        }
+    }
+
+    /// The built-in neutral mapping for one effort. `None` means the declared
+    /// capability has no documented expression for that level, so the model
+    /// must map it explicitly or stop exposing it.
+    #[must_use]
+    pub fn neutral(&self, effort: ReasoningEffort) -> Option<GeminiThinking> {
+        match self {
+            Self::Levels { levels, off } => {
+                if effort == ReasoningEffort::None {
+                    return off
+                        .as_ref()
+                        .map(|level| GeminiThinking::Level(level.clone()));
+                }
+                let level = match effort {
+                    ReasoningEffort::Minimal => "minimal",
+                    ReasoningEffort::Low => "low",
+                    ReasoningEffort::Medium => "medium",
+                    ReasoningEffort::High => "high",
+                    _ => return None,
+                };
+                levels
+                    .iter()
+                    .any(|declared| declared == level)
+                    .then(|| GeminiThinking::Level(level.to_owned()))
+            }
+            Self::Budget { zero_allowed } => (effort == ReasoningEffort::None && *zero_allowed)
+                .then_some(GeminiThinking::Budget(0)),
+        }
+    }
+
+    /// Whether a mapped `value` form names a declared level.
+    #[must_use]
+    pub fn supports_level(&self, value: &str) -> bool {
+        matches!(self, Self::Levels { levels, .. } if levels.iter().any(|level| level == value))
+    }
+
+    /// Validates the declared shape before it reaches configuration or a
+    /// request. The message is actionable and provider-neutral.
+    pub fn validate(&self) -> Result<(), String> {
+        let Self::Levels { levels, off } = self else {
+            return Ok(());
+        };
+        if levels.is_empty() {
+            return Err("levels must list at least one documented thinking level".to_owned());
+        }
+        let mut seen = BTreeSet::new();
+        for level in levels {
+            if level.trim().is_empty() {
+                return Err("thinking levels must not be empty".to_owned());
+            }
+            if !seen.insert(level) {
+                return Err(format!("thinking level {level:?} is declared twice"));
+            }
+        }
+        if let Some(off) = off
+            && !seen.contains(off)
+        {
+            return Err(format!(
+                "off level {off:?} must be one of the declared levels"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for GeminiThinkingCapability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Levels { levels, off } => {
+                write!(f, "levels: {}", levels.join(", "))?;
+                if let Some(off) = off {
+                    write!(f, " (off: {off})")?;
+                }
+                Ok(())
+            }
+            Self::Budget { zero_allowed: true } => write!(f, "budget (zero disables thinking)"),
+            Self::Budget {
+                zero_allowed: false,
+            } => write!(f, "budget (cannot disable)"),
+        }
+    }
+}
+
+/// Resolves the Gemini wire form from the model's declared capability. A
+/// mapped form is emitted only when the capability can serialize it; an
+/// unmapped level uses the documented neutral mapping. Configuration
+/// validation rejects anything this function would otherwise drop.
 #[must_use]
 pub fn gemini_thinking_for(
     effort: ReasoningEffort,
-    supports_effort: bool,
+    capability: Option<&GeminiThinkingCapability>,
     map: &EffortMap,
 ) -> GeminiThinking {
+    let Some(capability) = capability else {
+        return GeminiThinking::Default;
+    };
     match mapped_effort(effort, map) {
-        Some(EffortForm::Value(value)) => GeminiThinking::Level(value),
-        Some(EffortForm::BudgetTokens(budget)) => GeminiThinking::Budget(budget),
-        Some(EffortForm::Disabled) => GeminiThinking::Budget(0),
-        _ if supports_effort => match effort {
-            ReasoningEffort::None => GeminiThinking::Budget(0),
-            ReasoningEffort::Minimal => GeminiThinking::Level("minimal".into()),
-            ReasoningEffort::Low => GeminiThinking::Level("low".into()),
-            ReasoningEffort::Medium => GeminiThinking::Level("medium".into()),
-            ReasoningEffort::High => GeminiThinking::Level("high".into()),
-            // Gemini 3 exposes no documented `xhigh`/`max` level; never invent
-            // one, and let the model default apply instead.
-            _ => GeminiThinking::Default,
-        },
-        _ => GeminiThinking::Default,
+        Some(EffortForm::Value(value)) if capability.supports_level(&value) => {
+            GeminiThinking::Level(value)
+        }
+        Some(EffortForm::Value(_)) => GeminiThinking::Default,
+        Some(EffortForm::BudgetTokens(budget))
+            if matches!(capability, GeminiThinkingCapability::Budget { .. }) =>
+        {
+            GeminiThinking::Budget(budget)
+        }
+        Some(EffortForm::BudgetTokens(_)) => GeminiThinking::Default,
+        Some(EffortForm::Disabled) => capability.off_switch().unwrap_or_default(),
+        None => capability.neutral(effort).unwrap_or_default(),
     }
 }
 
@@ -1825,9 +1969,9 @@ pub struct GeminiProvider {
     provider_id: String,
     session_id: Option<Uuid>,
     effort: ReasoningEffort,
-    supports_effort: bool,
     replay: ReasoningReplay,
     effort_map: EffortMap,
+    thinking_capability: Option<GeminiThinkingCapability>,
     media: Option<MediaStore>,
 }
 
@@ -1842,9 +1986,9 @@ impl GeminiProvider {
             provider_id: "gemini".into(),
             session_id: None,
             effort: ReasoningEffort::ProviderDefault,
-            supports_effort: false,
             replay: ReasoningReplay::Replay,
             effort_map: EffortMap::new(),
+            thinking_capability: None,
             media: None,
         }
     }
@@ -1854,20 +1998,25 @@ impl GeminiProvider {
         self
     }
     #[must_use]
-    pub fn with_reasoning(
-        mut self,
-        effort: ReasoningEffort,
-        supports_effort: bool,
-        replay: ReasoningReplay,
-    ) -> Self {
+    pub fn with_reasoning(mut self, effort: ReasoningEffort, replay: ReasoningReplay) -> Self {
         self.effort = effort;
-        self.supports_effort = supports_effort;
         self.replay = replay;
         self
     }
     #[must_use]
     pub fn with_effort_map(mut self, effort_map: EffortMap) -> Self {
         self.effort_map = effort_map;
+        self
+    }
+    /// Declares the model's documented thinking capability. Without one, the
+    /// adapter emits no thinking controls and configuration validation rejects
+    /// effort mappings.
+    #[must_use]
+    pub fn with_thinking_capability(
+        mut self,
+        capability: Option<GeminiThinkingCapability>,
+    ) -> Self {
+        self.thinking_capability = capability;
         self
     }
     #[must_use]
@@ -1909,9 +2058,9 @@ impl ModelProvider for GeminiProvider {
             provider_id: self.provider_id.clone(),
             session_id: Some(session_id),
             effort: self.effort,
-            supports_effort: self.supports_effort,
             replay: self.replay,
             effort_map: self.effort_map.clone(),
+            thinking_capability: self.thinking_capability.clone(),
             media: self.media.clone(),
         }))
     }
@@ -1922,7 +2071,11 @@ impl ModelProvider for GeminiProvider {
         sink: StreamSink,
     ) -> Result<ModelResponse> {
         let thinking = if self.replay == ReasoningReplay::Replay {
-            gemini_thinking_for(self.effort, self.supports_effort, &self.effort_map)
+            gemini_thinking_for(
+                self.effort,
+                self.thinking_capability.as_ref(),
+                &self.effort_map,
+            )
         } else {
             GeminiThinking::Default
         };
@@ -4026,50 +4179,194 @@ mod tests {
         );
     }
 
+    fn level_capability(levels: &[&str], off: Option<&str>) -> GeminiThinkingCapability {
+        GeminiThinkingCapability::Levels {
+            levels: levels.iter().map(|level| (*level).to_owned()).collect(),
+            off: off.map(str::to_owned),
+        }
+    }
+
     #[test]
-    fn gemini_thinking_maps_neutral_levels_and_user_forms() {
+    fn gemini_thinking_maps_neutral_levels_and_user_forms_per_capability() {
+        // Level models: documented levels map onto `thinkingLevel`, `none`
+        // maps onto the declared off level, and an undeclared level or no
+        // capability emits nothing rather than inventing a wire value.
+        let levels = level_capability(&["minimal", "low", "high"], Some("minimal"));
         assert_eq!(
-            gemini_thinking_for(ReasoningEffort::Low, true, &EffortMap::new()),
+            gemini_thinking_for(ReasoningEffort::Low, Some(&levels), &EffortMap::new()),
             GeminiThinking::Level("low".into())
         );
         assert_eq!(
-            gemini_thinking_for(ReasoningEffort::None, true, &EffortMap::new()),
-            GeminiThinking::Budget(0)
+            gemini_thinking_for(ReasoningEffort::Minimal, Some(&levels), &EffortMap::new()),
+            GeminiThinking::Level("minimal".into())
+        );
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::None, Some(&levels), &EffortMap::new()),
+            GeminiThinking::Level("minimal".into())
+        );
+        // Medium is not in this model's declared levels.
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::Medium, Some(&levels), &EffortMap::new()),
+            GeminiThinking::Default
+        );
+        // A model that cannot disable thinking has no `none` expression.
+        let no_off = level_capability(&["low", "medium", "high"], None);
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::None, Some(&no_off), &EffortMap::new()),
+            GeminiThinking::Default
         );
         // Provider default omits thinking fields entirely; the model decides.
         assert_eq!(
-            gemini_thinking_for(ReasoningEffort::ProviderDefault, true, &EffortMap::new()),
+            gemini_thinking_for(
+                ReasoningEffort::ProviderDefault,
+                Some(&levels),
+                &EffortMap::new()
+            ),
             GeminiThinking::Default
         );
         // No documented Gemini level for xhigh/max: never invent one.
         assert_eq!(
-            gemini_thinking_for(ReasoningEffort::Max, true, &EffortMap::new()),
+            gemini_thinking_for(ReasoningEffort::Max, Some(&levels), &EffortMap::new()),
             GeminiThinking::Default
         );
-        // A configured map wins field for field.
+        // An undeclared model never emits a control, even for a mapped form.
         assert_eq!(
             gemini_thinking_for(
                 ReasoningEffort::High,
-                true,
+                None,
+                &effort_map(&[(ReasoningEffort::High, value("high"))])
+            ),
+            GeminiThinking::Default
+        );
+        // A configured map wins field for field when the capability can
+        // serialize the form.
+        assert_eq!(
+            gemini_thinking_for(
+                ReasoningEffort::High,
+                Some(&levels),
                 &effort_map(&[(ReasoningEffort::High, value("high"))])
             ),
             GeminiThinking::Level("high".into())
         );
         assert_eq!(
             gemini_thinking_for(
-                ReasoningEffort::Low,
-                true,
-                &effort_map(&[(ReasoningEffort::Low, budget(8_192))])
+                ReasoningEffort::High,
+                Some(&levels),
+                &effort_map(&[(ReasoningEffort::High, disabled())])
+            ),
+            GeminiThinking::Level("minimal".into())
+        );
+    }
+
+    #[test]
+    fn gemini_thinking_maps_budget_models_and_never_crosses_wire_modes() {
+        let zero = GeminiThinkingCapability::Budget { zero_allowed: true };
+        let no_zero = GeminiThinkingCapability::Budget {
+            zero_allowed: false,
+        };
+        // The documented zero-budget off switch applies only when allowed.
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::None, Some(&zero), &EffortMap::new()),
+            GeminiThinking::Budget(0)
+        );
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::None, Some(&no_zero), &EffortMap::new()),
+            GeminiThinking::Default
+        );
+        // Neutral levels have no invented budget; the model maps them or the
+        // configuration stops exposing them.
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::High, Some(&zero), &EffortMap::new()),
+            GeminiThinking::Default
+        );
+        assert_eq!(
+            gemini_thinking_for(
+                ReasoningEffort::High,
+                Some(&zero),
+                &effort_map(&[(ReasoningEffort::High, budget(8_192))])
             ),
             GeminiThinking::Budget(8_192)
         );
         assert_eq!(
             gemini_thinking_for(
-                ReasoningEffort::Medium,
-                true,
-                &effort_map(&[(ReasoningEffort::Medium, disabled())])
+                ReasoningEffort::None,
+                Some(&zero),
+                &effort_map(&[(ReasoningEffort::None, disabled())])
             ),
             GeminiThinking::Budget(0)
+        );
+        // A `value` form never leaks onto a budget model, and a
+        // `budget_tokens` form never leaks onto a level model.
+        assert_eq!(
+            gemini_thinking_for(
+                ReasoningEffort::High,
+                Some(&zero),
+                &effort_map(&[(ReasoningEffort::High, value("high"))])
+            ),
+            GeminiThinking::Default
+        );
+        let levels = level_capability(&["low", "high"], None);
+        assert_eq!(
+            gemini_thinking_for(
+                ReasoningEffort::High,
+                Some(&levels),
+                &effort_map(&[(ReasoningEffort::High, budget(8_192))])
+            ),
+            GeminiThinking::Default
+        );
+    }
+
+    #[test]
+    fn gemini_thinking_capability_validation_rejects_impossible_shapes() {
+        assert!(
+            level_capability(&["low", "high"], Some("low"))
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            GeminiThinkingCapability::Budget {
+                zero_allowed: false
+            }
+            .validate()
+            .is_ok()
+        );
+        let error = level_capability(&[], None).validate().unwrap_err();
+        assert!(error.contains("at least one"), "{error}");
+        let error = level_capability(&["low", "low"], None)
+            .validate()
+            .unwrap_err();
+        assert!(error.contains("declared twice"), "{error}");
+        let error = level_capability(&["low", "high"], Some("minimal"))
+            .validate()
+            .unwrap_err();
+        assert!(
+            error.contains("must be one of the declared levels"),
+            "{error}"
+        );
+        let error = level_capability(&["low", " "], None)
+            .validate()
+            .unwrap_err();
+        assert!(error.contains("must not be empty"), "{error}");
+    }
+
+    #[test]
+    fn gemini_thinking_capability_serializes_as_a_declared_mode() {
+        let levels = level_capability(&["minimal", "low", "high"], Some("minimal"));
+        let value = serde_json::to_value(&levels).unwrap();
+        assert_eq!(
+            value,
+            json!({"mode": "levels", "levels": ["minimal", "low", "high"], "off": "minimal"})
+        );
+        assert_eq!(
+            serde_json::from_value::<GeminiThinkingCapability>(value).unwrap(),
+            levels
+        );
+        let budget = GeminiThinkingCapability::Budget { zero_allowed: true };
+        let value = serde_json::to_value(&budget).unwrap();
+        assert_eq!(value, json!({"mode": "budget", "zero_allowed": true}));
+        assert_eq!(
+            serde_json::from_value::<GeminiThinkingCapability>(value).unwrap(),
+            budget
         );
     }
 

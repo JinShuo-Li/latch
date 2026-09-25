@@ -102,13 +102,12 @@ impl TransportKind {
                 budget_tokens: true,
                 disabled: true,
             },
-            // Gemini carries `thinkingLevel`, `thinkingBudget`, and the
-            // documented `thinkingBudget = 0` off switch.
-            Self::Gemini => EffortForms {
-                value: true,
-                budget_tokens: true,
-                disabled: true,
-            },
+            // Gemini thinking forms are model-declared, not transport-wide:
+            // Gemini 3 level models and Gemini 2.5 budget models accept
+            // different controls, and some models cannot disable thinking at
+            // all. Validation reads the resolved `gemini_thinking` capability
+            // instead of assuming the broadest wire.
+            Self::Gemini => EffortForms::NONE,
         }
     }
 }
@@ -203,6 +202,14 @@ pub struct EffortForms {
 }
 
 impl EffortForms {
+    /// No mapping form is expressible. Used when a model-level capability has
+    /// not been declared yet.
+    pub const NONE: Self = Self {
+        value: false,
+        budget_tokens: false,
+        disabled: false,
+    };
+
     #[must_use]
     pub const fn supports(self, form: &EffortForm) -> bool {
         match form {
@@ -437,6 +444,25 @@ fn resolved_adaptive(kind: ProviderKind, model: &str, override_: &ModelConfig) -
     })
 }
 
+/// The Gemini thinking capability that applies to one model: an explicit user
+/// declaration first, then the built-in catalog row. Only a Gemini transport
+/// consults it; an undeclared model stays conservative.
+fn resolved_gemini_thinking(
+    kind: ProviderKind,
+    model: &str,
+    override_: &ModelConfig,
+) -> Option<crate::provider::GeminiThinkingCapability> {
+    if resolved_transport(kind, model, override_) != TransportKind::Gemini {
+        return None;
+    }
+    override_.gemini_thinking.clone().or_else(|| {
+        crate::providers::builtin_catalog(kind)
+            .iter()
+            .find(|descriptor| descriptor.model == model)
+            .and_then(|descriptor| descriptor.gemini_thinking.clone())
+    })
+}
+
 /// Validates exposed efforts, the default effort, and any explicit wire map.
 /// A present map must cover every exposed level; a mapping a transport cannot
 /// express is rejected here rather than silently dropped at request time.
@@ -457,11 +483,50 @@ fn validate_effort_metadata(
             exposed
         );
     }
+    let transport = resolved_transport(kind, model, override_);
+    let gemini = (transport == TransportKind::Gemini)
+        .then(|| resolved_gemini_thinking(kind, model, override_))
+        .flatten();
+    if override_.gemini_thinking.is_some() && transport != TransportKind::Gemini {
+        anyhow::bail!(
+            "provider {provider} model {model:?} gemini_thinking is only valid with the gemini transport"
+        );
+    }
+    if let Some(capability) = &gemini {
+        capability.validate().map_err(|error| {
+            anyhow::anyhow!("provider {provider} model {model:?} gemini_thinking {error}")
+        })?;
+    }
+    if transport == TransportKind::Gemini {
+        // Gemini thinking forms are model-declared. An exposed level without a
+        // map must have a documented neutral expression; anything else is
+        // rejected here instead of silently dropping at request time.
+        for effort in &exposed {
+            if override_.effort_map.contains_key(effort) {
+                continue;
+            }
+            if gemini
+                .as_ref()
+                .and_then(|capability| capability.neutral(*effort))
+                .is_none()
+            {
+                anyhow::bail!(
+                    "provider {provider} model {model:?} exposes {} but the gemini transport cannot express it without an effort_map entry; map it explicitly or stop exposing it",
+                    effort.label()
+                );
+            }
+        }
+    }
     if override_.effort_map.is_empty() {
         return Ok(());
     }
-    let transport = resolved_transport(kind, model, override_);
-    let forms = transport.supports_effort_forms();
+    let forms = match transport {
+        TransportKind::Gemini => gemini.as_ref().map_or(
+            EffortForms::NONE,
+            crate::provider::GeminiThinkingCapability::effort_forms,
+        ),
+        _ => transport.supports_effort_forms(),
+    };
     let adaptive = resolved_adaptive(kind, model, override_);
     for (effort, mapping) in &override_.effort_map {
         if matches!(effort, ReasoningEffort::ProviderDefault) {
@@ -482,12 +547,29 @@ fn validate_effort_metadata(
             )
         })?;
         if !forms.supports(&form) {
+            if transport == TransportKind::Gemini && gemini.is_none() {
+                anyhow::bail!(
+                    "provider {provider} model {model:?} effort_map {} uses {} but the gemini transport has no declared thinking capability for the model; set gemini_thinking first",
+                    effort.label(),
+                    form.label()
+                );
+            }
             anyhow::bail!(
                 "provider {provider} model {model:?} effort_map {} uses {} but the {} transport only supports {}",
                 effort.label(),
                 form.label(),
                 transport.label(),
                 forms.label()
+            );
+        }
+        if transport == TransportKind::Gemini
+            && let Some(capability) = &gemini
+            && let EffortForm::Value(value) = &form
+            && !capability.supports_level(value)
+        {
+            anyhow::bail!(
+                "provider {provider} model {model:?} effort_map {} value {value:?} is not one of the declared gemini thinking levels",
+                effort.label()
             );
         }
         match (&form, transport) {
@@ -540,6 +622,11 @@ pub struct ModelConfig {
     /// for every catalog model. A present map must cover every exposed level.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub effort_map: BTreeMap<ReasoningEffort, EffortMapping>,
+    /// Declared Gemini thinking wire capability for Custom/Advanced models.
+    /// `None` uses the built-in catalog capability, or stays conservative (no
+    /// thinking controls) when neither declares one. Gemini only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gemini_thinking: Option<crate::provider::GeminiThinkingCapability>,
     /// Whether persisted assistant reasoning must be replayed to the provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_replay: Option<ReasoningReplayPolicy>,
@@ -1348,6 +1435,231 @@ mod tests {
             error.contains("only supports with adaptive_thinking"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn gemini_effort_mapping_resolves_against_the_model_capability() {
+        // Level-only builtin model: a token budget is not expressible.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.zen]
+            kind = "opencode-zen"
+            default_model = "gemini-3.8-flash"
+            [providers.zen.models."gemini-3.8-flash"]
+            efforts = ["low", "high"]
+            [providers.zen.models."gemini-3.8-flash".effort_map]
+            low = { value = "low" }
+            high = { budget_tokens = 8192 }
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("gemini transport only supports value"),
+            "{error}"
+        );
+
+        // A model that cannot disable thinking rejects the off form.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.zen]
+            kind = "opencode-zen"
+            default_model = "gemini-3.1-pro"
+            [providers.zen.models."gemini-3.1-pro"]
+            efforts = ["low", "high"]
+            [providers.zen.models."gemini-3.1-pro".effort_map]
+            low = { value = "low" }
+            high = { disabled = true }
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("gemini transport only supports value"),
+            "{error}"
+        );
+
+        // A mapped value must be one of the model's declared levels.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.zen]
+            kind = "opencode-zen"
+            default_model = "gemini-3.8-flash"
+            [providers.zen.models."gemini-3.8-flash"]
+            efforts = ["low", "high"]
+            [providers.zen.models."gemini-3.8-flash".effort_map]
+            low = { value = "minimal" }
+            high = { value = "high" }
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("is not one of the declared gemini thinking levels"),
+            "{error}"
+        );
+
+        // A builtin Gemini model that cannot express an exposed effort without
+        // a map is rejected rather than silently dropping it.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.zen]
+            kind = "opencode-zen"
+            default_model = "gemini-3.8-flash"
+            [providers.zen.models."gemini-3.8-flash"]
+            efforts = ["minimal", "high"]
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("cannot express it without an effort_map entry"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn custom_gemini_capability_is_explicit_and_validated() {
+        // A budget model that allows zero maps `none` to the documented off
+        // switch; the custom provider declares the capability itself.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.custom]
+            kind = "openai-compatible"
+            base_url = "https://gemini.example.com/v1beta"
+            default_model = "gemini-2.5-flash"
+            [providers.custom.models."gemini-2.5-flash"]
+            transport = "gemini"
+            efforts = ["none", "low"]
+            default_effort = "none"
+            [providers.custom.models."gemini-2.5-flash".gemini_thinking]
+            mode = "budget"
+            zero_allowed = true
+            [providers.custom.models."gemini-2.5-flash".effort_map]
+            none = { disabled = true }
+            low = { budget_tokens = 4096 }
+            "#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+
+        // The same shape without the documented zero switch rejects `disabled`.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.custom]
+            kind = "openai-compatible"
+            base_url = "https://gemini.example.com/v1beta"
+            default_model = "gemini-2.5-pro"
+            [providers.custom.models."gemini-2.5-pro"]
+            transport = "gemini"
+            efforts = ["none", "low"]
+            default_effort = "none"
+            [providers.custom.models."gemini-2.5-pro".gemini_thinking]
+            mode = "budget"
+            zero_allowed = false
+            [providers.custom.models."gemini-2.5-pro".effort_map]
+            none = { disabled = true }
+            low = { budget_tokens = 4096 }
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("gemini transport only supports budget_tokens"),
+            "{error}"
+        );
+
+        // Without a declared capability no thinking form is expressible.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.custom]
+            kind = "openai-compatible"
+            base_url = "https://gemini.example.com/v1beta"
+            default_model = "gemini-x"
+            [providers.custom.models."gemini-x"]
+            transport = "gemini"
+            efforts = ["low"]
+            [providers.custom.models."gemini-x".effort_map]
+            low = { value = "low" }
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("has no declared thinking capability"),
+            "{error}"
+        );
+
+        // Exposing an effort without a map is equally rejected.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.custom]
+            kind = "openai-compatible"
+            base_url = "https://gemini.example.com/v1beta"
+            default_model = "gemini-x"
+            [providers.custom.models."gemini-x"]
+            transport = "gemini"
+            efforts = ["low"]
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("cannot express it without an effort_map entry"),
+            "{error}"
+        );
+
+        // The capability belongs to the Gemini transport only.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.custom]
+            kind = "openai-compatible"
+            base_url = "https://example.com/v1"
+            default_model = "m"
+            [providers.custom.models.m]
+            transport = "responses"
+            [providers.custom.models.m.gemini_thinking]
+            mode = "budget"
+            zero_allowed = true
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("only valid with the gemini transport"),
+            "{error}"
+        );
+
+        // Malformed declarations are rejected before a request.
+        for (declaration, expected) in [
+            (
+                "mode = 'levels'\nlevels = []\n",
+                "at least one documented thinking level",
+            ),
+            (
+                "mode = 'levels'\nlevels = ['low', 'low']\n",
+                "declared twice",
+            ),
+            (
+                "mode = 'levels'\nlevels = ['low', 'high']\noff = 'minimal'\n",
+                "must be one of the declared levels",
+            ),
+        ] {
+            let input = format!(
+                r#"
+                [providers.custom]
+                kind = "openai-compatible"
+                base_url = "https://gemini.example.com/v1beta"
+                default_model = "gemini-x"
+                [providers.custom.models."gemini-x"]
+                transport = "gemini"
+                [providers.custom.models."gemini-x".gemini_thinking]
+                {declaration}"#
+            );
+            let config: Config = toml::from_str(&input).unwrap();
+            let error = config.validate().unwrap_err().to_string();
+            assert!(error.contains(expected), "{input}: {error}");
+        }
     }
 
     #[test]

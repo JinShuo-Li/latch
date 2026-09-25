@@ -45,7 +45,8 @@ pub use permissions::PermissionBroker;
 pub use progress::{ProgressSupervisor, StagnationDecision};
 pub use provider::{
     AnthropicConfig, AnthropicProvider, FakeProvider, GeminiProvider, GeminiThinking,
-    ModelProvider, OpenAiProvider, OpenAiResponsesProvider, ReasoningReplay, ThinkingToggle,
+    GeminiThinkingCapability, ModelProvider, OpenAiProvider, OpenAiResponsesProvider,
+    ReasoningReplay, ThinkingToggle,
 };
 pub use providers::{ModelDescriptor, ProviderCapabilities, ProviderProfile, ProviderRegistry};
 pub use state::{EvidenceLedger, FailureManager, TaskStateManager};

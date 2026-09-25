@@ -23,8 +23,8 @@ use crate::config::{
 };
 use crate::credentials::{CredentialRef, CredentialStore};
 use crate::provider::{
-    AnthropicProvider, ModelProvider, OpenAiProvider, OpenAiResponsesProvider, ReasoningReplay,
-    ThinkingToggle,
+    AnthropicProvider, GeminiThinkingCapability, ModelProvider, OpenAiProvider,
+    OpenAiResponsesProvider, ReasoningReplay, ThinkingToggle,
 };
 use anyhow::{Result, anyhow, bail};
 use latch_protocol::{InferenceProfile, ModelPricing, ProviderId, ReasoningEffort};
@@ -84,6 +84,10 @@ pub struct ModelDescriptor {
     /// uses its built-in mapping, which is the normal path for every catalog
     /// model. Resolution stays at the adapter boundary.
     pub effort_map: BTreeMap<ReasoningEffort, EffortMapping>,
+    /// Declared Gemini thinking wire capability. `None` means the model has no
+    /// declared capability, so the adapter emits no thinking controls and
+    /// configuration validation rejects effort mappings for it.
+    pub gemini_thinking: Option<GeminiThinkingCapability>,
     /// Provider-neutral input modalities the model accepts. Always contains
     /// `Text`; `Image` is explicit metadata, never inferred from a model name.
     pub input_modalities: Vec<latch_protocol::InputModality>,
@@ -162,6 +166,7 @@ impl ModelDescriptor {
             adaptive_thinking: false,
             transport: kind.default_transport(),
             effort_map: BTreeMap::new(),
+            gemini_thinking: None,
             input_modalities: vec![latch_protocol::InputModality::Text],
             pricing: None,
             aliases: Vec::new(),
@@ -987,7 +992,7 @@ fn builtin_opencode_zen() -> Vec<BuiltinModel> {
         ),
         (
             "gemini-3.5-flash-lite",
-            &[MINIMAL, LOW, MEDIUM, HIGH][..],
+            &[MINIMAL, LOW, HIGH][..],
             ReasoningEffort::Minimal,
         ),
         (
@@ -1028,6 +1033,33 @@ fn builtin_models(kind: ProviderKind) -> Vec<BuiltinModel> {
     }
 }
 
+/// Documented Gemini thinking capability per built-in row. Gemini 3 models
+/// use `thinkingLevel`; `minimal` is the documented no-thinking level where
+/// the model supports it, and Gemini 3.8/3.7 Flash and 3.1 Pro cannot disable
+/// thinking at all (`minimal` is an error / not supported). Gemini 2.5 budget
+/// models are not in this catalog; Custom/Advanced declares them explicitly.
+/// Source checked 2026-09:
+/// `ai.google.dev/gemini-api/docs/generate-content/thinking`.
+fn builtin_gemini_thinking(id: &str) -> Option<GeminiThinkingCapability> {
+    let levels = |levels: &[&str], off: Option<&str>| {
+        Some(GeminiThinkingCapability::Levels {
+            levels: levels.iter().map(|level| (*level).to_owned()).collect(),
+            off: off.map(str::to_owned),
+        })
+    };
+    match id {
+        "gemini-3.8-flash" | "gemini-3.7-flash" | "gemini-3.1-pro" => {
+            levels(&["low", "medium", "high"], None)
+        }
+        "gemini-3.6-flash" | "gemini-3.5-flash" | "gemini-3-flash" => {
+            levels(&["minimal", "low", "medium", "high"], Some("minimal"))
+        }
+        // Medium is not supported on the Flash-Lite tier.
+        "gemini-3.5-flash-lite" => levels(&["minimal", "low", "high"], Some("minimal")),
+        _ => None,
+    }
+}
+
 fn builtin_descriptor(
     provider: &ProviderId,
     kind: ProviderKind,
@@ -1044,6 +1076,11 @@ fn builtin_descriptor(
         adaptive_thinking: builtin.adaptive_thinking,
         transport: builtin.transport,
         effort_map: BTreeMap::new(),
+        gemini_thinking: if builtin.transport == TransportKind::Gemini {
+            builtin_gemini_thinking(builtin.id)
+        } else {
+            None
+        },
         input_modalities: if builtin.image {
             vec![
                 latch_protocol::InputModality::Text,
@@ -1328,6 +1365,9 @@ fn apply_user_metadata(descriptor: &mut ModelDescriptor, user: &ModelConfig) {
         // A user map owns the whole exposed range; validation has already
         // checked coverage and transport expressibility.
         descriptor.effort_map = user.effort_map.clone();
+    }
+    if let Some(capability) = &user.gemini_thinking {
+        descriptor.gemini_thinking = Some(capability.clone());
     }
     if !user.aliases.is_empty() {
         descriptor.aliases = user.aliases.clone();
@@ -1617,8 +1657,9 @@ impl ProviderRegistry {
                     descriptor.model.clone(),
                 )
                 .with_identity(provider.id.to_string())
-                .with_reasoning(effort, supports_effort, descriptor.reasoning_replay)
+                .with_reasoning(effort, descriptor.reasoning_replay)
                 .with_effort_map(descriptor.effort_map.clone())
+                .with_thinking_capability(descriptor.gemini_thinking.clone())
                 .with_session(session_id)
                 .with_media(media.clone()),
             ),
@@ -1792,12 +1833,103 @@ mod tests {
         assert_eq!(gemini.default_effort, ReasoningEffort::Medium);
         assert_eq!(gemini.reasoning_replay, ReasoningReplay::Replay);
         assert!(gemini.supports_image_input());
+        assert_eq!(
+            gemini.gemini_thinking,
+            Some(GeminiThinkingCapability::Levels {
+                levels: vec!["low".into(), "medium".into(), "high".into()],
+                off: None,
+            })
+        );
         let flash_lite = registry
             .model_descriptor("opencode-zen", "gemini-3.5-flash-lite")
             .unwrap();
         assert_eq!(flash_lite.default_effort, ReasoningEffort::Minimal);
+        assert_eq!(
+            flash_lite.supported_efforts,
+            vec![
+                ReasoningEffort::Minimal,
+                ReasoningEffort::Low,
+                ReasoningEffort::High
+            ]
+        );
+        assert_eq!(
+            flash_lite.gemini_thinking,
+            Some(GeminiThinkingCapability::Levels {
+                levels: vec!["minimal".into(), "low".into(), "high".into()],
+                off: Some("minimal".into()),
+            })
+        );
         let (default, _) = registry.default_profile(&config).unwrap();
         assert_eq!(default.model, "gpt-6-astra");
+    }
+
+    #[test]
+    fn gemini_catalog_capabilities_cover_every_declared_effort() {
+        // Every built-in Gemini row declares its own capability, and every
+        // exposed level has a documented neutral expression; otherwise the
+        // configuration validator would reject the catalog itself.
+        for kind in [ProviderKind::OpenCodeZen, ProviderKind::OpenCodeGo] {
+            for descriptor in builtin_catalog(kind) {
+                if descriptor.transport != TransportKind::Gemini {
+                    assert!(
+                        descriptor.gemini_thinking.is_none(),
+                        "{} declares Gemini thinking off the Gemini transport",
+                        descriptor.model
+                    );
+                    continue;
+                }
+                let capability = descriptor.gemini_thinking.as_ref().unwrap_or_else(|| {
+                    panic!("{} has no declared Gemini capability", descriptor.model)
+                });
+                capability.validate().unwrap();
+                for effort in &descriptor.supported_efforts {
+                    assert!(
+                        capability.neutral(*effort).is_some(),
+                        "{} exposes {} without a documented Gemini expression",
+                        descriptor.model,
+                        effort.label()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn custom_gemini_capability_overrides_catalog_metadata() {
+        let (_, registry) = registry(
+            r#"
+            [providers.zen]
+            kind = "opencode-zen"
+            default_model = "gemini-3.8-flash"
+            [providers.zen.models."gemini-3.8-flash"]
+            transport = "gemini"
+            efforts = ["none", "low"]
+            default_effort = "low"
+            [providers.zen.models."gemini-3.8-flash".gemini_thinking]
+            mode = "budget"
+            zero_allowed = true
+            [providers.zen.models."gemini-3.8-flash".effort_map]
+            none = { disabled = true }
+            low = { budget_tokens = 4096 }
+            "#,
+        );
+        let descriptor = registry
+            .model_descriptor("zen", "gemini-3.8-flash")
+            .unwrap();
+        assert_eq!(
+            descriptor.gemini_thinking,
+            Some(GeminiThinkingCapability::Budget { zero_allowed: true })
+        );
+        assert_eq!(
+            descriptor.supported_efforts,
+            vec![ReasoningEffort::None, ReasoningEffort::Low]
+        );
+        assert_eq!(
+            descriptor.effort_map[&ReasoningEffort::None]
+                .form()
+                .unwrap(),
+            crate::config::EffortForm::Disabled
+        );
     }
 
     #[test]
