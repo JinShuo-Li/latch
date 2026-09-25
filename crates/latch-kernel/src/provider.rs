@@ -1478,21 +1478,24 @@ pub fn gemini_request(
             }
         }
     }
-    let mut generation_config = json!({"includeThoughts": true});
+    // The GenerateContent API nests every thinking control under
+    // `generationConfig.thinkingConfig`; `includeThoughts` is the summary
+    // switch, and the level/budget controls are mutually exclusive per model.
+    let mut thinking_config = json!({"includeThoughts": true});
     match thinking {
         GeminiThinking::Default => {}
         GeminiThinking::Level(level) if !level.trim().is_empty() => {
-            generation_config["thinkingLevel"] = json!(level);
+            thinking_config["thinkingLevel"] = json!(level);
         }
         GeminiThinking::Level(_) => {}
         GeminiThinking::Budget(budget) => {
-            generation_config["thinkingBudget"] = json!(budget);
+            thinking_config["thinkingBudget"] = json!(budget);
         }
     }
     let mut body = json!({
         "systemInstruction": {"parts": [{"text": request.system}]},
         "contents": contents,
-        "generationConfig": generation_config,
+        "generationConfig": {"thinkingConfig": thinking_config},
     });
     if !request.tools.is_empty() {
         body["tools"] = json!([{
@@ -4108,8 +4111,23 @@ mod tests {
             body["tools"][0]["functionDeclarations"][0]["name"],
             "read_file"
         );
-        assert_eq!(body["generationConfig"]["includeThoughts"], true);
-        assert_eq!(body["generationConfig"]["thinkingLevel"], "high");
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "high"
+        );
+        assert!(
+            body["generationConfig"]["thinkingConfig"]
+                .get("thinkingBudget")
+                .is_none()
+        );
+        assert!(
+            body["generationConfig"].get("thinkingLevel").is_none(),
+            "thinking controls must stay nested under thinkingConfig"
+        );
 
         let body = gemini_request(
             &ModelRequest {
@@ -4121,8 +4139,51 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(body["generationConfig"]["thinkingBudget"], 0);
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
         assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn gemini_request_nests_thinking_config_controls() {
+        let request = ModelRequest {
+            system: "s".into(),
+            messages: vec![ModelMessage::text("user", "hi")],
+            tools: vec![],
+        };
+        // Default thinking still asks for summaries and emits no control.
+        let body = gemini_request(&request, &GeminiThinking::Default, None).unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({"includeThoughts": true})
+        );
+        // A level model carries exactly `thinkingLevel`.
+        let body = gemini_request(&request, &GeminiThinking::Level("medium".into()), None).unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({"includeThoughts": true, "thinkingLevel": "medium"})
+        );
+        // A budget model carries exactly `thinkingBudget`.
+        let body = gemini_request(&request, &GeminiThinking::Budget(8_192), None).unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({"includeThoughts": true, "thinkingBudget": 8_192})
+        );
+        // The documented off switch for a zero-budget model is `thinkingBudget: 0`.
+        let body = gemini_request(&request, &GeminiThinking::Budget(0), None).unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({"includeThoughts": true, "thinkingBudget": 0})
+        );
+        // An empty level is never emitted as a control.
+        let body = gemini_request(&request, &GeminiThinking::Level("  ".into()), None).unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({"includeThoughts": true})
+        );
+        assert_eq!(body["generationConfig"].as_object().unwrap().len(), 1);
     }
 
     #[test]
