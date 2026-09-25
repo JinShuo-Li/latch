@@ -130,6 +130,11 @@ pub enum SetupPlan {
     SetNewSessionDefault { name: String },
     /// Change one provider's switch default without changing the live session.
     SetProviderDefault { name: String, model: String },
+    /// Replace one provider's credential reference or securely stored value.
+    SetCredential {
+        name: String,
+        credential: SetupCredential,
+    },
 }
 
 /// One configured provider instance shown by the removal surface.

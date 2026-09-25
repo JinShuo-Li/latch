@@ -3,7 +3,7 @@
 //! This layer contains display state and actions only. Credential lookup,
 //! model discovery, and persistence belong to the CLI/kernel.
 
-use crate::profile::{ChoiceRow, SetupKind};
+use crate::profile::{ChoiceRow, SetupCredential, SetupKind};
 mod known;
 pub use known::{KnownPhase, KnownProviderFlow};
 
@@ -42,6 +42,7 @@ pub enum CenterPage {
     Providers,
     AddKind,
     Provider(String),
+    Credential(String),
     DefaultModel(String),
     RemoveConfirm(String),
 }
@@ -49,7 +50,7 @@ pub enum CenterPage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CenterAction {
     StartAdd(String),
-    EditCredential(String),
+    EditCredential { name: String, secret: bool },
     EditModels(String),
     SetProviderDefault { name: String, model: String },
     EditAdvanced(String),
@@ -84,6 +85,7 @@ impl ConfigurationCenter {
             CenterPage::Providers => "Setup · providers".to_owned(),
             CenterPage::AddKind => "Setup · add provider".to_owned(),
             CenterPage::Provider(id) => format!("Setup · {id}"),
+            CenterPage::Credential(id) => format!("Setup · {id} · Credential"),
             CenterPage::DefaultModel(id) => format!("Setup · {id} · Default model"),
             CenterPage::RemoveConfirm(id) => format!("Setup · remove {id}"),
         }
@@ -134,6 +136,21 @@ impl ConfigurationCenter {
                     (
                         "Remove provider".to_owned(),
                         "config only; stored credentials kept".to_owned(),
+                    ),
+                ]
+            }
+            CenterPage::Credential(id) => {
+                let reference = self
+                    .providers
+                    .iter()
+                    .find(|provider| &provider.id == id)
+                    .map(|provider| provider.credential_ref.as_str())
+                    .unwrap_or("");
+                vec![
+                    ("Environment variable".to_owned(), reference.to_owned()),
+                    (
+                        "Enter API key securely".to_owned(),
+                        "stored 0600 locally".to_owned(),
                     ),
                 ]
             }
@@ -197,6 +214,7 @@ impl ConfigurationCenter {
             CenterPage::Providers => return false,
             CenterPage::AddKind | CenterPage::Provider(_) => CenterPage::Providers,
             CenterPage::DefaultModel(id) => CenterPage::Provider(id.clone()),
+            CenterPage::Credential(id) => CenterPage::Provider(id.clone()),
             CenterPage::RemoveConfirm(id) => CenterPage::Provider(id.clone()),
         };
         self.selected = 0;
@@ -220,7 +238,11 @@ impl ConfigurationCenter {
             CenterPage::Provider(id) => {
                 let id = id.clone();
                 match self.selected {
-                    0 => Some(CenterAction::EditCredential(id)),
+                    0 => {
+                        self.page = CenterPage::Credential(id);
+                        self.selected = 0;
+                        None
+                    }
                     1 => Some(CenterAction::EditModels(id)),
                     2 => {
                         self.page = CenterPage::DefaultModel(id);
@@ -254,7 +276,23 @@ impl ConfigurationCenter {
                     .get(self.selected)?
                     .clone(),
             }),
+            CenterPage::Credential(id) => Some(CenterAction::EditCredential {
+                name: id.clone(),
+                secret: self.selected == 1,
+            }),
         }
+    }
+
+    pub fn credential_from_capture(&self, value: String) -> Option<(String, SetupCredential)> {
+        let CenterPage::Credential(id) = &self.page else {
+            return None;
+        };
+        let credential = if self.selected == 1 {
+            SetupCredential::Secret(value)
+        } else {
+            SetupCredential::Env(value.trim().to_owned())
+        };
+        Some((id.clone(), credential))
     }
 }
 
@@ -359,6 +397,48 @@ mod tests {
                 model: "deepseek-v4-pro".into()
             })
         );
+    }
+
+    #[test]
+    fn credential_editor_never_echoes_a_stored_value() {
+        let provider = ProviderSummary {
+            id: "deepseek".into(),
+            display_name: "DeepSeek".into(),
+            kind: "deepseek".into(),
+            status: ProviderStatus::MissingCredential,
+            model_count: 1,
+            default_model: "deepseek-flash".into(),
+            credential_ref: "file:deepseek".into(),
+            available_models: vec!["deepseek-flash".into()],
+        };
+        let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
+        center.down();
+        center.confirm();
+        center.confirm();
+        assert_eq!(center.page(), &CenterPage::Credential("deepseek".into()));
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::EditCredential {
+                name: "deepseek".into(),
+                secret: false,
+            })
+        );
+        center.down();
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::EditCredential {
+                name: "deepseek".into(),
+                secret: true,
+            })
+        );
+        assert_eq!(
+            center.credential_from_capture("private-value".into()),
+            Some((
+                "deepseek".into(),
+                SetupCredential::Secret("private-value".into())
+            ))
+        );
+        assert!(!format!("{center:?}").contains("private-value"));
     }
 
     #[test]

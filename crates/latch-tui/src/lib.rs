@@ -959,6 +959,15 @@ impl App {
                     flow.submit_capture(finished.value);
                 } else if let Some(flow) = self.setup.as_mut() {
                     flow.submit_capture(finished.value);
+                } else if let Some(center) = self.setup_center.as_ref() {
+                    if let Some((name, credential)) = center.credential_from_capture(finished.value)
+                    {
+                        self.setup_center = None;
+                        return Some(Action::SetupApply(SetupPlan::SetCredential {
+                            name,
+                            credential,
+                        }));
+                    }
                 }
             }
             return None;
@@ -1079,6 +1088,27 @@ impl App {
                             self.known_setup = Some(KnownProviderFlow::new(selected.clone()));
                         }
                     }
+                }
+                Some(CenterAction::EditCredential { name, secret }) => {
+                    let initial = if secret {
+                        String::new()
+                    } else {
+                        self.setup_providers
+                            .iter()
+                            .find(|provider| provider.id == name)
+                            .and_then(|provider| provider.credential_ref.strip_prefix("env:"))
+                            .unwrap_or("")
+                            .to_owned()
+                    };
+                    self.capture = Some(CaptureState::new(CaptureSpec {
+                        label: if secret {
+                            "API key".to_owned()
+                        } else {
+                            "environment variable".to_owned()
+                        },
+                        initial,
+                        masked: secret,
+                    }));
                 }
                 Some(CenterAction::Remove(name)) => {
                     self.setup_center = None;

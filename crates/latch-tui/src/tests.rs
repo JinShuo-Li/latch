@@ -2899,6 +2899,54 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
 }
 
 #[test]
+fn setup_credential_editor_masks_and_emits_recovery_action() {
+    use crate::configuration_center::{ProviderStatus, ProviderSummary};
+    let mut app = App::default();
+    app.output(Output::SetupCatalog(vec![SetupKind {
+        kind: "deepseek".into(),
+        label: "DeepSeek".into(),
+        default_base_url: String::new(),
+        requires_base_url: false,
+        credential_label: "env:DEEPSEEK_API_KEY".into(),
+        default_model: "deepseek-flash".into(),
+        models: vec![],
+    }]));
+    app.output(Output::SetupProviders(vec![ProviderSummary {
+        id: "deepseek".into(),
+        display_name: "DeepSeek".into(),
+        kind: "deepseek".into(),
+        status: ProviderStatus::MissingCredential,
+        model_count: 1,
+        default_model: "deepseek-flash".into(),
+        credential_ref: "file:deepseek".into(),
+        available_models: vec!["deepseek-flash".into()],
+    }]));
+    app.input.set_text("/setup");
+    app.submit_action();
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        app.capture
+            .as_ref()
+            .is_some_and(|capture| capture.spec.masked)
+    );
+    for ch in "recovered-secret".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert!(!render_to_text(&mut app, 80, 24).contains("recovered-secret"));
+    assert!(matches!(
+        app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)),
+        Some(Action::SetupApply(SetupPlan::SetCredential {
+            name,
+            credential: SetupCredential::Secret(secret),
+        })) if name == "deepseek" && secret == "recovered-secret"
+    ));
+}
+
+#[test]
 fn composer_metadata_always_shows_model_and_effort_adjacent() {
     let mut app = profile_app();
     let text = render_to_text(&mut app, 120, 24);

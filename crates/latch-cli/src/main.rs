@@ -649,6 +649,42 @@ fn set_provider_default(context: &mut InferenceContext, name: &str, model: &str)
     Ok(())
 }
 
+fn set_provider_credential(
+    context: &mut InferenceContext,
+    name: &str,
+    credential: &SetupCredential,
+) -> Result<()> {
+    let (reference, secret) = match credential {
+        SetupCredential::Env(variable) => (CredentialRef::Env(variable.clone()), None),
+        SetupCredential::Secret(value) => {
+            (CredentialRef::File(name.to_owned()), Some(value.as_str()))
+        }
+    };
+    let mut candidate = context.config.clone();
+    candidate
+        .providers
+        .get_mut(name)
+        .ok_or_else(|| anyhow!("no provider named {name:?}"))?
+        .credential = Some(reference.display());
+    candidate.validate()?;
+    let path = context
+        .config_path
+        .clone()
+        .or_else(Config::default_path)
+        .ok_or_else(|| anyhow!("cannot resolve configuration path"))?;
+    let staged_config = candidate.stage(&path)?;
+    let staged_secret = secret
+        .map(|value| context.credentials.stage_set(name, value))
+        .transpose()?;
+    if let Some(staged) = staged_secret {
+        context.credentials.commit_staged(staged)?;
+    }
+    Config::commit_stage(staged_config, &path)?;
+    context.registry = ProviderRegistry::from_config(&candidate)?;
+    context.config = candidate;
+    Ok(())
+}
+
 /// Persists a `/setup` plan and applies the resulting change live.
 async fn apply_setup(
     agent: &mut Agent,
@@ -658,6 +694,15 @@ async fn apply_setup(
     workspace: &Path,
     resumed: bool,
 ) -> Result<()> {
+    if let SetupPlan::SetCredential { name, credential } = &plan {
+        set_provider_credential(context, name, credential)?;
+        agent.set_provider_factory(context.provider_factory());
+        tx.send(Output::SetupProviders(context.setup_providers()))
+            .await?;
+        tx.send(Output::Notice(format!("{name} credential saved")))
+            .await?;
+        return Ok(());
+    }
     if let SetupPlan::SetProviderDefault { name, model } = &plan {
         set_provider_default(context, name, model)?;
         tx.send(Output::SetupProviders(context.setup_providers()))
@@ -1098,6 +1143,62 @@ mod tests {
                 .as_deref(),
             Some("deepseek-v4-pro")
         );
+    }
+
+    #[test]
+    fn credential_edit_recovers_missing_secret_without_exposing_it_in_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &SetupPlan::Apply {
+                name: "deepseek".into(),
+                provider_kind: "deepseek".into(),
+                base_url: None,
+                credential: SetupCredential::Env("MISSING_KEY".into()),
+                model: "deepseek-flash".into(),
+                enabled_models: None,
+                custom_model_display_name: None,
+                custom_transport: None,
+                effort: ReasoningEffort::ProviderDefault,
+            },
+        )
+        .unwrap();
+        context.registry = ProviderRegistry::from_config(&context.config).unwrap();
+        assert_eq!(
+            context.setup_providers()[0].status,
+            latch_tui::configuration_center::ProviderStatus::MissingCredential
+        );
+        assert!(
+            set_provider_credential(
+                &mut context,
+                "deepseek",
+                &SetupCredential::Secret(String::new())
+            )
+            .is_err()
+        );
+        assert_eq!(
+            context.config.providers["deepseek"].credential.as_deref(),
+            Some("env:MISSING_KEY")
+        );
+        set_provider_credential(
+            &mut context,
+            "deepseek",
+            &SetupCredential::Secret("private-value".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            context.setup_providers()[0].status,
+            latch_tui::configuration_center::ProviderStatus::Ready
+        );
+        let config_text = std::fs::read_to_string(path).unwrap();
+        assert!(config_text.contains("file:deepseek"));
+        assert!(!config_text.contains("private-value"));
     }
 
     #[test]
