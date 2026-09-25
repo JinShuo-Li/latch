@@ -24,34 +24,36 @@ the `latch` TUI (`cargo install --path crates/latch-cli` installs it).
 
 ## Commands
 
-CI is a small, stable architectural philosophy gate, not the full validation
-suite. CI runs exactly:
+The deterministic 0.2.2 reliability gate is `bash scripts/release-gate.sh`.
+CI installs Bubblewrap, ripgrep, and Python, probes the required sandbox
+namespaces and mounts, then runs:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test -p latch-kernel --test invariants
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test -p latch-kernel --test invariants --locked
+cargo test --workspace --locked
+cargo build --release --locked
 ```
 
-`crates/latch-kernel/tests/invariants.rs` is the deliberately selected fast,
-deterministic invariant tier (no `bwrap`, `rg`, `python3`, network, timing, or
-large histories). Keep it small and trustworthy; do not grow CI into a coverage
-contest.
+`crates/latch-kernel/tests/invariants.rs` remains the fast architectural tier.
+The full workspace suite covers deterministic F1–F5 regressions and sandbox
+behavior; a failed Bubblewrap probe fails the gate rather than skipping security
+coverage. Live/paid/network-provider tests remain opt-in and ignored.
 
-For significant changes, run the full local validation plus relevant
-cache/long-session tests before committing; passing CI alone is not sufficient:
+For significant changes, run the release gate plus relevant cache/long-session
+tests before committing:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
+bash scripts/release-gate.sh
 ```
 
 - Single test: `cargo test -p latch-kernel --lib -- <name>`
 - One integration file: `cargo test -p latch-kernel --test dogfood`
 - CLI machine interface: `cargo test -p latch-cli` spawns the real binary
   against a loopback SSE mock provider with an isolated state dir; it needs no
-  network, credentials, or TTY. It runs locally, not in CI.
+  network, credentials, or TTY. It is included in the workspace CI suite.
 - Preflight: `latch doctor` is a read-only check of `bwrap`, `rg`, Git, config,
   state dir, profile, and credential. It never contacts the provider; exit 0
   (all pass), 1 (runtime prerequisite), 2 (config/CLI). Keep it in sync when
@@ -92,26 +94,24 @@ never by Latch itself.
 > Memory decides what the model needs to know. Cache decides how cheaply we can
 > send it.
 
-> CI protects what Latch must never stop being. Local tests verify that the
-> current implementation actually works.
+> CI protects architecture and deterministic release reliability. Local stress
+> and live tests verify scale and real-provider behavior separately.
 
 Three tiers:
 
-- **CI (architectural invariants):** durable history is the source of truth,
+- **CI (architectural invariants plus workspace reliability):** durable history is the source of truth,
   cache epochs are not memory boundaries, canonical state stays authoritative,
   no hidden destructive compaction, resume equivalence, kernel-owned
   validation/evidence, safety/sandbox rules, steering/tool protocol
   correctness, append-only cache-epoch behavior, deterministic serialization.
-- **Local (`cargo test --workspace`):** detailed correctness, providers,
-  sandbox/command execution, snapshots, extensions. Expected before significant
-  commits.
+- **Deterministic workspace suite (CI and local):** detailed correctness,
+  providers, sandbox/command execution, snapshots, extensions, and release build.
 - **Stress (local, ignored/opt-in by convention):** long-session, large-history,
   scaling, and extreme behavior. Normally stays out of CI.
 
-Do not move tests between tiers merely to make CI green. Keep expensive, flaky,
-network-dependent, timing-sensitive, large-history, provider, benchmark, and
-stress tests out of CI. Passing CI alone is insufficient for substantial
-changes. Cache locality must never override long-horizon correctness.
+Do not move tests between tiers merely to make CI green. Keep paid-provider,
+network-dependent, flaky, benchmark, and stress tests out of CI. Cache locality
+must never override long-horizon correctness.
 
 ## Architecture map
 

@@ -8,17 +8,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  architecture:
+  reliability:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install deterministic test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep python3
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Architectural invariants
-        run: cargo test -p latch-kernel --test invariants
+      - name: Deterministic 0.2.2 release gate
+        run: bash scripts/release-gate.sh
