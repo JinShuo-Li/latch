@@ -357,8 +357,8 @@ impl ToolExecutor {
         vec![
             def(
                 "read_file",
-                "Read a bounded window of a UTF-8 workspace file and return its version hash. Defaults to the first 400 lines; pass offset (1-based line) and/or limit, or tail, to read another window. The result reports the line range and the offset for continuation, so large files are never injected whole. Use read_image for image files.",
-                json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based first line to return"},"limit":{"type":"integer","description":"maximum lines to return"},"tail":{"type":"integer","description":"return the last N lines instead of a head window"}}}),
+                "Read a bounded UTF-8 file window (default 400 lines). Small files include a hash. Supports 1-based offset, limit, tail; copy byte_offset and cursor_line from continuation when shown. Use read_image for images.",
+                json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"},"tail":{"type":"integer"},"byte_offset":{"type":"integer"},"cursor_line":{"type":"integer"}}}),
             ),
             def(
                 "read_image",
@@ -372,8 +372,8 @@ impl ToolExecutor {
             ),
             def(
                 "read_artifact",
-                "Read a stored artifact (full output spilled by a truncated shell, search, diff, or validation result) by id. Supports the same offset/limit/tail windowing as read_file; the result reports the line range and continuation offset.",
-                json!({"type":"object","required":["id"],"properties":{"id":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"},"tail":{"type":"integer"}}}),
+                "Read a bounded artifact window by id. Supports offset/limit/tail and byte_offset/cursor_line continuation.",
+                json!({"type":"object","required":["id"],"properties":{"id":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"},"tail":{"type":"integer"},"byte_offset":{"type":"integer"},"cursor_line":{"type":"integer"}}}),
             ),
             def(
                 "exec_start",
@@ -448,6 +448,11 @@ impl ToolExecutor {
             // terminal outcome even though execution never started, so persist
             // ToolFailed. PermissionDecision above remains the separate audit
             // event; this is the structured result the model sees.
+            let reason = if matches!(call.name.as_str(), "read_file" | "read_artifact") {
+                files::bound_final_output(&reason)
+            } else {
+                reason
+            };
             let denied = result(call, reason, true, None);
             if let Err(error) = self.store.append(
                 self.session_id,
@@ -497,9 +502,22 @@ impl ToolExecutor {
         self.clear_grant(&call.id);
         let r = match outcome {
             Ok((output, artifact_id, media)) => {
+                let output = if matches!(call.name.as_str(), "read_file" | "read_artifact") {
+                    files::bound_final_output(&output)
+                } else {
+                    output
+                };
                 result_with_media(call, output, false, artifact_id, media)
             }
-            Err(e) => result(call, format!("{e:#}"), true, None),
+            Err(e) => {
+                let output = format!("{e:#}");
+                let output = if matches!(call.name.as_str(), "read_file" | "read_artifact") {
+                    files::bound_final_output(&output)
+                } else {
+                    output
+                };
+                result(call, output, true, None)
+            }
         };
         let payload = if r.is_error {
             EventPayload::ToolFailed { result: r.clone() }

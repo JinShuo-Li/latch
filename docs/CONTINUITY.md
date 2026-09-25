@@ -201,9 +201,12 @@ and no episode ever replaces the events it summarizes.
 
 ## File state and compaction
 
-File observations include SHA-256 and size. A guarded mutation recomputes the
-hash just before writing. A mismatch emits an external-change event and rejects
-the edit so the model must re-read.
+File observations for files within the 64 KiB read bound include SHA-256 and
+size. Larger file pages have no whole-file hash. A guarded mutation recomputes
+the hash just before writing; a mismatch emits an external-change event and
+rejects the edit so the model must re-read. `read_file` and `read_artifact`
+append only their bounded ToolResult (24 KiB and 8000 estimated tokens at
+most), so replay and recall cannot recover an unbounded read result.
 
 `/compact` is the sole compact action. It appends `manual_compact` and resets
 the active working set while retaining raw events, canonical state, memory, and

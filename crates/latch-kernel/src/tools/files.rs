@@ -2,6 +2,75 @@
 //! policy that keeps large files out of the working set.
 
 use super::*;
+use tokio::io::AsyncSeekExt;
+
+/// Maximum source bytes fetched by one read_file or read_artifact call.
+pub(super) const READ_IO_BYTES: usize = 64 * 1024;
+/// Maximum decoded text held for a read page (UTF-8 never expands here).
+const READ_TEXT_BYTES: usize = READ_IO_BYTES;
+/// Includes headers and continuation instructions in the durable ToolResult.
+pub(super) const READ_OUTPUT_BYTES: usize = 24 * 1024;
+const READ_OUTPUT_TOKENS: usize = 8_000;
+const READ_FOOTER_RESERVE: usize = 256;
+const ARTIFACT_ID_MAX_BYTES: usize = 255;
+
+pub(super) struct SourcePage {
+    pub(super) text: String,
+    base: u64,
+    size: u64,
+}
+
+pub(super) async fn source_page(path: &Path, start: u64) -> Result<SourcePage> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let size = file.metadata().await?.len();
+    let mut base = start.min(size);
+    file.seek(std::io::SeekFrom::Start(base)).await?;
+    let mut bytes = Vec::with_capacity(READ_IO_BYTES);
+    file.take(READ_IO_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .await?;
+    // Tail seeks can start inside a multibyte scalar. Advancing at most three
+    // bytes avoids treating a valid text file as malformed.
+    if base > 0 {
+        let skip = bytes
+            .iter()
+            .take(3)
+            .take_while(|byte| **byte & 0b1100_0000 == 0b1000_0000)
+            .count();
+        bytes.drain(..skip);
+        base += skip as u64;
+    }
+    if base == 0 {
+        if let Some(format) = crate::media::detect_format(&bytes) {
+            bail!("{format} image; use read_image to inspect it");
+        }
+        if let Some(kind) = crate::media::detected_unsupported_kind(&bytes) {
+            bail!("{kind} image; read_image supports PNG, JPEG, and WebP");
+        }
+    }
+    if bytes
+        .iter()
+        .any(|byte| *byte == 0x7f || (*byte < 32 && !matches!(*byte, b'\n' | b'\r' | b'\t')))
+    {
+        bail!("binary input; read_file and read_artifact require text");
+    }
+    // A page may end in the middle of a UTF-8 scalar. The next page resumes
+    // at the first unread byte; malformed input inside the page is rejected.
+    let valid = match std::str::from_utf8(&bytes) {
+        Ok(_) => bytes.len(),
+        Err(error) if error.error_len().is_none() && base + (bytes.len() as u64) < size => {
+            error.valid_up_to()
+        }
+        Err(_) => bail!("input is not UTF-8"),
+    };
+    bytes.truncate(valid);
+    debug_assert!(bytes.len() <= READ_TEXT_BYTES);
+    Ok(SourcePage {
+        text: String::from_utf8(bytes)?,
+        base,
+        size,
+    })
+}
 
 impl ToolExecutor {
     /// Records the observed version and detects external drift, shared by
@@ -49,37 +118,19 @@ impl ToolExecutor {
     pub(super) async fn read_file(&self, call: &ToolCall) -> Result<(String, Option<String>)> {
         let _permit = self.read_slots.acquire().await?;
         let path = self.path_arg(call)?;
-        let bytes = tokio::fs::read(&path)
+        let label = relative(&self.workspace, &path)?;
+        let output = self
+            .read_text_window(
+                call,
+                &path,
+                &label,
+                READ_DEFAULT_LINES,
+                READ_MAX_LINES,
+                true,
+            )
             .await
             .with_context(|| format!("read {}", path.display()))?;
-        // Binary images are never dumped as text; point the model at the
-        // dedicated image tool instead.
-        if let Some(format) = crate::media::detect_format(&bytes) {
-            bail!("{format} image; use read_image to inspect it");
-        }
-        if let Some(kind) = crate::media::detected_unsupported_kind(&bytes) {
-            bail!("{kind} image; read_image supports PNG, JPEG, and WebP");
-        }
-        let version = self.observe_file(&path, &bytes).await?;
-        let text = String::from_utf8(bytes).context("file is not UTF-8")?;
-        let total = text.lines().count();
-        let mut window = LineWindow::from_args(call, total, READ_DEFAULT_LINES, READ_MAX_LINES)?;
-        let estimator = TokenEstimator::generic();
-        let token_bounded = window.token_bound(&text, READ_MAX_TOKENS, &estimator);
-        let selected = window.slice(&text);
-        let mut out = format!("hash: {}\n", version.content_hash);
-        out.push_str(&format!("[{}: {}]\n", version.path, window.describe(total)));
-        out.push_str(&selected);
-        if let Some(offset) = window.continue_offset(total) {
-            if token_bounded {
-                out.push_str(&format!(
-                    "\n[token-bounded window; continue with offset={offset}]"
-                ));
-            } else {
-                out.push_str(&format!("\n[continue with offset={offset}]"));
-            }
-        }
-        Ok((out, None))
+        Ok((output, None))
     }
 
     /// Ingests one workspace image into the immutable artifact store and
@@ -196,28 +247,134 @@ impl ToolExecutor {
         let _permit = self.read_slots.acquire().await?;
         let id = str_arg(call, "id")?;
         let path = self.artifact_path(id)?;
-        let bytes = tokio::fs::read(&path)
+        let output = self
+            .read_text_window(
+                call,
+                &path,
+                &format!("artifact {id}"),
+                ARTIFACT_DEFAULT_LINES,
+                ARTIFACT_MAX_LINES,
+                false,
+            )
             .await
             .with_context(|| format!("read artifact {id}"))?;
-        let text = String::from_utf8_lossy(&bytes);
-        let window = LineWindow::from_args(
-            call,
-            text.lines().count(),
-            ARTIFACT_DEFAULT_LINES,
-            ARTIFACT_MAX_LINES,
-        )?;
-        let mut out = format!(
-            "[artifact {id}: {}]\n",
-            window.describe(text.lines().count())
-        );
-        out.push_str(&window.slice(&text));
-        if let Some(offset) = window.continue_offset(text.lines().count()) {
-            out.push_str(&format!("\n[continue with offset={offset}]"));
+        Ok((output, None))
+    }
+    async fn read_text_window(
+        &self,
+        call: &ToolCall,
+        path: &Path,
+        label: &str,
+        default_lines: usize,
+        max_lines: usize,
+        observe: bool,
+    ) -> Result<String> {
+        let size = tokio::fs::metadata(path).await?.len();
+        let cursor = call.arguments.get("byte_offset").and_then(Value::as_u64);
+        let tail = if cursor.is_some() {
+            None
+        } else {
+            call.arguments.get("tail").and_then(Value::as_u64)
+        };
+        let base = if let Some(cursor) = cursor {
+            cursor
+        } else if tail.is_some() && size > READ_IO_BYTES as u64 {
+            size - READ_IO_BYTES as u64
+        } else {
+            0
+        };
+        let page = source_page(path, base).await?;
+        let complete = page.base == 0 && page.text.len() as u64 == page.size;
+        let hash_header = if observe && complete {
+            let version = self.observe_file(path, page.text.as_bytes()).await?;
+            format!("hash: {}\n", version.content_hash)
+        } else if observe {
+            "hash: unavailable on bounded page (guarded edits require an exact hash)\n".to_owned()
+        } else {
+            String::new()
+        };
+        if complete && cursor.is_none() {
+            let total = page.text.lines().count();
+            let window = LineWindow::from_args(call, total, default_lines, max_lines)?;
+            let start = line_byte(&page.text, window.start);
+            return render_page(
+                &page,
+                start,
+                window.start + 1,
+                window.end - window.start,
+                Some(total),
+                label,
+                &hash_header,
+            );
         }
-        Ok((out, None))
+        let limit = tail
+            .map_or_else(
+                || {
+                    call.arguments
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .map_or(default_lines, |n| n.min(max_lines as u64) as usize)
+                },
+                |n| n.min(max_lines as u64) as usize,
+            )
+            .clamp(1, max_lines);
+        let requested = call
+            .arguments
+            .get("offset")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .max(1);
+        let mut line = if cursor.is_some() {
+            call.arguments
+                .get("cursor_line")
+                .and_then(Value::as_u64)
+                .unwrap_or(requested)
+                .max(1)
+        } else {
+            1
+        };
+        let mut start = 0;
+        if tail.is_some() {
+            if page.base > 0 {
+                // The first bytes may be the middle of a line or UTF-8 scalar.
+                start = page.text.find('\n').map_or(0, |pos| pos + 1);
+            }
+            let suffix = &page.text[start..];
+            let total = suffix.lines().count();
+            let skip = total.saturating_sub(limit);
+            start += line_byte(suffix, skip);
+            line = 1;
+        } else {
+            while line < requested && start < page.text.len() {
+                let Some(next) = page.text[start..].find('\n') else {
+                    break;
+                };
+                start += next + 1;
+                line += 1;
+            }
+            if line < requested {
+                if page.base + (page.text.len() as u64) < page.size {
+                    return Ok(format!(
+                        "[{label}: scanning to line {requested}]\n[continue with offset={requested}, byte_offset={}, cursor_line={line}]",
+                        page.base + page.text.len() as u64
+                    ));
+                }
+                return Ok(format!("[{label}: no lines (offset past end)]"));
+            }
+        }
+        render_page(
+            &page,
+            start,
+            line as usize,
+            limit,
+            None,
+            label,
+            &hash_header,
+        )
     }
     pub(super) fn artifact_path(&self, id: &str) -> Result<PathBuf> {
         if id.is_empty()
+            || id.len() > ARTIFACT_ID_MAX_BYTES
             || id.contains("..")
             || id.contains('/')
             || id.contains('\\')
@@ -279,55 +436,168 @@ impl LineWindow {
         let end = start.saturating_add(limit).min(total);
         Ok(Self { start, end })
     }
+}
 
-    /// Trims the window to whole lines that fit `max_tokens`, returning true
-    /// when lines were dropped. The continuation offset then points at the
-    /// first dropped line.
-    fn token_bound(&mut self, text: &str, max_tokens: usize, estimator: &TokenEstimator) -> bool {
-        let lines: Vec<&str> = text
-            .lines()
-            .skip(self.start)
-            .take(self.end.saturating_sub(self.start))
-            .collect();
-        let mut used = 0usize;
-        let mut keep = 0usize;
-        for (index, line) in lines.iter().enumerate() {
-            let cost = estimator.estimate(line).saturating_add(1);
-            if index > 0 && used + cost > max_tokens {
+fn line_byte(text: &str, skip: usize) -> usize {
+    let mut pos = 0;
+    for _ in 0..skip {
+        let Some(next) = text[pos..].find('\n') else {
+            return text.len();
+        };
+        pos += next + 1;
+    }
+    pos
+}
+
+/// The same final budget is used for workspace files and durable artifacts.
+/// It is applied before ToolResult construction and event persistence.
+fn render_page(
+    page: &SourcePage,
+    start: usize,
+    first_line: usize,
+    limit: usize,
+    total: Option<usize>,
+    label: &str,
+    hash_header: &str,
+) -> Result<String> {
+    let overhead = label
+        .len()
+        .saturating_add(hash_header.len())
+        .saturating_add(READ_FOOTER_RESERVE);
+    if overhead >= READ_OUTPUT_BYTES {
+        bail!("read result header exceeds output budget");
+    }
+    let body_budget = READ_OUTPUT_BYTES - overhead;
+    let estimator = TokenEstimator::generic();
+    let header_tokens = estimator.estimate(label) + estimator.estimate(hash_header) + 128;
+    let mut body = String::new();
+    let mut pos = start;
+    let mut shown = 0;
+    let mut partial = false;
+    let mut bounded = false;
+    let mut tokens = 0;
+    while shown < limit && pos < page.text.len() {
+        let rest = &page.text[pos..];
+        let newline = rest.find('\n');
+        let raw_end = newline.unwrap_or(rest.len());
+        let line = rest[..raw_end]
+            .strip_suffix('\r')
+            .unwrap_or(&rest[..raw_end]);
+        let separator = usize::from(shown > 0);
+        let capacity = body_budget.saturating_sub(body.len() + separator);
+        let remaining_tokens = READ_OUTPUT_TOKENS
+            .saturating_sub(header_tokens)
+            .saturating_sub(tokens + separator);
+        let whole = line.len() <= capacity && estimator.estimate(line) <= remaining_tokens;
+        if !whole && shown > 0 {
+            bounded = true;
+            break;
+        }
+        if shown > 0 {
+            body.push('\n');
+            tokens += 1;
+        }
+        if whole {
+            body.push_str(line);
+            tokens += estimator.estimate(line);
+            pos += raw_end + usize::from(newline.is_some());
+            shown += 1;
+            if newline.is_none() && page.base + (pos as u64) < page.size {
+                partial = true;
                 break;
             }
-            used += cost;
-            keep = index + 1;
-        }
-        if keep < lines.len() {
-            self.end = self.start + keep;
-            true
         } else {
-            false
+            // Binary search over character boundaries so one enormous line
+            // cannot bypass either the byte or estimated-token budget.
+            let boundaries: Vec<usize> = line
+                .char_indices()
+                .map(|(i, _)| i)
+                .chain(std::iter::once(line.len()))
+                .collect();
+            let mut lo = 0;
+            let mut hi = boundaries.len();
+            while lo + 1 < hi {
+                let mid = (lo + hi) / 2;
+                let n = boundaries[mid];
+                if n <= capacity && estimator.estimate(&line[..n]) <= remaining_tokens {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let n = boundaries[lo];
+            if n == 0 {
+                bail!("read output budget cannot fit one text character");
+            }
+            body.push_str(&line[..n]);
+            pos += n;
+            shown += 1;
+            partial = true;
+            bounded = true;
+            break;
         }
     }
-
-    fn slice(self, text: &str) -> String {
-        text.lines()
-            .skip(self.start)
-            .take(self.end.saturating_sub(self.start))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    fn describe(self, total: usize) -> String {
-        if total == 0 {
-            return "empty".into();
+    let last_line = first_line.saturating_add(shown).saturating_sub(1);
+    let description = match (shown, total) {
+        (0, Some(0)) => "empty".to_owned(),
+        (0, Some(n)) => format!("no lines (offset past end of {n})"),
+        (0, None) => "no lines".to_owned(),
+        (_, Some(n)) => format!("lines {first_line}-{last_line} of {n}"),
+        (_, None) => format!("lines {first_line}-{last_line} (total unknown)"),
+    };
+    let mut out = format!("{hash_header}[{label}: {description}]\n{body}");
+    let more =
+        partial || total.is_some_and(|n| last_line < n) || page.base + (pos as u64) < page.size;
+    if more {
+        let offset = if partial { last_line } else { last_line + 1 };
+        let prefix = if bounded {
+            "token-bounded window; "
+        } else {
+            ""
+        };
+        if total.is_some() && !partial {
+            out.push_str(&format!("\n[{prefix}continue with offset={offset}]"));
+        } else {
+            out.push_str(&format!(
+                "\n[{prefix}continue with offset={offset}, byte_offset={}, cursor_line={offset}]",
+                page.base + pos as u64
+            ));
         }
-        if self.start >= total {
-            return format!("no lines (offset past end of {total})");
-        }
-        format!("lines {}-{} of {total}", self.start + 1, self.end)
     }
+    if out.len() > READ_OUTPUT_BYTES || estimator.estimate(&out) > READ_OUTPUT_TOKENS {
+        bail!("read result header exceeds output budget");
+    }
+    Ok(out)
+}
 
-    fn continue_offset(self, total: usize) -> Option<usize> {
-        (self.end < total).then_some(self.end + 1)
+/// Final guard for both successful and failed read calls, before ToolResult is
+/// created and appended to the event log. Normal pages already fit exactly.
+pub(super) fn bound_final_output(output: &str) -> String {
+    let estimator = TokenEstimator::generic();
+    if output.len() <= READ_OUTPUT_BYTES && estimator.estimate(output) <= READ_OUTPUT_TOKENS {
+        return output.to_owned();
     }
+    const NOTE: &str = "\n[read output bounded]";
+    let max_bytes = READ_OUTPUT_BYTES - NOTE.len();
+    let boundaries: Vec<usize> = output
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(output.len()))
+        .collect();
+    let mut lo = 0;
+    let mut hi = boundaries.len();
+    while lo + 1 < hi {
+        let mid = (lo + hi) / 2;
+        let n = boundaries[mid];
+        if n <= max_bytes
+            && estimator.estimate(&output[..n]) + estimator.estimate(NOTE) <= READ_OUTPUT_TOKENS
+        {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    format!("{}{}", &output[..boundaries[lo]], NOTE)
 }
 
 /// `read_file` defaults to a bounded window with continuation. Files are never
@@ -336,11 +606,6 @@ impl LineWindow {
 const READ_DEFAULT_LINES: usize = 400;
 
 const READ_MAX_LINES: usize = 20_000;
-
-/// Secondary token cap for one read window. A 400-line window is already small,
-/// but dense code can still be large; whole lines are trimmed until the
-/// selection fits, and the continuation offset keeps the rest reachable.
-const READ_MAX_TOKENS: usize = 8_000;
 
 /// `search` returns a bounded page with an offset continuation.
 const SEARCH_DEFAULT_RESULTS: usize = 50;

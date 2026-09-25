@@ -1544,7 +1544,156 @@ async fn read_file_never_injects_a_whole_large_file() {
         "{}",
         bounded.output
     );
-    assert!(bounded.output.contains("of 400]"), "{}", bounded.output);
+    assert!(
+        bounded.output.contains("total unknown)"),
+        "{}",
+        bounded.output
+    );
+}
+
+#[tokio::test]
+async fn f4_reads_are_bounded_and_persist_only_bounded_results() {
+    let (d, e) = setup(Mode::Ask);
+    let large = "x".repeat(1_000_000);
+    std::fs::write(d.path().join("long.json"), &large).unwrap();
+    std::fs::write(d.path().join("artifacts/long.log"), &large).unwrap();
+    let page = super::files::source_page(&d.path().join("long.json"), 0)
+        .await
+        .unwrap();
+    assert_eq!(page.text.len(), super::files::READ_IO_BYTES);
+    for (name, key, value) in [
+        ("read_file", "path", "long.json"),
+        ("read_artifact", "id", "long.log"),
+    ] {
+        let first = e
+            .execute(
+                &call(name, json!({key:value,"limit":1})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!first.is_error, "{}", first.output);
+        assert!(first.output.len() <= super::files::READ_OUTPUT_BYTES);
+        assert!(first.output.contains("byte_offset="));
+        let marker = first.output.rsplit("byte_offset=").next().unwrap();
+        let byte_offset: u64 = marker.split(',').next().unwrap().parse().unwrap();
+        assert!(byte_offset > 0 && byte_offset < 1_000_000);
+        let next = e.execute(&call(name, json!({key:value,"offset":1,"byte_offset":byte_offset,"cursor_line":1,"limit":1})), CancellationToken::new()).await;
+        assert!(!next.is_error, "{}", next.output);
+        assert!(next.output.len() <= super::files::READ_OUTPUT_BYTES);
+        assert!(next.output.contains("byte_offset="));
+        let next_offset: u64 = next
+            .output
+            .rsplit("byte_offset=")
+            .next()
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(next_offset > byte_offset);
+        let tail = e
+            .execute(
+                &call(name, json!({key:value,"tail":1})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!tail.is_error, "{}", tail.output);
+        assert!(tail.output.len() <= super::files::READ_OUTPUT_BYTES);
+    }
+    let many = (0..100_000)
+        .map(|n| format!("line {n}\n"))
+        .collect::<String>();
+    std::fs::write(d.path().join("many.txt"), many).unwrap();
+    let one = e
+        .execute(
+            &call("read_file", json!({"path":"many.txt","limit":1})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!one.is_error, "{}", one.output);
+    assert!(one.output.contains("line 0"));
+    assert!(!one.output.contains("line 2"));
+    assert!(one.output.len() <= super::files::READ_OUTPUT_BYTES);
+    let last = e
+        .execute(
+            &call("read_file", json!({"path":"many.txt","tail":1})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!last.is_error, "{}", last.output);
+    assert!(last.output.contains("line 99999"));
+    assert!(!last.output.contains("line 0"));
+    std::fs::write(
+        d.path().join("cursor.txt"),
+        format!("{}NEXT_SEGMENT{}", "a".repeat(26_000), "b".repeat(1_000)),
+    )
+    .unwrap();
+    let first = e
+        .execute(
+            &call("read_file", json!({"path":"cursor.txt","limit":1})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!first.output.contains("NEXT_SEGMENT"));
+    let cursor: u64 = first
+        .output
+        .rsplit("byte_offset=")
+        .next()
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let continuation = e
+        .execute(
+            &call("read_file", json!({"path":"cursor.txt","offset":1,"byte_offset":cursor,"cursor_line":1,"limit":1})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(continuation.output.contains("NEXT_SEGMENT"));
+    for payload in e
+        .store
+        .events(e.session_id)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.payload)
+    {
+        if let EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } =
+            payload
+            && (result.name == "read_file" || result.name == "read_artifact")
+        {
+            assert!(result.output.len() <= super::files::READ_OUTPUT_BYTES);
+        }
+    }
+}
+
+#[tokio::test]
+async fn f4_invalid_text_is_rejected_without_dumping_bytes() {
+    let (d, e) = setup(Mode::Ask);
+    std::fs::write(d.path().join("invalid.txt"), [b'a', 0xff, b'b']).unwrap();
+    std::fs::write(d.path().join("artifacts/binary.log"), [b'a', 0, b'b']).unwrap();
+    for (name, args) in [
+        ("read_file", json!({"path":"invalid.txt"})),
+        ("read_artifact", json!({"id":"binary.log"})),
+    ] {
+        let result = e.execute(&call(name, args), CancellationToken::new()).await;
+        assert!(result.is_error);
+        assert!(result.output.len() < 256);
+    }
+    let failed = e
+        .execute(
+            &call("read_artifact", json!({"id":"x".repeat(100_000)})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(failed.is_error);
+    assert!(failed.output.len() <= super::files::READ_OUTPUT_BYTES);
+    assert!(e.store.events(e.session_id).unwrap().iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::ToolFailed { result } if result.name == "read_artifact" && result.output == failed.output
+    )));
 }
 
 #[tokio::test]

@@ -435,11 +435,17 @@ block and `/group` prints the full coordination view.
 
 ## Bounded reads, artifacts, and long processes
 
-`read_file` returns a bounded line window (default 400 lines, additionally
-capped at roughly 8000 estimated tokens with whole-line trimming) and supports
-`offset`/`limit`/`tail` with an explicit continuation offset; large files are
-never injected whole. `search` returns a bounded result page with a total count
-and offset continuation. Output spilled by truncated shell, search, diff, or
+`read_file` and `read_artifact` read at most 64 KiB per call, decode at most
+64 KiB of UTF-8, and persist at most 24 KiB and 8000 estimated tokens of
+output. Their line windows support `offset`/`limit`/`tail`. A long line is
+paged within the line; copy `offset`, `byte_offset`, and `cursor_line` from its
+continuation marker. Large files report an unknown total line count. Files
+that fit in one read keep their exact version hash and normal line ranges;
+larger files omit a guarded-edit hash because hashing them would exceed the
+read budget. Binary and invalid UTF-8 input is rejected.
+
+`search` returns a bounded result page with a total count and offset
+continuation. Output spilled by truncated shell, search, diff, or
 validation results carries an artifact id that `read_artifact` can page through
 by range. Long-running development commands use `exec_start`, `exec_poll`, and
 `exec_terminate` instead of blocking shell calls; process lifecycle is durable,

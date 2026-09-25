@@ -635,6 +635,14 @@ any symlink alias into it, `write`/`patch` refuse to mutate it, and a recursive
 search rooted above it excludes the protected tree with an rg glob instead of
 failing. Credentials stay unreadable whatever the workspace layout.
 
+`read_file` and `read_artifact` share one bounded text page policy: at most
+64 KiB fetched and decoded, and at most 24 KiB / 8000 estimated tokens in the
+ToolResult that is appended to history. Long lines continue with a byte cursor
+and line number; large files cannot claim an exact whole-file hash or total
+line count without crossing the IO bound. Small files keep their exact hash
+for guarded edits. Binary and invalid UTF-8 pages fail before text reaches the
+provider.
+
 Non-interactive sessions record `non_interactive` denials; resume marks
 unresolved requests `resume_expired`, and `SafetyChanged`/`PermissionsChanged`
 events restore the exact policy the session ended with.
