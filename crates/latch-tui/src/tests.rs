@@ -947,6 +947,7 @@ fn setup_provider_list_renders_status_and_windows_long_lists() {
                 model_count: 2,
                 default_model: "deepseek-flash".into(),
                 credential_ref: format!("env:KEY_{index:02}"),
+                available_models: vec!["deepseek-flash".into()],
             })
             .collect(),
     ));

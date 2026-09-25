@@ -119,6 +119,11 @@ impl InferenceContext {
                     model_count,
                     default_model: profile.default_model.clone(),
                     credential_ref: profile.credential.display(),
+                    available_models: profile
+                        .available_models()
+                        .into_iter()
+                        .map(|model| model.model.clone())
+                        .collect(),
                 }
             })
             .collect()

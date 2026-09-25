@@ -626,6 +626,29 @@ fn save_config(context: &InferenceContext) -> Result<()> {
     Ok(())
 }
 
+fn set_provider_default(context: &mut InferenceContext, name: &str, model: &str) -> Result<()> {
+    let available = context.registry.available_models(name);
+    if !available.iter().any(|descriptor| descriptor.model == model) {
+        bail!("model {model:?} is not enabled and resolved for provider {name:?}");
+    }
+    let mut candidate = context.config.clone();
+    let profile = candidate
+        .providers
+        .get_mut(name)
+        .ok_or_else(|| anyhow!("no provider named {name:?}"))?;
+    profile.default_model = Some(model.to_owned());
+    candidate.validate()?;
+    let config_path = context
+        .config_path
+        .clone()
+        .or_else(Config::default_path)
+        .ok_or_else(|| anyhow!("cannot resolve configuration path"))?;
+    candidate.save(&config_path)?;
+    context.registry = ProviderRegistry::from_config(&candidate)?;
+    context.config = candidate;
+    Ok(())
+}
+
 /// Persists a `/setup` plan and applies the resulting change live.
 async fn apply_setup(
     agent: &mut Agent,
@@ -635,6 +658,16 @@ async fn apply_setup(
     workspace: &Path,
     resumed: bool,
 ) -> Result<()> {
+    if let SetupPlan::SetProviderDefault { name, model } = &plan {
+        set_provider_default(context, name, model)?;
+        tx.send(Output::SetupProviders(context.setup_providers()))
+            .await?;
+        tx.send(Output::Notice(format!(
+            "{name} default model set to {model}"
+        )))
+        .await?;
+        return Ok(());
+    }
     if let SetupPlan::SetNewSessionDefault { name } = &plan {
         set_new_session_default(context, name)?;
         tx.send(Output::Notice(format!(
@@ -1017,6 +1050,54 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn provider_default_edit_does_not_change_new_session_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &SetupPlan::Apply {
+                name: "deepseek".into(),
+                provider_kind: "deepseek".into(),
+                base_url: None,
+                credential: SetupCredential::Env("DEEPSEEK_API_KEY".into()),
+                model: "deepseek-flash".into(),
+                enabled_models: Some(vec!["deepseek-flash".into(), "deepseek-v4-pro".into()]),
+                custom_model_display_name: None,
+                custom_transport: None,
+                effort: ReasoningEffort::ProviderDefault,
+            },
+        )
+        .unwrap();
+        let original_inference = context.config.inference.clone();
+        context.registry = ProviderRegistry::from_config(&context.config).unwrap();
+        set_provider_default(&mut context, "deepseek", "deepseek-v4-pro").unwrap();
+        assert_eq!(
+            context.config.inference.provider,
+            original_inference.provider
+        );
+        assert_eq!(context.config.inference.model, original_inference.model);
+        assert_eq!(context.config.inference.effort, original_inference.effort);
+        assert_eq!(
+            context.config.providers["deepseek"]
+                .default_model
+                .as_deref(),
+            Some("deepseek-v4-pro")
+        );
+        assert!(set_provider_default(&mut context, "deepseek", "unresolved").is_err());
+        assert_eq!(
+            Config::load(Some(&config_path)).unwrap().providers["deepseek"]
+                .default_model
+                .as_deref(),
+            Some("deepseek-v4-pro")
+        );
     }
 
     #[test]

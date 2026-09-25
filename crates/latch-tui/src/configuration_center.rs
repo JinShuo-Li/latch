@@ -33,6 +33,8 @@ pub struct ProviderSummary {
     pub model_count: usize,
     pub default_model: String,
     pub credential_ref: String,
+    /// Enabled models with resolved transport, eligible as provider defaults.
+    pub available_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +42,7 @@ pub enum CenterPage {
     Providers,
     AddKind,
     Provider(String),
+    DefaultModel(String),
     RemoveConfirm(String),
 }
 
@@ -48,7 +51,7 @@ pub enum CenterAction {
     StartAdd(String),
     EditCredential(String),
     EditModels(String),
-    EditDefaultModel(String),
+    SetProviderDefault { name: String, model: String },
     EditAdvanced(String),
     SetNewSessionDefault(String),
     Remove(String),
@@ -81,6 +84,7 @@ impl ConfigurationCenter {
             CenterPage::Providers => "Setup · providers".to_owned(),
             CenterPage::AddKind => "Setup · add provider".to_owned(),
             CenterPage::Provider(id) => format!("Setup · {id}"),
+            CenterPage::DefaultModel(id) => format!("Setup · {id} · Default model"),
             CenterPage::RemoveConfirm(id) => format!("Setup · remove {id}"),
         }
     }
@@ -133,6 +137,27 @@ impl ConfigurationCenter {
                     ),
                 ]
             }
+            CenterPage::DefaultModel(id) => self
+                .providers
+                .iter()
+                .find(|provider| &provider.id == id)
+                .map(|provider| {
+                    provider
+                        .available_models
+                        .iter()
+                        .map(|model| {
+                            (
+                                model.clone(),
+                                if model == &provider.default_model {
+                                    "current default".to_owned()
+                                } else {
+                                    String::new()
+                                },
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             CenterPage::RemoveConfirm(_) => vec![
                 (
                     "Remove provider".to_owned(),
@@ -171,6 +196,7 @@ impl ConfigurationCenter {
         self.page = match &self.page {
             CenterPage::Providers => return false,
             CenterPage::AddKind | CenterPage::Provider(_) => CenterPage::Providers,
+            CenterPage::DefaultModel(id) => CenterPage::Provider(id.clone()),
             CenterPage::RemoveConfirm(id) => CenterPage::Provider(id.clone()),
         };
         self.selected = 0;
@@ -196,7 +222,11 @@ impl ConfigurationCenter {
                 match self.selected {
                     0 => Some(CenterAction::EditCredential(id)),
                     1 => Some(CenterAction::EditModels(id)),
-                    2 => Some(CenterAction::EditDefaultModel(id)),
+                    2 => {
+                        self.page = CenterPage::DefaultModel(id);
+                        self.selected = 0;
+                        None
+                    }
                     3 => Some(CenterAction::EditAdvanced(id)),
                     4 => Some(CenterAction::SetNewSessionDefault(id)),
                     _ => {
@@ -214,6 +244,16 @@ impl ConfigurationCenter {
                     None
                 }
             }
+            CenterPage::DefaultModel(id) => Some(CenterAction::SetProviderDefault {
+                name: id.clone(),
+                model: self
+                    .providers
+                    .iter()
+                    .find(|provider| &provider.id == id)?
+                    .available_models
+                    .get(self.selected)?
+                    .clone(),
+            }),
         }
     }
 }
@@ -247,6 +287,7 @@ mod tests {
             model_count: 2,
             default_model: "deepseek-flash".into(),
             credential_ref: "file:deepseek".into(),
+            available_models: vec!["deepseek-flash".into()],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         assert!(
@@ -275,6 +316,7 @@ mod tests {
             model_count: 1,
             default_model: "deepseek-flash".into(),
             credential_ref: "env:DEEPSEEK_API_KEY".into(),
+            available_models: vec!["deepseek-flash".into()],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();
@@ -290,6 +332,36 @@ mod tests {
     }
 
     #[test]
+    fn provider_default_picker_offers_only_resolved_enabled_models() {
+        let provider = ProviderSummary {
+            id: "deepseek".into(),
+            display_name: "DeepSeek".into(),
+            kind: "deepseek".into(),
+            status: ProviderStatus::Ready,
+            model_count: 3,
+            default_model: "deepseek-flash".into(),
+            credential_ref: "env:DEEPSEEK_API_KEY".into(),
+            available_models: vec!["deepseek-flash".into(), "deepseek-v4-pro".into()],
+        };
+        let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
+        center.down();
+        center.confirm();
+        center.down();
+        center.down();
+        center.confirm();
+        assert_eq!(center.page(), &CenterPage::DefaultModel("deepseek".into()));
+        assert_eq!(center.rows().len(), 2);
+        center.down();
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::SetProviderDefault {
+                name: "deepseek".into(),
+                model: "deepseek-v4-pro".into()
+            })
+        );
+    }
+
+    #[test]
     fn explicit_new_session_default_emits_a_distinct_action() {
         let provider = ProviderSummary {
             id: "deepseek".into(),
@@ -299,6 +371,7 @@ mod tests {
             model_count: 1,
             default_model: "deepseek-flash".into(),
             credential_ref: "env:DEEPSEEK_API_KEY".into(),
+            available_models: vec!["deepseek-flash".into()],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();

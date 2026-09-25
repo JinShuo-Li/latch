@@ -128,6 +128,8 @@ pub enum SetupPlan {
     Remove { name: String },
     /// Explicitly change the profile used by future sessions.
     SetNewSessionDefault { name: String },
+    /// Change one provider's switch default without changing the live session.
+    SetProviderDefault { name: String, model: String },
 }
 
 /// One configured provider instance shown by the removal surface.
