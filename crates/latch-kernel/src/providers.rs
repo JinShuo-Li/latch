@@ -2485,7 +2485,10 @@ mod tests {
             crate::config::EffortForm::Disabled
         );
         // The built-in catalog keeps user config free of copied metadata.
-        let builtin = registry.model_descriptor("openai", "gpt-5.5").unwrap();
+        let builtin = crate::providers::builtin_catalog(ProviderKind::OpenAi)
+            .into_iter()
+            .find(|descriptor| descriptor.model == "gpt-5.5")
+            .unwrap();
         assert!(builtin.effort_map.is_empty());
     }
 }
