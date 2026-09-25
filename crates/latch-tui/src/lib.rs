@@ -57,9 +57,9 @@ pub use presentation::{
     AgentOperation, Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel,
 };
 pub use profile::{
-    CaptureSpec, CatalogModel, CatalogProvider, ChoiceRow, EffortMapEdit, InferenceCatalog,
-    ModelFieldEdit, ProfileSelector, ProviderFieldEdit, SetupCredential, SetupKind, SetupPlan,
-    SetupStepOutcome,
+    CaptureSpec, CatalogModel, CatalogProvider, ChoiceRow, EffortMapEdit, GeminiThinkingEdit,
+    InferenceCatalog, ModelFieldEdit, ProfileSelector, ProviderFieldEdit, SetupCredential,
+    SetupKind, SetupPlan, SetupStepOutcome,
 };
 pub use session_picker::{PickerSelection, SessionItem, SessionPreviewLine, run_session_picker};
 pub use sidebar::{Pricing, SidebarModel, SidebarSession};

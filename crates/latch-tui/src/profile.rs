@@ -127,6 +127,8 @@ pub enum ModelFieldEdit {
     /// `None` restores the catalog replay policy.
     ReasoningReplay(Option<String>),
     AdaptiveThinking(Option<bool>),
+    /// `None` restores the catalog Gemini thinking capability.
+    GeminiThinking(Option<GeminiThinkingEdit>),
     InputModalities(Vec<String>),
     Aliases(Vec<String>),
     Efforts {
@@ -139,6 +141,21 @@ pub enum ModelFieldEdit {
     Pricing(Option<latch_protocol::ModelPricing>),
     /// Clear every override for this model (built-in catalog models only).
     Reset,
+}
+
+/// Provider-neutral Gemini thinking capability declaration edited by the
+/// Advanced surface. The CLI translates it into kernel model metadata; the TUI
+/// never sees wire field names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GeminiThinkingEdit {
+    /// `thinkingLevel` controls over the declared levels; `off` is the level
+    /// that expresses no thinking when the model has one.
+    Levels {
+        levels: Vec<String>,
+        off: Option<String>,
+    },
+    /// `thinkingBudget` controls; `zero_allowed` is the documented off switch.
+    Budget { zero_allowed: bool },
 }
 
 /// One effort level's edited wire form.

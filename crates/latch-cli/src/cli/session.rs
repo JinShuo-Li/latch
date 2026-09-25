@@ -95,6 +95,7 @@ fn has_model_override(user: &latch_kernel::config::ModelConfig) -> bool {
         || user.reasoning_replay.is_some()
         || user.transport.is_some()
         || user.adaptive_thinking.is_some()
+        || user.gemini_thinking.is_some()
         || user.input_modalities.is_some()
         || !user.aliases.is_empty()
         || !user.effort_map.is_empty()
@@ -192,6 +193,12 @@ impl InferenceContext {
                                 adaptive_thinking: model.adaptive_thinking,
                                 adaptive_thinking_configured: user
                                     .is_some_and(|user| user.adaptive_thinking.is_some()),
+                                gemini_thinking: model
+                                    .gemini_thinking
+                                    .as_ref()
+                                    .map(ToString::to_string),
+                                gemini_thinking_configured: user
+                                    .is_some_and(|user| user.gemini_thinking.is_some()),
                                 input_modalities: model
                                     .input_modalities
                                     .iter()

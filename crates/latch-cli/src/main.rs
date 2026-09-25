@@ -903,6 +903,9 @@ fn set_model_field(
                     entry.reasoning_replay = policy.as_deref().map(parse_replay).transpose()?;
                 }
                 ModelFieldEdit::AdaptiveThinking(adaptive) => entry.adaptive_thinking = *adaptive,
+                ModelFieldEdit::GeminiThinking(capability) => {
+                    entry.gemini_thinking = capability.as_ref().map(gemini_thinking_capability);
+                }
                 ModelFieldEdit::InputModalities(modalities) => {
                     entry.input_modalities = Some(parse_modalities(modalities)?);
                 }
@@ -1002,6 +1005,26 @@ fn effort_mapping(edit: &latch_tui::EffortMapEdit) -> Option<latch_kernel::confi
             ..Default::default()
         },
     })
+}
+
+/// Converts the provider-neutral Advanced capability declaration into kernel
+/// model metadata. The kernel validates it before the candidate is saved.
+fn gemini_thinking_capability(
+    edit: &latch_tui::GeminiThinkingEdit,
+) -> latch_kernel::GeminiThinkingCapability {
+    match edit {
+        latch_tui::GeminiThinkingEdit::Levels { levels, off } => {
+            latch_kernel::GeminiThinkingCapability::Levels {
+                levels: levels.clone(),
+                off: off.clone(),
+            }
+        }
+        latch_tui::GeminiThinkingEdit::Budget { zero_allowed } => {
+            latch_kernel::GeminiThinkingCapability::Budget {
+                zero_allowed: *zero_allowed,
+            }
+        }
+    }
 }
 
 /// Persists a `/setup` plan and applies the resulting change live.
@@ -1894,6 +1917,173 @@ mod tests {
                 .effort_map
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn gemini_thinking_edits_validate_round_trip_and_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "zen",
+                "opencode-zen",
+                SetupCredential::Env("OPENCODE_API_KEY".into()),
+                "gemini-3.8-flash",
+                ReasoningEffort::Medium,
+            ),
+        )
+        .unwrap();
+        // persist_setup updates the config; rebuild the registry for lookups.
+        context.registry = latch_kernel::ProviderRegistry::from_config(&context.config).unwrap();
+        // The builtin capability is the documented level-only shape.
+        assert_eq!(
+            context
+                .registry
+                .model_descriptor("zen", "gemini-3.8-flash")
+                .unwrap()
+                .gemini_thinking,
+            Some(latch_kernel::GeminiThinkingCapability::Levels {
+                levels: vec!["low".into(), "medium".into(), "high".into()],
+                off: None,
+            })
+        );
+
+        // A malformed declaration is rejected without writing.
+        let before = std::fs::read_to_string(&path).unwrap();
+        let error = set_model_field(
+            &mut context,
+            "zen",
+            "gemini-3.8-flash",
+            &ModelFieldEdit::GeminiThinking(Some(latch_tui::GeminiThinkingEdit::Levels {
+                levels: vec![],
+                off: None,
+            })),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("at least one documented thinking level"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        // Declaring a budget capability, then exposing and mapping levels,
+        // validates at every step and reaches the descriptor.
+        set_model_field(
+            &mut context,
+            "zen",
+            "gemini-3.8-flash",
+            &ModelFieldEdit::GeminiThinking(Some(latch_tui::GeminiThinkingEdit::Budget {
+                zero_allowed: true,
+            })),
+        )
+        .unwrap();
+        set_model_field(
+            &mut context,
+            "zen",
+            "gemini-3.8-flash",
+            &ModelFieldEdit::Efforts {
+                efforts: vec![ReasoningEffort::None, ReasoningEffort::Low],
+                default_effort: Some(ReasoningEffort::None),
+            },
+        )
+        .unwrap();
+        set_model_field(
+            &mut context,
+            "zen",
+            "gemini-3.8-flash",
+            &ModelFieldEdit::EffortMap(std::collections::BTreeMap::from([
+                (ReasoningEffort::None, latch_tui::EffortMapEdit::Disabled),
+                (
+                    ReasoningEffort::Low,
+                    latch_tui::EffortMapEdit::Budget(4_096),
+                ),
+            ])),
+        )
+        .unwrap();
+        let descriptor = context
+            .registry
+            .model_descriptor("zen", "gemini-3.8-flash")
+            .unwrap();
+        assert_eq!(
+            descriptor.gemini_thinking,
+            Some(latch_kernel::GeminiThinkingCapability::Budget { zero_allowed: true })
+        );
+        assert_eq!(
+            descriptor.effort_map[&ReasoningEffort::Low].form().unwrap(),
+            latch_kernel::config::EffortForm::BudgetTokens(4_096)
+        );
+        let summary = context.setup_providers()[0]
+            .models
+            .iter()
+            .find(|model| model.id == "gemini-3.8-flash")
+            .cloned()
+            .unwrap();
+        assert!(summary.gemini_thinking_configured);
+        assert!(
+            summary
+                .gemini_thinking
+                .as_deref()
+                .unwrap_or_default()
+                .contains("budget")
+        );
+
+        // A level-only capability rejects the budget map before request time.
+        let error = set_model_field(
+            &mut context,
+            "zen",
+            "gemini-3.8-flash",
+            &ModelFieldEdit::GeminiThinking(Some(latch_tui::GeminiThinkingEdit::Levels {
+                levels: vec!["low".into(), "high".into()],
+                off: None,
+            })),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("gemini transport only supports value"),
+            "{error}"
+        );
+
+        // Clearing the map, then the capability, restores catalog metadata.
+        set_model_field(
+            &mut context,
+            "zen",
+            "gemini-3.8-flash",
+            &ModelFieldEdit::EffortMap(std::collections::BTreeMap::new()),
+        )
+        .unwrap();
+        set_model_field(
+            &mut context,
+            "zen",
+            "gemini-3.8-flash",
+            &ModelFieldEdit::GeminiThinking(None),
+        )
+        .unwrap();
+        let descriptor = context
+            .registry
+            .model_descriptor("zen", "gemini-3.8-flash")
+            .unwrap();
+        assert_eq!(
+            descriptor.gemini_thinking,
+            Some(latch_kernel::GeminiThinkingCapability::Levels {
+                levels: vec!["low".into(), "medium".into(), "high".into()],
+                off: None,
+            })
+        );
+        let summary = context.setup_providers()[0]
+            .models
+            .iter()
+            .find(|model| model.id == "gemini-3.8-flash")
+            .cloned()
+            .unwrap();
+        assert!(!summary.gemini_thinking_configured);
     }
 
     #[test]

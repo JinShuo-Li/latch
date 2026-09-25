@@ -6,8 +6,8 @@
 //! byte for byte.
 
 use crate::profile::{
-    CaptureSpec, ChoiceRow, EffortMapEdit, ModelFieldEdit, ProviderFieldEdit, SetupCredential,
-    SetupKind,
+    CaptureSpec, ChoiceRow, EffortMapEdit, GeminiThinkingEdit, ModelFieldEdit, ProviderFieldEdit,
+    SetupCredential, SetupKind,
 };
 use latch_protocol::ReasoningEffort;
 use std::collections::{BTreeMap, BTreeSet};
@@ -90,6 +90,10 @@ pub struct ProviderModelSummary {
     pub reasoning_replay: Option<String>,
     pub adaptive_thinking: bool,
     pub adaptive_thinking_configured: bool,
+    /// Effective Gemini thinking capability summary from the CLI, when the
+    /// model declares one. Display text only; no wire names.
+    pub gemini_thinking: Option<String>,
+    pub gemini_thinking_configured: bool,
     pub input_modalities: Vec<String>,
     pub input_modalities_configured: bool,
     pub aliases: Vec<String>,
@@ -121,6 +125,8 @@ impl Default for ProviderModelSummary {
             reasoning_replay: None,
             adaptive_thinking: false,
             adaptive_thinking_configured: false,
+            gemini_thinking: None,
+            gemini_thinking_configured: false,
             input_modalities: Vec::new(),
             input_modalities_configured: false,
             aliases: Vec::new(),
@@ -189,6 +195,7 @@ pub enum ModelChoiceKind {
     Transport,
     ReasoningReplay,
     AdaptiveThinking,
+    GeminiThinking,
     InputModalities,
     DefaultEffort,
 }
@@ -199,6 +206,7 @@ impl ModelChoiceKind {
             Self::Transport => "Transport",
             Self::ReasoningReplay => "Reasoning replay",
             Self::AdaptiveThinking => "Adaptive thinking",
+            Self::GeminiThinking => "Gemini thinking capability",
             Self::InputModalities => "Input modalities",
             Self::DefaultEffort => "Default effort",
         }
@@ -561,6 +569,16 @@ impl ConfigurationCenter {
                 } else {
                     format!("custom ({} levels)", entry.effort_map.len())
                 };
+                let thinking = if entry.gemini_thinking_configured {
+                    entry
+                        .gemini_thinking
+                        .clone()
+                        .unwrap_or_else(|| "not declared".to_owned())
+                } else if let Some(label) = &entry.gemini_thinking {
+                    format!("{label} (catalog)")
+                } else {
+                    "not declared".to_owned()
+                };
                 let mut rows = vec![
                     ("Display name".to_owned(), entry.display_name.clone()),
                     ("Transport".to_owned(), transport),
@@ -596,6 +614,7 @@ impl ConfigurationCenter {
                         entry.default_effort.label().to_owned(),
                     ),
                     ("Effort mapping".to_owned(), mapping),
+                    ("Thinking capability".to_owned(), thinking),
                 ];
                 rows.push(if entry.from_catalog {
                     (
@@ -649,6 +668,36 @@ impl ConfigurationCenter {
                         ("Provider default".to_owned(), String::new()),
                         ("On".to_owned(), "adaptive thinking".to_owned()),
                         ("Off".to_owned(), "classic thinking".to_owned()),
+                    ],
+                    ModelChoiceKind::GeminiThinking => vec![
+                        (
+                            "Provider default".to_owned(),
+                            if entry.gemini_thinking.is_some() {
+                                "catalog capability".to_owned()
+                            } else {
+                                "no thinking controls".to_owned()
+                            },
+                        ),
+                        (
+                            "Thinking levels · standard".to_owned(),
+                            "minimal, low, medium, high (off: minimal)".to_owned(),
+                        ),
+                        (
+                            "Thinking levels · no off".to_owned(),
+                            "low, medium, high".to_owned(),
+                        ),
+                        (
+                            "Thinking levels · flash-lite".to_owned(),
+                            "minimal, low, high (off: minimal)".to_owned(),
+                        ),
+                        (
+                            "Thinking budget · zero allowed".to_owned(),
+                            "budget 0 disables thinking".to_owned(),
+                        ),
+                        (
+                            "Thinking budget · no off".to_owned(),
+                            "budget 0 is rejected".to_owned(),
+                        ),
                     ],
                     ModelChoiceKind::InputModalities => vec![
                         ("Text only".to_owned(), String::new()),
@@ -1085,6 +1134,15 @@ impl ConfigurationCenter {
                     self.selected = 0;
                     None
                 }
+                11 => {
+                    self.page = CenterPage::ModelChoice {
+                        provider,
+                        model,
+                        kind: ModelChoiceKind::GeminiThinking,
+                    };
+                    self.selected = 0;
+                    None
+                }
                 _ => Some(CenterAction::SetModelField {
                     name: provider,
                     model,
@@ -1118,6 +1176,32 @@ impl ConfigurationCenter {
                             0 => None,
                             1 => Some(true),
                             _ => Some(false),
+                        }))
+                    }
+                    ModelChoiceKind::GeminiThinking => {
+                        Some(ModelFieldEdit::GeminiThinking(match self.selected {
+                            0 => None,
+                            1 => Some(GeminiThinkingEdit::Levels {
+                                levels: vec![
+                                    "minimal".into(),
+                                    "low".into(),
+                                    "medium".into(),
+                                    "high".into(),
+                                ],
+                                off: Some("minimal".into()),
+                            }),
+                            2 => Some(GeminiThinkingEdit::Levels {
+                                levels: vec!["low".into(), "medium".into(), "high".into()],
+                                off: None,
+                            }),
+                            3 => Some(GeminiThinkingEdit::Levels {
+                                levels: vec!["minimal".into(), "low".into(), "high".into()],
+                                off: Some("minimal".into()),
+                            }),
+                            4 => Some(GeminiThinkingEdit::Budget { zero_allowed: true }),
+                            _ => Some(GeminiThinkingEdit::Budget {
+                                zero_allowed: false,
+                            }),
                         }))
                     }
                     ModelChoiceKind::InputModalities => {
@@ -1917,6 +2001,70 @@ mod tests {
                 name: "deepseek".into(),
                 model: "deepseek-flash".into(),
                 field: ModelFieldEdit::Pricing(None),
+            })
+        );
+    }
+
+    #[test]
+    fn gemini_thinking_capability_editor_offers_documented_shapes() {
+        let mut entry = provider(ProviderStatus::Ready).models.pop().unwrap();
+        entry.transport = "gemini".into();
+        entry.catalog_transport = "gemini".into();
+        entry.gemini_thinking = Some("levels: low, medium, high".into());
+        entry.gemini_thinking_configured = false;
+        let mut provider = provider(ProviderStatus::Ready);
+        provider.models = vec![entry];
+        let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
+        open_provider(&mut center);
+        center.down();
+        center.down();
+        center.down();
+        center.confirm(); // Advanced
+        center.down();
+        center.down();
+        center.confirm(); // ModelAdvanced
+        assert_eq!(center.rows()[11].label, "Thinking capability");
+        assert_eq!(
+            center.rows()[11].description,
+            "levels: low, medium, high (catalog)"
+        );
+        assert_eq!(center.rows()[12].label, "Reset model overrides");
+        for _ in 0..11 {
+            center.down();
+        }
+        center.confirm();
+        assert_eq!(
+            center.page(),
+            &CenterPage::ModelChoice {
+                provider: "deepseek".into(),
+                model: "deepseek-flash".into(),
+                kind: ModelChoiceKind::GeminiThinking,
+            }
+        );
+        assert_eq!(center.rows().len(), 6);
+        // Index 2 is the documented level set without an off switch.
+        center.down();
+        center.down();
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::SetModelField {
+                name: "deepseek".into(),
+                model: "deepseek-flash".into(),
+                field: ModelFieldEdit::GeminiThinking(Some(GeminiThinkingEdit::Levels {
+                    levels: vec!["low".into(), "medium".into(), "high".into()],
+                    off: None,
+                })),
+            })
+        );
+        // Index 0 restores the catalog capability.
+        center.up();
+        center.up();
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::SetModelField {
+                name: "deepseek".into(),
+                model: "deepseek-flash".into(),
+                field: ModelFieldEdit::GeminiThinking(None),
             })
         );
     }
