@@ -195,8 +195,10 @@ fn conservative_replay(kind: ProviderKind, model: &str) -> ReasoningReplay {
 ///   /quick_start/pricing gives 1M context and the thinking/effort rules.
 ///   Retired product names are accepted aliases only (see the footnote), never
 ///   canonical IDs.
-/// - OpenCode Go: opencode.ai/v2/docs/console/go endpoint table, which lists a
-///   transport per model (Chat Completions, Responses, or Messages).
+/// - OpenCode Go: opencode.ai/docs/go current model list and endpoint table,
+///   which lists a transport per model (Chat Completions, Responses, or
+///   Messages). Per-model effort sets come from the OpenCode model catalog's
+///   `opencode-go` reasoning options; context windows stay unknown.
 #[derive(Clone)]
 struct BuiltinModel {
     id: &'static str,
@@ -214,6 +216,7 @@ struct BuiltinModel {
 }
 
 const NONE: ReasoningEffort = ReasoningEffort::None;
+const MINIMAL: ReasoningEffort = ReasoningEffort::Minimal;
 const LOW: ReasoningEffort = ReasoningEffort::Low;
 const MEDIUM: ReasoningEffort = ReasoningEffort::Medium;
 const HIGH: ReasoningEffort = ReasoningEffort::High;
@@ -447,245 +450,377 @@ fn builtin_deepseek() -> Vec<BuiltinModel> {
     ]
 }
 
-/// OpenCode Go's documented catalog. Transport and capabilities are per model:
-/// GPT models use Responses, Claude/Qwen/MiniMax use the Messages API, and
-/// the rest use Chat Completions. DeepSeek models keep DeepSeek replay
-/// semantics; every other family does not inherit them. Effort levels are only
-/// advertised where the provider documents them.
-///
-/// Input modality: the Go endpoint table publishes a transport per model but no
-/// modality metadata, and live probing shows the gateway rejects images for
-/// models whose upstream accepts them (the DeepSeek Flash alias reports
-/// "Model only supports text input"). Every Go model therefore stays
-/// conservative text-only by default; a model the gateway actually serves with
-/// vision can be opted in per model with `input_modalities = ["text",
-/// "image"]`. Live probing (2026-09) observed that `kimi-k3` (chat completions)
-/// and `qwen3.8-max` (messages) do accept images correctly through the
-/// gateway, so those are the first rows a user should opt in.
+/// One OpenCode Go catalog row. OpenCode Go publishes a transport per
+/// model and the current selectable list, but not context windows, so the
+/// catalog carries only what is documented and leaves the window unknown
+/// rather than copying either limit.
+fn opencode_go_model(
+    id: &'static str,
+    display_name: &'static str,
+    transport: TransportKind,
+    efforts: &'static [ReasoningEffort],
+    default_effort: ReasoningEffort,
+    replay: ReasoningReplay,
+    aliases: &'static [&'static str],
+) -> BuiltinModel {
+    BuiltinModel {
+        id,
+        display_name,
+        context_window_tokens: None,
+        efforts,
+        default_effort,
+        transport,
+        adaptive_thinking: false,
+        replay,
+        image: false,
+        aliases,
+    }
+}
+
+/// OpenCode Go's current documented catalog (opencode.ai/docs/go). Effort
+/// sets follow the OpenCode model catalog's per-model `reasoning_options`
+/// for `opencode-go`, which is the metadata the OpenCode client itself
+/// uses; the Go docs publish transports but not effort sets. DeepSeek
+/// models keep required reasoning replay, and every other family does not
+/// inherit it. Image input stays conservative text-only: the gateway
+/// rejects images for models whose upstream accepts them, so a model that
+/// actually serves vision can be opted in per model with
+/// `input_modalities = ["text", "image"]`.
 fn builtin_opencode_go() -> Vec<BuiltinModel> {
     let chat = TransportKind::ChatCompletions;
     let messages = TransportKind::AnthropicMessages;
     let responses = TransportKind::Responses;
     let mut models = vec![
-        BuiltinModel {
-            id: "gpt-5.6-luna",
-            display_name: "GPT-5.6 Luna",
-            // OpenCode Go documents transport/endpoints but not context
-            // windows; leaving it unknown is honest and avoids copying the
-            // public-API or Codex deployment limits into a gateway.
-            context_window_tokens: None,
-            efforts: &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
-            default_effort: MEDIUM,
-            transport: responses,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "deepseek-v4-pro",
-            display_name: "DeepSeek V4 Pro",
-            context_window_tokens: Some(1_048_576),
-            efforts: &[NONE, LOW, HIGH, MAX],
-            default_effort: HIGH,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Replay,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "deepseek-v4-flash",
-            display_name: "DeepSeek V4 Flash",
-            context_window_tokens: Some(1_048_576),
-            efforts: &[NONE, LOW, HIGH, MAX],
-            default_effort: HIGH,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Replay,
-            image: false,
-            aliases: &["deepseek-v4.1-flash", "deepseek-v4.1", "deepseek-flash"],
-        },
-        BuiltinModel {
-            id: "grok-4.5",
-            display_name: "Grok 4.5",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "glm-5.2",
-            display_name: "GLM-5.2",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "glm-5.1",
-            display_name: "GLM-5.1",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "kimi-k3",
-            display_name: "Kimi K3",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "kimi-k2.7-code",
-            display_name: "Kimi K2.7 Code",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "kimi-k2.6",
-            display_name: "Kimi K2.6",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "mimo-v2.5",
-            display_name: "MiMo-V2.5",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "mimo-v2.5-pro",
-            display_name: "MiMo-V2.5-Pro",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "hy3",
-            display_name: "Hy3",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: chat,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "minimax-m3",
-            display_name: "MiniMax M3",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: messages,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "minimax-m2.7",
-            display_name: "MiniMax M2.7",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: messages,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "qwen3.8-max",
-            display_name: "Qwen3.8 Max",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: messages,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "qwen3.7-max",
-            display_name: "Qwen3.7 Max",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: messages,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "qwen3.7-plus",
-            display_name: "Qwen3.7 Plus",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: messages,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
-        BuiltinModel {
-            id: "qwen3.6-plus",
-            display_name: "Qwen3.6 Plus",
-            context_window_tokens: None,
-            efforts: &[],
-            default_effort: ReasoningEffort::ProviderDefault,
-            transport: messages,
-            adaptive_thinking: false,
-            replay: ReasoningReplay::Omit,
-            image: false,
-            aliases: &[],
-        },
+        // Grok 4.7
+        opencode_go_model(
+            "grok-4.7",
+            "Grok 4.7",
+            responses,
+            &[LOW, MEDIUM, HIGH, XHIGH],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Grok 4.6
+        opencode_go_model(
+            "grok-4.6",
+            "Grok 4.6",
+            responses,
+            &[LOW, MEDIUM, HIGH, XHIGH],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // GPT-6 Luna
+        opencode_go_model(
+            "gpt-6-luna",
+            "GPT-6 Luna",
+            responses,
+            &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
+            MEDIUM,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // GPT-5.6 Luna
+        opencode_go_model(
+            "gpt-5.6-luna",
+            "GPT-5.6 Luna",
+            responses,
+            &[NONE, LOW, MEDIUM, HIGH, XHIGH, MAX],
+            MEDIUM,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // GLM-5.3-Flash
+        opencode_go_model(
+            "glm-5.3-flash",
+            "GLM-5.3-Flash",
+            chat,
+            &[LOW, HIGH, MAX],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // GLM-5.3
+        opencode_go_model(
+            "glm-5.3",
+            "GLM-5.3",
+            chat,
+            &[LOW, HIGH, MAX],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // GLM-5.2
+        opencode_go_model(
+            "glm-5.2",
+            "GLM-5.2",
+            chat,
+            &[HIGH, MAX],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // GLM-5.1
+        opencode_go_model(
+            "glm-5.1",
+            "GLM-5.1",
+            chat,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Kimi K3
+        opencode_go_model(
+            "kimi-k3",
+            "Kimi K3",
+            chat,
+            &[MAX],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Kimi K2.7 Code
+        opencode_go_model(
+            "kimi-k2.7-code",
+            "Kimi K2.7 Code",
+            chat,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Kimi K2.6
+        opencode_go_model(
+            "kimi-k2.6",
+            "Kimi K2.6",
+            chat,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // LongCat-2.0
+        opencode_go_model(
+            "longcat-2.0",
+            "LongCat-2.0",
+            chat,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // DeepSeek V4.1 Flash
+        opencode_go_model(
+            "deepseek-v4.1-flash",
+            "DeepSeek V4.1 Flash",
+            chat,
+            &[LOW, HIGH, MAX],
+            HIGH,
+            ReasoningReplay::Replay,
+            &[],
+        ),
+        // DeepSeek V4 Pro
+        opencode_go_model(
+            "deepseek-v4-pro",
+            "DeepSeek V4 Pro",
+            chat,
+            &[HIGH, MAX],
+            HIGH,
+            ReasoningReplay::Replay,
+            &[],
+        ),
+        // DeepSeek V4 Flash
+        opencode_go_model(
+            "deepseek-v4-flash",
+            "DeepSeek V4 Flash",
+            chat,
+            &[LOW, HIGH, MAX],
+            HIGH,
+            ReasoningReplay::Replay,
+            &["deepseek-v4.1", "deepseek-flash"],
+        ),
+        // DeepSeek V4 Flash Vision Exp
+        opencode_go_model(
+            "deepseek-v4-flash-vision-exp",
+            "DeepSeek V4 Flash Vision Exp",
+            chat,
+            &[LOW, HIGH, MAX],
+            HIGH,
+            ReasoningReplay::Replay,
+            &[],
+        ),
+        // MiMo-V2.6-Flash
+        opencode_go_model(
+            "mimo-v2.6-flash",
+            "MiMo-V2.6-Flash",
+            chat,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // MiMo-V2.6-Pro
+        opencode_go_model(
+            "mimo-v2.6-pro",
+            "MiMo-V2.6-Pro",
+            chat,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // MiMo-V2.5
+        opencode_go_model(
+            "mimo-v2.5",
+            "MiMo-V2.5",
+            chat,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // MiMo-V2.5-Pro
+        opencode_go_model(
+            "mimo-v2.5-pro",
+            "MiMo-V2.5-Pro",
+            chat,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // MiniMax M3
+        opencode_go_model(
+            "minimax-m3",
+            "MiniMax M3",
+            messages,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // MiniMax M2.7
+        opencode_go_model(
+            "minimax-m2.7",
+            "MiniMax M2.7",
+            messages,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // MiniMax M2.5
+        opencode_go_model(
+            "minimax-m2.5",
+            "MiniMax M2.5",
+            messages,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Muse Spark 1.3 Contributor
+        opencode_go_model(
+            "muse-spark-1.3-contributor",
+            "Muse Spark 1.3 Contributor",
+            responses,
+            &[MINIMAL, LOW, MEDIUM, HIGH, XHIGH],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Muse Spark 1.2 Contributor
+        opencode_go_model(
+            "muse-spark-1.2-contributor",
+            "Muse Spark 1.2 Contributor",
+            responses,
+            &[MINIMAL, LOW, MEDIUM, HIGH, XHIGH],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Qwen3.8 Max
+        opencode_go_model(
+            "qwen3.8-max",
+            "Qwen3.8 Max",
+            messages,
+            &[LOW, MEDIUM, XHIGH],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Qwen3.8 Flash
+        opencode_go_model(
+            "qwen3.8-flash",
+            "Qwen3.8 Flash",
+            messages,
+            &[LOW, MEDIUM, XHIGH],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Qwen3.7 Max
+        opencode_go_model(
+            "qwen3.7-max",
+            "Qwen3.7 Max",
+            messages,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Qwen3.7 Plus
+        opencode_go_model(
+            "qwen3.7-plus",
+            "Qwen3.7 Plus",
+            messages,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Qwen3.6 Plus
+        opencode_go_model(
+            "qwen3.6-plus",
+            "Qwen3.6 Plus",
+            messages,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Hy4 preview
+        opencode_go_model(
+            "hy4-preview",
+            "Hy4 preview",
+            chat,
+            &[NONE, HIGH],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Hy3
+        opencode_go_model(
+            "hy3",
+            "Hy3",
+            chat,
+            &[NONE, LOW, HIGH],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
+        // Space Bunny Free
+        opencode_go_model(
+            "space-bunny-free",
+            "Space Bunny Free",
+            chat,
+            &[LOW, MEDIUM, HIGH, XHIGH, MAX],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ),
     ];
     // Keep the list stable and readable in UI order.
     models.sort_by(|a, b| a.id.cmp(b.id));
@@ -1449,8 +1584,8 @@ mod tests {
             credential = "env:OPENCODE_API_KEY"
             "#,
         );
-        // A DeepSeek-family model keeps required reasoning replay and efforts,
-        // including the documented `none` toggle.
+        // A DeepSeek-family model keeps required reasoning replay; the Go
+        // gateway advertises low/high/max for it (no `none`).
         let deepseek = registry
             .model_descriptor("opencode-go", "deepseek-v4-flash")
             .unwrap();
@@ -1459,7 +1594,6 @@ mod tests {
         assert_eq!(
             deepseek.supported_efforts,
             vec![
-                ReasoningEffort::None,
                 ReasoningEffort::Low,
                 ReasoningEffort::High,
                 ReasoningEffort::Max
@@ -1494,6 +1628,123 @@ mod tests {
         assert!(other.supported_efforts.is_empty());
         assert!(other.context_window_tokens.is_none());
         assert!(other.pricing.is_none());
+    }
+
+    #[test]
+    fn opencode_go_catalog_matches_the_current_documented_list() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.opencode-go]
+            kind = "opencode-go"
+            credential = "env:OPENCODE_API_KEY"
+            "#,
+        );
+        let mut models: Vec<String> = registry
+            .available_models("opencode-go")
+            .into_iter()
+            .map(|model| model.model)
+            .collect();
+        models.sort();
+        let mut expected = vec![
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "deepseek-v4-pro",
+            "deepseek-v4.1-flash",
+            "glm-5.1",
+            "glm-5.2",
+            "glm-5.3",
+            "glm-5.3-flash",
+            "gpt-5.6-luna",
+            "gpt-6-luna",
+            "grok-4.6",
+            "grok-4.7",
+            "hy3",
+            "hy4-preview",
+            "kimi-k2.6",
+            "kimi-k2.7-code",
+            "kimi-k3",
+            "longcat-2.0",
+            "mimo-v2.5",
+            "mimo-v2.5-pro",
+            "mimo-v2.6-flash",
+            "mimo-v2.6-pro",
+            "minimax-m2.5",
+            "minimax-m2.7",
+            "minimax-m3",
+            "muse-spark-1.2-contributor",
+            "muse-spark-1.3-contributor",
+            "qwen3.6-plus",
+            "qwen3.7-max",
+            "qwen3.7-plus",
+            "qwen3.8-flash",
+            "qwen3.8-max",
+            "space-bunny-free",
+        ];
+        expected.sort_unstable();
+        assert_eq!(models, expected, "the current OpenCode Go documented list");
+
+        // Per-model effort sets come from the Go reasoning options.
+        for (model, efforts) in [
+            (
+                "grok-4.7",
+                vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::Medium,
+                    ReasoningEffort::High,
+                    ReasoningEffort::XHigh,
+                ],
+            ),
+            ("glm-5.2", vec![ReasoningEffort::High, ReasoningEffort::Max]),
+            ("kimi-k3", vec![ReasoningEffort::Max]),
+            (
+                "qwen3.8-max",
+                vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::Medium,
+                    ReasoningEffort::XHigh,
+                ],
+            ),
+            (
+                "hy4-preview",
+                vec![ReasoningEffort::None, ReasoningEffort::High],
+            ),
+            (
+                "muse-spark-1.3-contributor",
+                vec![
+                    ReasoningEffort::Minimal,
+                    ReasoningEffort::Low,
+                    ReasoningEffort::Medium,
+                    ReasoningEffort::High,
+                    ReasoningEffort::XHigh,
+                ],
+            ),
+            ("qwen3.7-max", Vec::new()),
+        ] {
+            assert_eq!(
+                registry
+                    .model_descriptor("opencode-go", model)
+                    .unwrap()
+                    .supported_efforts,
+                efforts,
+                "{model} efforts"
+            );
+        }
+        // `deepseek-v4.1-flash` is its own documented Go model, not an alias of
+        // `deepseek-v4-flash`; legacy names keep resolving where they always did.
+        assert_eq!(
+            registry
+                .model_descriptor("opencode-go", "deepseek-v4.1-flash")
+                .unwrap()
+                .model,
+            "deepseek-v4.1-flash"
+        );
+        assert_eq!(
+            registry
+                .model_descriptor("opencode-go", "deepseek-flash")
+                .unwrap()
+                .model,
+            "deepseek-v4-flash"
+        );
     }
 
     #[test]

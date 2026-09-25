@@ -76,9 +76,10 @@ Anthropic models use
 adaptive thinking with exact thinking/redacted-block replay; DeepSeek's
 canonical API models are `deepseek-flash` and `deepseek-v4-pro` (Chat
 Completions, `none`/`low`/`high`/`max`, required `reasoning_content` replay,
-retired names accepted as aliases only); and OpenCode Go resolves transport
-and capabilities per model (GPT over Responses, Claude/Qwen/MiniMax over
-Messages, the rest over Chat Completions). Unknown models stay conservative:
+retired names accepted as aliases only); and OpenCode Go resolves transport,
+reasoning efforts, and capabilities per model from its current documented list
+(GPT/Grok/Muse Spark over Responses, MiniMax/Qwen over Messages, the rest over
+Chat Completions). Unknown models stay conservative:
 provider-default effort only, no replay assumption, no invented context
 window or pricing. Advanced users can override context window, efforts,
 default effort, replay policy, aliases, pricing, transport, and adaptive

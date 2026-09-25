@@ -88,7 +88,8 @@ Responses API (stateless `store: false` replay with
 durable assistant event and echoed back exactly once), Anthropic models use
 Messages with adaptive thinking and exact thinking/redacted-block replay,
 DeepSeek uses Chat Completions with explicit `reasoning_effort` and the
-`thinking` toggle, and OpenCode Go resolves transport per model. Run
+`thinking` toggle, and OpenCode Go resolves transport and reasoning efforts per
+model from its documented list. Run
 boundaries are durable (`RunStarted`/`RunCompleted`), so per-run accounting is
 explicit while session totals remain cumulative.
 
