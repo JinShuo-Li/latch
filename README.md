@@ -229,6 +229,11 @@ credential).
 
 ## Terminal interface
 
+When no usable provider is configured, the guided `/setup` flow opens on the
+first run. Its active field shows the current value, accepts paste and ordinary
+editing, uses Enter to confirm and Esc to go back, and masks secrets in both
+the display and debug formatting.
+
 The transcript is a semantic conversation rather than a kernel event log.
 User-authored messages sit on a full-width neutral band with a `›` gutter,
 while model output stays on the terminal background behind a quiet `•` bullet
@@ -292,8 +297,9 @@ backgrounds entirely on ANSI-16 rather than guessing the palette.
 ## Observability sidebar
 
 On wide terminals the transcript gets a right sidebar: session/model and turn
-count, a token-native **working set** estimate against the model context window
-(never "time until context death"), kernel canonical task state and completion,
+count, the latest durable user request, a token-native **working set** estimate
+against the model context window (never "time until context death"), kernel
+canonical task state and completion, separate run and validation status,
 a compact **children** section for root-visible child sessions (durable
 delegation and reports only, never a child transcript), provider-neutral usage
 totals, and change ownership. It is responsive: ~32% on
@@ -304,7 +310,9 @@ only from durable kernel events, so live and resumed sessions show the same
 state. Abnormal states (over-budget context, stalled progress, externally
 modified owned files) are highlighted; healthy states stay quiet.
 
-Context telemetry distinguishes three quantities: estimated architecture
+`/context` shows advanced accounting. The default sidebar omits cache
+architecture, epoch, reserve, and headroom details. Advanced telemetry
+distinguishes three quantities: estimated architecture
 cacheability (shared prefix / request under Latch's own serialization and
 estimator, not the provider's tokenizer), provider prefix utilization (cache
 reads / shared prefix), and the measured provider cache hit rate (cache reads /
@@ -319,8 +327,8 @@ rotation keeps a large whole-unit working set and emits a fresh authoritative
 snapshot instead of evicting a little every turn. Cache epochs are performance
 boundaries only: raw events, canonical state, archival episodes, and recall are
 independent of them, rotation never deletes memory, and `/compact` remains the
-explicit reset. The sidebar shows the epoch generation, span, last rotation
-reason, and retained tokens.
+explicit reset. `/context` shows epoch generation, span, last rotation reason,
+and retained tokens.
 
 Context budgets and every user-visible context number are tokens, estimated
 conservatively per provider/model; bytes remain only for internal file,
@@ -678,18 +686,18 @@ the composer metadata always shows the active model and effort together.
 
 ## Acceptance testing
 
-Testing is tiered on purpose. CI is a small architectural gate — `cargo fmt`,
-`cargo clippy --workspace --all-targets --all-features -- -D warnings`, and the
-fast, deterministic invariant tier in
-`crates/latch-kernel/tests/invariants.rs` (durable history is the source of
-truth, cache epochs are not memory boundaries, canonical state stays
-authoritative, no hidden destructive compaction, resume equivalence,
-kernel-owned validation/evidence, safety hard-deny, steering protocol
-correctness, atomic agent-group claims, deterministic provider serialization).
-Detailed correctness and
-sandbox/command execution run locally with `cargo test --workspace`, and
-long-session stress tests stay local by convention; passing CI alone is not
-sufficient for a substantial change.
+The deterministic Linux release gate is one command:
+
+```sh
+bash scripts/release-gate.sh
+```
+
+It probes Bubblewrap and runs formatting, locked Clippy, kernel invariants,
+the full workspace test suite, and a locked release build. CI runs this same
+gate after installing Bubblewrap, ripgrep, and Python. Sandbox coverage fails
+clearly when Bubblewrap cannot create the required namespaces. Live-model,
+paid-provider, benchmark, and long-session stress tests remain separate and
+are not counted as passing deterministic CI.
 
 A separate opt-in harness calls the configured provider for real and is ignored
 by default:

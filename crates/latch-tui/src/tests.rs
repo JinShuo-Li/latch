@@ -873,6 +873,57 @@ fn multiline_paste_places_the_cursor_on_the_visible_composer_row() {
 }
 
 #[test]
+fn setup_paste_edits_the_active_field_and_masks_secrets() {
+    let mut app = App::default();
+    app.input.insert_text("composer stays here");
+    for label in ["endpoint", "environment variable", "model id", "API key"] {
+        let secret = label == "API key";
+        app.capture = Some(CaptureState::new(CaptureSpec {
+            label: label.into(),
+            initial: String::new(),
+            masked: secret,
+        }));
+        let pasted = if secret {
+            "secret-sentinel"
+        } else {
+            "pasted-value"
+        };
+        app.on_paste(pasted);
+        let capture = app.capture.as_ref().unwrap();
+        assert_eq!(capture.value, pasted, "{label}");
+        assert_eq!(app.input.text(), "composer stays here");
+        assert!(
+            app.items.is_empty(),
+            "setup paste must not enter transcript"
+        );
+        if secret {
+            assert!(!capture.display_value().contains(pasted));
+            assert!(!format!("{capture:?}").contains(pasted));
+            assert!(!render_to_text(&mut app, 80, 24).contains(pasted));
+        }
+    }
+    app.capture = None;
+    app.on_paste(" normal");
+    assert_eq!(app.input.text(), "composer stays here normal");
+}
+
+#[test]
+fn missing_provider_opens_guided_setup_immediately() {
+    let mut app = App::default();
+    app.output(Output::SetupCatalog(vec![SetupKind {
+        kind: "openai-compatible".into(),
+        label: "Compatible provider".into(),
+        default_base_url: "https://example.test/v1".into(),
+        credential_label: "env:API_KEY".into(),
+        default_model: "model".into(),
+        models: vec![],
+    }]));
+    app.output(Output::SetupRequired);
+    assert!(app.setup.is_some());
+    assert!(render_to_text(&mut app, 80, 24).contains("Setup"));
+}
+
+#[test]
 fn composer_is_a_neutral_band_with_a_prompt_gutter() {
     let backend = ratatui::backend::TestBackend::new(48, 12);
     let mut terminal = Terminal::new(backend).unwrap();

@@ -307,7 +307,10 @@ pub struct SidebarModel {
     turns: u32,
     context: Option<ContextStats>,
     task: Option<TaskState>,
+    current_request: Option<String>,
     evidence: BTreeMap<String, EvidenceStatus>,
+    validation_stale: bool,
+    stale_claims: BTreeSet<String>,
     usage: UsageTotals,
     last_usage: Option<Usage>,
     /// Provider requests and tool calls observed in the durable stream.
@@ -332,7 +335,10 @@ impl SidebarModel {
             turns: 0,
             context: None,
             task: None,
+            current_request: None,
             evidence: BTreeMap::new(),
+            validation_stale: false,
+            stale_claims: BTreeSet::new(),
             usage: UsageTotals::default(),
             last_usage: None,
             tool_calls: 0,
@@ -377,6 +383,41 @@ impl SidebarModel {
     #[must_use]
     pub fn task(&self) -> Option<&TaskState> {
         self.task.as_ref()
+    }
+
+    #[must_use]
+    pub fn current_request(&self) -> Option<&str> {
+        self.current_request.as_deref()
+    }
+
+    #[must_use]
+    pub fn validation_status(&self) -> &'static str {
+        let required = self
+            .task
+            .as_ref()
+            .map_or(&[][..], |task| task.required_validations.as_slice());
+        let statuses = required
+            .iter()
+            .filter_map(|claim| self.evidence.get(&claim.trim().to_ascii_lowercase()));
+        if statuses
+            .clone()
+            .any(|status| *status == EvidenceStatus::Failed)
+        {
+            return "failed";
+        }
+        if statuses
+            .clone()
+            .any(|status| *status == EvidenceStatus::Unavailable)
+        {
+            return "unavailable";
+        }
+        if self.validation_stale {
+            return "stale";
+        }
+        if !required.is_empty() && self.validations_passed() == required.len() {
+            return "passed";
+        }
+        "pending"
     }
 
     #[must_use]
@@ -510,6 +551,26 @@ impl SidebarModel {
         if clears_stall(&event.payload) {
             self.stall = None;
         }
+        if matches!(
+            event.payload,
+            EventPayload::WorkspaceMutationPossible { .. }
+                | EventPayload::FileChanged { .. }
+                | EventPayload::ExternalFileChangeDetected { .. }
+        ) && (self
+            .task
+            .as_ref()
+            .is_some_and(|task| task.completion == CompletionState::Verified)
+            || self
+                .evidence
+                .values()
+                .any(|status| *status == EvidenceStatus::Passed))
+        {
+            self.validation_stale = true;
+            self.stale_claims
+                .extend(self.evidence.iter().filter_map(|(claim, status)| {
+                    (*status == EvidenceStatus::Passed).then_some(claim.clone())
+                }));
+        }
         match &event.payload {
             EventPayload::ContextMaterialized { stats } => {
                 // One event per provider request: accumulate the run totals and
@@ -539,17 +600,20 @@ impl SidebarModel {
                 self.task = Some(task);
             }
             EventPayload::EvidenceCreated { evidence } => {
-                self.evidence.insert(
-                    evidence.claim.trim().to_ascii_lowercase(),
-                    evidence.status.clone(),
-                );
+                let claim = evidence.claim.trim().to_ascii_lowercase();
+                self.evidence.insert(claim.clone(), evidence.status.clone());
+                self.stale_claims.remove(&claim);
+                if self.stale_claims.is_empty() {
+                    self.validation_stale = false;
+                }
             }
             EventPayload::ModelUsage { usage } => {
                 self.usage.add(usage);
                 self.run.usage.add(usage);
                 self.last_usage = Some(usage.clone());
             }
-            EventPayload::RunStarted { .. } => {
+            EventPayload::RunStarted { prompt, .. } => {
+                self.current_request = (!prompt.trim().is_empty()).then(|| prompt.clone());
                 self.run = RunTotals {
                     started_at: Some(event.timestamp),
                     ..RunTotals::default()
@@ -558,6 +622,12 @@ impl SidebarModel {
             EventPayload::RunCompleted { outcome, .. } => {
                 self.run.ended_at = Some(event.timestamp);
                 self.run.outcome = Some(outcome.clone());
+            }
+            EventPayload::UserMessage { text, .. } if !text.trim().is_empty() => {
+                self.current_request = Some(text.clone());
+            }
+            EventPayload::UserMessage { media, .. } if !media.is_empty() => {
+                self.current_request = Some("Image request".into());
             }
             EventPayload::ModelRequestStarted { .. } => {
                 self.turns += 1;
@@ -664,29 +734,24 @@ impl SidebarModel {
         let height = height as usize;
         let mut out = self.session_lines(width);
         for section in [
+            self.current_request
+                .as_ref()
+                .map(|_| vec![self.request_lines(width)]),
             Some(vec![
-                self.context_lines(width, true, true),
-                self.context_lines(width, false, true),
-                self.context_lines(width, false, false),
-            ]),
-            Some(vec![
-                self.task_lines(width, true),
                 self.task_lines(width, false),
+                self.task_summary_lines(width),
             ]),
+            (self.run.started_at.is_some() || self.run.requests > 0)
+                .then(|| vec![self.run_lines(width, false)]),
             (!self.subagents.is_empty()).then(|| vec![self.children_lines(width)]),
             (!self.group.is_empty()).then(|| vec![self.group_lines(width)]),
             Some(vec![
-                self.run_lines(width, true),
-                self.run_lines(width, false),
+                self.context_lines(width, false, true),
+                self.context_lines(width, false, false),
             ]),
-            Some(vec![
-                self.usage_lines(width, true),
-                self.usage_lines(width, false),
-            ]),
-            Some(vec![
-                self.change_lines(width, true),
-                self.change_lines(width, false),
-            ]),
+            (!self.usage.is_empty()).then(|| vec![self.usage_lines(width, false)]),
+            (self.change_lines(width, false).len() > 1)
+                .then(|| vec![self.change_lines(width, false)]),
         ]
         .into_iter()
         .flatten()
@@ -697,6 +762,30 @@ impl SidebarModel {
         }
         out.truncate(height);
         out
+    }
+
+    #[must_use]
+    pub fn advanced_context_text(&self) -> String {
+        self.context_lines(100, true, true)
+            .into_iter()
+            .chain(self.run_lines(100, true))
+            .chain(self.usage_lines(100, true))
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn request_lines(&self, width: usize) -> Vec<Line<'static>> {
+        let mut lines = vec![section_title("CURRENT REQUEST")];
+        if let Some(request) = &self.current_request {
+            lines.extend(wrap_words(request, width, 2).into_iter().map(Line::from));
+        }
+        lines
     }
 
     fn session_lines(&self, width: usize) -> Vec<Line<'static>> {
@@ -995,7 +1084,7 @@ impl SidebarModel {
                 ));
             }
         }
-        if detail || show_bar {
+        if detail {
             lines.push(Line::styled(
                 fit(
                     &format!(
@@ -1018,10 +1107,15 @@ impl SidebarModel {
 
     fn task_lines(&self, width: usize, detail: bool) -> Vec<Line<'static>> {
         let Some(task) = &self.task else {
-            return vec![section_title("TASK")];
+            return vec![
+                section_title("TASK"),
+                Line::styled("InProgress", cyan()),
+                Line::from("Implementation unchanged"),
+                Line::from("Validation pending"),
+            ];
         };
         let mut lines = vec![section_title("TASK")];
-        if !task.goal.trim().is_empty() {
+        if !task.goal.trim().is_empty() && (detail || self.current_request.is_none()) {
             let goal_lines = if detail { 2 } else { 1 };
             for (index, line) in wrap_words(&task.goal, width, goal_lines)
                 .into_iter()
@@ -1033,8 +1127,32 @@ impl SidebarModel {
                 ));
             }
         }
-        let (label, style) = completion_label(&task.completion);
+        let completion = if self.validation_stale && task.completion == CompletionState::Verified {
+            CompletionState::ImplementedNotVerified
+        } else {
+            task.completion.clone()
+        };
+        let (label, style) = completion_label(&completion);
         lines.push(Line::styled(fit(label, width), style));
+        let implementation = if task.implementation_done {
+            "claimed"
+        } else if !self.changes.entries.is_empty() || !self.changes.shell_untrackable.is_empty() {
+            "changed"
+        } else {
+            "unchanged"
+        };
+        lines.push(Line::styled(
+            fit(&format!("Implementation {implementation}"), width),
+            dim(),
+        ));
+        lines.push(Line::styled(
+            fit(&format!("Validation {}", self.validation_status()), width),
+            if self.validation_status() == "passed" {
+                green()
+            } else {
+                yellow()
+            },
+        ));
         if detail && !task.required_validations.is_empty() {
             lines.push(Line::from(vec![
                 Span::styled("Validations  ", dim()),
@@ -1063,11 +1181,40 @@ impl SidebarModel {
         lines
     }
 
+    fn task_summary_lines(&self, width: usize) -> Vec<Line<'static>> {
+        let completion = self
+            .task
+            .as_ref()
+            .map_or(CompletionState::InProgress, |task| {
+                if self.validation_stale && task.completion == CompletionState::Verified {
+                    CompletionState::ImplementedNotVerified
+                } else {
+                    task.completion.clone()
+                }
+            });
+        let (label, style) = completion_label(&completion);
+        vec![
+            section_title("TASK"),
+            Line::styled(fit(label, width), style),
+        ]
+    }
+
     fn run_lines(&self, width: usize, detail: bool) -> Vec<Line<'static>> {
         let mut lines = vec![section_title("RUN")];
         if self.run.started_at.is_none() && self.run.requests == 0 {
             return lines;
         }
+        let status = match self.run.outcome.as_deref() {
+            None => "running",
+            Some("completed") => "finished",
+            Some("cancelled") => "cancelled",
+            Some("error") => "error",
+            Some(other) => other,
+        };
+        lines.push(Line::styled(
+            fit(status, width),
+            if status == "error" { red() } else { cyan() },
+        ));
         let elapsed = self
             .run
             .elapsed_seconds()
@@ -1671,10 +1818,8 @@ mod tests {
         let rendered = render(&model, 40, 60);
         assert!(rendered.contains("Working set"));
         assert!(rendered.contains("≈48.1k / 256k tok"), "{rendered}");
-        assert!(rendered.contains("Recent"));
-        assert!(rendered.contains("Tools+ext"));
-        assert!(rendered.contains("Headroom"));
-        assert!(rendered.contains("503 events · 11 episodes"));
+        assert!(!rendered.contains("Headroom"));
+        assert!(!rendered.contains("Epoch"));
         assert!(
             !rendered.contains("48.1k / 256k B"),
             "context must never render as bytes"
@@ -1707,7 +1852,7 @@ mod tests {
         assert_eq!(model.validations_passed(), 1);
         let rendered = render(&model, 40, 60);
         assert!(rendered.contains("VERIFIED"));
-        assert!(rendered.contains("1 / 2"));
+        assert!(rendered.contains("Validation pending"));
     }
 
     #[test]
@@ -1846,10 +1991,8 @@ mod tests {
         assert_eq!(model.usage().output, Some(50));
         assert_eq!(model.usage().cache_read, Some(3_000));
         assert_eq!(model.usage().cache_write, None);
-        let rendered = render(&model, 40, 60);
-        assert!(rendered.contains("cache write"));
-        assert!(rendered.contains("—"), "unknown is not zero");
-        assert!(rendered.contains("400"));
+        assert_eq!(model.usage().cache_write, None, "unknown is not zero");
+        assert!(render(&model, 40, 60).contains("400"));
     }
 
     #[test]
@@ -1877,7 +2020,7 @@ mod tests {
         }));
         assert_eq!(model.usage().cache_read, Some(5));
         assert!(model.usage().cache_read_partial);
-        assert!(render(&model, 40, 60).contains("≥ 5"));
+        assert!(model.usage().cache_read_partial);
     }
 
     #[test]
@@ -2206,7 +2349,134 @@ mod tests {
         let short = render(&model, 32, 6);
         assert!(!short.contains("CHANGES"));
         assert!(!short.contains("USAGE"));
-        assert!(short.contains("CONTEXT") || short.contains("Working set"));
+        assert!(short.contains("TASK"));
+    }
+
+    #[test]
+    fn durable_run_request_usage_and_stale_validation_replay_identically() {
+        let run_id = Uuid::new_v4();
+        let first = vec![
+            event(EventPayload::RunStarted {
+                run_id,
+                prompt: "original request".into(),
+            }),
+            event(EventPayload::UserMessage {
+                text: "revised request".into(),
+                media: vec![],
+            }),
+            event(EventPayload::ModelRequestStarted {
+                provider: "p".into(),
+                model: "m".into(),
+            }),
+            event(EventPayload::ModelUsage {
+                usage: Usage {
+                    input_tokens: 100,
+                    output_tokens: 20,
+                    cache_read_tokens: Some(30),
+                    cache_write_tokens: Some(5),
+                    cache_miss_tokens: Some(70),
+                    reasoning_tokens: None,
+                },
+            }),
+            event(EventPayload::TaskStateUpdated {
+                state: TaskState {
+                    goal: "original request".into(),
+                    required_validations: vec!["tests".into()],
+                    implementation_done: true,
+                    completion: CompletionState::Verified,
+                    ..TaskState::default()
+                },
+            }),
+            event(EventPayload::EvidenceCreated {
+                evidence: latch_protocol::Evidence {
+                    id: Uuid::new_v4(),
+                    claim: "tests".into(),
+                    source_event: Uuid::new_v4(),
+                    status: EvidenceStatus::Passed,
+                    detail: "ok".into(),
+                    created_at: Utc::now(),
+                    workspace_generation: Some(1),
+                    supersedes: None,
+                },
+            }),
+            event(EventPayload::RunCompleted {
+                run_id,
+                outcome: "cancelled".into(),
+            }),
+        ];
+        let mut live = SidebarModel::new(session());
+        for item in &first {
+            live.apply_event(item);
+        }
+        let replay = SidebarModel::from_events(session(), &first);
+        assert_eq!(live, replay);
+        assert_eq!(live.current_request(), Some("revised request"));
+        assert_eq!(live.usage().input, Some(100));
+        assert_eq!(live.run().usage.cache_read, Some(30));
+        let rendered = render(&live, 40, 60);
+        assert!(rendered.contains("cancelled"));
+        assert!(
+            rendered.contains("VERIFIED"),
+            "task truth is separate from cancellation"
+        );
+
+        let mutation = event(EventPayload::WorkspaceMutationPossible {
+            operation: "write".into(),
+        });
+        live.apply_event(&mutation);
+        assert_eq!(live.validation_status(), "stale");
+        assert!(!render(&live, 40, 60).contains("✓ VERIFIED"));
+        let mut all = first;
+        all.push(mutation);
+        assert_eq!(live, SidebarModel::from_events(session(), &all));
+
+        let second_run = event(EventPayload::RunStarted {
+            run_id: Uuid::new_v4(),
+            prompt: "new task".into(),
+        });
+        live.apply_event(&second_run);
+        assert_eq!(live.run().usage.input, None);
+        assert_eq!(live.usage().input, Some(100));
+        assert_eq!(live.current_request(), Some("new task"));
+        all.push(second_run);
+        assert_eq!(live, SidebarModel::from_events(session(), &all));
+    }
+
+    #[test]
+    fn unrelated_evidence_cannot_clear_stale_required_validations() {
+        let mut model = SidebarModel::new(session());
+        model.apply_event(&event(EventPayload::TaskStateUpdated {
+            state: TaskState {
+                required_validations: vec!["tests".into(), "clippy".into()],
+                completion: CompletionState::Verified,
+                ..TaskState::default()
+            },
+        }));
+        let evidence = |claim: &str| {
+            event(EventPayload::EvidenceCreated {
+                evidence: latch_protocol::Evidence {
+                    id: Uuid::new_v4(),
+                    claim: claim.into(),
+                    source_event: Uuid::new_v4(),
+                    status: EvidenceStatus::Passed,
+                    detail: "ok".into(),
+                    created_at: Utc::now(),
+                    workspace_generation: Some(1),
+                    supersedes: None,
+                },
+            })
+        };
+        model.apply_event(&evidence("tests"));
+        model.apply_event(&evidence("clippy"));
+        assert_eq!(model.validation_status(), "passed");
+        model.apply_event(&event(EventPayload::WorkspaceMutationPossible {
+            operation: "write".into(),
+        }));
+        model.apply_event(&evidence("unrelated"));
+        model.apply_event(&evidence("tests"));
+        assert_eq!(model.validation_status(), "stale");
+        model.apply_event(&evidence("clippy"));
+        assert_eq!(model.validation_status(), "passed");
     }
 
     #[test]

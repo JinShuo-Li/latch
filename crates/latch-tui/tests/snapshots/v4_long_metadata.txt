@@ -2,12 +2,12 @@
                                          ███     ████  ██████  █████ ██  ██                                         │WORK · 0 turns                             
                                          ███    ██  ██   ██   ██     ██  ██                                         │on main                                    
                                          ███    ██████   ██   ██     ██████                                         │                                           
-                                         ███    ██  ██   ██   ██     ██  ██                                         │CONTEXT                                    
-                                         ██████ ██  ██   ██    █████ ██  ██                                         │                                           
-                                            a quiet terminal coding agent                                           │TASK                                       
-                                                                                                                    │                                           
-                         Ask Latch to inspect, change, or verify code. /help lists commands.                        │RUN                                        
-                                                                                                                    │                                           
+                                         ███    ██  ██   ██   ██     ██  ██                                         │TASK                                       
+                                         ██████ ██  ██   ██    █████ ██  ██                                         │InProgress                                 
+                                            a quiet terminal coding agent                                           │Implementation unchanged                   
+                                                                                                                    │Validation pending                         
+                         Ask Latch to inspect, change, or verify code. /help lists commands.                        │                                           
+                                                                                                                    │CONTEXT                                    
                                                                                                                                                                 
                                                                                                                                                                 
 › check the long metadata handling                                                                                                                              

@@ -2,20 +2,20 @@
   └ child session running                                                                                                                                   │WORK · 0 turns · 0s                        
                                                                                                                                                             │on main                                    
 ✓ Child agent `audit-locks` completed                                                                                                                       │                                           
-  └ Found two unsynchronized locks.                                                                                                                         │CONTEXT                                    
-                                                                                                                                                            │                                           
-                                                                                                                                                            │TASK                                       
+  └ Found two unsynchronized locks.                                                                                                                         │TASK                                       
+                                                                                                                                                            │InProgress                                 
+                                                                                                                                                            │Implementation unchanged                   
+                                                                                                                                                            │Validation pending                         
                                                                                                                                                             │                                           
                                                                                                                                                             │CHILDREN                                   
                                                                                                                                                             │0 active · 1 known                         
                                                                                                                                                             │✓ audit-locks [explorer]                   
                                                                                                                                                             │  Found two unsynchronized locks.          
                                                                                                                                                             │                                           
-                                                                                                                                                            │RUN                                        
+                                                                                                                                                            │CONTEXT                                    
                                                                                                                                                             │                                           
-                                                                                                                                                            │SESSION                                    
                                                                                                                                                             │                                           
-                                                                                                                                                            │CHANGES                                    
+                                                                                                                                                            │                                           
                                                                                                                                                             │                                           
                                                                                                                                                             │                                           
                                                                                                                                                                                                         

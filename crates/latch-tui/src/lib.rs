@@ -145,6 +145,8 @@ pub enum Output {
     InferenceCatalog(InferenceCatalog),
     /// Provider kinds and built-in models available to `/setup`.
     SetupCatalog(Vec<SetupKind>),
+    /// The provider cannot run until setup completes; open the guided flow.
+    SetupRequired,
     /// The effective profile changed; update model/effort chrome.
     Inference {
         provider_id: String,
@@ -453,10 +455,26 @@ pub(crate) struct ActionOption {
 
 /// An open composer text capture opened by the setup flow. Masked captures
 /// never render their value and are only sent to the CLI on submit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CaptureState {
     pub spec: CaptureSpec,
     pub value: String,
+}
+
+impl std::fmt::Debug for CaptureState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CaptureState")
+            .field("label", &self.spec.label)
+            .field(
+                "value",
+                &if self.spec.masked {
+                    "[redacted]"
+                } else {
+                    &self.value
+                },
+            )
+            .finish()
+    }
 }
 
 impl CaptureState {
@@ -526,6 +544,10 @@ impl Default for App {
 }
 impl App {
     fn on_paste(&mut self, text: &str) {
+        if let Some(capture) = self.capture.as_mut() {
+            capture.value.push_str(text);
+            return;
+        }
         self.input.insert_text(text);
         self.palette.dismissed = false;
         self.palette.forced = false;
@@ -647,6 +669,11 @@ impl App {
             }
             Output::InferenceCatalog(catalog) => self.inference_catalog = catalog,
             Output::SetupCatalog(kinds) => self.setup_catalog = kinds,
+            Output::SetupRequired => {
+                if !self.setup_catalog.is_empty() {
+                    self.setup = Some(SetupFlow::new(self.setup_catalog.clone()));
+                }
+            }
             Output::Inference {
                 provider_id,
                 provider_label,
@@ -907,7 +934,9 @@ impl App {
             }
             if cancel {
                 self.capture = None;
-                self.setup = None;
+                if let Some(flow) = self.setup.as_mut() {
+                    flow.back();
+                }
             } else if submit {
                 let finished = self.capture.take().expect("checked above");
                 if let Some(flow) = self.setup.as_mut() {
@@ -921,7 +950,13 @@ impl App {
             let outcome = {
                 let flow = self.setup.as_mut().expect("checked above");
                 match key.code {
-                    KeyCode::Esc => Some(SetupStepOutcome::Cancel),
+                    KeyCode::Esc => {
+                        if !flow.back() {
+                            Some(SetupStepOutcome::Cancel)
+                        } else {
+                            None
+                        }
+                    }
                     KeyCode::Backspace => {
                         flow.back();
                         None
@@ -1490,6 +1525,10 @@ impl App {
             self.input.take_for_submit();
             self.toggle_sidebar();
             return None;
+        }
+        if command == "/context" {
+            self.presentation
+                .push_notice(self.sidebar.advanced_context_text());
         }
         if command == "/safety" {
             self.input.take_for_submit();

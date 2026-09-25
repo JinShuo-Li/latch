@@ -2,15 +2,15 @@
   ──────────────────────────────────────────────────────────                                                        │WORK · 0 turns · 0s                        
   ASK   denied           not run     read-only inspection                                                           │on main                                    
   PLAN  denied           not run     produces a plan                                                                │                                           
-  WORK  policy-approved  required    implements and verifies                                                        │CONTEXT                                    
+  WORK  policy-approved  required    implements and verifies                                                        │TASK                                       
+                                                                                                                    │InProgress                                 
+                                                                                                                    │Implementation unchanged                   
+                                                                                                                    │Validation pending                         
                                                                                                                     │                                           
-                                                                                                                    │TASK                                       
+                                                                                                                    │CONTEXT                                    
                                                                                                                     │                                           
-                                                                                                                    │RUN                                        
                                                                                                                     │                                           
-                                                                                                                    │SESSION                                    
                                                                                                                     │                                           
-                                                                                                                    │CHANGES                                    
                                                                                                                     │                                           
                                                                                                                                                                 
                                                                                                                                                                 

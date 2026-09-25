@@ -221,6 +221,7 @@ fn catalog_model_ref(descriptor: &ModelDescriptor) -> CatalogModel {
 pub struct SessionInfo {
     pub profile: InferenceProfile,
     pub descriptor: ModelDescriptor,
+    pub needs_setup: bool,
 }
 
 pub struct BuiltSession {
@@ -451,15 +452,18 @@ pub async fn build_agent(
         overridden = true;
     }
     let (profile, descriptor) = configuration(context.resolve(&requested))?;
-    let provider = match context.build(&profile, &descriptor, session_id) {
-        Ok(provider) => provider,
+    let (provider, needs_setup) = match context.build(&profile, &descriptor, session_id) {
+        Ok(provider) => (provider, false),
         Err(error) if interactive => {
             // First-run UX: rather than failing before the TUI can offer
             // /setup, start the session with an actionable stub provider.
             tracing::warn!("{error:#}");
-            Arc::new(UnconfiguredProvider {
-                message: format!("{error:#}"),
-            })
+            (
+                Arc::new(UnconfiguredProvider {
+                    message: format!("{error:#}"),
+                }) as Arc<dyn ModelProvider>,
+                true,
+            )
         }
         Err(error) => return Err(SessionBuildError::Configuration(error)),
     };
@@ -569,6 +573,7 @@ pub async fn build_agent(
         info: SessionInfo {
             profile,
             descriptor,
+            needs_setup,
         },
         context,
         restored,

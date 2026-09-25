@@ -2,37 +2,25 @@ deepseek-flash
 WORK · 1 turns · 12m
 on main
 
-CONTEXT
-Working set  ≈48.1k / 256k tok
-██████░░░░░░░░░░░░░░░░░░░░░░░░░░
-Recent      37.9k tok
-State       3.3k tok
-Recall      1.5k tok
-Tools+ext   2.4k tok
-Reserve     12.2k tok
-Headroom    195.7k tok
-Reported    last request 428.6k tok
-Measured    66% cache hit · 286.1k hit · …
-503 events · 11 episodes
-
 TASK
 TTL cache implementation
 ● Implementing
-Validations  0 / 2
+Implementation changed
+Validation pending
 
 RUN
-time        …
-requests    1
-tools       0
-in          428.6k
-out         31.4k
-cache       286.1k read · 142.5k miss
-replay      0 cumulative · 0 last
-tool args   0 cumulative · 0 last
-tool result 0 cumulative · 0 last
-files       0 read · 2 changed
-validations 0
+running
+1 req · 0 tools · … · in 428.6k out 31.4k
+
+CONTEXT
+Working set  ≈48.1k / 256k tok
+██████░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 SESSION
 in 428.6k · out 31.4k
 est. cost   $0.06
+
+CHANGES
+Latch      1 file
+Shell      1 file
+External   1 file

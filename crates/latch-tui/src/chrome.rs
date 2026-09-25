@@ -369,7 +369,7 @@ fn capture_surface_lines(capture: &CaptureState, width: usize) -> Vec<Line<'stat
     }
     lines.push(surface_blank(width));
     lines.push(surface_text(
-        "enter confirm · esc cancel".to_owned(),
+        "enter confirm · esc back".to_owned(),
         notice_style(),
         width,
         2,

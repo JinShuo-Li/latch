@@ -518,9 +518,10 @@ paths: `last_sequence` for watermarks, `events_after`/`events_before`/
 `events_of_kinds` for targeted replay (approvals, failed tool lineages, change
 ownership, process starts), and `latest_event_of_kinds` for compact
 boundaries. `search_events` retrieves FTS-matched rows directly instead of
-loading and filtering the whole transcript, preserving the bounded FTS
-selection order (insertion order) before the bookkeeping-kind exclusion, so the
-same durable log always yields the same recall material.
+loading and filtering the whole transcript. Bounded FTS selection takes the
+newest matching rows first so a later correction remains recallable after many
+repeated terms, then presents selected events in chronological order. The same
+durable log always yields the same recall material.
 
 Live supervision keeps sequence cursors, so each turn feeds only newly
 appended events to the progress supervisor and the live sink. Equivalence and
@@ -601,7 +602,7 @@ remote side effects always classify as `Ask` first, even under Autonomous +
 All approved; hard deny (privileged/system-destructive) is independent of both
 profile and resolver and cannot be granted. Explicit capability requests
 (`capabilities: ["network"]`) are parsed from tool arguments; unknown names
-become `UnknownCapability` -> `Ask`.
+become `UnknownCapability` -> `Deny` because no executable sandbox grant exists.
 
 `AiReview` is a separate stateless provider call with no conversation history
 and no tools. It receives a short task summary, workspace, the exact command,
@@ -755,6 +756,11 @@ for Latch / Shell / Extension / External ownership. Optional user-configured
 `[models.<name>.pricing]` yields a clearly labeled estimated cost; missing
 components stay unavailable. The kernel forwards tool-appended durable events
 to the live sink so live and replay observe identical event order.
+The current-request label follows the latest durable `RunStarted.prompt` or
+`UserMessage`; canonical `TaskState.goal` stays separate. Run outcome does not
+imply task verification. The default sidebar shows task, implementation,
+validation, run, context utilization, usage, cost, and relevant changes;
+`/context` presents low-level cache and budget accounting.
 
 The composer (`latch-tui::composer`) is a real editor rather than a text field:
 the complete buffer is wrapped into grapheme-safe visual rows, an independent

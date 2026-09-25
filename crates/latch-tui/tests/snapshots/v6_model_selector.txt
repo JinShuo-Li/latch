@@ -2,15 +2,15 @@
                                                                                             │WORK · 0 turns             
                              ███     ████  ██████  █████ ██  ██                             │on main                    
                              ███    ██  ██   ██   ██     ██  ██                             │                           
-                             ███    ██████   ██   ██     ██████                             │CONTEXT                    
-                             ███    ██  ██   ██   ██     ██  ██                             │                           
-                             ██████ ██  ██   ██    █████ ██  ██                             │TASK                       
-                                a quiet terminal coding agent                               │                           
-                                                                                            │RUN                        
-             Ask Latch to inspect, change, or verify code. /help lists commands.            │                           
-                                                                                            │SESSION                    
+                             ███    ██████   ██   ██     ██████                             │TASK                       
+                             ███    ██  ██   ██   ██     ██  ██                             │InProgress                 
+                             ██████ ██  ██   ██    █████ ██  ██                             │Implementation unchanged   
+                                a quiet terminal coding agent                               │Validation pending         
                                                                                             │                           
-                                                                                            │CHANGES                    
+             Ask Latch to inspect, change, or verify code. /help lists commands.            │CONTEXT                    
+                                                                                            │                           
+                                                                                            │                           
+                                                                                            │                           
                                                                                                                         
   Inference profile · OpenCode Go                                                                                       
                                                                                                                         

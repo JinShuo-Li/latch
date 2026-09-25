@@ -272,6 +272,9 @@ async fn interactive_session(
     output_tx
         .send(Output::SetupCatalog(context.setup_catalog()))
         .await?;
+    if info.needs_setup {
+        output_tx.send(Output::SetupRequired).await?;
+    }
     // Policy chrome state, restored from durable events on resume.
     output_tx.send(Output::Safety(agent.safety())).await?;
     output_tx
