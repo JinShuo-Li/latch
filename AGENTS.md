@@ -25,8 +25,9 @@ the `latch` TUI (`cargo install --path crates/latch-cli` installs it).
 ## Commands
 
 The deterministic 0.2.2 reliability gate is `bash scripts/release-gate.sh`.
-CI installs Bubblewrap, ripgrep, and Python, probes the required sandbox
-namespaces and mounts, then runs:
+CI uses an ephemeral Ubuntu 24.04 runner, installs Bubblewrap, ripgrep, and
+Python, enables user namespaces there, probes the required sandbox namespaces
+and mounts, then runs:
 
 ```sh
 cargo fmt --all -- --check

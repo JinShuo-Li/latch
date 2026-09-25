@@ -9,11 +9,13 @@ env:
 
 jobs:
   reliability:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install deterministic test prerequisites
         run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep python3
+      - name: Enable Bubblewrap user namespaces on this runner
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

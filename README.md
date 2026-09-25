@@ -694,7 +694,8 @@ bash scripts/release-gate.sh
 
 It probes Bubblewrap and runs formatting, locked Clippy, kernel invariants,
 the full workspace test suite, and a locked release build. CI runs this same
-gate after installing Bubblewrap, ripgrep, and Python. Sandbox coverage fails
+gate after installing Bubblewrap, ripgrep, and Python and enabling user
+namespaces on its ephemeral Ubuntu runner. Sandbox coverage fails
 clearly when Bubblewrap cannot create the required namespaces. Live-model,
 paid-provider, benchmark, and long-session stress tests remain separate and
 are not counted as passing deterministic CI.
