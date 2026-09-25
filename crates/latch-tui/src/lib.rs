@@ -1076,10 +1076,10 @@ impl App {
             }
             if cancel {
                 self.capture = None;
-                if self.custom_setup.is_some() {
-                    self.custom_setup.as_mut().expect("checked above").back();
-                } else if self.known_setup.is_some() {
-                    self.known_setup.as_mut().expect("checked above").back();
+                if let Some(flow) = self.custom_setup.as_mut() {
+                    flow.back();
+                } else if let Some(flow) = self.known_setup.as_mut() {
+                    flow.back();
                 } else if let Some(center) = self.setup_center.as_mut() {
                     center.cancel_capture();
                 }

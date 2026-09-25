@@ -1750,7 +1750,7 @@ mod tests {
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.merge_discovered("deepseek", &["deepseek-flash".into(), "unknown".into()]);
         assert_eq!(center.providers[0].models.len(), 2);
-        assert!(center.providers[0].models[1].resolved == false);
+        assert!(!center.providers[0].models[1].resolved);
         assert_eq!(center.providers[0].discovered_ids.len(), 2);
         assert!(
             !center.providers[0]
