@@ -497,27 +497,10 @@ fn validate_effort_metadata(
             anyhow::anyhow!("provider {provider} model {model:?} gemini_thinking {error}")
         })?;
     }
-    if transport == TransportKind::Gemini {
-        // Gemini thinking forms are model-declared. An exposed level without a
-        // map must have a documented neutral expression; anything else is
-        // rejected here instead of silently dropping at request time.
-        for effort in &exposed {
-            if override_.effort_map.contains_key(effort) {
-                continue;
-            }
-            if gemini
-                .as_ref()
-                .and_then(|capability| capability.neutral(*effort))
-                .is_none()
-            {
-                anyhow::bail!(
-                    "provider {provider} model {model:?} exposes {} but the gemini transport cannot express it without an effort_map entry; map it explicitly or stop exposing it",
-                    effort.label()
-                );
-            }
-        }
-    }
     if override_.effort_map.is_empty() {
+        // No map: the adapter's neutral mapping applies. A level the declared
+        // capability cannot express emits no control (the model's own default
+        // applies), exactly like `provider default`.
         return Ok(());
     }
     let forms = match transport {
@@ -1499,8 +1482,9 @@ mod tests {
             "{error}"
         );
 
-        // A builtin Gemini model that cannot express an exposed effort without
-        // a map is rejected rather than silently dropping it.
+        // An exposed level the capability cannot express without a map keeps
+        // validating: without a map the adapter emits no control and the
+        // model's own default applies, exactly like `provider default`.
         let config: Config = toml::from_str(
             r#"
             [providers.zen]
@@ -1511,11 +1495,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let error = config.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("cannot express it without an effort_map entry"),
-            "{error}"
-        );
+        config.validate().unwrap();
     }
 
     #[test]
@@ -1590,7 +1570,8 @@ mod tests {
             "{error}"
         );
 
-        // Exposing an effort without a map is equally rejected.
+        // Exposing an effort without a map is allowed: the adapter omits the
+        // control and the model's own default applies.
         let config: Config = toml::from_str(
             r#"
             [providers.custom]
@@ -1603,11 +1584,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let error = config.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("cannot express it without an effort_map entry"),
-            "{error}"
-        );
+        config.validate().unwrap();
 
         // The capability belongs to the Gemini transport only.
         let config: Config = toml::from_str(
