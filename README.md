@@ -59,6 +59,9 @@ provider saves preserve it. A running session's `/model` choice is separate.
 
 Credentials are symbolic (`env:NAME`, `file:NAME`, or `keyring:NAME`) and are
 never stored in the config, the durable event log, the transcript, or logs.
+Setup stages and syncs config and secrets before Save. A stored key is committed
+first, so an interrupted save cannot leave config pointing at an uncommitted
+secret; a failed config commit may leave an unused secret for later cleanup.
 The legacy single `[provider]` table (and global `[models.*]` metadata) still
 loads and migrates automatically, so existing configs keep working. Provider
 requests identify as `latch/0.2.2`; OpenCode Go endpoints additionally receive

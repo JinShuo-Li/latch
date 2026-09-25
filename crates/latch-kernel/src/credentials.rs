@@ -122,6 +122,11 @@ pub struct CredentialStore {
     values: BTreeMap<String, String>,
 }
 
+pub struct StagedCredentialWrite {
+    file: tempfile::NamedTempFile,
+    values: BTreeMap<String, String>,
+}
+
 impl std::fmt::Debug for CredentialStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CredentialStore")
@@ -195,6 +200,11 @@ impl CredentialStore {
 
     /// Stores a secret under `name` and flushes the file with `0600` mode.
     pub fn set(&mut self, name: &str, value: &str) -> Result<()> {
+        let staged = self.stage_set(name, value)?;
+        self.commit_staged(staged)
+    }
+
+    pub fn stage_set(&self, name: &str, value: &str) -> Result<StagedCredentialWrite> {
         let name = name.trim();
         if name.is_empty() {
             bail!("secret name must not be empty");
@@ -202,8 +212,31 @@ impl CredentialStore {
         if value.is_empty() {
             bail!("secret value must not be empty");
         }
-        self.values.insert(name.to_owned(), value.to_owned());
-        self.flush()
+        let mut values = self.values.clone();
+        values.insert(name.to_owned(), value.to_owned());
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        crate::paths::ResolvedPaths::ensure_private_root(parent)?;
+        let text = toml::to_string(&SecretsFile {
+            secrets: values.clone(),
+        })
+        .context("serialize secrets")?;
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        file.write_all(text.as_bytes())?;
+        file.as_file().sync_all()?;
+        Ok(StagedCredentialWrite { file, values })
+    }
+
+    pub fn commit_staged(&mut self, staged: StagedCredentialWrite) -> Result<()> {
+        let StagedCredentialWrite { file, values } = staged;
+        file.persist(&self.path)
+            .map_err(|error| error.error)
+            .with_context(|| format!("replace {}", self.path.display()))?;
+        if let Some(parent) = self.path.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+        self.values = values;
+        Ok(())
     }
 
     /// Removes a secret. Returns whether it existed.

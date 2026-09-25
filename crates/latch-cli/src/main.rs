@@ -515,20 +515,14 @@ fn persist_setup(
     if model.trim().is_empty() {
         bail!("provider {provider_id:?} needs a default_model before saving");
     }
-    let credential_ref = match credential {
-        SetupCredential::Env(name) => CredentialRef::Env(name),
-        SetupCredential::Secret(secret) => {
-            context.credentials.set(&provider_id, &secret)?;
-            CredentialRef::File(provider_id.clone())
-        }
+    let (credential_ref, secret_value) = match credential {
+        SetupCredential::Env(name) => (CredentialRef::Env(name), None),
+        SetupCredential::Secret(secret) => (CredentialRef::File(provider_id.clone()), Some(secret)),
     };
     // Semantic update: an existing entry keeps its model metadata, display
     // name, and discovery flag; only the fields the flow owns are replaced.
-    let entry = context
-        .config
-        .providers
-        .entry(provider_id.clone())
-        .or_default();
+    let mut candidate = context.config.clone();
+    let entry = candidate.providers.entry(provider_id.clone()).or_default();
     if entry.kind != kind {
         // A kind change invalidates kind-specific built-in model overrides.
         entry.models.clear();
@@ -537,34 +531,48 @@ fn persist_setup(
     entry.base_url = base_url;
     entry.credential = Some(credential_ref.display());
     entry.default_model = Some(model.clone());
-    let valid_inference = context
-        .config
+    let valid_inference = candidate
         .inference
         .provider
         .as_deref()
-        .zip(context.config.inference.model.as_deref())
+        .zip(candidate.inference.model.as_deref())
         .is_some_and(|(provider, model)| {
-            ProviderRegistry::from_config(&context.config)
+            ProviderRegistry::from_config(&candidate)
                 .ok()
                 .and_then(|registry| {
                     registry
                         .resolve_profile(&InferenceProfile::new(
                             provider,
                             model,
-                            context.config.inference.effort,
+                            candidate.inference.effort,
                         ))
                         .ok()
                 })
                 .is_some()
         });
     if !valid_inference {
-        context.config.inference = InferenceConfig {
+        candidate.inference = InferenceConfig {
             provider: Some(provider_id.clone()),
             model: Some(model.clone()),
             effort,
         };
     }
-    save_config(context)?;
+    ProviderRegistry::from_config(&candidate)?.default_profile(&candidate)?;
+    let config_path = context
+        .config_path
+        .clone()
+        .or_else(Config::default_path)
+        .ok_or_else(|| anyhow!("cannot resolve configuration path"))?;
+    let staged_config = candidate.stage(&config_path)?;
+    let staged_secret = secret_value
+        .as_deref()
+        .map(|value| context.credentials.stage_set(&provider_id, value))
+        .transpose()?;
+    if let Some(staged) = staged_secret {
+        context.credentials.commit_staged(staged)?;
+    }
+    Config::commit_stage(staged_config, &config_path)?;
+    context.config = candidate;
     Ok((provider_id, model, effort))
 }
 
@@ -942,6 +950,86 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn setup_validation_failure_writes_neither_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let state_dir = dir.path().join("state");
+        let config = Config {
+            state_dir: state_dir.clone(),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
+        let plan = setup_plan(
+            "bad-custom",
+            "openai-compatible",
+            SetupCredential::Secret("private-value".into()),
+            "custom-model",
+            ReasoningEffort::ProviderDefault,
+        );
+        assert!(persist_setup(&mut context, &plan).is_err());
+        assert!(!config_path.exists());
+        assert!(!CredentialStore::default_path(&state_dir).exists());
+        assert!(context.config.providers.is_empty());
+    }
+
+    #[test]
+    fn secret_commit_failure_keeps_previous_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let state_dir = dir.path().join("state");
+        let config = Config {
+            state_dir: state_dir.clone(),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
+        std::fs::write(&config_path, "previous config").unwrap();
+        std::fs::create_dir_all(CredentialStore::default_path(&state_dir)).unwrap();
+        let plan = setup_plan(
+            "deepseek",
+            "deepseek",
+            SetupCredential::Secret("private-value".into()),
+            "deepseek-flash",
+            ReasoningEffort::Low,
+        );
+        assert!(persist_setup(&mut context, &plan).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&config_path).unwrap(),
+            "previous config"
+        );
+        assert!(context.config.providers.is_empty());
+    }
+
+    #[test]
+    fn config_commit_failure_may_leave_only_an_orphan_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let state_dir = dir.path().join("state");
+        let config = Config {
+            state_dir: state_dir.clone(),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
+        std::fs::create_dir(&config_path).unwrap();
+        let plan = setup_plan(
+            "deepseek",
+            "deepseek",
+            SetupCredential::Secret("private-value".into()),
+            "deepseek-flash",
+            ReasoningEffort::Low,
+        );
+        assert!(persist_setup(&mut context, &plan).is_err());
+        assert!(config_path.is_dir());
+        assert!(context.config.providers.is_empty());
+        assert_eq!(
+            CredentialStore::open(CredentialStore::default_path(&state_dir))
+                .unwrap()
+                .require(&CredentialRef::File("deepseek".into()))
+                .unwrap(),
+            "private-value"
+        );
     }
 
     fn setup_plan(

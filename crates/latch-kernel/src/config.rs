@@ -660,6 +660,13 @@ impl Config {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
+        let staged = self.stage(path)?;
+        Self::commit_stage(staged, path)
+    }
+
+    /// Stage a complete config in its target directory. The returned file is
+    /// removed automatically if validation or a later stage fails.
+    pub fn stage(&self, path: &Path) -> Result<tempfile::NamedTempFile> {
         let mut canonical = self.clone();
         canonical.normalize();
         let text = toml::to_string_pretty(&canonical).context("serialize config")?;
@@ -673,9 +680,24 @@ impl Config {
             }
             .with_context(|| format!("create {}", parent.display()))?;
         }
-        let temp = path.with_extension("toml.tmp");
-        std::fs::write(&temp, text).with_context(|| format!("write {}", temp.display()))?;
-        std::fs::rename(&temp, path).with_context(|| format!("replace {}", path.display()))?;
+        use std::io::Write;
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut temp = tempfile::NamedTempFile::new_in(parent)
+            .with_context(|| format!("stage config in {}", parent.display()))?;
+        temp.write_all(text.as_bytes())
+            .context("write staged config")?;
+        temp.as_file().sync_all().context("sync staged config")?;
+        Ok(temp)
+    }
+
+    pub fn commit_stage(staged: tempfile::NamedTempFile, path: &Path) -> Result<()> {
+        staged
+            .persist(path)
+            .map_err(|error| error.error)
+            .with_context(|| format!("replace {}", path.display()))?;
+        if let Some(parent) = path.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
         Ok(())
     }
 }
