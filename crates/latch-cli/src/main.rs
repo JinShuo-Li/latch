@@ -685,6 +685,28 @@ fn set_provider_credential(
     Ok(())
 }
 
+fn set_enabled_models(context: &mut InferenceContext, name: &str, models: &[String]) -> Result<()> {
+    if models.is_empty() {
+        bail!("provider {name:?} must enable at least one model");
+    }
+    let mut candidate = context.config.clone();
+    let profile = candidate
+        .providers
+        .get_mut(name)
+        .ok_or_else(|| anyhow!("no provider named {name:?}"))?;
+    profile.enabled_models = Some(models.to_vec());
+    candidate.validate()?;
+    let path = context
+        .config_path
+        .clone()
+        .or_else(Config::default_path)
+        .ok_or_else(|| anyhow!("cannot resolve configuration path"))?;
+    candidate.save(&path)?;
+    context.registry = ProviderRegistry::from_config(&candidate)?;
+    context.config = candidate;
+    Ok(())
+}
+
 /// Persists a `/setup` plan and applies the resulting change live.
 async fn apply_setup(
     agent: &mut Agent,
@@ -694,6 +716,15 @@ async fn apply_setup(
     workspace: &Path,
     resumed: bool,
 ) -> Result<()> {
+    if let SetupPlan::SetEnabledModels { name, models } = &plan {
+        set_enabled_models(context, name, models)?;
+        tx.send(Output::InferenceCatalog(context.catalog())).await?;
+        tx.send(Output::SetupProviders(context.setup_providers()))
+            .await?;
+        tx.send(Output::Notice(format!("{name} model selection saved")))
+            .await?;
+        return Ok(());
+    }
     if let SetupPlan::SetCredential { name, credential } = &plan {
         set_provider_credential(context, name, credential)?;
         agent.set_provider_factory(context.provider_factory());
@@ -1199,6 +1230,53 @@ mod tests {
         let config_text = std::fs::read_to_string(path).unwrap();
         assert!(config_text.contains("file:deepseek"));
         assert!(!config_text.contains("private-value"));
+    }
+
+    #[test]
+    fn model_selection_preserves_overrides_and_rejects_disabling_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &SetupPlan::Apply {
+                name: "deepseek".into(),
+                provider_kind: "deepseek".into(),
+                base_url: None,
+                credential: SetupCredential::Env("DEEPSEEK_API_KEY".into()),
+                model: "deepseek-flash".into(),
+                enabled_models: Some(vec!["deepseek-flash".into()]),
+                custom_model_display_name: None,
+                custom_transport: None,
+                effort: ReasoningEffort::ProviderDefault,
+            },
+        )
+        .unwrap();
+        context.registry = ProviderRegistry::from_config(&context.config).unwrap();
+        assert!(set_enabled_models(&mut context, "deepseek", &["deepseek-v4-pro".into()]).is_err());
+        assert_eq!(
+            context.config.providers["deepseek"]
+                .enabled_models
+                .as_ref()
+                .unwrap(),
+            &vec!["deepseek-flash".to_owned()]
+        );
+        set_enabled_models(
+            &mut context,
+            "deepseek",
+            &["deepseek-flash".into(), "deepseek-v4-pro".into()],
+        )
+        .unwrap();
+        assert_eq!(context.setup_providers()[0].model_count, 2);
+        assert!(
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("deepseek-v4-pro")
+        );
     }
 
     #[test]

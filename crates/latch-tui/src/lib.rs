@@ -1125,6 +1125,13 @@ impl App {
                         model,
                     }));
                 }
+                Some(CenterAction::SetEnabledModels { name, models }) => {
+                    self.setup_center = None;
+                    return Some(Action::SetupApply(SetupPlan::SetEnabledModels {
+                        name,
+                        models,
+                    }));
+                }
                 Some(other) => {
                     self.presentation
                         .push_notice(format!("{other:?} is not available yet"));

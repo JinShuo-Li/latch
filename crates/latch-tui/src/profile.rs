@@ -135,6 +135,8 @@ pub enum SetupPlan {
         name: String,
         credential: SetupCredential,
     },
+    /// Replace the provider's enabled model set; metadata overrides are kept.
+    SetEnabledModels { name: String, models: Vec<String> },
 }
 
 /// One configured provider instance shown by the removal surface.

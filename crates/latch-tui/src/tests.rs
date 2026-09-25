@@ -948,6 +948,7 @@ fn setup_provider_list_renders_status_and_windows_long_lists() {
                 default_model: "deepseek-flash".into(),
                 credential_ref: format!("env:KEY_{index:02}"),
                 available_models: vec!["deepseek-flash".into()],
+                models: vec![],
             })
             .collect(),
     ));
@@ -2920,6 +2921,7 @@ fn setup_credential_editor_masks_and_emits_recovery_action() {
         default_model: "deepseek-flash".into(),
         credential_ref: "file:deepseek".into(),
         available_models: vec!["deepseek-flash".into()],
+        models: vec![],
     }]));
     app.input.set_text("/setup");
     app.submit_action();

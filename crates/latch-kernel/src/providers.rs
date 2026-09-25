@@ -1162,6 +1162,23 @@ impl ProviderProfile {
             .collect()
     }
 
+    /// All catalog and custom entries, including unresolved and disabled
+    /// models. The configuration center needs these for selection editing.
+    #[must_use]
+    pub fn setup_models(&self) -> Vec<(&ModelDescriptor, bool)> {
+        self.models
+            .iter()
+            .map(|(id, model)| {
+                (
+                    model,
+                    self.enabled_models
+                        .as_ref()
+                        .is_none_or(|selected| selected.contains(id)),
+                )
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn configured_model_count(&self) -> usize {
         self.models

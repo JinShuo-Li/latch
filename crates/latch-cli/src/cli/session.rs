@@ -16,7 +16,7 @@ use latch_kernel::{
     session,
 };
 use latch_protocol::{EventPayload, InferenceProfile, MediaRef, Mode, ProviderId, ReasoningEffort};
-use latch_tui::configuration_center::{ProviderStatus, ProviderSummary};
+use latch_tui::configuration_center::{ProviderModelSummary, ProviderStatus, ProviderSummary};
 use latch_tui::{CatalogModel, CatalogProvider, InferenceCatalog, SetupKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -103,7 +103,11 @@ impl InferenceContext {
                 let unresolved = profile.default_model.is_empty()
                     || default
                         .as_ref()
-                        .is_none_or(|descriptor| !descriptor.resolved);
+                        .is_none_or(|descriptor| !descriptor.resolved)
+                    || profile
+                        .setup_models()
+                        .iter()
+                        .any(|(descriptor, enabled)| *enabled && !descriptor.resolved);
                 let status = if !credential_ready {
                     ProviderStatus::MissingCredential
                 } else if unresolved {
@@ -123,6 +127,16 @@ impl InferenceContext {
                         .available_models()
                         .into_iter()
                         .map(|model| model.model.clone())
+                        .collect(),
+                    models: profile
+                        .setup_models()
+                        .into_iter()
+                        .map(|(model, enabled)| ProviderModelSummary {
+                            id: model.model.clone(),
+                            display_name: model.display_name.clone(),
+                            enabled,
+                            resolved: model.resolved,
+                        })
                         .collect(),
                 }
             })

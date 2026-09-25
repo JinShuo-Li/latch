@@ -4,6 +4,7 @@
 //! model discovery, and persistence belong to the CLI/kernel.
 
 use crate::profile::{ChoiceRow, SetupCredential, SetupKind};
+use std::collections::BTreeSet;
 mod known;
 pub use known::{KnownPhase, KnownProviderFlow};
 
@@ -35,6 +36,15 @@ pub struct ProviderSummary {
     pub credential_ref: String,
     /// Enabled models with resolved transport, eligible as provider defaults.
     pub available_models: Vec<String>,
+    pub models: Vec<ProviderModelSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelSummary {
+    pub id: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub resolved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +53,7 @@ pub enum CenterPage {
     AddKind,
     Provider(String),
     Credential(String),
+    Models(String),
     DefaultModel(String),
     RemoveConfirm(String),
 }
@@ -51,7 +62,7 @@ pub enum CenterPage {
 pub enum CenterAction {
     StartAdd(String),
     EditCredential { name: String, secret: bool },
-    EditModels(String),
+    SetEnabledModels { name: String, models: Vec<String> },
     SetProviderDefault { name: String, model: String },
     EditAdvanced(String),
     SetNewSessionDefault(String),
@@ -64,6 +75,7 @@ pub struct ConfigurationCenter {
     kinds: Vec<SetupKind>,
     page: CenterPage,
     selected: usize,
+    draft_models: BTreeSet<String>,
 }
 
 impl ConfigurationCenter {
@@ -73,6 +85,7 @@ impl ConfigurationCenter {
             kinds,
             page: CenterPage::Providers,
             selected: 0,
+            draft_models: BTreeSet::new(),
         }
     }
 
@@ -86,6 +99,7 @@ impl ConfigurationCenter {
             CenterPage::AddKind => "Setup · add provider".to_owned(),
             CenterPage::Provider(id) => format!("Setup · {id}"),
             CenterPage::Credential(id) => format!("Setup · {id} · Credential"),
+            CenterPage::Models(id) => format!("Setup · {id} · Models"),
             CenterPage::DefaultModel(id) => format!("Setup · {id} · Default model"),
             CenterPage::RemoveConfirm(id) => format!("Setup · remove {id}"),
         }
@@ -154,6 +168,36 @@ impl ConfigurationCenter {
                     ),
                 ]
             }
+            CenterPage::Models(id) => self
+                .providers
+                .iter()
+                .find(|provider| &provider.id == id)
+                .map(|provider| {
+                    provider
+                        .models
+                        .iter()
+                        .map(|model| {
+                            let status = if !model.resolved { "unresolved" } else { "" };
+                            (
+                                format!(
+                                    "{} {}",
+                                    if self.draft_models.contains(&model.id) {
+                                        "[x]"
+                                    } else {
+                                        "[ ]"
+                                    },
+                                    model.display_name
+                                ),
+                                format!("{} {status}", model.id),
+                            )
+                        })
+                        .chain(std::iter::once((
+                            "Save model selection".to_owned(),
+                            format!("{} selected", self.draft_models.len()),
+                        )))
+                        .collect()
+                })
+                .unwrap_or_default(),
             CenterPage::DefaultModel(id) => self
                 .providers
                 .iter()
@@ -215,6 +259,7 @@ impl ConfigurationCenter {
             CenterPage::AddKind | CenterPage::Provider(_) => CenterPage::Providers,
             CenterPage::DefaultModel(id) => CenterPage::Provider(id.clone()),
             CenterPage::Credential(id) => CenterPage::Provider(id.clone()),
+            CenterPage::Models(id) => CenterPage::Provider(id.clone()),
             CenterPage::RemoveConfirm(id) => CenterPage::Provider(id.clone()),
         };
         self.selected = 0;
@@ -243,7 +288,20 @@ impl ConfigurationCenter {
                         self.selected = 0;
                         None
                     }
-                    1 => Some(CenterAction::EditModels(id)),
+                    1 => {
+                        self.draft_models = self
+                            .providers
+                            .iter()
+                            .find(|provider| provider.id == id)?
+                            .models
+                            .iter()
+                            .filter(|model| model.enabled)
+                            .map(|model| model.id.clone())
+                            .collect();
+                        self.page = CenterPage::Models(id);
+                        self.selected = 0;
+                        None
+                    }
                     2 => {
                         self.page = CenterPage::DefaultModel(id);
                         self.selected = 0;
@@ -280,6 +338,28 @@ impl ConfigurationCenter {
                 name: id.clone(),
                 secret: self.selected == 1,
             }),
+            CenterPage::Models(id) => {
+                let provider = self.providers.iter().find(|provider| &provider.id == id)?;
+                if self.selected == provider.models.len() {
+                    if self.draft_models.is_empty()
+                        || !self.draft_models.contains(&provider.default_model)
+                    {
+                        return None;
+                    }
+                    return Some(CenterAction::SetEnabledModels {
+                        name: id.clone(),
+                        models: self.draft_models.iter().cloned().collect(),
+                    });
+                }
+                let model = provider.models.get(self.selected)?;
+                if model.id == provider.default_model {
+                    return None;
+                }
+                if !self.draft_models.remove(&model.id) {
+                    self.draft_models.insert(model.id.clone());
+                }
+                None
+            }
         }
     }
 
@@ -326,6 +406,7 @@ mod tests {
             default_model: "deepseek-flash".into(),
             credential_ref: "file:deepseek".into(),
             available_models: vec!["deepseek-flash".into()],
+            models: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         assert!(
@@ -338,10 +419,8 @@ mod tests {
         assert_eq!(center.page(), &CenterPage::Provider("deepseek".into()));
         assert_eq!(center.rows()[0].description, "file:deepseek");
         center.down();
-        assert_eq!(
-            center.confirm(),
-            Some(CenterAction::EditModels("deepseek".into()))
-        );
+        assert_eq!(center.confirm(), None);
+        assert_eq!(center.page(), &CenterPage::Models("deepseek".into()));
     }
 
     #[test]
@@ -355,6 +434,7 @@ mod tests {
             default_model: "deepseek-flash".into(),
             credential_ref: "env:DEEPSEEK_API_KEY".into(),
             available_models: vec!["deepseek-flash".into()],
+            models: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();
@@ -380,6 +460,7 @@ mod tests {
             default_model: "deepseek-flash".into(),
             credential_ref: "env:DEEPSEEK_API_KEY".into(),
             available_models: vec!["deepseek-flash".into(), "deepseek-v4-pro".into()],
+            models: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();
@@ -410,6 +491,7 @@ mod tests {
             default_model: "deepseek-flash".into(),
             credential_ref: "file:deepseek".into(),
             available_models: vec!["deepseek-flash".into()],
+            models: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();
@@ -442,6 +524,53 @@ mod tests {
     }
 
     #[test]
+    fn model_editor_keeps_default_enabled_and_shows_unresolved_entries() {
+        let provider = ProviderSummary {
+            id: "custom".into(),
+            display_name: "Custom".into(),
+            kind: "custom".into(),
+            status: ProviderStatus::UnresolvedModels,
+            model_count: 1,
+            default_model: "ready".into(),
+            credential_ref: "env:CUSTOM_KEY".into(),
+            available_models: vec!["ready".into()],
+            models: vec![
+                ProviderModelSummary {
+                    id: "ready".into(),
+                    display_name: "Ready".into(),
+                    enabled: true,
+                    resolved: true,
+                },
+                ProviderModelSummary {
+                    id: "unknown".into(),
+                    display_name: "Unknown".into(),
+                    enabled: false,
+                    resolved: false,
+                },
+            ],
+        };
+        let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
+        center.down();
+        center.confirm();
+        center.down();
+        center.confirm();
+        assert_eq!(center.page(), &CenterPage::Models("custom".into()));
+        assert!(center.rows()[1].description.contains("unresolved"));
+        center.confirm(); // Default cannot be deselected.
+        assert!(center.rows()[0].label.starts_with("[x]"));
+        center.down();
+        center.confirm(); // Enable unresolved in setup only.
+        center.down();
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::SetEnabledModels {
+                name: "custom".into(),
+                models: vec!["ready".into(), "unknown".into()],
+            })
+        );
+    }
+
+    #[test]
     fn explicit_new_session_default_emits_a_distinct_action() {
         let provider = ProviderSummary {
             id: "deepseek".into(),
@@ -452,6 +581,7 @@ mod tests {
             default_model: "deepseek-flash".into(),
             credential_ref: "env:DEEPSEEK_API_KEY".into(),
             available_models: vec!["deepseek-flash".into()],
+            models: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();
