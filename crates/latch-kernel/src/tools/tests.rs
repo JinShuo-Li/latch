@@ -1893,7 +1893,10 @@ async fn managed_process_start_poll_and_terminate() {
     // issued; it does not test patience with an unkillable process. Keeping
     // its natural lifetime short bounds the test's worst case: when the
     // sandbox leader is killed but a namespaced grandchild still holds the
-    // output pipes, teardown waits for the grandchild to exit.
+    // output pipes, teardown waits for the grandchild to exit. The bound is a
+    // hang detector, not a product latency SLA, so it stays generous enough
+    // that a loaded parallel workspace suite (many sandbox spawns at once)
+    // cannot turn scheduling delay into a false failure.
     let long = e
         .execute(
             &call("exec_start", json!({"command":"sleep 0.5"})),
@@ -1902,14 +1905,14 @@ async fn managed_process_start_poll_and_terminate() {
         .await;
     let long_id = long.output.split_whitespace().nth(1).unwrap().to_owned();
     let terminated = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(20),
         e.execute(
             &call("exec_terminate", json!({"id": long_id})),
             CancellationToken::new(),
         ),
     )
     .await
-    .expect("managed-process fixture termination exceeded 5 seconds");
+    .expect("managed-process fixture termination exceeded 20 seconds");
     assert!(!terminated.is_error, "{}", terminated.output);
     assert!(
         terminated.output.contains("terminated"),
