@@ -284,6 +284,9 @@ async fn interactive_session(
     output_tx
         .send(Output::SetupCatalog(context.setup_catalog()))
         .await?;
+    output_tx
+        .send(Output::SetupProviders(context.setup_providers()))
+        .await?;
     if info.needs_setup {
         output_tx.send(Output::SetupRequired).await?;
     }
@@ -617,6 +620,9 @@ async fn apply_setup(
         // Rebuild the registry so the removal is reflected everywhere.
         context.registry = ProviderRegistry::from_config(&context.config)?;
         agent.set_provider_factory(context.provider_factory());
+        tx.send(Output::InferenceCatalog(context.catalog())).await?;
+        tx.send(Output::SetupProviders(context.setup_providers()))
+            .await?;
         match replacement {
             Some(requested) => {
                 let (profile, descriptor) = context.resolve(&requested)?;
@@ -653,6 +659,9 @@ async fn apply_setup(
     // matches what the next process will load.
     context.registry = ProviderRegistry::from_config(&context.config)?;
     agent.set_provider_factory(context.provider_factory());
+    tx.send(Output::InferenceCatalog(context.catalog())).await?;
+    tx.send(Output::SetupProviders(context.setup_providers()))
+        .await?;
     let requested = InferenceProfile::new(provider_id, model, effort);
     let (profile, descriptor) = context.resolve(&requested)?;
     let provider = context.build(&profile, &descriptor, agent.session_id)?;
@@ -973,6 +982,41 @@ mod tests {
         assert!(!config_path.exists());
         assert!(!CredentialStore::default_path(&state_dir).exists());
         assert!(context.config.providers.is_empty());
+    }
+
+    #[test]
+    fn setup_provider_rows_report_credential_status_without_secret_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config {
+            state_dir: dir.path().to_path_buf(),
+            ..Config::default()
+        };
+        config.providers.insert(
+            "deepseek".into(),
+            latch_kernel::config::ProviderProfileConfig {
+                kind: ProviderKind::DeepSeek,
+                credential: Some("file:deepseek".into()),
+                default_model: Some("deepseek-flash".into()),
+                ..Default::default()
+            },
+        );
+        let mut context = InferenceContext::new(config, None).unwrap();
+        let rows = context.setup_providers();
+        assert_eq!(
+            rows[0].status,
+            latch_tui::configuration_center::ProviderStatus::MissingCredential
+        );
+        context
+            .credentials
+            .set("deepseek", "private-value")
+            .unwrap();
+        let rows = context.setup_providers();
+        assert_eq!(
+            rows[0].status,
+            latch_tui::configuration_center::ProviderStatus::Ready
+        );
+        assert_eq!(rows[0].credential_ref, "file:deepseek");
+        assert!(!format!("{rows:?}").contains("private-value"));
     }
 
     #[test]

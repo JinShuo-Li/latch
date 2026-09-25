@@ -48,6 +48,7 @@ mod session_picker;
 mod sidebar;
 use composer::display_width;
 pub use composer::{Composer, VisualRow};
+use configuration_center::{CenterAction, ConfigurationCenter, ProviderSummary};
 pub use diff::{DiffDocument, DiffFile, DiffHunk, DiffLine, DiffLineKind, parse_unified_diff};
 pub use presentation::{
     AgentOperation, Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel,
@@ -146,6 +147,7 @@ pub enum Output {
     InferenceCatalog(InferenceCatalog),
     /// Provider kinds and built-in models available to `/setup`.
     SetupCatalog(Vec<SetupKind>),
+    SetupProviders(Vec<ProviderSummary>),
     /// The provider cannot run until setup completes; open the guided flow.
     SetupRequired,
     /// The effective profile changed; update model/effort chrome.
@@ -382,6 +384,8 @@ struct App {
     profile_selector: Option<ProfileSelector>,
     /// Provider kinds available to `/setup`.
     setup_catalog: Vec<SetupKind>,
+    setup_providers: Vec<ProviderSummary>,
+    setup_center: Option<ConfigurationCenter>,
     /// Open guided setup flow.
     setup: Option<SetupFlow>,
     /// A composer text capture opened by the setup flow.
@@ -514,6 +518,8 @@ impl Default for App {
             inference_catalog: InferenceCatalog::default(),
             profile_selector: None,
             setup_catalog: Vec::new(),
+            setup_providers: Vec::new(),
+            setup_center: None,
             setup: None,
             capture: None,
             attachments: Vec::new(),
@@ -670,9 +676,13 @@ impl App {
             }
             Output::InferenceCatalog(catalog) => self.inference_catalog = catalog,
             Output::SetupCatalog(kinds) => self.setup_catalog = kinds,
+            Output::SetupProviders(providers) => self.setup_providers = providers,
             Output::SetupRequired => {
                 if !self.setup_catalog.is_empty() {
-                    self.setup = Some(SetupFlow::new(self.setup_catalog.clone()));
+                    self.setup_center = Some(ConfigurationCenter::new(
+                        self.setup_providers.clone(),
+                        self.setup_catalog.clone(),
+                    ));
                 }
             }
             Output::Inference {
@@ -982,10 +992,57 @@ impl App {
                     }
                     SetupStepOutcome::Apply(plan) => {
                         self.setup = None;
+                        self.setup_center = None;
                         return Some(Action::SetupApply(plan));
                     }
                     SetupStepOutcome::Cancel => self.setup = None,
                 }
+            }
+            return None;
+        }
+        if let Some(center) = self.setup_center.as_mut() {
+            let action = match key.code {
+                KeyCode::Esc => {
+                    if !center.back() {
+                        self.setup_center = None;
+                    }
+                    None
+                }
+                KeyCode::Backspace => {
+                    center.back();
+                    None
+                }
+                KeyCode::Up => {
+                    center.up();
+                    None
+                }
+                KeyCode::Down => {
+                    center.down();
+                    None
+                }
+                KeyCode::Enter => center.confirm(),
+                _ => None,
+            };
+            match action {
+                Some(CenterAction::StartAdd(kind)) => {
+                    if let Some(selected) = self.setup_catalog.iter().find(|item| item.kind == kind)
+                    {
+                        let mut flow = SetupFlow::new(vec![selected.clone()]);
+                        if let SetupStepOutcome::Capture(spec) = flow.confirm() {
+                            self.capture = Some(CaptureState::new(spec));
+                        }
+                        self.setup = Some(flow);
+                    }
+                }
+                Some(CenterAction::Remove(name)) => {
+                    self.setup_center = None;
+                    return Some(Action::SetupApply(SetupPlan::Remove { name }));
+                }
+                Some(other) => {
+                    self.presentation
+                        .push_notice(format!("{other:?} is not available yet"));
+                }
+                None => {}
             }
             return None;
         }
@@ -1579,17 +1636,10 @@ impl App {
                     .push_notice("provider setup is unavailable in this session");
                 return None;
             }
-            let configured = self
-                .inference_catalog
-                .providers
-                .iter()
-                .map(|provider| ConfiguredProvider {
-                    id: provider.id.clone(),
-                    model: provider.default_model.clone(),
-                })
-                .collect();
-            self.setup =
-                Some(SetupFlow::new(self.setup_catalog.clone()).with_providers(configured));
+            self.setup_center = Some(ConfigurationCenter::new(
+                self.setup_providers.clone(),
+                self.setup_catalog.clone(),
+            ));
             return None;
         }
         // A pending image must never be silently dropped for a model the

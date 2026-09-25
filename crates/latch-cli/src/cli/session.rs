@@ -16,6 +16,7 @@ use latch_kernel::{
     session,
 };
 use latch_protocol::{EventPayload, InferenceProfile, MediaRef, Mode, ProviderId, ReasoningEffort};
+use latch_tui::configuration_center::{ProviderStatus, ProviderSummary};
 use latch_tui::{CatalogModel, CatalogProvider, InferenceCatalog, SetupKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -84,6 +85,42 @@ pub struct InferenceContext {
 }
 
 impl InferenceContext {
+    pub fn setup_providers(&self) -> Vec<ProviderSummary> {
+        self.registry
+            .available_providers()
+            .into_iter()
+            .map(|profile| {
+                let model_count = self.registry.available_models(profile.id.as_str()).len();
+                let credential_ready = self
+                    .credentials
+                    .resolve(&profile.credential)
+                    .ok()
+                    .flatten()
+                    .is_some();
+                let default = self
+                    .registry
+                    .model_descriptor(profile.id.as_str(), &profile.default_model);
+                let unresolved = profile.default_model.is_empty()
+                    || default.as_ref().is_none_or(|descriptor| !descriptor.known);
+                let status = if !credential_ready {
+                    ProviderStatus::MissingCredential
+                } else if unresolved {
+                    ProviderStatus::UnresolvedModels
+                } else {
+                    ProviderStatus::Ready
+                };
+                ProviderSummary {
+                    id: profile.id.as_str().to_owned(),
+                    display_name: profile.display_name.clone(),
+                    kind: profile.kind.id().to_owned(),
+                    status,
+                    model_count,
+                    default_model: profile.default_model.clone(),
+                    credential_ref: profile.credential.display(),
+                }
+            })
+            .collect()
+    }
     pub fn new(config: Config, config_path: Option<PathBuf>) -> Result<Self> {
         let registry = ProviderRegistry::from_config(&config)?;
         let credentials = CredentialStore::open(CredentialStore::default_path(&config.state_dir))?;

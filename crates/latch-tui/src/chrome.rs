@@ -264,6 +264,15 @@ pub(super) fn action_surface_lines(app: &App, width: usize, height: u16) -> Vec<
         capture_surface_lines(capture, width)
     } else if let Some(flow) = &app.setup {
         setup_surface_lines(flow, width, height)
+    } else if let Some(center) = &app.setup_center {
+        choice_surface_lines(
+            center.title(),
+            &center.rows(),
+            "↑↓ select · enter open · esc back",
+            &[],
+            width,
+            height,
+        )
     } else if let Some(selector) = &app.profile_selector {
         profile_surface_lines(selector, width, height)
     } else if let Some(selector) = app.selector {

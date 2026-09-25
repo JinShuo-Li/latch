@@ -919,8 +919,45 @@ fn missing_provider_opens_guided_setup_immediately() {
         models: vec![],
     }]));
     app.output(Output::SetupRequired);
-    assert!(app.setup.is_some());
+    assert!(app.setup_center.is_some());
     assert!(render_to_text(&mut app, 80, 24).contains("Setup"));
+}
+
+#[test]
+fn setup_provider_list_renders_status_and_windows_long_lists() {
+    use crate::configuration_center::{ProviderStatus, ProviderSummary};
+    let mut app = App::default();
+    app.output(Output::SetupCatalog(vec![SetupKind {
+        kind: "deepseek".into(),
+        label: "DeepSeek".into(),
+        default_base_url: String::new(),
+        credential_label: "env:DEEPSEEK_API_KEY".into(),
+        default_model: "deepseek-flash".into(),
+        models: vec![],
+    }]));
+    app.output(Output::SetupProviders(
+        (0..30)
+            .map(|index| ProviderSummary {
+                id: format!("provider-{index:02}"),
+                display_name: format!("Provider {index:02}"),
+                kind: "deepseek".into(),
+                status: ProviderStatus::MissingCredential,
+                model_count: 2,
+                default_model: "deepseek-flash".into(),
+                credential_ref: format!("env:KEY_{index:02}"),
+            })
+            .collect(),
+    ));
+    app.input.set_text("/setup");
+    app.submit_action();
+    let initial = render_to_text(&mut app, 90, 22);
+    assert!(initial.contains("Add provider"));
+    assert!(initial.contains("missing credential"));
+    for _ in 0..30 {
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    }
+    let scrolled = render_to_text(&mut app, 90, 22);
+    assert!(scrolled.contains("Provider 29"), "{scrolled}");
 }
 
 #[test]
@@ -2805,7 +2842,8 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     }]));
     app.input.set_text("/setup");
     assert!(app.submit_action().is_none());
-    // Kind -> provider name capture, prefilled with the kind id.
+    // Provider list -> Add -> kind -> provider name capture.
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.capture.is_some());
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
@@ -2900,6 +2938,7 @@ fn snapshot_setup_review_surface_masks_the_credential() {
     }]));
     app.input.set_text("/setup");
     app.submit_action();
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // providers -> Add
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // kind -> name capture
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // accept default name
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // endpoint capture
