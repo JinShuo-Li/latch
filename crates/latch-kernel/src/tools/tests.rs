@@ -1844,6 +1844,27 @@ async fn read_artifact_supports_ranges_and_rejects_escape() {
 }
 
 #[tokio::test]
+async fn bounded_process_drain_never_waits_forever_on_a_held_pipe() {
+    // A pipe reader that can never see EOF (the writer stays alive) must be
+    // bounded and aborted, because a terminated sandbox can leave an orphan
+    // holding the write end.
+    let (reader, writer) = tokio::io::duplex(64);
+    let handle = tokio::spawn(async move {
+        let mut reader = reader;
+        let mut buffer = [0_u8; 16];
+        let _ = tokio::io::AsyncReadExt::read(&mut reader, &mut buffer).await;
+    });
+    let started = std::time::Instant::now();
+    super::process::drain_readers(vec![handle]).await;
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "bounded drain took {elapsed:?}"
+    );
+    drop(writer);
+}
+
+#[tokio::test]
 async fn managed_process_start_poll_and_terminate() {
     let (_d, e) = setup(Mode::Work);
     let started = e

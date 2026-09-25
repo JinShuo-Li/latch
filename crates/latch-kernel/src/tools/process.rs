@@ -3,6 +3,51 @@
 
 use super::*;
 
+/// How long a terminated or exited process's output readers may take to see
+/// EOF. Bubblewrap's namespace init can be interrupted before it execs the
+/// command and then block forever on its internal sync pipe, holding the
+/// inherited stdout/stderr write ends; a bounded drain keeps `exec_terminate`
+/// and `exec_poll` honest instead of hanging on that orphan.
+const PROCESS_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Best-effort SIGKILL for a sandbox leader's direct children. The namespace
+/// init is a direct child; signalling it before killing the leader prevents a
+/// mid-setup init from surviving as an orphan that holds the output pipes.
+/// Uses the system `kill` utility so no unsafe signal call is needed; if the
+/// utility is unavailable the bounded drain still bounds teardown.
+fn kill_direct_children(pid: Option<u32>) {
+    let Some(pid) = pid else { return };
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return;
+    };
+    for task in tasks.flatten() {
+        let Ok(children) = std::fs::read_to_string(task.path().join("children")) else {
+            continue;
+        };
+        for child in children.split_whitespace() {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", child])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
+/// Waits for the output readers with a bound, aborting a reader that can never
+/// reach EOF because an orphaned sandbox process still holds the pipe.
+pub(super) async fn drain_readers(readers: Vec<tokio::task::JoinHandle<()>>) {
+    for mut handle in readers {
+        if tokio::time::timeout(PROCESS_DRAIN_TIMEOUT, &mut handle)
+            .await
+            .is_err()
+        {
+            handle.abort();
+        }
+    }
+}
+
 impl ToolExecutor {
     /// Starts a persistent development process owned by the kernel. Output is
     /// buffered for `exec_poll`; lifecycle is durable so a resumed session can
@@ -93,9 +138,7 @@ impl ToolExecutor {
         {
             process.status = ProcessStatus::Exited(status.code().unwrap_or(-1));
             process.child = None;
-            for handle in process.readers.drain(..) {
-                let _ = handle.await;
-            }
+            drain_readers(std::mem::take(&mut process.readers)).await;
             self.finish_process(id, process).await?;
         }
         let full = process.output.lock().await.clone();
@@ -131,14 +174,13 @@ impl ToolExecutor {
         };
         if process.status == ProcessStatus::Running {
             if let Some(child) = process.child.as_mut() {
+                kill_direct_children(child.id());
                 child.kill().await.ok();
                 let _ = child.wait().await;
             }
             process.status = ProcessStatus::Killed;
             process.child = None;
-            for handle in process.readers.drain(..) {
-                let _ = handle.await;
-            }
+            drain_readers(std::mem::take(&mut process.readers)).await;
             self.finish_process(id, process).await?;
         }
         Ok((
