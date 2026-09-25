@@ -73,6 +73,8 @@ pub enum Commands {
     /// Check runtime prerequisites, configuration, and credentials without
     /// running a task or contacting the provider.
     Doctor(DoctorArgs),
+    /// Explicitly copy a legacy XDG installation into ~/.latch.
+    Migrate,
     /// Inspect internal prompt compilation and diagnostics without running a task.
     Debug {
         #[command(subcommand)]
@@ -250,5 +252,11 @@ mod tests {
         let args = Args::try_parse_from(["latch", "--resume", "--session", "deadbeef"]).unwrap();
         assert!(args.resume);
         assert_eq!(args.session.as_deref(), Some("deadbeef"));
+    }
+
+    #[test]
+    fn migrate_is_an_explicit_command() {
+        let args = Args::try_parse_from(["latch", "migrate"]).unwrap();
+        assert!(matches!(args.command, Some(Commands::Migrate)));
     }
 }

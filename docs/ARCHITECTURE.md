@@ -42,6 +42,15 @@ flowchart LR
 
 ## Providers and inference profiles
 
+`ResolvedPaths` (`kernel/src/paths.rs`) owns configuration and storage path
+discovery. New installations use a private `~/.latch/` root for config,
+secrets, SQLite sessions, artifacts, and regenerable cache data. When the new
+config is absent, an exact live XDG config is read in place. The explicit
+`latch migrate` command copies the SQLite database with SQLite's backup API
+and copies artifacts and secrets before publishing the new config. It writes a
+migration marker and renames legacy config and secrets to backup names so
+deleting the new config cannot reactivate the old installation.
+
 Provider handling is a layered subsystem, not a set of endpoint conditionals:
 
 ```text

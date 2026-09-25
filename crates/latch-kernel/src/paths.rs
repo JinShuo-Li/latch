@@ -29,6 +29,13 @@ pub struct ResolvedPaths {
 }
 
 impl ResolvedPaths {
+    #[must_use]
+    pub fn new_destination() -> Self {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let root = home.join(".latch");
+        Self::from_parts(root.join("config.toml"), root, PathSource::New, None)
+    }
+
     /// Create the storage root privately even with a permissive process umask.
     /// Existing roots are tightened because they can contain secret material.
     pub fn ensure_state_root(&self) -> io::Result<()> {
@@ -48,6 +55,11 @@ impl ResolvedPaths {
         #[cfg(not(unix))]
         std::fs::create_dir_all(root)?;
         Ok(())
+    }
+
+    #[must_use]
+    pub fn migration_marker(&self) -> PathBuf {
+        self.state_root.join("migration.toml")
     }
 
     #[must_use]
@@ -79,7 +91,10 @@ impl ResolvedPaths {
         let legacy_config = legacy_config_root.join("latch/config.toml");
         let source = if explicit_config.is_some() {
             PathSource::Explicit
-        } else if !new_config.exists() && legacy_config.exists() {
+        } else if !new_config.exists()
+            && !root.join("migration.toml").exists()
+            && legacy_config.exists()
+        {
             PathSource::Legacy
         } else {
             PathSource::New

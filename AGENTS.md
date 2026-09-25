@@ -86,7 +86,8 @@ bash scripts/release-gate.sh
 Runtime prerequisites are mandatory, not optional: system `bwrap` (all command
 execution is sandboxed; there is no unsandboxed fallback) and `rg` (the `search`
 tool; it must fail with an actionable message, never bare ENOENT). State lives in
-`~/.local/state/latch/`; config example is `config.example.toml`. Docker (or a
+`~/.latch/` by default; legacy XDG installs stay in place until `latch migrate`
+copies them. Config example is `config.example.toml`. Docker (or a
 compatible CLI via `DOCKER=…`) is required only for the optional dogfood harness,
 never by Latch itself.
 

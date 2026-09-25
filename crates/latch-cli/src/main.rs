@@ -53,9 +53,21 @@ async fn main() -> ExitCode {
         }
         Some(Commands::Sessions(sessions)) => cli::sessions::execute(&args, sessions).await,
         Some(Commands::Doctor(doctor)) => cli::doctor::execute(&args, doctor),
+        Some(Commands::Migrate) => legacy_exit(migrate(&args)),
         Some(Commands::Debug { command }) => legacy_exit(debug_dispatch(&args, command)),
         None => legacy_exit(run_legacy(args).await),
     }
+}
+
+fn migrate(args: &Args) -> Result<ExitCode> {
+    if args.config.is_some() {
+        bail!("latch migrate uses the discovered legacy XDG configuration; omit --config");
+    }
+    let source = latch_kernel::paths::ResolvedPaths::resolve(None, None);
+    let target = latch_kernel::paths::ResolvedPaths::new_destination();
+    latch_kernel::migration::migrate_legacy(&source, &target)?;
+    println!("Migrated Latch storage to {}", target.state_root.display());
+    Ok(ExitCode::SUCCESS)
 }
 
 fn legacy_exit(result: Result<ExitCode>) -> ExitCode {

@@ -10,6 +10,7 @@ pub mod credentials;
 pub mod extension;
 pub mod linediff;
 pub mod media;
+pub mod migration;
 pub mod paths;
 pub mod permissions;
 pub mod progress;

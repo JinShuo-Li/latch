@@ -106,8 +106,12 @@ workspace clearly changes Latch to that session's persisted workspace. Resume
 restores the visible transcript, effective mode (override with `--mode work`),
 task state, evidence, failure streaks, provider session UUID, continuity, and
 change ownership without re-running historical tools. Session metadata lives
-under `~/.local/state/latch/` by default; large output is stored in its
-`artifacts/` tree.
+under `~/.latch/` by default, with the database at `latch.sqlite3` and large
+output under `artifacts/`. Existing XDG installs (`~/.config/latch/config.toml`
+and `~/.local/state/latch/`) continue to run in place until `latch migrate`
+explicitly copies them. Migration keeps backups and records its source in
+`~/.latch/migration.toml`. Removing the new config after migration starts fresh
+setup; it does not reopen the old config.
 
 Child agents are independent sessions and are omitted from the ordinary root
 session picker. Resuming a root reconstructs its durable child graph; a child
