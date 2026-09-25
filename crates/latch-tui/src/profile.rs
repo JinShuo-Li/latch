@@ -82,9 +82,6 @@ impl InferenceCatalog {
     fn provider_index(&self, id: &str) -> usize {
         self.providers.iter().position(|p| p.id == id).unwrap_or(0)
     }
-    fn model_index(&self, provider: &CatalogProvider, id: &str) -> usize {
-        provider.models.iter().position(|m| m.id == id).unwrap_or(0)
-    }
 }
 
 /// One row rendered by a profile setup surface.
@@ -195,7 +192,10 @@ pub struct ProfileSelector {
     phase: ProfilePhase,
     selected: usize,
     provider: usize,
-    model: usize,
+    /// Explicitly selected model. `None` until the user highlights a concrete
+    /// row; switching to a provider preselects its configured default model,
+    /// never catalog index 0 merely because it is first.
+    model: Option<usize>,
     effort: usize,
     effort_values: Vec<ReasoningEffort>,
     /// Effective profile when the selector opened, used to preserve the
@@ -218,8 +218,7 @@ impl ProfileSelector {
         let model = catalog
             .providers
             .get(provider)
-            .map(|p| catalog.model_index(p, current_model))
-            .unwrap_or(0);
+            .and_then(|p| p.models.iter().position(|m| m.id == current_model));
         let effort_values = Self::efforts_for(&catalog, provider, model);
         let effort = effort_values
             .iter()
@@ -242,14 +241,23 @@ impl ProfileSelector {
     fn efforts_for(
         catalog: &InferenceCatalog,
         provider: usize,
-        model: usize,
+        model: Option<usize>,
     ) -> Vec<ReasoningEffort> {
-        catalog
-            .providers
-            .get(provider)
-            .and_then(|p| p.models.get(model))
+        model
+            .and_then(|model| catalog.providers.get(provider)?.models.get(model))
             .map(CatalogModel::selectable_efforts)
             .unwrap_or_else(|| vec![ReasoningEffort::ProviderDefault])
+    }
+
+    /// The model a provider switch preselects: its configured default, or
+    /// `None` when the default is not in the live catalog. The selector must
+    /// never silently choose a different model.
+    fn default_model_index(catalog: &InferenceCatalog, provider: usize) -> Option<usize> {
+        let provider = catalog.providers.get(provider)?;
+        provider
+            .models
+            .iter()
+            .position(|model| model.id == provider.default_model)
     }
 
     #[must_use]
@@ -281,7 +289,8 @@ impl ProfileSelector {
     }
 
     fn current_model(&self) -> Option<&CatalogModel> {
-        self.current_provider()?.models.get(self.model)
+        self.model
+            .and_then(|model| self.current_provider()?.models.get(model))
     }
 
     #[must_use]
@@ -316,7 +325,12 @@ impl ProfileSelector {
                     .iter()
                     .enumerate()
                     .map(|(index, model)| {
-                        row(index, model.label(), model.id.clone(), index == self.model)
+                        row(
+                            index,
+                            model.label(),
+                            model.id.clone(),
+                            self.model == Some(index),
+                        )
                     })
                     .collect();
                 rows.push(row(
@@ -378,7 +392,7 @@ impl ProfileSelector {
             }
             ProfilePhase::Effort => {
                 self.phase = ProfilePhase::Model;
-                self.selected = self.model;
+                self.selected = self.model.unwrap_or(0);
                 true
             }
         }
@@ -393,11 +407,14 @@ impl ProfileSelector {
                     return None;
                 }
                 self.provider = self.selected.min(self.catalog.providers.len() - 1);
-                self.model = 0;
-                self.effort_values = Self::efforts_for(&self.catalog, self.provider, 0);
+                // A provider switch lands on that provider's configured default
+                // model. When the default is not in the live catalog nothing is
+                // preselected; index 0 is never chosen implicitly.
+                self.model = Self::default_model_index(&self.catalog, self.provider);
+                self.effort_values = Self::efforts_for(&self.catalog, self.provider, self.model);
                 self.effort = 0;
                 self.phase = ProfilePhase::Model;
-                self.selected = 0;
+                self.selected = self.model.unwrap_or(0);
                 None
             }
             ProfilePhase::Model => {
@@ -414,7 +431,7 @@ impl ProfileSelector {
                         provider.models.get(self.selected).map(|m| m.id.clone()),
                     )
                 };
-                self.model = self.selected;
+                self.model = Some(self.selected);
                 self.effort_values = Self::efforts_for(&self.catalog, self.provider, self.model);
                 let same_selection = provider_id == self.current_provider
                     && model_id.as_deref() == Some(self.current_model.as_str());
@@ -1260,6 +1277,61 @@ mod tests {
         selector.down();
         assert!(selector.confirm().is_none());
         assert!(selector.title().contains("provider"));
+    }
+
+    #[test]
+    fn provider_switch_preselects_the_configured_default_model_not_index_zero() {
+        let mut catalog = catalog();
+        catalog.providers[0].models.insert(
+            0,
+            CatalogModel {
+                id: "first-in-catalog".into(),
+                display_name: "First".into(),
+                efforts: vec![],
+                default_effort: ReasoningEffort::ProviderDefault,
+                input_modalities: vec![InputModality::Text],
+            },
+        );
+        catalog.providers[0].default_model = "deepseek-v4.1-flash".into();
+        let mut selector = ProfileSelector::new(
+            catalog,
+            "anthropic",
+            "claude-sonnet-4-5",
+            ReasoningEffort::ProviderDefault,
+        );
+        selector.up(); // move to OpenCode Go
+        selector.confirm(); // provider -> model step
+        let rows = selector.rows();
+        assert!(
+            rows.iter()
+                .any(|row| row.selected && row.label == "DeepSeek V4.1 Flash"),
+            "the configured default is highlighted: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.selected && row.label == "First"),
+            "catalog index 0 is never selected implicitly: {rows:?}"
+        );
+        let (provider, model, _effort) = {
+            assert!(selector.confirm().is_none(), "model -> effort");
+            selector.confirm().expect("profile")
+        };
+        assert_eq!(provider, "opencode-go");
+        assert_eq!(model, "deepseek-v4.1-flash");
+    }
+
+    #[test]
+    fn provider_without_a_resolved_default_preselects_no_model() {
+        let mut selector = ProfileSelector::new(
+            catalog(),
+            "anthropic",
+            "claude-sonnet-4-5",
+            ReasoningEffort::ProviderDefault,
+        );
+        selector.confirm(); // provider -> model step (fixture default_model is empty)
+        assert!(
+            selector.rows().iter().all(|row| !row.current),
+            "nothing is current without a configured default"
+        );
     }
 
     #[test]
