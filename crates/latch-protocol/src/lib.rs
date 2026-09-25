@@ -2111,7 +2111,8 @@ mod tests {
             id: uuid::Uuid::new_v4(),
             session_id: uuid::Uuid::new_v4(),
             sequence: 1,
-            created_at: chrono::Utc::now(),
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
             payload: payload.clone(),
         };
         let rendered = format!("{:?}", display_items(&event));
