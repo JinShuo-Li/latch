@@ -766,7 +766,7 @@ impl AgentSupervisor {
                     _ => None,
                 })
                 .collect(),
-        );
+        )?;
         agent.restore_failures()?;
         agent.restore_progress()?;
         Ok(agent)

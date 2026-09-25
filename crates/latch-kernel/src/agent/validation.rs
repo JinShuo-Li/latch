@@ -63,6 +63,10 @@ impl Agent {
             .get("timeout_seconds")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(600);
+        self.refresh_workspace_generation()?;
+        let starting_generation = self.evidence.workspace_generation();
+        let starting_watermark = self.workspace_generation_watermark;
+        let writer_active_at_start = !self.active_managed_processes.is_empty();
         let output = match self
             .tools
             .run_validated_command(call, timeout, cancel)
@@ -81,12 +85,32 @@ impl Agent {
             }
         };
         let passed = output.success;
-        let detail = format!(
+        self.refresh_workspace_generation()?;
+        let conflicting_mutation = writer_active_at_start
+            || self
+                .store
+                .workspace_mutation_events_after(&self.workspace, starting_watermark)?
+                .iter()
+                .any(|(_, event)| {
+                    event.session_id != self.session_id
+                        && (super::supervision::advances_workspace_generation(&event.payload)
+                            || matches!(
+                                &event.payload,
+                                EventPayload::ProcessStarted {
+                                    may_write_workspace: None | Some(true),
+                                    ..
+                                }
+                            ))
+                });
+        let mut detail = format!(
             "{} ({:.1?}): {}",
             output.status_line,
             output.elapsed,
             output.first_line()
         );
+        if conflicting_mutation {
+            detail.push_str("; workspace writer overlapped validation");
+        }
         // 1. Durable ValidationResult…
         let validation_event = self.emit(
             EventPayload::ValidationResult {
@@ -102,9 +126,15 @@ impl Agent {
         } else {
             EvidenceStatus::Failed
         };
-        let evidence = self
-            .evidence
-            .build(&requirement, validation_event.id, status, detail);
+        let mut evidence =
+            self.evidence
+                .build_validation(&requirement, validation_event.id, status, detail);
+        if passed && conflicting_mutation {
+            // A pass observed while another writer was active certifies no
+            // stable final workspace. Preserve the result for audit but keep
+            // its earlier generation so it cannot satisfy completion.
+            evidence.workspace_generation = Some(starting_generation);
+        }
         // Persist before mutating the live ledger; see kernel_tools.
         self.emit(
             EventPayload::EvidenceCreated {

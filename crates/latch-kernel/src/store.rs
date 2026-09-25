@@ -978,6 +978,53 @@ impl EventStore {
         )
     }
 
+    /// Workspace-wide mutation/lifecycle stream in durable insertion order.
+    /// Root and child sessions share a workspace, so a per-session sequence
+    /// cannot be used as a verification generation.
+    pub fn workspace_mutation_events_after(
+        &self,
+        workspace: &Path,
+        after_rowid: u64,
+    ) -> Result<Vec<(u64, Event)>> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT e.rowid,e.session_id,e.sequence,e.id,e.parent_id,e.timestamp,e.payload
+             FROM events e JOIN sessions s ON s.id=e.session_id
+             WHERE s.workspace=?1 AND e.rowid>?2
+               AND e.kind IN ('workspace_mutation_possible','shell_mutation_observed',
+                  'change_reverted','external_file_change_detected','file_changed',
+                  'process_started','process_exited')
+             ORDER BY e.rowid",
+        )?;
+        let rows =
+            statement.query_map(params![workspace.to_string_lossy(), after_rowid], |row| {
+                Ok((
+                    row.get::<_, u64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })?;
+        rows.map(|row| {
+            let (rowid, session, sequence, id, parent, timestamp, payload) = row?;
+            Ok((
+                rowid,
+                Event {
+                    id: Uuid::parse_str(&id)?,
+                    session_id: Uuid::parse_str(&session)?,
+                    sequence,
+                    timestamp: timestamp.parse()?,
+                    parent_id: parent.map(|value| Uuid::parse_str(&value)).transpose()?,
+                    payload: serde_json::from_str(&payload)?,
+                },
+            ))
+        })
+        .collect()
+    }
+
     /// The newest `limit` events in sequence order. Bounds per-turn recent
     /// working-memory loads by the working set instead of history size.
     pub fn events_tail(&self, session_id: Uuid, limit: usize) -> Result<Vec<Event>> {

@@ -1700,6 +1700,7 @@ mod tests {
                 status: EvidenceStatus::Passed,
                 detail: "ok".into(),
                 created_at: Utc::now(),
+                workspace_generation: None,
                 supersedes: None,
             },
         }));

@@ -472,17 +472,19 @@ async fn scripted_long_session_dogfood() {
         })
         .unwrap();
     agent.restore_state(state);
-    agent.restore_evidence(
-        store
-            .events(session)
-            .unwrap()
-            .iter()
-            .filter_map(|event| match &event.payload {
-                EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
-                _ => None,
-            })
-            .collect(),
-    );
+    agent
+        .restore_evidence(
+            store
+                .events(session)
+                .unwrap()
+                .iter()
+                .filter_map(|event| match &event.payload {
+                    EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
+                    _ => None,
+                })
+                .collect(),
+        )
+        .unwrap();
     agent.restore_failures().unwrap();
     assert_eq!(agent.state().completion, CompletionState::Verified);
     assert_eq!(
@@ -1278,15 +1280,17 @@ async fn denied_tool_call_preserves_complete_provider_transaction() {
             })
             .unwrap_or_default(),
     );
-    agent.restore_evidence(
-        events
-            .iter()
-            .filter_map(|event| match &event.payload {
-                EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
-                _ => None,
-            })
-            .collect(),
-    );
+    agent
+        .restore_evidence(
+            events
+                .iter()
+                .filter_map(|event| match &event.payload {
+                    EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
+                    _ => None,
+                })
+                .collect(),
+        )
+        .unwrap();
     agent.restore_failures().unwrap();
     agent
         .run(

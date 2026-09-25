@@ -122,7 +122,7 @@ impl TaskStateManager {
             let mut blocked = false;
             let mut unverified = false;
             for requirement in &required {
-                match evidence.status_of(requirement) {
+                match evidence.status_for_completion(requirement) {
                     Some(EvidenceStatus::Passed) => {}
                     Some(EvidenceStatus::Unavailable) => blocked = true,
                     Some(EvidenceStatus::Failed) | Some(EvidenceStatus::Pending) | None => {
@@ -171,11 +171,27 @@ pub fn same_text(a: &str, b: &str) -> bool {
 #[derive(Debug, Default)]
 pub struct EvidenceLedger {
     entries: Vec<Evidence>,
+    workspace_generation: u64,
+    active_writers: bool,
 }
 impl EvidenceLedger {
     #[must_use]
     pub fn new(entries: Vec<Evidence>) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            workspace_generation: 0,
+            active_writers: false,
+        }
+    }
+    pub fn set_active_writers(&mut self, active: bool) {
+        self.active_writers = active;
+    }
+    pub fn set_workspace_generation(&mut self, generation: u64) {
+        self.workspace_generation = generation;
+    }
+    #[must_use]
+    pub fn workspace_generation(&self) -> u64 {
+        self.workspace_generation
     }
     /// Builds a new evidence observation for a claim without recording it, so
     /// a caller can persist it durably before mutating live state.
@@ -196,8 +212,22 @@ impl EvidenceLedger {
             status,
             detail: detail.into(),
             created_at: chrono::Utc::now(),
+            workspace_generation: None,
             supersedes,
         }
+    }
+    /// Only kernel-run validation can attach a workspace generation.
+    #[must_use]
+    pub fn build_validation(
+        &self,
+        claim: impl Into<String>,
+        source_event: Uuid,
+        status: EvidenceStatus,
+        detail: impl Into<String>,
+    ) -> Evidence {
+        let mut evidence = self.build(claim, source_event, status, detail);
+        evidence.workspace_generation = Some(self.workspace_generation);
+        evidence
     }
     /// Records a previously built observation.
     pub fn push(&mut self, evidence: Evidence) {
@@ -233,6 +263,21 @@ impl EvidenceLedger {
     pub fn status_of(&self, claim: &str) -> Option<EvidenceStatus> {
         self.current(claim).map(|e| e.status.clone())
     }
+    /// A historical Passed observation remains auditable but cannot satisfy
+    /// completion after the workspace generation has advanced.
+    #[must_use]
+    pub fn status_for_completion(&self, claim: &str) -> Option<EvidenceStatus> {
+        self.current(claim).and_then(|entry| {
+            if entry.status == EvidenceStatus::Passed
+                && (entry.workspace_generation != Some(self.workspace_generation)
+                    || self.active_writers)
+            {
+                None
+            } else {
+                Some(entry.status.clone())
+            }
+        })
+    }
     /// Current summary lines for canonical materialization.
     #[must_use]
     pub fn current_summary(&self) -> Vec<String> {
@@ -245,8 +290,17 @@ impl EvidenceLedger {
         claims
             .into_iter()
             .filter_map(|claim| {
-                self.current(&claim)
-                    .map(|entry| format!("- {} [{:?}] {}", entry.claim, entry.status, entry.detail))
+                self.current(&claim).map(|entry| {
+                    let status = if entry.status == EvidenceStatus::Passed
+                        && (entry.workspace_generation != Some(self.workspace_generation)
+                            || self.active_writers)
+                    {
+                        "Stale".to_owned()
+                    } else {
+                        format!("{:?}", entry.status)
+                    };
+                    format!("- {} [{status}] {}", entry.claim, entry.detail)
+                })
             })
             .collect()
     }
@@ -392,6 +446,7 @@ mod tests {
             status,
             detail: "test".into(),
             created_at: Utc::now(),
+            workspace_generation: None,
             supersedes: None,
         }
     }
@@ -510,7 +565,7 @@ mod tests {
         m.recompute_completion(&e);
         assert_eq!(m.state.completion, CompletionState::ImplementedNotVerified);
 
-        e.add("tests pass", Uuid::new_v4(), EvidenceStatus::Passed, "ok");
+        e.push(e.build_validation("tests pass", Uuid::new_v4(), EvidenceStatus::Passed, "ok"));
         m.recompute_completion(&e);
         assert_eq!(m.state.completion, CompletionState::Verified);
     }
@@ -526,9 +581,58 @@ mod tests {
         let mut e = EvidenceLedger::default();
         e.add("tests", Uuid::new_v4(), EvidenceStatus::Failed, "fail 1");
         e.add("tests", Uuid::new_v4(), EvidenceStatus::Failed, "fail 2");
-        e.add("tests", Uuid::new_v4(), EvidenceStatus::Passed, "now green");
+        e.push(e.build_validation("tests", Uuid::new_v4(), EvidenceStatus::Passed, "now green"));
         m.recompute_completion(&e);
         assert_eq!(m.state.completion, CompletionState::Verified);
+    }
+
+    #[test]
+    fn passed_evidence_is_historical_after_generation_advances() {
+        let mut state = TaskStateManager::default();
+        state.require_validation("tests");
+        state.set_implementation_done(true);
+        let mut ledger = EvidenceLedger::default();
+        let first =
+            ledger.build_validation("tests", Uuid::new_v4(), EvidenceStatus::Passed, "green");
+        ledger.push(first.clone());
+        state.recompute_completion(&ledger);
+        assert_eq!(state.state().completion, CompletionState::Verified);
+
+        ledger.set_workspace_generation(12);
+        state.recompute_completion(&ledger);
+        assert_eq!(
+            state.state().completion,
+            CompletionState::ImplementedNotVerified
+        );
+        assert_eq!(ledger.status_of("tests"), Some(EvidenceStatus::Passed));
+        assert_eq!(ledger.status_for_completion("tests"), None);
+        assert!(ledger.current_summary()[0].contains("[Stale]"));
+        assert_eq!(ledger.entries()[0], first);
+
+        let second = ledger.build_validation(
+            "tests",
+            Uuid::new_v4(),
+            EvidenceStatus::Passed,
+            "green again",
+        );
+        ledger.push(second);
+        state.recompute_completion(&ledger);
+        assert_eq!(state.state().completion, CompletionState::Verified);
+    }
+
+    #[test]
+    fn legacy_unversioned_pass_cannot_certify_completion() {
+        let mut state = TaskStateManager::default();
+        state.require_validation("tests");
+        state.set_implementation_done(true);
+        let mut ledger = EvidenceLedger::default();
+        ledger.add("tests", Uuid::new_v4(), EvidenceStatus::Passed, "old pass");
+        state.recompute_completion(&ledger);
+        assert_eq!(
+            state.state().completion,
+            CompletionState::ImplementedNotVerified
+        );
+        assert_eq!(ledger.status_of("tests"), Some(EvidenceStatus::Passed));
     }
 
     #[test]

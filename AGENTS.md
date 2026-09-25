@@ -159,6 +159,11 @@ Memory/cache invariants (do not violate):
   `stable`/`session` split and `ContextEngine`'s `session_context` intact.
 - Transitions that must survive resume fail closed: a live state change must not
   be reported successful before its durable event commits.
+- A Passed validation certifies only its durable workspace generation. Edits
+  and write-capable commands from any session sharing the workspace make older
+  passes stale; replay must derive the
+  same completion state without deleting historical evidence. Active managed
+  processes block certification until exit and revalidation.
 - Child agents are independent durable sessions. Their task/evidence/continuity
   never becomes root truth; only semantic reports cross the boundary. Agent
   notifications are appended to root history only at safe model boundaries.

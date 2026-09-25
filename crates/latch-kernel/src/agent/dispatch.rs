@@ -202,6 +202,15 @@ impl Agent {
                     );
                 } else {
                     batch.push(self.tools.execute(&call, cancel.clone()).await);
+                    if self.refresh_workspace_generation()? {
+                        self.sync_completion(sink)?;
+                        self.emit(
+                            EventPayload::TaskStateUpdated {
+                                state: self.state.state().clone(),
+                            },
+                            sink,
+                        )?;
+                    }
                 }
             }
             batch

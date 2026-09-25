@@ -1128,6 +1128,12 @@ pub enum EventPayload {
         reversible: bool,
         paths: Vec<String>,
     },
+    /// A write-capable operation is about to run. It advances verification's
+    /// workspace generation before side effects, even when drift detection
+    /// cannot later enumerate the changed paths.
+    WorkspaceMutationPossible {
+        operation: String,
+    },
     /// Tombstone marking that a previously recorded owned change was reverted.
     /// Ledger reconstruction after resume uses it to drop the undone entry.
     ChangeReverted {
@@ -1247,6 +1253,9 @@ pub enum EventPayload {
         command: String,
         #[serde(default)]
         label: String,
+        /// Missing on older events; replay treats those processes as writable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        may_write_workspace: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pid: Option<u32>,
     },
@@ -1367,6 +1376,11 @@ pub struct Evidence {
     pub status: EvidenceStatus,
     pub detail: String,
     pub created_at: DateTime<Utc>,
+    /// Global insertion order of the latest durable mutation for this
+    /// workspace when kernel validation produced this observation. Legacy
+    /// evidence has no version and cannot verify until revalidated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_generation: Option<u64>,
     /// The evidence entry this entry supersedes, when it updates an existing
     /// claim's current state.
     #[serde(default, skip_serializing_if = "Option::is_none")]

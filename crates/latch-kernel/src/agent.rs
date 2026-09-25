@@ -32,7 +32,7 @@ use latch_protocol::{
 use request::{common_prefix_bytes, context_messages, request_signature};
 use serde_json::json;
 use std::any::TypeId;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -73,6 +73,10 @@ pub struct Agent {
     continuity: Box<dyn ContextEngine>,
     state: TaskStateManager,
     evidence: EvidenceLedger,
+    /// Last workspace mutation event row checked for generation changes.
+    workspace_generation_watermark: u64,
+    /// Managed processes can still write after validation returns.
+    active_managed_processes: HashMap<String, Uuid>,
     extensions: ExtensionRegistry,
     failures: FailureManager,
     progress: ProgressSupervisor,
@@ -234,6 +238,8 @@ impl Agent {
             continuity,
             state: TaskStateManager::default(),
             evidence: EvidenceLedger::default(),
+            workspace_generation_watermark: 0,
+            active_managed_processes: HashMap::new(),
             extensions: ExtensionRegistry::new(),
             failures: FailureManager::new(runtime.retry_budget),
             progress,
@@ -511,8 +517,52 @@ impl Agent {
         self.last_completion = Some(state.completion.clone());
         self.state = TaskStateManager::new(state);
     }
-    pub fn restore_evidence(&mut self, evidence: Vec<latch_protocol::Evidence>) {
+    pub fn restore_evidence(&mut self, evidence: Vec<latch_protocol::Evidence>) -> Result<()> {
         self.evidence = EvidenceLedger::new(evidence);
+        self.workspace_generation_watermark = 0;
+        self.active_managed_processes.clear();
+        self.refresh_workspace_generation()?;
+        // This session's write-capable processes cannot survive its restart.
+        // Other sessions may still be live, so their writers remain active.
+        let mut lost_processes: Vec<_> = self
+            .active_managed_processes
+            .iter()
+            .filter(|(_, session)| **session == self.session_id)
+            .map(|(id, session)| (id.clone(), *session))
+            .collect();
+        lost_processes.sort();
+        for (id, session_id) in lost_processes {
+            self.store.append(
+                session_id,
+                EventPayload::ProcessExited {
+                    id,
+                    status: "lost".into(),
+                    artifact_id: None,
+                },
+            )?;
+        }
+        self.refresh_workspace_generation()?;
+        let previous = self.state.state().completion.clone();
+        self.state.recompute_completion(&self.evidence);
+        let current = self.state.state().completion.clone();
+        if current != previous {
+            // Old sessions may contain a pre-generation Passed observation.
+            // Downgrade their canonical state durably during resume.
+            self.store.append(
+                self.session_id,
+                EventPayload::CompletionChanged {
+                    completion: current.clone(),
+                },
+            )?;
+            self.store.append(
+                self.session_id,
+                EventPayload::TaskStateUpdated {
+                    state: self.state.state().clone(),
+                },
+            )?;
+            self.last_completion = Some(current);
+        }
+        Ok(())
     }
     pub fn context(&self, query: Option<&str>) -> Result<crate::continuity::MaterializedContext> {
         let prompt = PromptCompiler::compile(self.mode, &self.workspace)?;

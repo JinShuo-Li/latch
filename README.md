@@ -359,6 +359,17 @@ failed and now passes supersedes the failure; historical attempts stay in the
 raw event log. Completion states: `InProgress`, `ImplementedNotVerified`,
 `Verified`, `Blocked` (a required validation could not run).
 
+Passing evidence is tied to the workspace generation it checked. Guarded edits
+and write-capable shell commands advance that generation, so an older pass
+remains auditable but cannot make changed work `Verified`. Read-only inspection
+preserves the pass; validation after a change restores it. Resume rebuilds the
+same generation from durable events. A running write-capable managed process
+also prevents a pass from certifying completion until it exits and validation
+runs again. The generation covers all Latch sessions sharing the workspace,
+including child agents. Validation runs serially with guarded edits and
+synchronous shell commands; a pass overlapping another workspace writer stays
+stale.
+
 Completion state and loop termination are separate. `Verified` is the only
 completion that ends the run on the strength of its own claim;
 `ImplementedNotVerified` stays a real and honestly-labelled state, but it is

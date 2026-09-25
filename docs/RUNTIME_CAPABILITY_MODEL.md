@@ -45,7 +45,9 @@ mechanism added under this model must preserve all of them.
    (privileged/system-destructive) is independent of profile and resolver.
 6. **Evidence provenance.** `passed`/`failed` evidence is kernel-owned, created
    only by the kernel executing a validation and recording its real source
-   event. The model, extensions, clients, and backends may report observations
+   event and workspace generation. A Passed result from an older generation
+   remains auditable but cannot certify completion. The model, extensions,
+   clients, and backends may report observations
    (`pending`, `unavailable`) but can never self-certify. Child-agent evidence
    never becomes root evidence; only a semantic report crosses the boundary.
 7. **Tool-call/result integrity.** Every tool call gets exactly one terminal

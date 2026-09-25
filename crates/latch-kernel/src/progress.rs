@@ -178,6 +178,7 @@ impl ProgressSupervisor {
             }
             EventPayload::FileChanged { .. }
             | EventPayload::ChangeReverted { .. }
+            | EventPayload::WorkspaceMutationPossible { .. }
             | EventPayload::ShellMutationObserved { .. }
             | EventPayload::ExternalFileChangeDetected { .. } => {
                 self.finish_turn();

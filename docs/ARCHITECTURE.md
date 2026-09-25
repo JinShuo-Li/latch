@@ -313,6 +313,22 @@ now passes supersedes the failure. Completion is derived, never declared:
 required validation has current passing evidence, `Blocked` when a required
 validation is unavailable, and `ImplementedNotVerified` otherwise.
 
+Each kernel validation observation stores the workspace generation it checked.
+The generation is the global insertion order of the latest durable mutation or
+write-uncertainty event from any session sharing that workspace, so it rebuilds
+from history on resume. Guarded edits and write-capable shell commands record
+possible mutation before executing; observed changes, undo, detected external
+changes, and write-capable managed process lifecycle events also advance the
+generation. A Passed observation from another generation stays in the ledger
+for audit but is stale for completion and canonical context. A running
+write-capable managed process prevents a pass from certifying completion
+because it can write after validation. Read-only operations do not advance the
+generation. Validation and synchronous shell commands share the workspace
+mutation lock with guarded edits; a pass overlapping an active managed writer
+or another session's mutation remains stale.
+Revalidation after the process exits on the current generation restores
+`Verified` eligibility.
+
 Completion state and loop termination are deliberately separate. A `complete`
 claim sets the terminal flag only so the loop can exit in the same turn; the
 loop resolves it against the derived completion, and only `Verified` ends the

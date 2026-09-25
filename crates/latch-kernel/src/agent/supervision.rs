@@ -27,7 +27,65 @@ fn is_workspace_mutation(payload: &EventPayload) -> bool {
     )
 }
 
+/// The global row id of the newest such event is the workspace generation. A
+/// write-capable command advances it before execution, so an undetected or
+/// interrupted write cannot leave older validation current.
+pub(super) fn advances_workspace_generation(payload: &EventPayload) -> bool {
+    match payload {
+        EventPayload::WorkspaceMutationPossible { .. }
+        | EventPayload::ShellMutationObserved { .. }
+        | EventPayload::ChangeReverted { .. }
+        | EventPayload::ExternalFileChangeDetected { .. } => true,
+        EventPayload::FileChanged { owner, .. } => {
+            !matches!(owner, latch_protocol::ChangeOwner::PreExisting)
+        }
+        _ => false,
+    }
+}
+
 impl Agent {
+    /// Incrementally derives the current workspace generation from durable
+    /// events. Call before accepting validation evidence or deriving completion.
+    pub(super) fn refresh_workspace_generation(&mut self) -> Result<bool> {
+        let events = self.store.workspace_mutation_events_after(
+            &self.workspace,
+            self.workspace_generation_watermark,
+        )?;
+        let mut generation = self.evidence.workspace_generation();
+        for (rowid, event) in &events {
+            if advances_workspace_generation(&event.payload) {
+                generation = *rowid;
+            }
+            match &event.payload {
+                EventPayload::ProcessStarted {
+                    id,
+                    may_write_workspace,
+                    ..
+                } => {
+                    if may_write_workspace.unwrap_or(true) {
+                        generation = *rowid;
+                        self.active_managed_processes
+                            .insert(id.clone(), event.session_id);
+                    }
+                }
+                EventPayload::ProcessExited { id, .. }
+                    if self.active_managed_processes.remove(id).is_some() =>
+                {
+                    generation = *rowid;
+                }
+                _ => {}
+            }
+            self.workspace_generation_watermark = *rowid;
+        }
+        let changed = generation != self.evidence.workspace_generation();
+        if changed {
+            self.evidence.set_workspace_generation(generation);
+        }
+        self.evidence
+            .set_active_writers(!self.active_managed_processes.is_empty());
+        Ok(changed)
+    }
+
     /// Feeds every durable event appended since the watermark to the progress
     /// supervisor and advances the watermark. Live supervision and replay
     /// consume the same event stream in the same order.

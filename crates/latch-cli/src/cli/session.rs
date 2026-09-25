@@ -540,15 +540,17 @@ pub async fn build_agent(
         }) {
             agent.restore_state(state);
         }
-        agent.restore_evidence(
-            events
-                .iter()
-                .filter_map(|event| match &event.payload {
-                    EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
-                    _ => None,
-                })
-                .collect(),
-        );
+        runtime(
+            agent.restore_evidence(
+                events
+                    .iter()
+                    .filter_map(|event| match &event.payload {
+                        EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+        )?;
         // Failure supervision reconstructs its streaks so a stalled loop is
         // not silently forgotten, and progress supervision reconstructs an
         // active inspection loop.

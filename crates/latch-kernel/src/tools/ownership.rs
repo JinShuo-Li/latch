@@ -100,6 +100,12 @@ impl ToolExecutor {
         owner: ChangeOwner,
         call_id: Option<&str>,
     ) -> Result<(String, Option<String>)> {
+        self.store.append(
+            self.session_id,
+            EventPayload::WorkspaceMutationPossible {
+                operation: format!("guarded write: {}", path.display()),
+            },
+        )?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -423,6 +429,12 @@ impl ToolExecutor {
                 None => None,
             },
         };
+        self.store.append(
+            self.session_id,
+            EventPayload::WorkspaceMutationPossible {
+                operation: format!("undo: {}", change.path.display()),
+            },
+        )?;
         match before {
             Some(bytes) => tokio::fs::write(&change.path, bytes).await?,
             None if change.created => tokio::fs::remove_file(&change.path).await?,

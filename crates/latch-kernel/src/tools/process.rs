@@ -18,6 +18,16 @@ impl ToolExecutor {
         let id = format!("proc-{}", Uuid::new_v4());
         let profile = self.sandbox_profile(call);
         let runner = self.sandbox_runner()?;
+        let may_write_workspace =
+            profile.workspace_writable() && !is_read_only_shell(&command, &self.workspace);
+        if may_write_workspace {
+            self.store.append(
+                self.session_id,
+                EventPayload::WorkspaceMutationPossible {
+                    operation: format!("exec_start: {command}"),
+                },
+            )?;
+        }
         let mut child = runner
             .command(&profile, &command)?
             .kill_on_drop(true)
@@ -40,6 +50,7 @@ impl ToolExecutor {
                 id: id.clone(),
                 command: command.clone(),
                 label: label.clone(),
+                may_write_workspace: Some(may_write_workspace),
                 pid,
             },
         )?;
@@ -181,12 +192,23 @@ impl ToolExecutor {
         timeout_seconds: u64,
         cancel: CancellationToken,
     ) -> Result<ProcessOutput> {
-        let drift = !is_read_only_shell(command, &self.workspace);
+        // Shared by root and child executors: validation cannot race a
+        // synchronous shell write or a guarded workspace edit.
+        let _workspace_guard = self.mutation_lock.lock().await;
+        let drift = profile.workspace_writable() && !is_read_only_shell(command, &self.workspace);
         let before = if drift {
             self.snapshot_dirty().await.ok().flatten()
         } else {
             None
         };
+        if drift {
+            self.store.append(
+                self.session_id,
+                EventPayload::WorkspaceMutationPossible {
+                    operation: format!("shell: {command}"),
+                },
+            )?;
+        }
         let started = Instant::now();
         let (status, text, artifact) = self
             .run_process_inner(profile, command, timeout_seconds, cancel)

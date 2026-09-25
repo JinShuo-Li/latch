@@ -18,6 +18,14 @@ query-recalled original events, and a budgeted tail of verbatim conversation.
 4. **L3 raw store:** original durable events and artifacts. Normal context
    management never deletes them.
 
+Kernel validation evidence records the workspace generation it checked. The
+generation is replayed from durable mutation events across sessions sharing the
+workspace; a historical Passed entry
+remains in L3 and is shown as stale in the canonical evidence summary when the
+workspace advances. Only a Passed entry for the current generation can certify
+completion after resume, and an active managed process blocks certification
+until it exits and validation is rerun.
+
 Every child agent has its own complete L0-L3 stack. Parent history does not seed
 a child's active context: it starts from a compact delegation brief and the
 workspace repository instructions. Child task state and evidence remain local

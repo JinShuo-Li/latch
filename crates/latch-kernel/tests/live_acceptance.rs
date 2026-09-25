@@ -672,15 +672,17 @@ async fn live_interrupt_and_resume() {
     }) {
         resumed.restore_state(state);
     }
-    resumed.restore_evidence(
-        durable
-            .iter()
-            .filter_map(|event| match &event.payload {
-                EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
-                _ => None,
-            })
-            .collect(),
-    );
+    resumed
+        .restore_evidence(
+            durable
+                .iter()
+                .filter_map(|event| match &event.payload {
+                    EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
+                    _ => None,
+                })
+                .collect(),
+        )
+        .unwrap();
     resumed.restore_failures().unwrap();
     resumed.restore_progress().unwrap();
     let result = resumed

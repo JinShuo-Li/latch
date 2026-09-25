@@ -25,6 +25,7 @@ impl Agent {
                         tool_error(call, error.to_string())
                     } else {
                         self.state.update(update);
+                        self.refresh_workspace_generation()?;
                         self.state.recompute_completion(&self.evidence);
                         tool_ok(
                             call,
@@ -153,6 +154,7 @@ impl Agent {
     /// value actually changes. This is the single announcement point; the model
     /// never writes completion truth.
     pub(super) fn sync_completion(&mut self, sink: &AgentEventSink) -> Result<()> {
+        self.refresh_workspace_generation()?;
         self.state.recompute_completion(&self.evidence);
         let derived = self.state.state().completion.clone();
         if self.last_completion.as_ref() != Some(&derived) {

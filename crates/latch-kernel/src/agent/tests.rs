@@ -11,6 +11,7 @@ use crate::{
 };
 use latch_protocol::{ModelResponse, ToolCall};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 #[tokio::test]
 async fn loop_executes_multiple_read_tools() {
@@ -395,6 +396,330 @@ async fn fail_then_pass_validation_supersedes_completion() {
     assert_eq!(failed_entries, 2, "history keeps the failed attempts");
     // A passing validation resolved its failure lineage.
     assert!(agent.failure_lineages().is_empty());
+}
+
+fn freshness_agent(dir: &tempfile::TempDir) -> (EventStore, Uuid, Agent) {
+    std::fs::write(dir.path().join("x.txt"), "old").unwrap();
+    policy_agent(dir, PermissionConfig::default(), vec![])
+}
+
+async fn freshness_validate(agent: &mut Agent) {
+    let result = agent
+        .run_validation("workspace check", "test -f x.txt", CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", result.output);
+}
+
+async fn freshness_tool(agent: &mut Agent, name: &str, arguments: serde_json::Value) {
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let call = ToolCall {
+        id: Uuid::new_v4().to_string(),
+        name: name.into(),
+        arguments,
+    };
+    let results = agent
+        .execute_batch(vec![call], CancellationToken::new(), &sink)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(!results[0].is_error, "{}", results[0].output);
+}
+
+fn freshness_complete(agent: &mut Agent) {
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let result = agent
+        .execute_kernel_tool(
+            &ToolCall {
+                id: Uuid::new_v4().to_string(),
+                name: "complete".into(),
+                arguments: json!({"implementation_done": true}),
+            },
+            &sink,
+        )
+        .unwrap();
+    assert!(!result.is_error, "{}", result.output);
+}
+
+#[tokio::test]
+async fn freshness_patch_after_validation_cannot_complete_verified() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    freshness_validate(&mut agent).await;
+    let passed = agent.evidence().current("workspace check").unwrap().clone();
+    let base_hash = hex::encode(Sha256::digest(b"old"));
+    freshness_tool(
+        &mut agent,
+        "patch",
+        json!({"path":"x.txt","base_hash":base_hash,"old":"old","new":"new"}),
+    )
+    .await;
+    freshness_complete(&mut agent);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    assert_eq!(
+        agent.evidence().status_for_completion("workspace check"),
+        None
+    );
+    assert_eq!(passed.status, EvidenceStatus::Passed);
+    assert!(store.events(sid).unwrap().iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::EvidenceCreated { evidence } if evidence.id == passed.id && evidence.status == EvidenceStatus::Passed
+    )));
+}
+
+#[tokio::test]
+async fn freshness_whole_file_write_after_validation_cannot_complete_verified() {
+    let dir = tempdir().unwrap();
+    let (_, _, mut agent) = freshness_agent(&dir);
+    freshness_validate(&mut agent).await;
+    freshness_tool(
+        &mut agent,
+        "write",
+        json!({"path":"x.txt","base_hash":hex::encode(Sha256::digest(b"old")),"content":"new"}),
+    )
+    .await;
+    freshness_complete(&mut agent);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+}
+
+#[tokio::test]
+async fn freshness_write_capable_shell_after_validation_cannot_complete_verified() {
+    let dir = tempdir().unwrap();
+    let (_, _, mut agent) = freshness_agent(&dir);
+    freshness_validate(&mut agent).await;
+    freshness_tool(&mut agent, "shell", json!({"command":"printf new > x.txt"})).await;
+    freshness_complete(&mut agent);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("x.txt")).unwrap(),
+        "new"
+    );
+}
+
+#[tokio::test]
+async fn freshness_resume_then_mutate_cannot_reuse_prior_validation() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    freshness_validate(&mut agent).await;
+    drop(agent);
+    let tools = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("art"),
+        store.clone(),
+        sid,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut resumed = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: Arc::new(FakeProvider::scripted(vec![])),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 3,
+    });
+    let events = store.events(sid).unwrap();
+    resumed.restore_state(
+        events
+            .iter()
+            .rev()
+            .find_map(|event| match &event.payload {
+                EventPayload::TaskStateUpdated { state } => Some(state.clone()),
+                _ => None,
+            })
+            .unwrap(),
+    );
+    resumed
+        .restore_evidence(
+            events
+                .iter()
+                .filter_map(|event| match &event.payload {
+                    EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
+                    _ => None,
+                })
+                .collect(),
+        )
+        .unwrap();
+    freshness_tool(
+        &mut resumed,
+        "shell",
+        json!({"command":"printf new > x.txt"}),
+    )
+    .await;
+    freshness_complete(&mut resumed);
+    assert_eq!(
+        resumed.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+}
+
+#[tokio::test]
+async fn freshness_other_session_mutation_invalidates_same_workspace() {
+    let dir = tempdir().unwrap();
+    let (store, _, mut agent) = freshness_agent(&dir);
+    freshness_validate(&mut agent).await;
+    let generation = agent.evidence().workspace_generation();
+    let child_id = store.create_session(dir.path()).unwrap();
+    let child_tools = agent.tools.for_child(child_id).unwrap();
+    let read = child_tools
+        .execute(
+            &ToolCall {
+                id: Uuid::new_v4().to_string(),
+                name: "read_file".into(),
+                arguments: json!({"path":"x.txt"}),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!read.is_error, "{}", read.output);
+    freshness_complete(&mut agent);
+    assert_eq!(agent.evidence().workspace_generation(), generation);
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+
+    let write = child_tools
+        .execute(
+            &ToolCall {
+                id: Uuid::new_v4().to_string(),
+                name: "shell".into(),
+                arguments: json!({"command":"printf child > x.txt"}),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!write.is_error, "{}", write.output);
+    freshness_complete(&mut agent);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+}
+
+#[tokio::test]
+async fn freshness_read_only_action_preserves_current_validation() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    freshness_validate(&mut agent).await;
+    let generation = agent.evidence().workspace_generation();
+    freshness_tool(&mut agent, "read_file", json!({"path":"x.txt"})).await;
+    freshness_tool(&mut agent, "shell", json!({"command":"cat x.txt"})).await;
+    store
+        .append(
+            sid,
+            EventPayload::ProcessStarted {
+                id: "proc-reader".into(),
+                command: "cat x.txt".into(),
+                label: String::new(),
+                may_write_workspace: Some(false),
+                pid: Some(1),
+            },
+        )
+        .unwrap();
+    store
+        .append(
+            sid,
+            EventPayload::ProcessExited {
+                id: "proc-reader".into(),
+                status: "exit 0".into(),
+                artifact_id: None,
+            },
+        )
+        .unwrap();
+    freshness_complete(&mut agent);
+    assert_eq!(agent.evidence().workspace_generation(), generation);
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+}
+
+#[tokio::test]
+async fn freshness_revalidation_after_mutation_restores_verified_completion() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    freshness_validate(&mut agent).await;
+    let old = agent.evidence().current("workspace check").unwrap().clone();
+    freshness_tool(&mut agent, "shell", json!({"command":"printf new > x.txt"})).await;
+    freshness_complete(&mut agent);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    freshness_validate(&mut agent).await;
+    freshness_complete(&mut agent);
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+    assert_eq!(agent.evidence().entries().len(), 2);
+    assert_eq!(agent.evidence().entries()[1].supersedes, Some(old.id));
+    assert!(agent.evidence().entries()[1].workspace_generation > old.workspace_generation);
+    assert_eq!(
+        store
+            .events(sid)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::EvidenceCreated { .. }))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn freshness_managed_process_blocks_validation_until_exit_and_revalidation() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    // A managed process can mutate the workspace after its launch tool returns.
+    // Use durable lifecycle events to exercise the same completion path without
+    // a timing-dependent child process fixture.
+    store
+        .append(
+            sid,
+            EventPayload::ProcessStarted {
+                id: "proc-test".into(),
+                command: "writer".into(),
+                label: String::new(),
+                may_write_workspace: Some(true),
+                pid: Some(1),
+            },
+        )
+        .unwrap();
+    freshness_validate(&mut agent).await;
+    assert!(
+        agent
+            .evidence()
+            .current("workspace check")
+            .unwrap()
+            .detail
+            .contains("workspace writer overlapped validation")
+    );
+    freshness_complete(&mut agent);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    store
+        .append(
+            sid,
+            EventPayload::ProcessExited {
+                id: "proc-test".into(),
+                status: "exit 0".into(),
+                artifact_id: None,
+            },
+        )
+        .unwrap();
+    freshness_complete(&mut agent);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    freshness_validate(&mut agent).await;
+    freshness_complete(&mut agent);
+    assert_eq!(agent.state().completion, CompletionState::Verified);
 }
 
 #[test]
