@@ -257,15 +257,15 @@ pub(super) fn hint_spans(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
 /// title, concise context, numbered options, and keyboard hints. Long approval
 /// arguments can be inspected in full with Ctrl+O instead of being silently
 /// truncated.
-pub(super) fn action_surface_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+pub(super) fn action_surface_lines(app: &App, width: usize, height: u16) -> Vec<Line<'static>> {
     if let Some(prompt) = &app.permission {
         approval_surface_lines(prompt, width)
     } else if let Some(capture) = &app.capture {
         capture_surface_lines(capture, width)
     } else if let Some(flow) = &app.setup {
-        setup_surface_lines(flow, width)
+        setup_surface_lines(flow, width, height)
     } else if let Some(selector) = &app.profile_selector {
-        profile_surface_lines(selector, width)
+        profile_surface_lines(selector, width, height)
     } else if let Some(selector) = app.selector {
         selector_surface_lines(app, selector, width)
     } else {
@@ -274,18 +274,53 @@ pub(super) fn action_surface_lines(app: &App, width: usize) -> Vec<Line<'static>
 }
 
 /// Render one generic choice surface with an optional review block.
+///
+/// The row list is windowed so the highlighted row is always visible inside
+/// the half-screen action budget; overflow markers name how many rows are
+/// hidden above and below. Short lists render exactly as before.
 fn choice_surface_lines(
     title: String,
     rows: &[ChoiceRow],
     hint: &str,
     review: &[(String, String)],
     width: usize,
+    height: u16,
 ) -> Vec<Line<'static>> {
     let palette = crate::theme::palette();
     let mut lines = vec![surface_blank(width)];
     lines.push(surface_text(title, palette.attention(), width, 2));
     lines.push(surface_blank(width));
-    for row in rows {
+    // Fixed lines: the two header blanks above, the blank before the hint,
+    // and the hint itself. The review block adds its own blank and rows.
+    let fixed = 5 + review.len() + usize::from(!review.is_empty());
+    let budget = (height as usize / 2).max(1);
+    let slots = budget.saturating_sub(fixed).max(1);
+    let total = rows.len();
+    let selected = rows.iter().position(|row| row.selected).unwrap_or(0);
+    let (offset, visible, more_above, more_below) = {
+        let mut visible = total.min(slots);
+        loop {
+            let offset = selected
+                .saturating_sub(visible.saturating_sub(1))
+                .min(total.saturating_sub(visible));
+            let more_above = offset > 0;
+            let more_below = offset + visible < total;
+            let markers = usize::from(more_above) + usize::from(more_below);
+            if visible + markers <= slots || visible <= 1 {
+                break (offset, visible, more_above, more_below);
+            }
+            visible -= 1;
+        }
+    };
+    if more_above {
+        lines.push(surface_text(
+            format!("↑ {offset} more"),
+            notice_style(),
+            width,
+            2,
+        ));
+    }
+    for row in &rows[offset..offset + visible] {
         let marker = if row.selected { "› " } else { "  " };
         let label_style = if row.selected {
             palette.selected()
@@ -306,6 +341,14 @@ fn choice_surface_lines(
         }
         lines.push(surface_row(spans, width));
     }
+    if more_below {
+        lines.push(surface_text(
+            format!("↓ {} more", total - offset - visible),
+            notice_style(),
+            width,
+            2,
+        ));
+    }
     if !review.is_empty() {
         lines.push(surface_blank(width));
         for (key, value) in review {
@@ -324,23 +367,35 @@ fn choice_surface_lines(
     lines
 }
 
-fn profile_surface_lines(selector: &ProfileSelector, width: usize) -> Vec<Line<'static>> {
+fn profile_surface_lines(
+    selector: &ProfileSelector,
+    width: usize,
+    height: u16,
+) -> Vec<Line<'static>> {
     choice_surface_lines(
         selector.title(),
         &selector.rows(),
         selector.hint(),
         &[],
         width,
+        height,
     )
 }
 
-fn setup_surface_lines(flow: &SetupFlow, width: usize) -> Vec<Line<'static>> {
+fn setup_surface_lines(flow: &SetupFlow, width: usize, height: u16) -> Vec<Line<'static>> {
     let review = if matches!(flow.step(), SetupStep::Review | SetupStep::RemoveConfirm) {
         flow.review_lines()
     } else {
         Vec::new()
     };
-    choice_surface_lines(flow.title(), &flow.rows(), flow.hint(), &review, width)
+    choice_surface_lines(
+        flow.title(),
+        &flow.rows(),
+        flow.hint(),
+        &review,
+        width,
+        height,
+    )
 }
 
 fn capture_surface_lines(capture: &CaptureState, width: usize) -> Vec<Line<'static>> {
@@ -1161,8 +1216,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         0
     };
     // Action surfaces render at their natural height, bounded so the transcript
-    // above them always keeps most of the screen.
-    let action_lines = action_surface_lines(app, area.width as usize);
+    // above them always keeps most of the screen. Choice surfaces window their
+    // rows so the highlighted row stays visible inside that bound.
+    let action_lines = action_surface_lines(app, area.width as usize, area.height);
     let action_rows = (action_lines.len() as u16).min(area.height / 2);
     let status_line = active_status_line(app);
     let status_rows = u16::from(status_line.is_some());

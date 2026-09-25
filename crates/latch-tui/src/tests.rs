@@ -2672,6 +2672,94 @@ fn model_command_opens_a_provider_model_effort_selector() {
     assert!(app.profile_selector.is_none());
 }
 
+fn many_model_catalog(count: usize) -> InferenceCatalog {
+    InferenceCatalog {
+        providers: vec![CatalogProvider {
+            id: "opencode-go".into(),
+            display_name: "OpenCode Go".into(),
+            default_model: String::new(),
+            models: (0..count)
+                .map(|index| CatalogModel {
+                    id: format!("model-{index:02}"),
+                    display_name: format!("Model {index:02}"),
+                    efforts: vec![],
+                    default_effort: latch_protocol::ReasoningEffort::ProviderDefault,
+                    input_modalities: vec![],
+                })
+                .collect(),
+        }],
+    }
+}
+
+/// Parse a `↑ N more` / `↓ N more` window marker from a rendered surface.
+fn overflow_marker(text: &str, arrow: char) -> Option<usize> {
+    text.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix(arrow)?;
+        rest.strip_suffix(" more")?.trim().parse().ok()
+    })
+}
+
+#[test]
+fn model_picker_scrolls_and_never_hides_the_selected_model() {
+    let count = 33;
+    let mut app = App::default();
+    app.output(Output::InferenceCatalog(many_model_catalog(count)));
+    app.output(Output::Header {
+        model: "model-00".into(),
+        provider: "OpenCode Go".into(),
+        provider_id: "opencode-go".into(),
+        effort: latch_protocol::ReasoningEffort::ProviderDefault,
+        workspace: "/tmp/latch".into(),
+        branch: "main".into(),
+        resumed: false,
+        pricing: None,
+    });
+    app.input.set_text("/model");
+    assert!(app.submit_action().is_none());
+    // Provider step, then the model step.
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+
+    // At the top the pointer is visible and overflow below is named.
+    let text = render_to_text(&mut app, 120, 30);
+    assert!(text.contains("› Model 00"), "{text}");
+    assert!(overflow_marker(&text, '↓').is_some(), "{text}");
+    assert!(overflow_marker(&text, '↑').is_none(), "{text}");
+
+    // In the middle both overflow markers appear and the pointer follows.
+    for _ in 0..20 {
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    }
+    let text = render_to_text(&mut app, 120, 30);
+    assert!(text.contains("› Model 20"), "{text}");
+    assert!(overflow_marker(&text, '↑').is_some(), "{text}");
+    assert!(overflow_marker(&text, '↓').is_some(), "{text}");
+
+    // At the last row ("Change provider…") only the top marker remains.
+    for _ in 0..(count - 20) {
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    }
+    let text = render_to_text(&mut app, 120, 30);
+    assert!(text.contains("› Change provider…"), "{text}");
+    assert!(overflow_marker(&text, '↑').is_some(), "{text}");
+    assert!(overflow_marker(&text, '↓').is_none(), "{text}");
+
+    // Down wraps to the first model; the pointer is visible again.
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    let text = render_to_text(&mut app, 120, 30);
+    assert!(text.contains("› Model 00"), "wrap-around works: {text}");
+
+    // Every model can be brought into view with the pointer on it.
+    for index in 0..count {
+        let text = render_to_text(&mut app, 120, 30);
+        let label = format!("Model {index:02}");
+        assert!(
+            text.contains(&format!("› {label}")),
+            "model {label} is not visible when selected:\n{text}"
+        );
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    }
+}
+
 #[test]
 fn escape_cancels_the_model_selector_without_changing_the_profile() {
     let mut app = profile_app();
