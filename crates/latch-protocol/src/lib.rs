@@ -815,6 +815,26 @@ pub enum ReasoningArtifact {
         #[serde(default)]
         data: String,
     },
+    /// A provider-visible text part that carried an opaque signature (for
+    /// example Gemini's final-part `thoughtSignature`). `text` is the exact
+    /// part text; the artifact's position in the sequence is significant.
+    SignedText {
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        signature: String,
+    },
+    /// Positional marker for a tool-call part that carries opaque replay state
+    /// (for example a Gemini `functionCall` part with a `thoughtSignature`).
+    /// The call itself stays in `tool_calls` and is referenced by its durable
+    /// id, so parallel and same-name calls remain distinguishable while the
+    /// exact part order is preserved.
+    ToolCall {
+        #[serde(default)]
+        call_id: String,
+        #[serde(default)]
+        signature: String,
+    },
 }
 
 impl std::fmt::Debug for ReasoningArtifact {
@@ -840,6 +860,22 @@ impl std::fmt::Debug for ReasoningArtifact {
                 .debug_struct("Redacted")
                 .field("data", &format_args!("<redacted {} bytes>", data.len()))
                 .finish(),
+            Self::SignedText { text, signature } => f
+                .debug_struct("SignedText")
+                .field("text", text)
+                .field(
+                    "signature",
+                    &format_args!("<redacted {} bytes>", signature.len()),
+                )
+                .finish(),
+            Self::ToolCall { call_id, signature } => f
+                .debug_struct("ToolCall")
+                .field("call_id", call_id)
+                .field(
+                    "signature",
+                    &format_args!("<redacted {} bytes>", signature.len()),
+                )
+                .finish(),
         }
     }
 }
@@ -850,8 +886,13 @@ impl ReasoningArtifact {
     #[must_use]
     pub fn replay_text(&self) -> &str {
         match self {
-            Self::Text { text } | Self::Thinking { text, .. } => text,
+            Self::Text { text } | Self::Thinking { text, .. } | Self::SignedText { text, .. } => {
+                text
+            }
             Self::Encrypted { data } | Self::Redacted { data } => data,
+            // A tool-call marker's payload is the call arguments, accounted
+            // separately from reasoning replay.
+            Self::ToolCall { .. } => "",
         }
     }
 
@@ -2011,14 +2052,68 @@ mod tests {
             ReasoningArtifact::Redacted {
                 data: "redacted".into(),
             },
+            ReasoningArtifact::SignedText {
+                text: "visible answer".into(),
+                signature: "signed-text".into(),
+            },
+            ReasoningArtifact::ToolCall {
+                call_id: "call-7".into(),
+                signature: "signed-call".into(),
+            },
         ];
         let json = serde_json::to_string(&artifacts).unwrap();
         assert!(json.contains("\"kind\":\"thinking\""));
         assert!(json.contains("\"kind\":\"redacted\""));
+        assert!(json.contains("\"kind\":\"signed_text\""));
+        assert!(json.contains("\"kind\":\"tool_call\""));
         let back: Vec<ReasoningArtifact> = serde_json::from_str(&json).unwrap();
         assert_eq!(back, artifacts);
         assert_eq!(artifacts[0].replay_text(), "deepseek reasoning");
         assert_eq!(artifacts[3].replay_text(), "redacted");
+        assert_eq!(artifacts[4].replay_text(), "visible answer");
+        assert_eq!(artifacts[5].replay_text(), "");
+    }
+
+    #[test]
+    fn positional_replay_artifacts_survive_the_durable_event_representation() {
+        // The exact ordered sequence of thought, signed-text, and tool-call
+        // parts must survive event serialization without reordering.
+        let payload = EventPayload::AssistantMessageCompleted {
+            text: "answer".into(),
+            tool_calls: vec![ToolCall {
+                id: "call-1".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": "a"}),
+            }],
+            reasoning_content: None,
+            reasoning: vec![
+                ReasoningArtifact::Thinking {
+                    text: "thought one".into(),
+                    signature: "sig-one".into(),
+                },
+                ReasoningArtifact::ToolCall {
+                    call_id: "call-1".into(),
+                    signature: "sig-call".into(),
+                },
+                ReasoningArtifact::SignedText {
+                    text: "answer".into(),
+                    signature: "sig-final".into(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: EventPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, payload);
+
+        // Old durable events without the new variants deserialize unchanged.
+        let legacy: EventPayload = serde_json::from_str(
+            r#"{"type":"assistant_message_completed","data":{"text":"hi","tool_calls":[],"reasoning_content":null}}"#,
+        )
+        .unwrap();
+        let EventPayload::AssistantMessageCompleted { reasoning, .. } = legacy else {
+            panic!("expected assistant message");
+        };
+        assert!(reasoning.is_empty());
     }
 
     #[test]
@@ -2033,10 +2128,20 @@ mod tests {
             text: "summary".into(),
             signature: "opaque-signature".into(),
         };
+        let signed = ReasoningArtifact::SignedText {
+            text: "answer".into(),
+            signature: "signed-secret".into(),
+        };
+        let call = ReasoningArtifact::ToolCall {
+            call_id: "call-1".into(),
+            signature: "call-secret".into(),
+        };
         for (artifact, secret) in [
             (&encrypted, "opaque-ciphertext"),
             (&redacted, "redacted-ciphertext"),
             (&thinking, "opaque-signature"),
+            (&signed, "signed-secret"),
+            (&call, "call-secret"),
         ] {
             let debug = format!("{artifact:?}");
             assert!(
