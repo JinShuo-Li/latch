@@ -3,13 +3,17 @@
 # the mandatory sandbox. Latch refuses to execute commands unsandboxed.
 
 default_mode = "WORK"
-# state_dir = "/home/you/.local/state/latch"
+# Storage root defaults to ~/.latch/ (config.toml, secrets.toml, latch.sqlite3,
+# artifacts/, cache/) and is created 0700. An explicit state_dir overrides it.
+# Existing ~/.config/latch + ~/.local/state/latch installs keep working in
+# place until `latch migrate` copies them explicitly.
+# state_dir = "/home/you/.latch"
 
 # Recommended multi-provider configuration. Each provider is a named instance
 # with a symbolic credential reference; secret values never live in this file.
 #
 # [providers.opencode-go]
-# kind = "opencode-go"                  # openai | anthropic | deepseek | opencode-go | openai-compatible
+# kind = "opencode-go"                  # openai | anthropic | deepseek | opencode-go | opencode-zen | openai-compatible
 # credential = "env:OPENCODE_API_KEY"  # env:NAME | file:NAME (0600 local store).
 # keyring:NAME parses for forward compatibility but is not available in this
 # build and is never advertised by /setup.
@@ -23,13 +27,22 @@ default_mode = "WORK"
 # efforts = ["none", "low", "high", "max"]
 # default_effort = "high"
 # reasoning_replay = "replay"
-# transport = "chat_completions"   # chat_completions | responses | anthropic_messages
+# transport = "chat_completions"   # chat_completions | responses | anthropic_messages | gemini
 # adaptive_thinking = false        # Anthropic adaptive thinking
 # input_modalities = ["text", "image"]  # explicit image input for a custom model
 # aliases = ["flash", "deepseek-v4.1-flash"]
 # [providers.opencode-go.models."deepseek-v4-flash".pricing]
 # input_per_million = 0.28
 # output_per_million = 0.42
+#
+# Custom/Advanced per-level wire mapping. A present map must cover every
+# exposed level; forms a transport cannot express are rejected at validation.
+# Built-in models use their adapter mapping and need no copy here.
+# [providers.custom.models."acme-pro".effort_map]
+# low = { value = "1" }
+# medium = { value = "2" }
+# high = { budget_tokens = 32768 }
+# none = { disabled = true }
 
 # Default inference profile. Precedence at startup:
 # CLI override > durable session profile (resume) > this config > built-in.

@@ -230,7 +230,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/setup",
-        description: "Configure a provider and credential",
+        description: "Open the provider configuration center",
     },
     SlashCommand {
         name: "/context",

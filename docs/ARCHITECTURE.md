@@ -118,27 +118,64 @@ Messages with adaptive thinking and exact thinking/redacted-block replay,
 DeepSeek uses Chat Completions with explicit `reasoning_effort` and the
 `thinking` toggle, and OpenCode Go resolves transport and reasoning efforts per
 model from its documented list.
-OpenCode Zen uses the same existing adapters for its documented Responses,
-Messages, and Chat Completions models at `https://opencode.ai/zen/v1`; Go's
-stable session header stays Go-only. The Zen transport list follows
-https://opencode.ai/docs/en/zen/ and excludes Gemini until its adapter is
-implemented. Run boundaries are durable (`RunStarted`/`RunCompleted`), so per-run accounting is
+OpenCode Zen uses the existing adapters for its documented Responses,
+Messages, and Chat Completions models and a Gemini `generateContent` adapter
+for its Gemini 3 rows at `https://opencode.ai/zen/v1`; Go's stable session
+header stays Go-only. The Zen transport list follows
+https://opencode.ai/docs/en/zen/.
+The Gemini adapter streams `models/{model}:streamGenerateContent?alt=sse`,
+serializes `contents` with text, `inlineData` images, `functionCall`, and
+`functionResponse` parts, preserves provider-native function-call ids with a
+deterministic fallback only when the API omits one, and correlates tool
+results by call id (the function name is recovered from history because the
+wire requires it, never used as the correlation key). Gemini thought and
+function-call signatures are positional replay state: the provider-neutral
+`ReasoningArtifact` sequence records every thought part, signed text part, and
+tool-call position in order, survives the durable event log and SQLite, and is
+replayed exactly on resume; non-Gemini providers ignore those variants. Run
+boundaries are durable (`RunStarted`/`RunCompleted`), so per-run accounting is
 explicit while session totals remain cumulative.
+
+`effort_map` is user configuration only for Custom/Advanced models: the
+resolved per-level map travels on the `ModelDescriptor` and each transport
+adapter serializes the form it documents (`reasoning_effort`,
+`reasoning.effort`, `output_config.effort`, `thinking.budget_tokens`,
+`thinkingConfig.thinkingLevel`/`thinkingBudget`, or the documented off
+switch). Validation enforces coverage of every exposed level, a default that
+is exposed, and transport expressibility; the kernel loop and durable memory
+never see a wire mapping. Built-in models keep using the adapter's catalog
+mapping and need no copied map.
+
+Model availability discovery for OpenCode Go/Zen is a CLI request/response
+over the existing TUI channel: the TUI never performs network I/O, only ids
+cross the boundary, and a successful snapshot is cached as regenerable
+metadata under the resolved `cache_root` with a conservative freshness
+window. Built-in catalog metadata always wins over discovered availability
+for transport and capabilities, explicit user overrides win last, and an
+unknown discovered id becomes an unresolved setup row that Advanced must
+configure before `/model` can activate it.
 
 The TUI consumes a provider-neutral catalog from the CLI for `/model` and
 `/setup`; it never inspects base URLs, model families, or wire parameters.
 `configuration_center.rs` owns the provider-list navigation state and emits
-actions for Add, Credential, Models, Default model, Advanced, new-session
-default, and Remove. It holds only symbolic credential references and display
-statuses; the CLI/kernel owns resolution and persistence. The CLI sends
-`SetupProviders` rows with credential and model readiness, and refreshes them
-after setup changes. The TUI renders the rows through the existing windowed
-choice surface.
+field-level actions for Add, Credential, Models, Add custom model, Default
+model, Advanced (base URL, provider name, display name, transport, context
+window, replay policy, adaptive thinking, input modalities, aliases, effort
+levels, default effort, and the effort wire map), new-session default, and
+Remove. It holds only symbolic credential references and display statuses;
+the CLI/kernel owns resolution and persistence. The CLI sends
+`SetupProviders` rows with credential, model, and override readiness, the
+resolved storage destination shown on Save review, and refreshes them after
+setup changes. The TUI renders the rows through the existing windowed choice
+surface.
 Known providers use `KnownProviderFlow` under the configuration center: it
 collects a credential, enabled model selection, and a provider default before
-Save. The plan carries selections only; catalog metadata stays in the kernel.
-Endpoint and effort controls are absent from this normal path.
-Custom model entries require an explicit transport override before activation.
+Save. Custom Provider uses `CustomProviderFlow`, which additionally asks for
+protocol and base URL and one custom model. Both plans carry selections only;
+catalog metadata stays in the kernel, and each Advanced edit writes exactly
+one override field. Custom model entries require an explicit transport
+override before activation; a user-declared OpenAI-compatible provider
+resolves its models through the protocol chosen at provider setup.
 An unknown id can retain display metadata in setup while the registry excludes
 it from `/model`; legacy single-provider custom models receive their former
 default transport during normalization to preserve existing installations.

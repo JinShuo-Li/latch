@@ -29,17 +29,24 @@ export OPENAI_API_KEY=...
 cargo install --path crates/latch-cli
 ```
 
-Run `/setup` in the TUI to configure a known provider: choose the provider,
+Run `/setup` in the TUI to configure a provider: choose the provider, the
 credential source (environment variable or a securely entered key stored
-`0600`), models to enable, and its default model, then Save. Known endpoints
-and model capabilities come from Latch's catalog. `/model` switches the live inference profile
-(provider, model, effort) without restarting the session.
-OpenCode Zen is available as `opencode-zen`; its built-in rows currently cover
-the documented Responses, Messages, and Chat Completions endpoints. Gemini
-rows require a separate transport and are not offered yet.
-Custom providers ask for an endpoint and a model request id and display name.
-Their model transport is set in Advanced before the model can run. Unknown
-models with no transport remain visible in setup but are excluded from `/model`.
+`0600`), the models to enable, and its default model, then Save. That is the
+whole normal path; known endpoints and model capabilities come from Latch's
+catalog. `/setup` is a configuration center: it opens on the provider list,
+shows each provider's status (`ready`, `missing credential`, `unresolved
+models`), and navigates to Credential, Models, Default model, Advanced, and
+Remove for each provider. Advanced edits base URL, provider name, transport,
+context window, reasoning replay, adaptive thinking, input modalities,
+aliases, effort levels, default effort, and per-level wire mappings one field
+at a time. Custom Provider additionally asks for its protocol and base URL up
+front; adding a custom model asks only for the request/model id and a display
+name, and the model stays out of `/model` until Advanced resolves its
+transport. `/model` switches the live inference profile (provider, model,
+effort) without restarting the session and never edits configuration.
+OpenCode Zen is available as `opencode-zen` with the documented Responses,
+Messages, Chat Completions, and Gemini endpoints. Unknown models with no
+transport remain visible in setup but are excluded from `/model`.
 
 Configuration is provider-neutral and multi-provider:
 
@@ -57,8 +64,16 @@ effort = "low"
 
 `enabled_models` may select a subset of a provider's catalog; when absent,
 the full built-in catalog plus custom entries is offered. Per-model tables
-contain only fields the user overrides. Latch does not write built-in model
-facts into the config.
+contain only fields the user overrides, and each Advanced edit writes exactly
+one field so unrelated overrides survive. Latch does not write built-in model
+facts into the config. Model metadata resolves in one order: built-in catalog
+-> discovered availability evidence -> explicit user overrides. A Go/Zen
+refresh (`GET /models`) only proves that an id is served: it can mark a known
+model available or introduce an unknown id as `unresolved`, but it never
+invents transport, context window, modalities, replay, or effort support, and
+a failed or empty refresh leaves configuration and the catalog untouched.
+Successful snapshots are cached as regenerable metadata under
+`~/.latch/cache/`, which is always safe to delete.
 Each provider's `default_model` is used when switching to that provider.
 `[inference]` seeds new sessions and is set by the first usable setup; later
 provider saves preserve it. The provider menu's **Set as new-session default**
@@ -67,15 +82,18 @@ is separate.
 
 Credentials are symbolic (`env:NAME`, `file:NAME`, or `keyring:NAME`) and are
 never stored in the config, the durable event log, the transcript, or logs.
-Setup stages and syncs config and secrets before Save. A stored key is committed
-first, so an interrupted save cannot leave config pointing at an uncommitted
-secret; a failed config commit may leave an unused secret for later cleanup.
-The legacy single `[provider]` table (and global `[models.*]` metadata) still
-loads and migrates automatically, so existing configs keep working. Provider
+`file:NAME` values live in `~/.latch/secrets.toml` (`0600`, staged writes).
+Setup stages and syncs config and secrets before Save. A stored key is
+committed first, so an interrupted save cannot leave config pointing at an
+uncommitted secret; a failed config commit may leave an unused secret for
+later cleanup. A `file:` reference whose stored value is missing is reported
+as `missing credential` — a recoverable provider status, not a startup
+failure — and `/setup` offers to enter the key again. The legacy single
+`[provider]` table (and global `[models.*]` metadata) still loads and
+migrates automatically, so existing configs keep working. Provider
 requests identify as `latch/0.2.2`; OpenCode Go endpoints additionally receive
 a stable `x-opencode-session` header carrying the durable session id, so
-`--resume` keeps the same value. Model metadata precedence is explicit user
-configuration > built-in catalog > conservative default; unknown models never
+`--resume` keeps the same value. Unknown models never
 receive invented context windows, pricing, cache semantics, or reasoning
 parameters, and unsupported effort values are never sent on the wire.
 
@@ -95,14 +113,25 @@ Anthropic models use
 adaptive thinking with exact thinking/redacted-block replay; DeepSeek's
 canonical API models are `deepseek-flash` and `deepseek-v4-pro` (Chat
 Completions, `none`/`low`/`high`/`max`, required `reasoning_content` replay,
-retired names accepted as aliases only); and OpenCode Go resolves transport,
+retired names accepted as aliases only); OpenCode Go resolves transport,
 reasoning efforts, and capabilities per model from its current documented list
 (GPT/Grok/Muse Spark over Responses, MiniMax/Qwen over Messages, the rest over
-Chat Completions). Unknown models stay conservative:
+Chat Completions); OpenCode Zen adds Gemini 3 models over the Generative
+Language `generateContent` transport. Unknown models stay conservative:
 provider-default effort only, no replay assumption, no invented context
 window or pricing. Advanced users can override context window, efforts,
 default effort, replay policy, aliases, pricing, transport, and adaptive
 thinking per model under `[providers.<id>.models.<id>]`.
+
+Custom/Advanced models can map each exposed level to its exact wire form with
+`effort_map`: `{ value = "…" }` for the transport's effort field,
+`{ budget_tokens = N }` for a thinking budget, or `{ disabled = true }` for
+the documented off switch. A present map must cover every exposed level;
+`default_effort` must be one of them; forms a transport cannot express are
+rejected at validation with an actionable message. Mapping is serialization:
+it lives in the transport adapter, and the kernel loop and durable memory
+never see it. Built-in models use their catalog/adapter mapping and do not
+need a copied map in user config.
 
 `keyring:NAME` credentials parse for forward compatibility but are not
 available in this build; `/setup` offers environment variables and the 0600
@@ -125,12 +154,15 @@ workspace clearly changes Latch to that session's persisted workspace. Resume
 restores the visible transcript, effective mode (override with `--mode work`),
 task state, evidence, failure streaks, provider session UUID, continuity, and
 change ownership without re-running historical tools. Session metadata lives
-under `~/.latch/` by default, with the database at `latch.sqlite3` and large
-output under `artifacts/`. Existing XDG installs (`~/.config/latch/config.toml`
-and `~/.local/state/latch/`) continue to run in place until `latch migrate`
-explicitly copies them. Migration keeps backups and records its source in
-`~/.latch/migration.toml`. Removing the new config after migration starts fresh
-setup; it does not reopen the old config.
+under `~/.latch/` (created `0700`) by default: `config.toml`, `secrets.toml`
+(`0600`), `latch.sqlite3`, `artifacts/`, and the regenerable `cache/`. Existing
+XDG installs (`~/.config/latch/config.toml` and
+`~/.local/state/latch/`) continue to run in place until `latch migrate`
+explicitly copies them. Migration keeps non-discoverable backups and records
+its source in `~/.latch/migration.toml`. Removing the new config after
+migration starts fresh setup; it does not reopen the old config. `latch
+doctor` reports the resolved paths, their source, and migration provenance
+using symbolic credential references only.
 
 Child agents are independent sessions and are omitted from the ordinary root
 session picker. Resuming a root reconstructs its durable child graph; a child
@@ -255,10 +287,11 @@ credential).
 
 ## Terminal interface
 
-When no usable provider is configured, the guided `/setup` flow opens on the
-first run. Its active field shows the current value, accepts paste and ordinary
-editing, uses Enter to confirm and Esc to go back, and masks secrets in both
-the display and debug formatting.
+When no usable provider is configured, the `/setup` configuration center opens
+on the provider list with Add highlighted. Its active field shows the current
+value, accepts paste and ordinary editing, uses Enter to confirm and Esc to go
+back, and masks secrets in both the display and debug formatting. Save review
+names the resolved storage root and config file it will write to.
 
 The transcript is a semantic conversation rather than a kernel event log.
 User-authored messages sit on a full-width neutral band with a `›` gutter,
@@ -629,8 +662,10 @@ the same picker as `latch --resume`. `/quit` and `/exit` are aliases and never
 become model input or durable user messages. `/compact` resets the active
 working set while retaining durable history and canonical state. `/model`
 walks provider → model → effort in the bottom selector and applies the chosen
-profile live; Esc preserves the current profile. `/setup` is the guided
-persistent configuration flow. Both are disabled during an active turn, and
+profile live; a provider switch lands on that provider's configured default
+model, and Esc preserves the current profile. `/setup` is the configuration
+center for persistent provider, credential, model, and Advanced edits. Both
+are disabled during an active turn, and
 the composer metadata always shows the active model and effort together.
 
 ## TUI controls
@@ -683,11 +718,12 @@ the composer metadata always shows the active model and effort together.
   composer metadata (for example `WORK · deepseek-v4-flash/low · main · std ·
   ask`) and both settings are restored exactly on resume.
 - **Model/effort:** `/model` opens the live inference-profile selector and
-  `/setup` the guided provider setup; both show only values the selected model
-  supports and are unavailable during an active turn. `/setup` also supports
-  adding, editing, and removing provider instances: removal asks for one
-  confirmation, keeps stored credentials, and refuses to remove the only
-  configured provider so `[inference]` never dangles.
+  `/setup` the configuration center; both show only values the selected model
+  supports and are unavailable during an active turn. `/setup` supports
+  adding, editing, and removing provider instances, adding custom models, and
+  editing Advanced overrides; removal asks for one confirmation, keeps stored
+  credentials, and refuses to remove the only configured provider so
+  `[inference]` never dangles.
 - **Run metrics:** the sidebar shows a RUN block for the current/last user
   request next to cumulative SESSION totals. Reasoning-replay, tool-argument,
   and tool-result estimates are run-cumulative with the most recent request
