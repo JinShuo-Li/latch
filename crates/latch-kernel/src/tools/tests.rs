@@ -18,6 +18,24 @@ fn call(name: &str, args: Value) -> ToolCall {
     }
 }
 
+/// Reads `path` and returns the version hash the way a model obtains a
+/// `base_hash`, asserting the read itself succeeded.
+async fn read_hash(executor: &ToolExecutor, path: &str) -> String {
+    let read = executor
+        .execute(
+            &call("read_file", json!({"path": path})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!read.is_error, "{}", read.output);
+    read.output
+        .lines()
+        .next()
+        .unwrap()
+        .trim_start_matches("hash: ")
+        .to_owned()
+}
+
 #[test]
 fn configured_state_dir_reaches_commands_extensions_and_children() {
     let dir = tempdir().unwrap();
@@ -183,6 +201,204 @@ async fn self_authored_edit_can_be_repaired_without_a_reread() {
         std::fs::read_to_string(d.path().join("a.txt")).unwrap(),
         "right"
     );
+}
+
+#[tokio::test]
+async fn whole_file_write_requires_current_base_and_recovers_after_reread() {
+    let (d, e) = setup(Mode::Work);
+    let path = d.path().join("a.txt");
+    let base = read_hash(&e, "a.txt").await;
+    // Operating on the current version succeeds.
+    let first = e
+        .execute(
+            &call(
+                "write",
+                json!({"path":"a.txt","base_hash":&base,"content":"H1"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!first.is_error, "{}", first.output);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "H1");
+    // Reusing the old base is stale even for the writer that produced H1:
+    // version equality decides, not who authored the intervening version.
+    let stale = e
+        .execute(
+            &call(
+                "write",
+                json!({"path":"a.txt","base_hash":&base,"content":"H2"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        stale.is_error,
+        "stale whole-file write must fail: {}",
+        stale.output
+    );
+    assert!(
+        stale.output.contains("stale write rejected"),
+        "{}",
+        stale.output
+    );
+    assert!(stale.output.contains("re-read"), "{}", stale.output);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "H1",
+        "a rejected write must not touch the file"
+    );
+    // A fresh read yields the current base; retrying then succeeds and the
+    // file is exactly the caller's bytes, never a silent merge.
+    let current = read_hash(&e, "a.txt").await;
+    assert_ne!(current, base);
+    let retry = e
+        .execute(
+            &call(
+                "write",
+                json!({"path":"a.txt","base_hash":&current,"content":"H2"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!retry.is_error, "{}", retry.output);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "H2");
+}
+
+#[tokio::test]
+async fn root_and_child_whole_file_writes_cannot_lose_concurrent_changes() {
+    let d = tempdir().unwrap();
+    std::fs::write(d.path().join("shared.txt"), "H0").unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let root_session = store.create_session(d.path()).unwrap();
+    let root = ToolExecutor::new(
+        d.path().into(),
+        d.path().join("artifacts"),
+        store,
+        root_session,
+        PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let child = root.for_child(Uuid::new_v4()).unwrap();
+
+    // A (root) and B (child) both read H0.
+    let a_base = read_hash(&root, "shared.txt").await;
+    let b_base = read_hash(&child, "shared.txt").await;
+    assert_eq!(a_base, b_base);
+
+    // A writes H1; B's whole-file write is still based on H0.
+    let a = root
+        .execute(
+            &call(
+                "write",
+                json!({"path":"shared.txt","base_hash":&a_base,"content":"H1"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        !a.is_error,
+        "A's current-base write must succeed: {}",
+        a.output
+    );
+    let b = child
+        .execute(
+            &call(
+                "write",
+                json!({"path":"shared.txt","base_hash":&b_base,"content":"H2"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(b.is_error, "B's stale write must fail: {}", b.output);
+    assert!(b.output.contains("stale write rejected"), "{}", b.output);
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("shared.txt")).unwrap(),
+        "H1",
+        "A's concurrent change must remain"
+    );
+
+    // B re-reads the current version and then succeeds.
+    let fresh = read_hash(&child, "shared.txt").await;
+    let retry = child
+        .execute(
+            &call(
+                "write",
+                json!({"path":"shared.txt","base_hash":&fresh,"content":"H2"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!retry.is_error, "{}", retry.output);
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("shared.txt")).unwrap(),
+        "H2"
+    );
+}
+
+#[tokio::test]
+async fn child_agents_cannot_overwrite_each_others_whole_file_writes() {
+    let d = tempdir().unwrap();
+    std::fs::write(d.path().join("shared.txt"), "H0").unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let root_session = store.create_session(d.path()).unwrap();
+    let root = ToolExecutor::new(
+        d.path().into(),
+        d.path().join("artifacts"),
+        store,
+        root_session,
+        PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let child_a = root.for_child(Uuid::new_v4()).unwrap();
+    let child_b = root.for_child(Uuid::new_v4()).unwrap();
+
+    // Root, A, and B all read H0.
+    let root_base = read_hash(&root, "shared.txt").await;
+    let a_base = read_hash(&child_a, "shared.txt").await;
+    let b_base = read_hash(&child_b, "shared.txt").await;
+
+    // A (child) wins the write race.
+    let a = child_a
+        .execute(
+            &call(
+                "write",
+                json!({"path":"shared.txt","base_hash":&a_base,"content":"HA"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!a.is_error, "{}", a.output);
+
+    // B (child/child) and root (child/root) still hold H0; both must fail.
+    for (label, executor, base) in [
+        ("child B", &child_b, b_base.as_str()),
+        ("root", &root, root_base.as_str()),
+    ] {
+        let stale = executor
+            .execute(
+                &call(
+                    "write",
+                    json!({"path":"shared.txt","base_hash":base,"content":"lost"}),
+                ),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            stale.is_error,
+            "{label} stale write must fail: {}",
+            stale.output
+        );
+        assert!(
+            stale.output.contains("stale write rejected"),
+            "{}",
+            stale.output
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("shared.txt")).unwrap(),
+            "HA",
+            "{label} must not overwrite A's change"
+        );
+    }
 }
 
 #[tokio::test]

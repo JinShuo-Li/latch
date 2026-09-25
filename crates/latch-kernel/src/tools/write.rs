@@ -36,7 +36,11 @@ impl ToolExecutor {
             &before,
             call.arguments.get("base_hash").and_then(Value::as_str),
         ) {
-            (Some(bytes), Some(base)) => self.ensure_fresh(&path, bytes, base).await?,
+            // Whole-file writes are strict compare-and-swap: the base hash
+            // must equal the current bytes exactly. A newer version some
+            // agent authored is still a different version from this caller's
+            // base and must never be overwritten without a re-read.
+            (Some(bytes), Some(base)) => self.ensure_base_exact(&path, bytes, base).await?,
             (Some(_), None) => bail!("existing file requires base_hash from read_file"),
             (None, Some(_)) => bail!("new file must not provide base_hash"),
             (None, None) => {}
@@ -44,27 +48,56 @@ impl ToolExecutor {
         self.commit_change(path, before, content, ChangeOwner::Latch, Some(&call.id))
             .await
     }
+    /// Strict whole-file compare-and-swap. "Some agent authored this hash" is
+    /// not a substitute for version equality: only the exact current version
+    /// may be replaced, so a writer holding an older base re-reads instead of
+    /// silently discarding the newer content.
+    async fn ensure_base_exact(&self, path: &Path, bytes: &[u8], base: &str) -> Result<()> {
+        let actual = hash(bytes);
+        if actual != base {
+            if !self.is_self_authored(path, &actual) {
+                self.note_external_change(path, base, &actual).await?;
+            }
+            let display =
+                relative(&self.workspace, path).unwrap_or_else(|_| path.display().to_string());
+            bail!(
+                "stale write rejected: expected base_hash {base} for {display}, found {actual}; \
+                 re-read the file and retry with its current hash"
+            );
+        }
+        Ok(())
+    }
+    /// Exact replacement keeps its repairable self-authored semantics: the
+    /// patch itself applies only when `old` still matches current content
+    /// exactly once, so it can neither merge nor blindly overwrite another
+    /// writer's change. Genuine external modification fails before the
+    /// replacement runs. Whole-file writes never take this shortcut; see
+    /// [`Self::ensure_base_exact`].
     async fn ensure_fresh(&self, path: &Path, bytes: &[u8], base: &str) -> Result<()> {
         let actual = hash(bytes);
-        // Drift onto a hash Latch itself wrote is self-authored: the guarded
-        // edit proceeds against current content without a forced re-read.
-        // Genuine external modification still fails below.
         if actual != base && !self.is_self_authored(path, &actual) {
-            self.store.append(
-                self.session_id,
-                EventPayload::ExternalFileChangeDetected {
-                    path: relative(&self.workspace, path)?,
-                    expected_hash: base.into(),
-                    actual_hash: actual.clone(),
-                },
-            )?;
-            self.ledger
-                .lock()
-                .await
-                .externally_changed
-                .insert(path.to_path_buf());
+            self.note_external_change(path, base, &actual).await?;
             bail!("stale observation: expected {base}, found {actual}; re-read before editing");
         }
+        Ok(())
+    }
+    /// Durable external-drift record shared by guarded edits. Drift onto a
+    /// hash Latch itself wrote is concurrent-agent drift, not external
+    /// modification, so only genuinely external change is recorded here.
+    async fn note_external_change(&self, path: &Path, base: &str, actual: &str) -> Result<()> {
+        self.store.append(
+            self.session_id,
+            EventPayload::ExternalFileChangeDetected {
+                path: relative(&self.workspace, path)?,
+                expected_hash: base.into(),
+                actual_hash: actual.to_owned(),
+            },
+        )?;
+        self.ledger
+            .lock()
+            .await
+            .externally_changed
+            .insert(path.to_path_buf());
         Ok(())
     }
     /// Write paths honor an explicit outside-workspace approval: the user saw

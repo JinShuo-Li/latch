@@ -640,10 +640,16 @@ Latch- and shell-owned changes persist across restarts: pre-change bytes go to
 content-addressed artifacts referenced by `FileChanged` events, and
 `ChangeReverted` tombstones keep a resumed ledger from re-applying undone
 work. `/undo` peeks before popping, restores only when the file still matches
-the recorded post-change hash, and refuses otherwise. Guarded edits check the
-`base_hash` against the current bytes, but drift onto a hash Latch itself wrote
-is recognized as self-authored, so read → edit → repair works without a forced
-re-read; only genuinely external modification trips the stale path. Workspace drift around
+the recorded post-change hash, and refuses otherwise. Whole-file writes are
+strict compare-and-swap: the `base_hash` must equal the current bytes exactly,
+and a newer version any writer authored — including a concurrent root or child
+agent — rejects the write as stale so the loser re-reads instead of silently
+losing the winner's change. Exact `patch` replacement keeps the repairable
+self-authored rule: drift onto a hash Latch itself wrote proceeds without a
+forced re-read, but the replacement still has to match its `old` text exactly
+once in current content, so it can neither merge nor blindly overwrite another
+writer's change; only genuinely external modification trips the same stale
+path. Workspace drift around
 shell commands is classified honestly: Git workspaces get reversible `Shell`-owned
 records where pre-content was capturable (captured dirty files, or the HEAD
 blob for previously clean files) and explicit non-reversible markers otherwise;

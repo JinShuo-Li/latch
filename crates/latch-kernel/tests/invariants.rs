@@ -1820,3 +1820,103 @@ async fn custom_root_engine_without_child_policy_fails_closed() {
         "no successful spawn result may be fabricated"
     );
 }
+
+/// Reads `path` and returns the version hash the way a model obtains a
+/// `base_hash`.
+async fn executor_read_hash(executor: &ToolExecutor, path: &str) -> String {
+    let result = executor
+        .execute(
+            &call("read", "read_file", json!({"path": path})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!result.is_error, "{}", result.output);
+    result
+        .output
+        .lines()
+        .next()
+        .unwrap()
+        .trim_start_matches("hash: ")
+        .to_owned()
+}
+
+/// Whole-file writes are compare-and-swap: the caller's `base_hash` must equal
+/// the current bytes, so a writer holding an older version can never silently
+/// overwrite a newer change — including one a concurrent child agent authored.
+/// The stale write is rejected and the winner's bytes remain.
+#[tokio::test]
+async fn stale_whole_file_writes_never_overwrite_newer_changes() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("shared.txt"), "H0").unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(dir.path()).unwrap();
+    let root = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        store,
+        session,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let child = root.for_child(uuid::Uuid::new_v4()).unwrap();
+
+    // A (root) and B (child) both read H0.
+    let root_base = executor_read_hash(&root, "shared.txt").await;
+    let child_base = executor_read_hash(&child, "shared.txt").await;
+    assert_eq!(root_base, child_base);
+
+    // A writes H1 with the current base.
+    let first = root
+        .execute(
+            &call(
+                "a",
+                "write",
+                json!({"path":"shared.txt","base_hash":root_base,"content":"H1"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!first.is_error, "{}", first.output);
+
+    // B's whole-file write is still based on H0 and must fail, not overwrite.
+    let stale = child
+        .execute(
+            &call(
+                "b",
+                "write",
+                json!({"path":"shared.txt","base_hash":child_base,"content":"H2"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(stale.is_error, "{}", stale.output);
+    assert!(
+        stale.output.contains("stale write rejected"),
+        "{}",
+        stale.output
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("shared.txt")).unwrap(),
+        "H1",
+        "the newer change must remain"
+    );
+
+    // Re-reading the current version admits the retry with the caller's exact
+    // bytes: no silent merge of the two writers.
+    let fresh = executor_read_hash(&child, "shared.txt").await;
+    let retry = child
+        .execute(
+            &call(
+                "c",
+                "write",
+                json!({"path":"shared.txt","base_hash":fresh,"content":"H2"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!retry.is_error, "{}", retry.output);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("shared.txt")).unwrap(),
+        "H2"
+    );
+}
