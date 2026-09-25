@@ -232,11 +232,13 @@ construction, attachments, and policy are identical everywhere.
 
 `latch doctor` is a read-only preflight for the machine a run depends on. It
 checks the mandatory Bubblewrap sandbox (by probing a minimal sandboxed
-command), the `rg` search runtime, Git, the effective config path and state
-directory, the resolved provider/model/effort, and that the provider credential
+command), the `rg` search runtime, Git, every resolved storage path and its
+source (`explicit`, `new`, or `legacy`), migration status, the resolved
+provider/model/effort, and that the provider credential
 resolves. It never contacts the provider, never runs a task, and never prints
 secret material: a credential is reported only by its symbolic reference
 (`env:NAME`, `file:NAME`).
+The JSON report uses schema version 2 for the added `paths` object.
 
 ```sh
 latch doctor

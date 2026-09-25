@@ -1368,7 +1368,7 @@ fn doctor_reports_profile_and_credential() {
         "doctor must never contact the provider"
     );
     let value = stdout_json(&output);
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["provider"], "mock");
     assert_eq!(value["model"], "mock-model");
     let checks = value["checks"].as_array().expect("checks array");

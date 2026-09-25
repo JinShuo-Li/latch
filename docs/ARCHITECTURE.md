@@ -50,6 +50,8 @@ config is absent, an exact live XDG config is read in place. The explicit
 and copies artifacts and secrets before publishing the new config. It writes a
 migration marker and renames legacy config and secrets to backup names so
 deleting the new config cannot reactivate the old installation.
+`latch doctor` reads the same `ResolvedPaths` result and reports every path,
+its source, and migration provenance. It prints credential references only.
 Setup saves validate the proposed provider profile before writing. Config and
 secrets are staged in their destination directories and synced; a new secret
 is committed before config publishes its `file:<id>` reference. A failed

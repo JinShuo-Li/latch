@@ -17,6 +17,7 @@
 use crate::cli::command::{Args, DoctorArgs, OutputFormat};
 use crate::cli::output::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE};
 use crate::cli::session::resolve_workspace;
+use latch_kernel::paths::ResolvedPaths;
 use latch_kernel::{Config, CredentialStore, ProviderRegistry};
 use latch_protocol::{InferenceProfile, ProviderId, ReasoningEffort};
 use serde::Serialize;
@@ -25,7 +26,7 @@ use std::process::ExitCode;
 
 /// Doctor's payload has no relationship to the run/resume schema, so it keeps
 /// its own independent version.
-const DOCTOR_SCHEMA_VERSION: u32 = 1;
+const DOCTOR_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,10 +96,70 @@ struct Report {
     workspace: String,
     config_path: Option<String>,
     state_dir: Option<String>,
+    paths: Option<DoctorPaths>,
     provider: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     checks: Vec<Check>,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorPaths {
+    source: &'static str,
+    config: String,
+    state_root: String,
+    secrets: String,
+    database: String,
+    artifacts: String,
+    cache: String,
+    migration: String,
+}
+
+impl DoctorPaths {
+    fn resolve(config_path: Option<&Path>, state_root: &Path) -> Self {
+        let paths = ResolvedPaths::resolve(config_path, Some(state_root));
+        Self::from_resolved(&paths)
+    }
+
+    fn from_resolved(paths: &ResolvedPaths) -> Self {
+        let migration = if paths.migration_marker().exists() {
+            let marker = std::fs::read_to_string(paths.migration_marker())
+                .ok()
+                .and_then(|text| text.parse::<toml::Table>().ok());
+            let source = marker
+                .as_ref()
+                .and_then(|table| table.get("source_config"))
+                .and_then(toml::Value::as_str);
+            let source_state = marker
+                .as_ref()
+                .and_then(|table| table.get("source_state"))
+                .and_then(toml::Value::as_str);
+            let timestamp = marker
+                .as_ref()
+                .and_then(|table| table.get("migrated_at"))
+                .and_then(toml::Value::as_str);
+            match (source, source_state, timestamp) {
+                (Some(source), Some(source_state), Some(timestamp)) => {
+                    format!("migrated from config {source} and state {source_state} at {timestamp}")
+                }
+                _ => "migration marker unreadable".to_owned(),
+            }
+        } else if paths.source == latch_kernel::paths::PathSource::Legacy {
+            "legacy in place".to_owned()
+        } else {
+            "none".to_owned()
+        };
+        Self {
+            source: paths.source.label(),
+            config: paths.config_path.display().to_string(),
+            state_root: paths.state_root.display().to_string(),
+            secrets: paths.secrets_path.display().to_string(),
+            database: paths.database_path.display().to_string(),
+            artifacts: paths.artifacts_root.display().to_string(),
+            cache: paths.cache_root.display().to_string(),
+            migration,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -209,6 +270,10 @@ pub fn execute(args: &Args, doctor: DoctorArgs) -> ExitCode {
         workspace: workspace.display().to_string(),
         config_path: config_path.map(|path| path.display().to_string()),
         state_dir: Some(config.state_dir.display().to_string()),
+        paths: Some(DoctorPaths::resolve(
+            args.config.as_deref(),
+            &config.state_dir,
+        )),
         provider,
         model,
         effort,
@@ -420,6 +485,7 @@ fn config_error_report(workspace: &Path, config_path: Option<&Path>, checks: Vec
         workspace: workspace.display().to_string(),
         config_path: config_path.map(|path| path.display().to_string()),
         state_dir: None,
+        paths: None,
         provider: None,
         model: None,
         effort: None,
@@ -444,6 +510,14 @@ fn print_text(report: &Report) {
     }
     if let Some(state_dir) = &report.state_dir {
         println!("state      {state_dir}");
+    }
+    if let Some(paths) = &report.paths {
+        println!("source     {}", paths.source);
+        println!("secrets    {}", paths.secrets);
+        println!("database   {}", paths.database);
+        println!("artifacts  {}", paths.artifacts);
+        println!("cache      {}", paths.cache);
+        println!("migration  {}", paths.migration);
     }
     if let (Some(provider), Some(model)) = (&report.provider, &report.model) {
         println!(
@@ -495,6 +569,47 @@ fn print_json<T: Serialize>(value: &T) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostics_report_resolved_paths_and_migration_without_secret_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let legacy_config = home.join(".config/latch");
+        std::fs::create_dir_all(&legacy_config).unwrap();
+        std::fs::write(legacy_config.join("config.toml"), "").unwrap();
+        let legacy = ResolvedPaths::resolve_with_roots(
+            home,
+            &home.join(".config"),
+            &home.join(".local/state/latch"),
+            None,
+            None,
+        );
+        let report = DoctorPaths::from_resolved(&legacy);
+        assert_eq!(report.source, "legacy");
+        assert_eq!(report.migration, "legacy in place");
+        assert_eq!(
+            report.database,
+            home.join(".local/state/latch/latch.sqlite3")
+                .display()
+                .to_string()
+        );
+
+        let new = ResolvedPaths::for_state(&home.join(".latch"));
+        std::fs::create_dir_all(&new.state_root).unwrap();
+        std::fs::write(
+            new.migration_marker(),
+            format!(
+                "source_config = '{}'\nsource_state = '{}'\nmigrated_at = '2026-09-25T00:00:00Z'\n",
+                legacy.config_path.display(),
+                legacy.state_root.display(),
+            ),
+        )
+        .unwrap();
+        let report = DoctorPaths::from_resolved(&new);
+        assert!(report.migration.contains("migrated from"));
+        assert!(report.migration.contains("2026-09-25"));
+        assert!(!format!("{report:?}").contains("private-value"));
+    }
 
     #[test]
     fn successful_checks_exit_zero() {
@@ -549,6 +664,7 @@ mod tests {
             workspace: "/tmp/ws".into(),
             config_path: None,
             state_dir: Some("/tmp/state".into()),
+            paths: None,
             provider: Some("openai".into()),
             model: Some("gpt-5-mini".into()),
             effort: Some("default".into()),

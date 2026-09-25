@@ -10,6 +10,16 @@ pub enum PathSource {
     Legacy,
 }
 
+impl PathSource {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::New => "new",
+            Self::Legacy => "legacy",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegacyPaths {
     pub config_path: PathBuf,
