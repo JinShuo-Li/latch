@@ -27,4 +27,4 @@
                                                                                                     
   WORK · deepseek-flash/low · main · std · ask                                                      
                                                                                                     
-/tmp/latch-ui                                                                           latch v0.2.1
+/tmp/latch-ui                                                                           latch v0.2.2

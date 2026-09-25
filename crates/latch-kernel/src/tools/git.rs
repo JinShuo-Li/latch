@@ -7,7 +7,7 @@ impl ToolExecutor {
         let profile = self.sandbox_profile(call);
         let runner = self.sandbox_runner()?;
         let output = runner
-            .command(&profile, "git status --short --branch; git diff --stat")
+            .command(&profile, "git status --short --branch; git diff --stat")?
             .output()
             .await?;
         if !output.status.success() {
@@ -22,7 +22,7 @@ impl ToolExecutor {
         let profile = self.sandbox_profile(call);
         let runner = self.sandbox_runner()?;
         let output = runner
-            .command(&profile, "git diff --no-ext-diff --")
+            .command(&profile, "git diff --no-ext-diff --")?
             .output()
             .await?;
         if !output.status.success() {

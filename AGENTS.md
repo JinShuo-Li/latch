@@ -1,6 +1,6 @@
 # AGENTS.md — Latch
 
-Latch is a Linux-first Rust terminal coding agent (v0.2.1). Users drive it through
+Latch is a Linux-first Rust terminal coding agent (v0.2.2). Users drive it through
 the `latch` TUI (`cargo install --path crates/latch-cli` installs it).
 
 ## Hard constraints

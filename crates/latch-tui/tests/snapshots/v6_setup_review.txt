@@ -31,4 +31,4 @@
   WORK · std · ask                                                                                                 ready
                                                                                                                         
 enter send  ctrl+j newline  ctrl+p commands                                                                             
-.                                                                                                           latch v0.2.1
+.                                                                                                           latch v0.2.2

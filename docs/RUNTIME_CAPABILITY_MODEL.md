@@ -358,7 +358,7 @@ disturb the other.
 | Permissions / sandbox | `safety.rs`, `permissions.rs`, `tools/policy.rs`, `sandbox.rs` |
 | Evidence provenance | `agent/validation.rs`, `state.rs`, `agent/kernel_tools.rs` |
 | Tool-call integrity | `agent/dispatch.rs`, `agent/request.rs` (`sanitize_tool_history`) |
-| Secret isolation | `credentials.rs`, provider redaction |
+| Secret isolation | `credentials.rs`, `sandbox.rs` resolved state and credential mounts, provider redaction |
 | Context port invariants | `context.rs`, `continuity.rs` (default factory), `agents/supervisor.rs` (child policy), `tests/invariants.rs` (port parity, replaceability, child propagation, resume, fail-closed) |
 
 Related documents: [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full subsystem

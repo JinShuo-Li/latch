@@ -1,7 +1,7 @@
 # Latch
 
 Latch is a quiet, programmable terminal coding agent built around explicit state,
-evidence, controlled execution, and continuous long-session memory. V0.2.1 is a
+evidence, controlled execution, and continuous long-session memory. V0.2.2 is a
 Linux-first Rust implementation with a native streamed tool loop, durable SQLite
 sessions, OpenAI-compatible and Anthropic providers, kernel-owned validation
 evidence, guarded coding tools, three orthogonal Mode/Safety/Permissions
@@ -51,7 +51,7 @@ Credentials are symbolic (`env:NAME`, `file:NAME`, or `keyring:NAME`) and are
 never stored in the config, the durable event log, the transcript, or logs.
 The legacy single `[provider]` table (and global `[models.*]` metadata) still
 loads and migrates automatically, so existing configs keep working. Provider
-requests identify as `latch/0.2.1`; OpenCode Go endpoints additionally receive
+requests identify as `latch/0.2.2`; OpenCode Go endpoints additionally receive
 a stable `x-opencode-session` header carrying the durable session id, so
 `--resume` keeps the same value. Model metadata precedence is explicit user
 configuration > built-in catalog > conservative default; unknown models never
@@ -543,7 +543,8 @@ sandbox; Latch refuses to execute commands unsandboxed rather than falling back.
 The sandbox binds the host root read-only, gives the workspace an explicit
 read-only or writable mount (`.git` stays read-only unless Git metadata mutation
 was granted), provides private `/tmp` and scratch build output, masks `~/.ssh`,
-GPG/cloud/registry credentials, and `/run` sockets, and isolates user, PID,
+GPG/cloud/registry credentials, the resolved Latch state directory and any
+symlinked `secrets.toml` target, and `/run` sockets, and isolates user, PID,
 IPC, UTS, and network namespaces. `Approve for me` reviews shell commands with a
 separate stateless model call that returns strict JSON (`low` approves;
 `medium`/`high`/`critical` reject with one actionable sentence); non-command
@@ -718,9 +719,10 @@ LSP-style framed stdio. See [docs/PROTOCOL.md](docs/PROTOCOL.md), the minimal
 TypeScript SDK under `sdk/typescript`, and `extensions/example-ts`. The runtime
 platform model that governs extensions, replaceable backends, and future
 clients is [docs/RUNTIME_CAPABILITY_MODEL.md](docs/RUNTIME_CAPABILITY_MODEL.md).
-V0.2.1 runs
+V0.2.2 runs
 the extension host inside the mandatory sandbox (read-only workspace, masked
-home, network for protocol work); extension tool arguments remain a cooperative
+home and resolved Latch state directory, network for protocol work); extension
+tool arguments remain a cooperative
 audit contract, and no syscall isolation is claimed inside the host.
 
 Build and probe the reference extension with:
@@ -732,5 +734,5 @@ cargo run -p latch-kernel --example extension_probe -- \
   extensions/example-ts/dist/index.js
 ```
 
-Latch v0.2.1 supports Linux terminals only and requires the system `bwrap` binary. It has no daemon, browser automation,
+Latch v0.2.2 supports Linux terminals only and requires the system `bwrap` binary. It has no daemon, browser automation,
 remote execution, MCP, IDE integration, automatic commits, or automatic pushes.

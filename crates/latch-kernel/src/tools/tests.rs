@@ -17,6 +17,39 @@ fn call(name: &str, args: Value) -> ToolCall {
         arguments: args,
     }
 }
+
+#[test]
+fn configured_state_dir_reaches_commands_extensions_and_children() {
+    let dir = tempdir().unwrap();
+    let state_dir = dir.path().join("custom-state");
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(dir.path()).unwrap();
+    let policy = PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default());
+    let executor = ToolExecutor::new_with_state_dir(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        state_dir.clone(),
+        store,
+        session,
+        policy,
+    )
+    .unwrap();
+    assert_eq!(
+        executor
+            .sandbox_profile(&call("shell", json!({"command":"pwd"})))
+            .state_dir,
+        state_dir
+    );
+    assert_eq!(executor.extension_sandbox_profile().state_dir, state_dir);
+    assert_eq!(
+        executor
+            .for_child(Uuid::new_v4())
+            .unwrap()
+            .extension_sandbox_profile()
+            .state_dir,
+        state_dir
+    );
+}
 #[tokio::test]
 async fn ask_and_plan_deny_mutation() {
     for mode in [Mode::Ask, Mode::Plan] {

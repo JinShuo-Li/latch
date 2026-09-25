@@ -46,6 +46,7 @@ enum SandboxState {
 pub struct ToolExecutor {
     workspace: PathBuf,
     artifacts: PathBuf,
+    state_dir: PathBuf,
     store: EventStore,
     session_id: Uuid,
     policy: PolicyEngine,
@@ -118,6 +119,26 @@ impl ToolExecutor {
         session_id: Uuid,
         policy: PolicyEngine,
     ) -> Result<Self> {
+        Self::new_with_state_dir(
+            workspace,
+            artifacts,
+            crate::config::Config::default().state_dir,
+            store,
+            session_id,
+            policy,
+        )
+    }
+
+    /// Production sessions pass their configured state directory explicitly.
+    pub fn new_with_state_dir(
+        workspace: PathBuf,
+        artifacts: PathBuf,
+        state_dir: PathBuf,
+        store: EventStore,
+        session_id: Uuid,
+        policy: PolicyEngine,
+    ) -> Result<Self> {
+        std::fs::create_dir_all(&state_dir)?;
         std::fs::create_dir_all(&artifacts)?;
         let initial = git_dirty_hashes(&workspace).unwrap_or_default();
         let sandbox = match SandboxRunner::detect(&workspace) {
@@ -131,6 +152,7 @@ impl ToolExecutor {
         Ok(Self {
             workspace,
             artifacts,
+            state_dir,
             store,
             session_id,
             policy,
@@ -160,6 +182,7 @@ impl ToolExecutor {
         Ok(Self {
             workspace: self.workspace.clone(),
             artifacts,
+            state_dir: self.state_dir.clone(),
             store: self.store.clone(),
             session_id,
             policy: self.policy.clone(),
@@ -201,6 +224,7 @@ impl ToolExecutor {
         SandboxProfile::new(
             self.workspace.clone(),
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+            self.state_dir.clone(),
             capabilities,
         )
     }
@@ -248,6 +272,7 @@ impl ToolExecutor {
         SandboxProfile::new(
             self.workspace.clone(),
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+            self.state_dir.clone(),
             capabilities,
         )
         .with_external_roots(external_roots)

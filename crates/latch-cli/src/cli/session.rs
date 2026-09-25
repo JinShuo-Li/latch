@@ -469,9 +469,10 @@ pub async fn build_agent(
         config.safety.level,
     );
     let artifacts = artifact_root(config, session_id);
-    let tools = runtime(ToolExecutor::new(
+    let tools = runtime(ToolExecutor::new_with_state_dir(
         workspace.to_path_buf(),
         artifacts.clone(),
+        config.state_dir.clone(),
         store.clone(),
         session_id,
         policy,

@@ -637,7 +637,7 @@ impl Agent {
                 command,
                 args,
                 &self.workspace.to_string_lossy(),
-                Some((&runner, &profile)),
+                (&runner, &profile),
             )
             .await
     }

@@ -607,6 +607,13 @@ uses fixed read-only Git commands. Extension hosts start through the same
 sandbox with a read-only workspace and network; their individual tool arguments
 remain a cooperative boundary, documented rather than overclaimed.
 
+Every command and extension profile carries the configured Latch state directory.
+The sandbox resolves its real path and masks the whole directory after workspace
+and external mounts. If `secrets.toml` is a symlink outside that directory, its
+resolved target is masked too. The private `/tmp` and `/run` mounts already hide
+paths there unless a workspace or granted external mount exposes them. Failure
+to resolve the configured state directory refuses the command.
+
 Non-interactive sessions record `non_interactive` denials; resume marks
 unresolved requests `resume_expired`, and `SafetyChanged`/`PermissionsChanged`
 events restore the exact policy the session ended with.

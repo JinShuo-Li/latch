@@ -19,7 +19,7 @@ impl ToolExecutor {
         let profile = self.sandbox_profile(call);
         let runner = self.sandbox_runner()?;
         let mut child = runner
-            .command(&profile, &command)
+            .command(&profile, &command)?
             .kill_on_drop(true)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -214,7 +214,7 @@ impl ToolExecutor {
             .begin_operation(self.session_id, &format!("shell: {command}"))?;
         let runner = self.sandbox_runner()?;
         let mut child = runner
-            .command(profile, command)
+            .command(profile, command)?
             .kill_on_drop(true)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

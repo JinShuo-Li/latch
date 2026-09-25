@@ -175,6 +175,8 @@ impl FromIterator<Capability> for CapabilitySet {
 pub struct SandboxProfile {
     pub workspace: PathBuf,
     pub home: PathBuf,
+    /// The configured Latch state directory, resolved by the command builder.
+    pub state_dir: PathBuf,
     pub capabilities: CapabilitySet,
     /// External roots explicitly approved for this call, mounted writable.
     pub external_roots: Vec<PathBuf>,
@@ -182,10 +184,16 @@ pub struct SandboxProfile {
 
 impl SandboxProfile {
     #[must_use]
-    pub fn new(workspace: PathBuf, home: PathBuf, capabilities: CapabilitySet) -> Self {
+    pub fn new(
+        workspace: PathBuf,
+        home: PathBuf,
+        state_dir: PathBuf,
+        capabilities: CapabilitySet,
+    ) -> Self {
         Self {
             workspace,
             home,
+            state_dir,
             capabilities,
             external_roots: Vec::new(),
         }
@@ -249,8 +257,30 @@ impl SandboxRunner {
 
     /// Builds the bwrap invocation for one call. Every mount is explicit; the
     /// host root is bound read-only first and narrowed afterwards.
-    #[must_use]
-    pub fn command(&self, profile: &SandboxProfile, command: &str) -> Command {
+    pub fn command(&self, profile: &SandboxProfile, command: &str) -> Result<Command> {
+        // Resolve on the host before constructing mounts. Masking the real
+        // directory also hides paths through symlinked state-dir aliases.
+        let state_dir = std::fs::canonicalize(&profile.state_dir).with_context(|| {
+            format!(
+                "resolve Latch state directory {}",
+                profile.state_dir.display()
+            )
+        })?;
+        if !state_dir.is_dir() {
+            bail!(
+                "Latch state directory {} is not a directory",
+                state_dir.display()
+            );
+        }
+        let secret = state_dir.join("secrets.toml");
+        let secret_target =
+            if secret.exists() {
+                Some(std::fs::canonicalize(&secret).with_context(|| {
+                    format!("resolve Latch credential file {}", secret.display())
+                })?)
+            } else {
+                None
+            };
         let mut cmd = Command::new(&self.bwrap);
         cmd.arg("--die-with-parent");
         cmd.arg("--new-session");
@@ -297,8 +327,24 @@ impl SandboxRunner {
                 cmd.arg("--bind").arg(root).arg(root);
             }
         }
-        for secret in secret_paths(&profile.home) {
+        for secret in secret_paths(&profile.home)
+            .into_iter()
+            .filter(|path| mount_exposes(path, profile))
+        {
             cmd.args(["--tmpfs"]).arg(secret);
+        }
+        // These mounts come after workspace and external grants, so neither
+        // can remount Latch's state back into view. /tmp and /run are already
+        // private unless a later workspace/external bind exposes the path.
+        if mount_exposes(&state_dir, profile) {
+            cmd.arg("--tmpfs").arg(&state_dir);
+        }
+        if let Some(target) = secret_target {
+            // A symlinked secrets.toml can point outside the state directory.
+            // Hide that real file as well as the directory containing the link.
+            if !target.starts_with(&state_dir) && mount_exposes(&target, profile) {
+                cmd.args(["--ro-bind", "/dev/null"]).arg(target);
+            }
         }
         // Minimal environment: no host secrets leak through variables.
         cmd.arg("--clearenv");
@@ -334,8 +380,17 @@ impl SandboxRunner {
         cmd.arg("--chdir").arg(workspace);
         cmd.args(["--", "/bin/bash", "-lc", command]);
         cmd.stdin(Stdio::null());
-        cmd
+        Ok(cmd)
     }
+}
+
+fn mount_exposes(path: &Path, profile: &SandboxProfile) -> bool {
+    if !path.starts_with("/tmp") && !path.starts_with("/run") {
+        return true;
+    }
+    std::iter::once(&profile.workspace)
+        .chain(&profile.external_roots)
+        .any(|root| std::fs::canonicalize(root).is_ok_and(|real| path.starts_with(real)))
 }
 
 fn default_path() -> String {
@@ -493,6 +548,7 @@ mod tests {
     ) -> std::process::Output {
         runner
             .command(profile, command)
+            .expect("build sandboxed command")
             .output()
             .await
             .expect("spawn sandboxed command")
@@ -501,7 +557,12 @@ mod tests {
     fn base_profile(workspace: &Path, home: &Path) -> SandboxProfile {
         let mut capabilities = CapabilitySet::new();
         capabilities.insert(Capability::WorkspaceRead);
-        SandboxProfile::new(workspace.to_path_buf(), home.to_path_buf(), capabilities)
+        SandboxProfile::new(
+            workspace.to_path_buf(),
+            home.to_path_buf(),
+            home.to_path_buf(),
+            capabilities,
+        )
     }
 
     #[test]
@@ -588,7 +649,8 @@ mod tests {
         let mut capabilities = CapabilitySet::new();
         capabilities.insert(Capability::WorkspaceRead);
         capabilities.insert(Capability::WorkspaceSourceWrite);
-        let profile = SandboxProfile::new(dir.path().to_path_buf(), home, capabilities);
+        let profile =
+            SandboxProfile::new(dir.path().to_path_buf(), home.clone(), home, capabilities);
         let output = run(
             &runner,
             &profile,
@@ -618,7 +680,8 @@ mod tests {
         let mut capabilities = CapabilitySet::new();
         capabilities.insert(Capability::WorkspaceRead);
         capabilities.insert(Capability::GitMetadataWrite);
-        let profile = SandboxProfile::new(dir.path().to_path_buf(), home, capabilities);
+        let profile =
+            SandboxProfile::new(dir.path().to_path_buf(), home.clone(), home, capabilities);
         let output = run(&runner, &profile, "echo updated > .git/HEAD").await;
         assert!(output.status.success(), "granted git write must succeed");
     }
@@ -636,6 +699,109 @@ mod tests {
         let output = run(&runner, &profile, "cat \"$HOME/.ssh/id_ed25519\"").await;
         assert!(!output.status.success(), "home secret must be masked");
         assert!(!String::from_utf8_lossy(&output.stdout).contains("SECRET"));
+    }
+
+    async fn assert_state_hidden(
+        runner: &SandboxRunner,
+        workspace: &Path,
+        home: &Path,
+        state_dir: &Path,
+        secret_path: &Path,
+    ) {
+        let profile = base_profile(workspace, home);
+        let profile = SandboxProfile::new(
+            profile.workspace,
+            profile.home,
+            state_dir.to_path_buf(),
+            profile.capabilities,
+        );
+        let output = run(
+            runner,
+            &profile,
+            &format!(
+                "if cat '{}' >/dev/null 2>&1; then exit 42; fi; cat readable.txt",
+                secret_path.display()
+            ),
+        )
+        .await;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "workspace data");
+    }
+
+    #[tokio::test]
+    async fn default_state_credentials_are_hidden_and_workspace_is_readable() {
+        let Some(runner) = runner() else { return };
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let home = workspace.join("home");
+        let state_dir = home.join(".local/state/latch");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(workspace.join("readable.txt"), "workspace data").unwrap();
+        let secret = state_dir.join("secrets.toml");
+        std::fs::write(&secret, "fake default secret").unwrap();
+        assert_state_hidden(&runner, &workspace, &home, &state_dir, &secret).await;
+    }
+
+    #[tokio::test]
+    async fn custom_symlinked_state_and_secret_targets_are_hidden() {
+        let Some(runner) = runner() else { return };
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let home = dir.path().join("home");
+        let real_state = workspace.join("custom-state");
+        std::fs::create_dir_all(&real_state).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(workspace.join("readable.txt"), "workspace data").unwrap();
+        let target = workspace.join("fake-credential-target");
+        std::fs::write(&target, "fake custom secret").unwrap();
+        std::os::unix::fs::symlink(&target, real_state.join("secrets.toml")).unwrap();
+        let alias = workspace.join("state-alias");
+        std::os::unix::fs::symlink(&real_state, &alias).unwrap();
+        assert_state_hidden(&runner, &workspace, &home, &alias, &target).await;
+        assert_state_hidden(
+            &runner,
+            &workspace,
+            &home,
+            &alias,
+            &alias.join("secrets.toml"),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn changed_home_default_state_credentials_are_hidden() {
+        let Some(runner) = runner() else { return };
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let changed_home = workspace.join("different-home");
+        let state_dir = changed_home.join(".local/state/latch");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(workspace.join("readable.txt"), "workspace data").unwrap();
+        let secret = state_dir.join("secrets.toml");
+        std::fs::write(&secret, "fake changed-home secret").unwrap();
+        assert_state_hidden(&runner, &workspace, &changed_home, &state_dir, &secret).await;
+        let profile = SandboxProfile::new(
+            workspace,
+            changed_home.clone(),
+            state_dir,
+            [Capability::WorkspaceRead].into_iter().collect(),
+        );
+        let output = run(
+            &runner,
+            &profile,
+            &format!(
+                "test \"$HOME\" = '{}' && test ! -r \"$HOME/.local/state/latch/secrets.toml\"",
+                changed_home.display()
+            ),
+        )
+        .await;
+        assert!(output.status.success());
     }
 
     #[tokio::test]
@@ -678,7 +844,8 @@ mod tests {
         let mut capabilities = CapabilitySet::new();
         capabilities.insert(Capability::WorkspaceRead);
         capabilities.insert(Capability::NetworkAccess);
-        let profile = SandboxProfile::new(dir.path().to_path_buf(), home, capabilities);
+        let profile =
+            SandboxProfile::new(dir.path().to_path_buf(), home.clone(), home, capabilities);
         let shared = run(&runner, &profile, "cat /proc/net/dev").await;
         let shared = interface_names(&String::from_utf8_lossy(&shared.stdout));
         assert_eq!(shared, host, "granted network must share the host netns");

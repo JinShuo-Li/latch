@@ -30,7 +30,9 @@ Extension declarations remain a cooperative auditing contract, but v0.2.1
 changes the process boundary: Latch starts the extension host inside the same
 mandatory Bubblewrap sandbox as every other command, with a read-only
 workspace, masked home credentials and sockets, and network access for protocol
-work. The host cannot write project files or read masked host secrets. What is
+work. The host cannot write project files or read masked host secrets. Since
+v0.2.2, the configured Latch state directory and resolved credential target
+are masked as well. What is
 still cooperative is the extension's own tool behavior: Latch does not classify
 individual extension tool arguments as separate capabilities, and there is no
 seccomp, Landlock, or WASM isolation inside the host. Configure only trusted

@@ -7,7 +7,7 @@ use std::process::Stdio;
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio_util::sync::CancellationToken;
 
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
@@ -102,22 +102,13 @@ impl ExtensionHost {
         command: &str,
         args: &[String],
         workspace: &str,
-        sandbox: Option<(&SandboxRunner, &SandboxProfile)>,
+        sandbox: (&SandboxRunner, &SandboxProfile),
     ) -> Result<Self> {
-        let mut process = match sandbox {
-            Some((runner, profile)) => {
-                // The extension host runs through the same sandbox as every
-                // other process: read-only workspace, masked home, network
-                // available for protocol work. Extension tool arguments are a
-                // cooperative boundary documented in docs/ARCHITECTURE.md.
-                runner.command(profile, &sandbox_command(command, args))
-            }
-            None => {
-                let mut command = Command::new(command);
-                command.args(args);
-                command
-            }
-        };
+        // Extension hosts always use the same sandbox as command execution.
+        // Their tool arguments remain a cooperative boundary.
+        let mut process = sandbox
+            .0
+            .command(sandbox.1, &sandbox_command(command, args))?;
         let mut child = process
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -438,7 +429,7 @@ impl ExtensionRegistry {
         command: &str,
         args: &[String],
         workspace: &str,
-        sandbox: Option<(&SandboxRunner, &SandboxProfile)>,
+        sandbox: (&SandboxRunner, &SandboxProfile),
     ) -> Result<()> {
         let host = ExtensionHost::start(name.clone(), command, args, workspace, sandbox).await?;
         self.hosts.insert(name, host);
@@ -573,10 +564,32 @@ mod tests {
 
     #[tokio::test]
     async fn host_registers_and_executes_external_tool() {
+        use crate::sandbox::{Capability, CapabilitySet};
+
+        let dir = tempfile::tempdir().unwrap();
+        let Ok(runner) = SandboxRunner::detect(dir.path()) else {
+            return;
+        };
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let profile = SandboxProfile::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            state_dir,
+            [Capability::WorkspaceRead, Capability::NetworkAccess]
+                .into_iter()
+                .collect::<CapabilitySet>(),
+        );
         let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
-        let mut host = ExtensionHost::start("fixture".into(), "python3", &[fixture], "/tmp", None)
-            .await
-            .unwrap();
+        let mut host = ExtensionHost::start(
+            "fixture".into(),
+            "python3",
+            &[fixture],
+            &dir.path().to_string_lossy(),
+            (&runner, &profile),
+        )
+        .await
+        .unwrap();
         assert_eq!(host.capabilities.tools[0].name, "fixture.echo");
         assert_eq!(host.capabilities.commands, ["fixture-about"]);
         assert_eq!(
@@ -608,6 +621,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(value["echoed"], "hello");
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sandboxed_extension_cannot_read_latch_credentials() {
+        use crate::sandbox::{Capability, CapabilitySet};
+
+        let dir = tempfile::tempdir().unwrap();
+        let Ok(runner) = SandboxRunner::detect(dir.path()) else {
+            return;
+        };
+        let workspace = dir.path().join("workspace");
+        let home = dir.path().join("home");
+        let state_dir = workspace.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let normal = workspace.join("normal.txt");
+        let secret = state_dir.join("secrets.toml");
+        std::fs::write(&normal, "workspace data").unwrap();
+        std::fs::write(&secret, "fake extension secret").unwrap();
+        let capabilities = [
+            Capability::WorkspaceRead,
+            Capability::NetworkAccess,
+            Capability::ExtensionExecution,
+        ]
+        .into_iter()
+        .collect::<CapabilitySet>();
+        let profile = SandboxProfile::new(workspace.clone(), home, state_dir, capabilities);
+        let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
+        let mut host = ExtensionHost::start(
+            "fixture".into(),
+            "python3",
+            &[fixture],
+            &workspace.to_string_lossy(),
+            (&runner, &profile),
+        )
+        .await
+        .unwrap();
+        for (path, expected) in [(&secret, false), (&normal, true)] {
+            let result = host
+                .execute_tool(
+                    "fixture.echo",
+                    json!({"read_path": path}),
+                    &CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result["readable"], expected, "{}", path.display());
+        }
         host.shutdown().await.unwrap();
     }
 }
