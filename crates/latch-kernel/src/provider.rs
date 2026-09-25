@@ -1452,15 +1452,16 @@ pub fn gemini_request(
                     if !call_id.is_empty() {
                         function_response["id"] = json!(call_id);
                     }
-                    let mut part = json!({"functionResponse": function_response});
+                    // Multimodal results are `FunctionResponse.parts`, not
+                    // sibling parts beside the function response.
                     if !tool.media.is_empty() {
                         let mut media_parts = Vec::new();
                         for media_ref in &tool.media {
                             media_parts.push(gemini_inline_data(media_ref, media)?);
                         }
-                        part["parts"] = Value::Array(media_parts);
+                        function_response["parts"] = Value::Array(media_parts);
                     }
-                    parts.push(part);
+                    parts.push(json!({"functionResponse": function_response}));
                     index += 1;
                 }
                 push_user(&mut contents, parts);
@@ -4316,6 +4317,87 @@ mod tests {
             error.to_string().contains("no matching function call"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn gemini_request_nests_tool_media_inside_function_responses() {
+        let request = ModelRequest {
+            system: "s".into(),
+            messages: vec![
+                ModelMessage {
+                    role: "assistant".into(),
+                    is_error: false,
+                    content: String::new(),
+                    tool_calls: vec![
+                        ToolCall {
+                            id: "call-image".into(),
+                            name: "screenshot".into(),
+                            arguments: json!({"target": "window"}),
+                        },
+                        ToolCall {
+                            id: "call-failed".into(),
+                            name: "read_file".into(),
+                            arguments: json!({"path": "missing.txt"}),
+                        },
+                    ],
+                    tool_call_id: None,
+                    reasoning_content: None,
+                    reasoning: vec![],
+                    media: Vec::new(),
+                },
+                ModelMessage::tool_result(
+                    "call-image",
+                    "captured",
+                    false,
+                    vec![image_ref("img-1")],
+                ),
+                ModelMessage::tool_result(
+                    "call-failed",
+                    "no such file",
+                    true,
+                    vec![image_ref("img-2")],
+                ),
+            ],
+            tools: vec![],
+        };
+        let store = MemoryMedia(std::collections::HashMap::from([
+            ("img-1".to_owned(), vec![1_u8, 2, 3]),
+            ("img-2".to_owned(), vec![4_u8, 5, 6]),
+        ]));
+        let body = gemini_request(&request, &GeminiThinking::Default, Some(&store)).unwrap();
+        let parts = body["contents"][1]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2, "{parts:#?}");
+        // Successful result: media nests inside the function response, and the
+        // call id and recovered function name stay on it.
+        assert_eq!(
+            parts[0],
+            json!({
+                "functionResponse": {
+                    "id": "call-image",
+                    "name": "screenshot",
+                    "response": {"result": "captured"},
+                    "parts": [{"inlineData": {"mimeType": "image/png", "data": "AQID"}}],
+                }
+            })
+        );
+        // Failed result: same nesting with the error response.
+        assert_eq!(
+            parts[1],
+            json!({
+                "functionResponse": {
+                    "id": "call-failed",
+                    "name": "read_file",
+                    "response": {"error": "no such file"},
+                    "parts": [{"inlineData": {"mimeType": "image/png", "data": "BAUG"}}],
+                }
+            })
+        );
+        for part in parts {
+            assert!(
+                part.get("parts").is_none(),
+                "media must never sit beside functionResponse: {part}"
+            );
+        }
     }
 
     #[test]
