@@ -126,6 +126,8 @@ pub enum SetupPlan {
     },
     /// Remove one configured provider instance. Credentials are never deleted.
     Remove { name: String },
+    /// Explicitly change the profile used by future sessions.
+    SetNewSessionDefault { name: String },
 }
 
 /// One configured provider instance shown by the removal surface.

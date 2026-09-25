@@ -1084,6 +1084,10 @@ impl App {
                     self.setup_center = None;
                     return Some(Action::SetupApply(SetupPlan::Remove { name }));
                 }
+                Some(CenterAction::SetNewSessionDefault(name)) => {
+                    self.setup_center = None;
+                    return Some(Action::SetupApply(SetupPlan::SetNewSessionDefault { name }));
+                }
                 Some(other) => {
                     self.presentation
                         .push_notice(format!("{other:?} is not available yet"));

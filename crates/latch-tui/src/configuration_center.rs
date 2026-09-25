@@ -288,4 +288,27 @@ mod tests {
         assert_eq!(center.confirm(), None);
         assert_eq!(center.page(), &CenterPage::Provider("deepseek".into()));
     }
+
+    #[test]
+    fn explicit_new_session_default_emits_a_distinct_action() {
+        let provider = ProviderSummary {
+            id: "deepseek".into(),
+            display_name: "DeepSeek".into(),
+            kind: "deepseek".into(),
+            status: ProviderStatus::Ready,
+            model_count: 1,
+            default_model: "deepseek-flash".into(),
+            credential_ref: "env:DEEPSEEK_API_KEY".into(),
+        };
+        let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
+        center.down();
+        center.confirm();
+        for _ in 0..4 {
+            center.down();
+        }
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::SetNewSessionDefault("deepseek".into()))
+        );
+    }
 }

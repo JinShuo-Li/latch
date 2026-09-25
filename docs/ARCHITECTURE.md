@@ -87,6 +87,9 @@ references at process start from the environment
 or a `0600` local secrets file. Secret values never enter the config file, the
 durable event log, the model context, the transcript, or ordinary logs, and
 provider error bodies are redacted.
+The configuration center has an explicit Set as new-session default action;
+it updates `[inference]` without changing the live session profile or either
+provider's `default_model`.
 
 `InferenceProfile` is provider-neutral and credential-free. The agent holds the
 effective profile; `Agent::set_inference_profile` swaps the provider adapter,

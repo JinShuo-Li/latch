@@ -635,6 +635,16 @@ async fn apply_setup(
     workspace: &Path,
     resumed: bool,
 ) -> Result<()> {
+    if let SetupPlan::SetNewSessionDefault { name } = &plan {
+        set_new_session_default(context, name)?;
+        tx.send(Output::Notice(format!(
+            "{name} is now the new-session default"
+        )))
+        .await?;
+        tx.send(Output::SetupProviders(context.setup_providers()))
+            .await?;
+        return Ok(());
+    }
     if let SetupPlan::Remove { name } = &plan {
         let replacement = remove_provider(context, name)?;
         // Rebuild the registry so the removal is reflected everywhere.
@@ -700,6 +710,31 @@ async fn apply_setup(
     )))
     .await?;
     send_profile_header(context, tx, workspace, resumed, &profile, &descriptor).await
+}
+
+fn set_new_session_default(context: &mut InferenceContext, name: &str) -> Result<()> {
+    let provider = context
+        .registry
+        .provider(name)
+        .ok_or_else(|| anyhow!("unknown provider {name:?}"))?;
+    if provider.default_model.is_empty() {
+        bail!("provider {name:?} needs a default_model before becoming the new-session default");
+    }
+    let mut candidate = context.config.clone();
+    candidate.inference = InferenceConfig {
+        provider: Some(name.to_owned()),
+        model: Some(provider.default_model.clone()),
+        effort: ReasoningEffort::ProviderDefault,
+    };
+    candidate.validate()?;
+    let path = context
+        .config_path
+        .clone()
+        .or_else(Config::default_path)
+        .ok_or_else(|| anyhow!("cannot resolve configuration path"))?;
+    candidate.save(&path)?;
+    context.config = candidate;
+    Ok(())
 }
 
 async fn send_profile_header(
@@ -1076,6 +1111,49 @@ mod tests {
             saved.providers["acme"].enabled_models.as_deref(),
             Some(&["acme-pro".into()][..])
         );
+    }
+
+    #[test]
+    fn explicit_new_session_default_changes_only_inference_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let mut config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        for (id, kind, model) in [
+            ("openai", ProviderKind::OpenAi, "gpt-5.5"),
+            ("deepseek", ProviderKind::DeepSeek, "deepseek-v4-pro"),
+        ] {
+            config.providers.insert(
+                id.into(),
+                latch_kernel::config::ProviderProfileConfig {
+                    kind,
+                    default_model: Some(model.into()),
+                    ..Default::default()
+                },
+            );
+        }
+        config.inference = InferenceConfig {
+            provider: Some("openai".into()),
+            model: Some("gpt-5.5".into()),
+            effort: ReasoningEffort::High,
+        };
+        let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
+        set_new_session_default(&mut context, "deepseek").unwrap();
+        let reloaded = Config::load(Some(&config_path)).unwrap();
+        assert_eq!(reloaded.inference.provider.as_deref(), Some("deepseek"));
+        assert_eq!(reloaded.inference.model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(reloaded.inference.effort, ReasoningEffort::ProviderDefault);
+        assert_eq!(
+            reloaded.providers["openai"].default_model.as_deref(),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            reloaded.providers["deepseek"].default_model.as_deref(),
+            Some("deepseek-v4-pro")
+        );
+        assert!(set_new_session_default(&mut context, "missing").is_err());
     }
 
     #[test]
