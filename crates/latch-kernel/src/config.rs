@@ -69,6 +69,151 @@ impl TransportKind {
             Self::AnthropicMessages => "messages",
         }
     }
+
+    /// Which effort mapping forms this transport can serialize. A form a
+    /// transport cannot express is rejected at configuration validation, not
+    /// silently dropped at request time.
+    #[must_use]
+    pub const fn supports_effort_forms(self) -> EffortForms {
+        match self {
+            // OpenAI-compatible chat completions carries `reasoning_effort`
+            // and, on DeepSeek-family reasoning models, the `thinking` toggle.
+            Self::ChatCompletions => EffortForms {
+                value: true,
+                budget_tokens: false,
+                disabled: true,
+            },
+            // Responses carries `reasoning.effort`; there is no token budget or
+            // separate off switch (the `none` level is the documented off).
+            Self::Responses => EffortForms {
+                value: true,
+                budget_tokens: false,
+                disabled: false,
+            },
+            // Messages carries `output_config.effort` for adaptive thinking and
+            // `thinking.budget_tokens` / `thinking.type = "disabled"` for
+            // classic thinking.
+            Self::AnthropicMessages => EffortForms {
+                value: true,
+                budget_tokens: true,
+                disabled: true,
+            },
+        }
+    }
+}
+
+/// One exposed effort's wire form in a user `effort_map`. Exactly one of the
+/// three documented forms is set; validation rejects empty, conflicting, and
+/// transport-inexpressible mappings with an actionable message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct EffortMapping {
+    /// The transport's effort field value (`reasoning_effort`,
+    /// `reasoning.effort`, `output_config.effort`,
+    /// `thinkingConfig.thinkingLevel`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// The transport's thinking token budget (`thinking.budget_tokens`,
+    /// `thinkingConfig.thinkingBudget`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u64>,
+    /// The transport's documented off switch (`thinking.type = "disabled"`,
+    /// `thinkingConfig.thinkingBudget = 0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+}
+
+/// The resolved single form of one [`EffortMapping`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffortForm {
+    Value(String),
+    BudgetTokens(u64),
+    Disabled,
+}
+
+impl EffortForm {
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Value(_) => "value",
+            Self::BudgetTokens(_) => "budget_tokens",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+impl EffortMapping {
+    /// Resolves the one documented form this mapping expresses. Unknown,
+    /// empty, conflicting, and contradictory mappings are errors.
+    pub fn form(&self) -> Result<EffortForm, String> {
+        let forms = [
+            self.value.is_some(),
+            self.budget_tokens.is_some(),
+            self.disabled.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        if forms != 1 {
+            return Err("must set exactly one of value, budget_tokens, or disabled".to_owned());
+        }
+        if let Some(value) = &self.value {
+            if value.trim().is_empty() {
+                return Err("value must not be empty".to_owned());
+            }
+            return Ok(EffortForm::Value(value.clone()));
+        }
+        if let Some(budget) = self.budget_tokens {
+            if budget == 0 {
+                return Err("budget_tokens must be positive".to_owned());
+            }
+            return Ok(EffortForm::BudgetTokens(budget));
+        }
+        match self.disabled {
+            Some(true) => Ok(EffortForm::Disabled),
+            Some(false) => Err("disabled must be true when present".to_owned()),
+            None => unreachable!("form count checked above"),
+        }
+    }
+
+    /// Whether this mapping expresses an explicit value form.
+    #[must_use]
+    pub fn is_value(&self) -> bool {
+        matches!(self.form(), Ok(EffortForm::Value(_)))
+    }
+}
+
+/// Which [`EffortMapping`] forms one wire transport can serialize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffortForms {
+    pub value: bool,
+    pub budget_tokens: bool,
+    pub disabled: bool,
+}
+
+impl EffortForms {
+    #[must_use]
+    pub const fn supports(self, form: &EffortForm) -> bool {
+        match form {
+            EffortForm::Value(_) => self.value,
+            EffortForm::BudgetTokens(_) => self.budget_tokens,
+            EffortForm::Disabled => self.disabled,
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match (self.value, self.budget_tokens, self.disabled) {
+            (true, true, true) => "value, budget_tokens, or disabled",
+            (true, true, false) => "value or budget_tokens",
+            (true, false, true) => "value or disabled",
+            (true, false, false) => "value",
+            (false, true, true) => "budget_tokens or disabled",
+            (false, false, true) => "disabled",
+            (false, true, false) => "budget_tokens",
+            (false, false, false) => "no effort mapping",
+        }
+    }
 }
 
 /// One user-defined provider instance.
@@ -226,6 +371,132 @@ pub struct InferenceConfig {
     pub effort: ReasoningEffort,
 }
 
+/// Efforts a model exposes: an explicit user list, the built-in catalog set, or
+/// none for a fully custom model. `ProviderDefault` is a selection state, never
+/// an exposed level.
+fn exposed_efforts(
+    kind: ProviderKind,
+    model: &str,
+    override_: &ModelConfig,
+) -> Vec<ReasoningEffort> {
+    if let Some(efforts) = &override_.efforts {
+        return efforts
+            .iter()
+            .copied()
+            .filter(|effort| !matches!(effort, ReasoningEffort::ProviderDefault))
+            .collect();
+    }
+    crate::providers::builtin_catalog(kind)
+        .iter()
+        .find(|descriptor| descriptor.model == model)
+        .map(|descriptor| descriptor.supported_efforts.clone())
+        .unwrap_or_default()
+}
+
+/// The transport a model override will actually serialize through: explicit
+/// override, built-in catalog, then the provider-kind default.
+fn resolved_transport(kind: ProviderKind, model: &str, override_: &ModelConfig) -> TransportKind {
+    override_.transport.unwrap_or_else(|| {
+        crate::providers::builtin_catalog(kind)
+            .iter()
+            .find(|descriptor| descriptor.model == model)
+            .map(|descriptor| descriptor.transport)
+            .unwrap_or_else(|| kind.default_transport())
+    })
+}
+
+/// Whether the model uses Anthropic adaptive thinking rather than classic
+/// thinking with an explicit budget. This decides which effort mapping forms
+/// the Messages transport can honestly represent.
+fn resolved_adaptive(kind: ProviderKind, model: &str, override_: &ModelConfig) -> bool {
+    override_.adaptive_thinking.unwrap_or_else(|| {
+        crate::providers::builtin_catalog(kind)
+            .iter()
+            .find(|descriptor| descriptor.model == model)
+            .is_some_and(|descriptor| descriptor.adaptive_thinking)
+    })
+}
+
+/// Validates exposed efforts, the default effort, and any explicit wire map.
+/// A present map must cover every exposed level; a mapping a transport cannot
+/// express is rejected here rather than silently dropped at request time.
+fn validate_effort_metadata(
+    provider: &str,
+    kind: ProviderKind,
+    model: &str,
+    override_: &ModelConfig,
+) -> Result<()> {
+    let exposed = exposed_efforts(kind, model, override_);
+    if let Some(default) = override_.default_effort
+        && default != ReasoningEffort::ProviderDefault
+        && !exposed.contains(&default)
+    {
+        anyhow::bail!(
+            "provider {provider} model {model:?} default_effort {} is not in the exposed efforts {:?}",
+            default.label(),
+            exposed
+        );
+    }
+    if override_.effort_map.is_empty() {
+        return Ok(());
+    }
+    let transport = resolved_transport(kind, model, override_);
+    let forms = transport.supports_effort_forms();
+    let adaptive = resolved_adaptive(kind, model, override_);
+    for (effort, mapping) in &override_.effort_map {
+        if matches!(effort, ReasoningEffort::ProviderDefault) {
+            anyhow::bail!(
+                "provider {provider} model {model:?} effort_map cannot map the provider default; map exposed levels only"
+            );
+        }
+        if !exposed.contains(effort) {
+            anyhow::bail!(
+                "provider {provider} model {model:?} effort_map maps {} but the model does not expose that effort",
+                effort.label()
+            );
+        }
+        let form = mapping.form().map_err(|error| {
+            anyhow::anyhow!(
+                "provider {provider} model {model:?} effort_map {} {error}",
+                effort.label()
+            )
+        })?;
+        if !forms.supports(&form) {
+            anyhow::bail!(
+                "provider {provider} model {model:?} effort_map {} uses {} but the {} transport only supports {}",
+                effort.label(),
+                form.label(),
+                transport.label(),
+                forms.label()
+            );
+        }
+        match (&form, transport) {
+            (EffortForm::Value(_), TransportKind::AnthropicMessages) if !adaptive => {
+                anyhow::bail!(
+                    "provider {provider} model {model:?} effort_map {} uses the value form, which the messages transport only supports with adaptive_thinking; use budget_tokens",
+                    effort.label()
+                );
+            }
+            (EffortForm::BudgetTokens(_), TransportKind::AnthropicMessages) if adaptive => {
+                anyhow::bail!(
+                    "provider {provider} model {model:?} effort_map {} uses budget_tokens, which the messages transport only supports for classic thinking; adaptive models use the value form",
+                    effort.label()
+                );
+            }
+            _ => {}
+        }
+    }
+    for effort in &exposed {
+        if !override_.effort_map.contains_key(effort) {
+            anyhow::bail!(
+                "provider {provider} model {model:?} effort_map must cover the exposed effort {}",
+                effort.label()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Product metadata for one model name, keyed by the provider model string.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelConfig {
@@ -244,6 +515,11 @@ pub struct ModelConfig {
     pub efforts: Option<Vec<ReasoningEffort>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<ReasoningEffort>,
+    /// Per-level wire form for Custom/Advanced models. Empty means the
+    /// transport adapter uses its built-in mapping, which is the normal path
+    /// for every catalog model. A present map must cover every exposed level.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub effort_map: BTreeMap<ReasoningEffort, EffortMapping>,
     /// Whether persisted assistant reasoning must be replayed to the provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_replay: Option<ReasoningReplayPolicy>,
@@ -580,14 +856,7 @@ impl Config {
                 if override_.context_window_tokens == Some(0) {
                     anyhow::bail!("provider {id} model {model:?} needs a positive context window");
                 }
-                if let Some(efforts) = &override_.efforts
-                    && let Some(default) = override_.default_effort
-                    && !efforts.contains(&default)
-                {
-                    anyhow::bail!(
-                        "provider {id} model {model:?} default_effort must be in efforts"
-                    );
-                }
+                validate_effort_metadata(id, entry.kind, model, override_)?;
             }
         }
         let registry = crate::providers::ProviderRegistry::from_config(self)?;
@@ -820,6 +1089,234 @@ mod tests {
         }
         let config: Config = toml::from_str(base).unwrap();
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn effort_map_forms_parse_serialize_and_validate() {
+        let config: Config = toml::from_str(
+            r#"
+            [providers.classic]
+            kind = "anthropic"
+            default_model = "classic-pro"
+
+            [providers.classic.models."classic-pro"]
+            transport = "anthropic_messages"
+            adaptive_thinking = false
+            efforts = ["low", "high"]
+            default_effort = "low"
+
+            [providers.classic.models."classic-pro".effort_map]
+            low = { budget_tokens = 1024 }
+            high = { budget_tokens = 32768 }
+
+            [providers.adaptive]
+            kind = "anthropic"
+            default_model = "adaptive-pro"
+
+            [providers.adaptive.models."adaptive-pro"]
+            transport = "anthropic_messages"
+            adaptive_thinking = true
+            efforts = ["low", "high"]
+            default_effort = "low"
+            [providers.adaptive.models."adaptive-pro".effort_map]
+            low = { value = "low" }
+            high = { value = "high" }
+
+            [providers.toggle]
+            kind = "openai-compatible"
+            base_url = "https://example.com/v1"
+            default_model = "toggle-pro"
+
+            [providers.toggle.models."toggle-pro"]
+            transport = "chat_completions"
+            efforts = ["low", "high"]
+
+            [providers.toggle.models."toggle-pro".effort_map]
+            low = { disabled = true }
+            high = { value = "high" }
+            "#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        let classic = &config.providers["classic"].models["classic-pro"].effort_map;
+        assert_eq!(
+            classic[&ReasoningEffort::High].form().unwrap(),
+            EffortForm::BudgetTokens(32_768)
+        );
+        let adaptive = &config.providers["adaptive"].models["adaptive-pro"].effort_map;
+        assert_eq!(
+            adaptive[&ReasoningEffort::Low].form().unwrap(),
+            EffortForm::Value("low".into())
+        );
+        let toggle = &config.providers["toggle"].models["toggle-pro"].effort_map;
+        assert_eq!(
+            toggle[&ReasoningEffort::Low].form().unwrap(),
+            EffortForm::Disabled
+        );
+        let text = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            text.contains("effort_map.low]") && text.contains("budget_tokens = 1024"),
+            "{text}"
+        );
+        assert!(text.contains("disabled = true"), "{text}");
+        let reloaded: Config = toml::from_str(&text).unwrap();
+        reloaded.validate().unwrap();
+        assert_eq!(
+            &reloaded.providers["toggle"].models["toggle-pro"].effort_map,
+            toggle
+        );
+    }
+
+    #[test]
+    fn effort_map_rejects_incomplete_malformed_and_contradictory_mappings() {
+        for (body, expected) in [
+            (
+                "efforts = ['low', 'high']\n[providers.acme.models.m.effort_map]\nlow = { value = 'a' }\n",
+                "must cover the exposed effort high",
+            ),
+            (
+                "efforts = ['low']\n[providers.acme.models.m.effort_map]\nlow = { value = '' }\n",
+                "value must not be empty",
+            ),
+            (
+                "efforts = ['low']\n[providers.acme.models.m.effort_map]\nlow = { budget_tokens = 0 }\n",
+                "budget_tokens must be positive",
+            ),
+            (
+                "efforts = ['low']\n[providers.acme.models.m.effort_map]\nlow = { disabled = false }\n",
+                "disabled must be true",
+            ),
+            (
+                "efforts = ['low']\n[providers.acme.models.m.effort_map]\nlow = { value = 'a', disabled = true }\n",
+                "exactly one of value, budget_tokens, or disabled",
+            ),
+            (
+                "efforts = ['low']\n[providers.acme.models.m.effort_map]\nlow = {}\n",
+                "exactly one of value, budget_tokens, or disabled",
+            ),
+            (
+                "efforts = ['low']\n[providers.acme.models.m.effort_map]\nprovider_default = { value = 'a' }\nlow = { value = 'a' }\n",
+                "cannot map the provider default",
+            ),
+            (
+                "efforts = ['low']\n[providers.acme.models.m.effort_map]\nhigh = { value = 'a' }\nlow = { value = 'a' }\n",
+                "does not expose that effort",
+            ),
+            (
+                "efforts = ['low']\ndefault_effort = 'high'\n",
+                "is not in the exposed efforts",
+            ),
+        ] {
+            let input = format!(
+                "[providers.acme]\nkind = 'openai-compatible'\ndefault_model = 'm'\n[providers.acme.models.m]\n{body}"
+            );
+            let config: Config = toml::from_str(&input).unwrap_or_else(|error| {
+                panic!("{input}: {error}");
+            });
+            let error = config.validate().unwrap_err().to_string();
+            assert!(error.contains(expected), "{input}: {error}");
+        }
+    }
+
+    #[test]
+    fn effort_map_is_rejected_for_transports_without_the_form() {
+        // Responses has effort values but no token budget and no off switch.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.openai]
+            kind = "openai"
+            default_model = "gpt-5.5"
+            [providers.openai.models."gpt-5.5"]
+            efforts = ["low", "high"]
+            default_effort = "low"
+            [providers.openai.models."gpt-5.5".effort_map]
+            low = { budget_tokens = 1024 }
+            high = { value = "high" }
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("responses transport only supports value"),
+            "{error}"
+        );
+
+        // Chat completions cannot express a thinking budget.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.acme]
+            kind = "openai-compatible"
+            default_model = "m"
+            [providers.acme.models.m]
+            efforts = ["low"]
+            [providers.acme.models.m.effort_map]
+            low = { budget_tokens = 1024 }
+            "#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("chat completions transport only supports value or disabled"),
+            "{error}"
+        );
+
+        // Messages resolves the form against the model's thinking mode.
+        let adaptive: Config = toml::from_str(
+            r#"
+            [providers.anthropic]
+            kind = "anthropic"
+            default_model = "claude-sonnet-5"
+            [providers.anthropic.models."claude-sonnet-5"]
+            efforts = ["low", "high"]
+            [providers.anthropic.models."claude-sonnet-5".effort_map]
+            low = { budget_tokens = 2048 }
+            high = { value = "high" }
+            "#,
+        )
+        .unwrap();
+        let error = adaptive.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("only supports for classic thinking"),
+            "{error}"
+        );
+
+        let classic: Config = toml::from_str(
+            r#"
+            [providers.anthropic]
+            kind = "anthropic"
+            default_model = "claude-haiku-4-5"
+            [providers.anthropic.models."claude-haiku-4-5"]
+            adaptive_thinking = false
+            efforts = ["low", "high"]
+            [providers.anthropic.models."claude-haiku-4-5".effort_map]
+            low = { value = "low" }
+            high = { value = "high" }
+            "#,
+        )
+        .unwrap();
+        let error = classic.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("only supports with adaptive_thinking"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn builtin_models_need_no_copied_effort_mapping() {
+        // Absent map: the adapter owns the catalog mapping.
+        let config: Config = toml::from_str(
+            r#"
+            [providers.openai]
+            kind = "openai"
+            default_model = "gpt-5.5"
+            "#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        assert!(
+            config.providers["openai"].models.is_empty(),
+            "a selection is never a copy of catalog metadata"
+        );
     }
 
     #[test]
