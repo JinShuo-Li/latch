@@ -86,6 +86,10 @@ pub struct ProviderProfileConfig {
     pub credential: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
+    /// Selection only: absent means the complete built-in catalog plus custom
+    /// entries. Model facts stay in the catalog or sparse `models` overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_models: Option<Vec<String>>,
     #[serde(default)]
     pub models: BTreeMap<String, ModelConfig>,
     /// Reserved for optional remote model discovery. Never required at startup.
@@ -629,6 +633,7 @@ impl Config {
                     base_url: self.provider.base_url.clone(),
                     credential: Some(credential),
                     default_model: Some(self.provider.model.clone()),
+                    enabled_models: None,
                     models: BTreeMap::new(),
                     model_discovery: false,
                 },

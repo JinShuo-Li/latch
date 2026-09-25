@@ -66,6 +66,8 @@ Provider configuration      [providers.<id>] + legacy [provider]
 built-in catalog, user metadata merging, effort capability resolution, alias
 resolution, and provider construction. Precedence for model metadata is
 explicit user configuration > built-in catalog > conservative default; an
+optional `enabled_models` list filters the offered catalog without becoming
+metadata, while per-model config tables store sparse user overrides. An
 unknown model gets no invented context window, pricing, cache shape, or
 reasoning parameters. `ProviderConfig` entries carry a symbolic credential
 reference (`env:NAME`, `file:NAME`, `keyring:NAME`), and

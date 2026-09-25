@@ -906,6 +906,7 @@ pub struct ProviderProfile {
     pub default_model: String,
     pub capabilities: ProviderCapabilities,
     pub model_discovery: bool,
+    enabled_models: Option<Vec<String>>,
     models: BTreeMap<String, ModelDescriptor>,
     aliases: BTreeMap<String, String>,
 }
@@ -968,12 +969,32 @@ impl ProviderProfile {
             models.insert(name.clone(), descriptor);
         }
 
+        if let Some(selected) = &entry.enabled_models {
+            if selected.is_empty() {
+                bail!("provider {id} must enable at least one model");
+            }
+            for model in selected {
+                if !models.contains_key(model) {
+                    bail!(
+                        "provider {id} enables unknown model {model:?}; add a custom model override first"
+                    );
+                }
+            }
+        }
+
         let default_model = entry
             .default_model
             .clone()
             .filter(|model| !model.trim().is_empty())
             .or_else(|| builtin_models(kind).first().map(|m| m.id.to_owned()))
             .unwrap_or_else(|| "unknown".to_owned());
+        if entry
+            .enabled_models
+            .as_ref()
+            .is_some_and(|selected| !selected.contains(&default_model))
+        {
+            bail!("provider {id} default_model {default_model:?} is not enabled");
+        }
         Ok(Self {
             id: provider_id,
             display_name: entry
@@ -987,6 +1008,7 @@ impl ProviderProfile {
             default_model,
             capabilities: ProviderCapabilities::for_kind(kind),
             model_discovery: entry.model_discovery,
+            enabled_models: entry.enabled_models.clone(),
             models,
             aliases,
         })
@@ -1010,6 +1032,13 @@ impl ProviderProfile {
         if canonical.trim().is_empty() {
             return None;
         }
+        if self
+            .enabled_models
+            .as_ref()
+            .is_some_and(|selected| !selected.contains(&canonical))
+        {
+            return None;
+        }
         Some(
             self.models
                 .get(&canonical)
@@ -1020,7 +1049,15 @@ impl ProviderProfile {
 
     #[must_use]
     pub fn available_models(&self) -> Vec<&ModelDescriptor> {
-        self.models.values().collect()
+        self.models
+            .iter()
+            .filter(|(id, _)| {
+                self.enabled_models
+                    .as_ref()
+                    .is_none_or(|selected| selected.contains(id))
+            })
+            .map(|(_, model)| model)
+            .collect()
     }
 }
 
@@ -1114,6 +1151,7 @@ impl ProviderRegistry {
                     base_url: legacy.base_url.clone(),
                     credential: Some(credential),
                     default_model: Some(legacy.model.clone()),
+                    enabled_models: None,
                     models: BTreeMap::new(),
                     model_discovery: false,
                 },
@@ -1325,6 +1363,7 @@ pub fn canonical_provider_entry(
         base_url,
         credential: Some(kind.default_credential().to_owned()),
         default_model: None,
+        enabled_models: None,
         models: BTreeMap::new(),
         model_discovery: false,
     }
@@ -1339,6 +1378,44 @@ mod tests {
         let config: Config = toml::from_str(toml).unwrap();
         let registry = ProviderRegistry::from_config(&config).unwrap();
         (config, registry)
+    }
+
+    #[test]
+    fn enabled_models_select_without_copying_builtin_metadata() {
+        let source = r#"
+            [providers.openai]
+            kind = "openai"
+            default_model = "gpt-5.5"
+            enabled_models = ["gpt-5.5"]
+
+            [providers.openai.models."gpt-5.5"]
+            display_name = "Preferred GPT"
+        "#;
+        let (config, registry) = registry(source);
+        let selected = registry.available_models("openai");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].model, "gpt-5.5");
+        assert_eq!(selected[0].display_name, "Preferred GPT");
+        assert!(registry.model_descriptor("openai", "gpt-5.4").is_none());
+
+        let text = toml::to_string(&config).unwrap();
+        assert!(text.contains("enabled_models = [\"gpt-5.5\"]"));
+        assert!(!text.contains("context_window_tokens"));
+        assert!(!text.contains("transport"));
+    }
+
+    #[test]
+    fn invalid_selections_are_rejected() {
+        for selected in ["[]", "[\"invented\"]", "[\"gpt-5.4\"]"] {
+            let source = format!(
+                "[providers.openai]\nkind = 'openai'\ndefault_model = 'gpt-5.5'\nenabled_models = {selected}\n"
+            );
+            let config: Config = toml::from_str(&source).unwrap();
+            assert!(
+                ProviderRegistry::from_config(&config).is_err(),
+                "{selected}"
+            );
+        }
     }
 
     #[test]

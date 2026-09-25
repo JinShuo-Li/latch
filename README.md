@@ -49,6 +49,11 @@ model = "deepseek-v4-flash"
 effort = "low"
 ```
 
+`enabled_models` may select a subset of a provider's catalog; when absent,
+the full built-in catalog plus custom entries is offered. Per-model tables
+contain only fields the user overrides. Latch does not write built-in model
+facts into the config.
+
 Credentials are symbolic (`env:NAME`, `file:NAME`, or `keyring:NAME`) and are
 never stored in the config, the durable event log, the transcript, or logs.
 The legacy single `[provider]` table (and global `[models.*]` metadata) still
