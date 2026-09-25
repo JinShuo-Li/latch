@@ -348,6 +348,17 @@ without such a field, with an actionable setup message. Mapping is
 serialization: it lives in the adapter, and the kernel loop and memory never
 see it.
 
+Gemini thinking is model-specific, not transport-wide: one transport carries
+level models (`thinkingConfig.thinkingLevel`), budget models
+(`thinkingConfig.thinkingBudget`), models where zero disables thinking, and
+models that cannot disable thinking at all. Each Gemini model therefore
+declares a `gemini_thinking` capability — `levels` with the documented level
+set and optional off level, or `budget` with `zero_allowed`. Built-in catalog
+rows carry their documented capability automatically; a custom Gemini model
+declares it explicitly rather than inheriting a transport-wide default.
+Validation rejects a `value` map on a budget model, a `budget_tokens` map on
+a level model, and a `disabled` map when the model documents no off switch.
+
 ### Discovery
 
 Go and Zen publish `GET /models` (public, and account-filtered when a
@@ -377,7 +388,9 @@ Zen serves some models over Google's Generative Language API. Supporting them
 adds a `Gemini` transport: streaming `generateContent` requests
 (`models/{model}:streamGenerateContent?alt=sse`), `contents` with
 `functionCall`/`functionResponse` parts, `inlineData` images, and
-`thinkingConfig` for thinking.
+`generationConfig.thinkingConfig` for thinking (`includeThoughts`, plus the
+model's documented `thinkingLevel` or `thinkingBudget`). Multimodal tool
+results travel as `functionResponse.parts`, not as sibling parts.
 
 The transport must not assume the API omits call ids: provider-native call ids
 are preserved whenever they are present, and deterministic ids are synthesized

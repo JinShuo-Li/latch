@@ -43,6 +43,22 @@ default_mode = "WORK"
 # medium = { value = "2" }
 # high = { budget_tokens = 32768 }
 # none = { disabled = true }
+#
+# Gemini thinking is model-specific, never transport-wide: the same transport
+# carries level models, budget models, models where zero disables thinking,
+# and models that cannot disable thinking. Built-in Gemini rows carry their
+# documented capability automatically; a custom Gemini model declares it
+# before exposing efforts or mapping them. `mode = "levels"` lists the
+# documented thinkingLevel values and `off` names the no-thinking level when
+# the model has one; `mode = "budget"` uses thinkingBudget and `zero_allowed`
+# is the documented off switch.
+# [providers.custom.models."gemini-3.8-flash".gemini_thinking]
+# mode = "levels"
+# levels = ["low", "medium", "high"]
+#
+# [providers.custom.models."gemini-2.5-flash".gemini_thinking]
+# mode = "budget"
+# zero_allowed = true
 
 # Default inference profile. Precedence at startup:
 # CLI override > durable session profile (resume) > this config > built-in.
