@@ -2753,6 +2753,73 @@ mod tests {
             EventPayload::UserMessage {  text, .. } if text.starts_with("before compact")
         )));
     }
+
+    #[test]
+    fn recall_prefers_later_revision_across_topics_after_compact_and_resume() {
+        let store = EventStore::open_memory().unwrap();
+        let sid = store
+            .create_session(Path::new("/recall-regression"))
+            .unwrap();
+        for index in 0..16 {
+            store
+                .append(
+                    sid,
+                    EventPayload::UserMessage {
+                        text: format!("protocol endpoint originally alpha, repetition {index}"),
+                        media: vec![],
+                    },
+                )
+                .unwrap();
+        }
+        store
+            .append(
+                sid,
+                EventPayload::UserMessage {
+                    text: "database uses SQLite WAL".into(),
+                    media: vec![],
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                sid,
+                EventPayload::UserMessage {
+                    text: "protocol endpoint revised to beta".into(),
+                    media: vec![],
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                sid,
+                EventPayload::UserMessage {
+                    text: "配置密钥 保持隔离".into(),
+                    media: vec![],
+                },
+            )
+            .unwrap();
+        let mut engine = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        engine.manual_compact(sid).unwrap();
+        let resumed = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        let protocol = resumed.recall(sid, "protocol endpoint").unwrap();
+        assert!(protocol.iter().any(|event| matches!(&event.payload,
+            EventPayload::UserMessage { text, .. } if text.contains("revised to beta"))));
+        let database = resumed.recall(sid, "SQLite WAL").unwrap();
+        assert!(database.iter().any(|event| matches!(&event.payload,
+            EventPayload::UserMessage { text, .. } if text.contains("database"))));
+        let cjk = resumed.recall(sid, "配置密钥").unwrap();
+        assert!(cjk.iter().any(|event| matches!(&event.payload,
+            EventPayload::UserMessage { text, .. } if text.contains("保持隔离"))));
+        assert_eq!(
+            store
+                .events(sid)
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
+                .count(),
+            19
+        );
+    }
     #[test]
     fn cache_epochs_beat_per_turn_sliding_suffix_on_prefix_reuse() {
         use crate::state::EvidenceLedger;

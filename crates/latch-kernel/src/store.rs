@@ -1177,14 +1177,14 @@ impl EventStore {
             return Ok(vec![]);
         }
         // Fetch only the matched rows. The FTS selection is ordered by
-        // insertion (rowid) so the same durable log always yields the same
-        // bounded recall set; the outer query then presents it in event
-        // order. The bookkeeping kinds are excluded after selection so the
-        // limit keeps its original meaning.
+        // newest insertion first so later corrections remain recallable even
+        // when a term appears many times; the outer query presents selected
+        // events in chronological order. Bookkeeping kinds are excluded after
+        // selection.
         let sql = "SELECT sequence,id,parent_id,timestamp,payload FROM events \
                    WHERE session_id=?1 AND id IN (\
                        SELECT event_id FROM event_search \
-                       WHERE session_id=?1 AND event_search MATCH ?2 ORDER BY rowid LIMIT ?3\
+                       WHERE session_id=?1 AND event_search MATCH ?2 ORDER BY rowid DESC LIMIT ?3\
                    ) ORDER BY sequence";
         let session = session_id.to_string();
         let events = self.events_query(session_id, sql, &[&session, &query, &(limit as i64)])?;
@@ -1529,7 +1529,7 @@ fn fts_query(q: &str) -> String {
         .filter(|s| !s.is_empty())
         .map(|s| format!("\"{}\"", s.replace('"', "")))
         .collect::<Vec<_>>()
-        .join(" OR ")
+        .join(" AND ")
 }
 
 fn payload(json: Option<String>) -> Result<Option<EventPayload>> {
@@ -1767,12 +1767,12 @@ mod tests {
             )
             .unwrap();
 
-        // Recompute the historical implementation: FTS ids first (insertion
-        // order), then a full history scan filtered by id and excluded kinds.
+        // Recompute the bounded FTS selection, then a full history scan
+        // filtered by id and excluded kinds.
         let raw_ids: Vec<String> = {
             let conn = store.conn().unwrap();
             let mut stmt = conn
-                .prepare("SELECT event_id FROM event_search WHERE session_id=?1 AND event_search MATCH ?2 ORDER BY rowid LIMIT ?3")
+                .prepare("SELECT event_id FROM event_search WHERE session_id=?1 AND event_search MATCH ?2 ORDER BY rowid DESC LIMIT ?3")
                 .unwrap();
             stmt.query_map(params![sid.to_string(), "\"needle\"", 12i64], |row| {
                 row.get(0)

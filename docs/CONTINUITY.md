@@ -34,9 +34,11 @@ back; its validation entries are informational and never become parent
 evidence.
 
 Summaries are indexes, not truth. Exact questions use deterministic SQLite FTS
-to recover original events. Retrieval uses explicit relationships, paths,
-entities, decisions, evidence, keywords, and recency. There are no embeddings
-and no vector database.
+to recover original events. Bounded recall selects the newest matching rows
+first, retaining later revisions even when older turns repeat a term, then
+presents selected events in chronological order. Retrieval uses explicit
+relationships, paths, entities, decisions, evidence, keywords, and recency.
+There are no embeddings and no vector database.
 
 ## Port boundary
 
