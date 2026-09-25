@@ -36,6 +36,31 @@ async fn read_hash(executor: &ToolExecutor, path: &str) -> String {
         .to_owned()
 }
 
+/// Sets up a workspace whose configured state directory lives inside the
+/// workspace itself, with a fake credential file and an image under it.
+fn setup_with_workspace_state_dir(mode: Mode) -> (tempfile::TempDir, ToolExecutor) {
+    let d = tempdir().unwrap();
+    std::fs::write(d.path().join("visible.txt"), "ordinary content\n").unwrap();
+    let state = d.path().join("state");
+    std::fs::create_dir_all(state.join("nested")).unwrap();
+    std::fs::write(state.join("secrets.toml"), "FAKE_SECRET = \"abc123\"\n").unwrap();
+    std::fs::write(state.join("nested/secret.txt"), "FAKE_SECRET nested\n").unwrap();
+    std::fs::write(state.join("hidden.png"), TINY_PNG).unwrap();
+    let s = EventStore::open_memory().unwrap();
+    let id = s.create_session(d.path()).unwrap();
+    let p = PolicyEngine::new(mode, d.path().into(), PermissionConfig::default());
+    let e = ToolExecutor::new_with_state_dir(
+        d.path().into(),
+        d.path().join("artifacts"),
+        state,
+        s,
+        id,
+        p,
+    )
+    .unwrap();
+    (d, e)
+}
+
 #[test]
 fn configured_state_dir_reaches_commands_extensions_and_children() {
     let dir = tempdir().unwrap();
@@ -399,6 +424,199 @@ async fn child_agents_cannot_overwrite_each_others_whole_file_writes() {
             "{label} must not overwrite A's change"
         );
     }
+}
+
+#[tokio::test]
+async fn read_file_refuses_the_state_directory_and_symlink_aliases() {
+    let (d, e) = setup_with_workspace_state_dir(Mode::Work);
+    for path in ["state", "state/secrets.toml", "state/nested/secret.txt"] {
+        let denied = e
+            .execute(
+                &call("read_file", json!({"path": path})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(denied.is_error, "{path} must be denied: {}", denied.output);
+        assert!(
+            denied.output.contains("protected state directory"),
+            "{path}: {}",
+            denied.output
+        );
+        assert!(
+            !denied.output.contains("FAKE_SECRET"),
+            "{path} must not leak content: {}",
+            denied.output
+        );
+    }
+    // A symlink alias resolving into the state directory is the same boundary,
+    // whether it aliases the directory or a single secret file.
+    std::os::unix::fs::symlink(d.path().join("state"), d.path().join("alias")).unwrap();
+    std::os::unix::fs::symlink(
+        d.path().join("state/secrets.toml"),
+        d.path().join("secret-link"),
+    )
+    .unwrap();
+    for path in ["alias", "alias/secrets.toml", "secret-link"] {
+        let denied = e
+            .execute(
+                &call("read_file", json!({"path": path})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(denied.is_error, "{path} must be denied: {}", denied.output);
+        assert!(
+            denied.output.contains("protected state directory"),
+            "{path}: {}",
+            denied.output
+        );
+    }
+    // Ordinary workspace reads are unchanged.
+    let ordinary = e
+        .execute(
+            &call("read_file", json!({"path":"visible.txt"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!ordinary.is_error, "{}", ordinary.output);
+    assert!(
+        ordinary.output.contains("ordinary content"),
+        "{}",
+        ordinary.output
+    );
+}
+
+#[tokio::test]
+async fn read_image_refuses_the_state_directory() {
+    let (d, e) = setup_with_workspace_state_dir(Mode::Work);
+    for path in ["state", "state/hidden.png"] {
+        let denied = e
+            .execute(
+                &call("read_image", json!({"path": path})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(denied.is_error, "{path} must be denied: {}", denied.output);
+        assert!(
+            denied.output.contains("protected state directory"),
+            "{path}: {}",
+            denied.output
+        );
+        assert!(
+            denied.media.is_empty(),
+            "{path} must not attach image bytes: {}",
+            denied.media.len()
+        );
+    }
+    // Ordinary workspace images still work.
+    std::fs::write(d.path().join("shot.png"), TINY_PNG).unwrap();
+    let ordinary = e
+        .execute(
+            &call("read_image", json!({"path":"shot.png"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!ordinary.is_error, "{}", ordinary.output);
+    assert_eq!(ordinary.media.len(), 1);
+}
+
+#[tokio::test]
+async fn search_refuses_and_excludes_the_state_directory() {
+    let (d, e) = setup_with_workspace_state_dir(Mode::Work);
+    // Direct targets inside the protected tree are refused.
+    for path in ["state", "state/secrets.toml", "state/nested"] {
+        let denied = e
+            .execute(
+                &call("search", json!({"query":"FAKE_SECRET","path":path})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(denied.is_error, "{path} must be denied: {}", denied.output);
+        assert!(
+            denied.output.contains("protected state directory"),
+            "{path}: {}",
+            denied.output
+        );
+    }
+    // A symlink target resolving into the protected tree is refused.
+    std::os::unix::fs::symlink(d.path().join("state"), d.path().join("alias")).unwrap();
+    let via_alias = e
+        .execute(
+            &call("search", json!({"query":"FAKE_SECRET","path":"alias"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(via_alias.is_error, "{}", via_alias.output);
+    assert!(
+        via_alias.output.contains("protected state directory"),
+        "{}",
+        via_alias.output
+    );
+    // A recursive search from the workspace root excludes the protected tree
+    // but still finds ordinary workspace files.
+    std::fs::write(d.path().join("visible.txt"), "FAKE_SECRET visible\n").unwrap();
+    let found = e
+        .execute(
+            &call("search", json!({"query":"FAKE_SECRET","path":"."})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!found.is_error, "{}", found.output);
+    assert!(found.output.contains("visible.txt"), "{}", found.output);
+    assert!(!found.output.contains("secrets.toml"), "{}", found.output);
+    assert!(!found.output.contains("state/"), "{}", found.output);
+    assert!(!found.output.contains("nested"), "{}", found.output);
+}
+
+#[tokio::test]
+async fn writes_and_patches_cannot_target_the_state_directory() {
+    let (d, e) = setup_with_workspace_state_dir(Mode::Work);
+    let secret = std::fs::read(d.path().join("state/secrets.toml")).unwrap();
+    let write = e
+        .execute(
+            &call("write", json!({"path":"state/new.txt","content":"owned"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(write.is_error, "{}", write.output);
+    assert!(
+        write.output.contains("protected state directory"),
+        "{}",
+        write.output
+    );
+    let patch = e
+        .execute(
+            &call(
+                "patch",
+                json!({
+                    "path":"state/secrets.toml",
+                    "base_hash": hash(&secret),
+                    "old":"abc123",
+                    "new":"owned"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(patch.is_error, "{}", patch.output);
+    assert!(
+        patch.output.contains("protected state directory"),
+        "{}",
+        patch.output
+    );
+    // Symlink aliases are blocked for writes too, and nothing was mutated.
+    std::os::unix::fs::symlink(d.path().join("state"), d.path().join("alias")).unwrap();
+    let via_alias = e
+        .execute(
+            &call("write", json!({"path":"alias/new.txt","content":"owned"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(via_alias.is_error, "{}", via_alias.output);
+    assert!(!d.path().join("state/new.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("state/secrets.toml")).unwrap(),
+        "FAKE_SECRET = \"abc123\"\n"
+    );
 }
 
 #[tokio::test]

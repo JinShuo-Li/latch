@@ -1920,3 +1920,65 @@ async fn stale_whole_file_writes_never_overwrite_newer_changes() {
         "H2"
     );
 }
+
+/// Kernel-native filesystem tools enforce the same boundary the sandbox does:
+/// the configured state directory and symlink aliases into it are never
+/// agent-visible, even when the state directory lives inside the workspace.
+#[tokio::test]
+async fn native_filesystem_tools_cannot_reach_the_state_directory() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("ordinary.txt"), "ordinary").unwrap();
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("secrets.toml"), "FAKE_SECRET = true\n").unwrap();
+    std::os::unix::fs::symlink(&state, dir.path().join("alias")).unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(dir.path()).unwrap();
+    let tools = ToolExecutor::new_with_state_dir(
+        dir.path().into(),
+        dir.path().join("artifacts"),
+        state,
+        store,
+        session,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+
+    for (tool, path) in [
+        ("read_file", "state/secrets.toml"),
+        ("read_file", "alias/secrets.toml"),
+        ("read_image", "state"),
+        ("read_image", "state/secrets.toml"),
+    ] {
+        let result = tools
+            .execute(
+                &call("deny", tool, json!({"path": path})),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            result.is_error,
+            "{tool} {path} must be denied: {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("protected state directory"),
+            "{tool} {path}: {}",
+            result.output
+        );
+        assert!(
+            !result.output.contains("FAKE_SECRET") && result.media.is_empty(),
+            "{tool} {path} must not expose state: {}",
+            result.output
+        );
+    }
+    // Ordinary workspace reads stay available.
+    let ordinary = tools
+        .execute(
+            &call("ok", "read_file", json!({"path":"ordinary.txt"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!ordinary.is_error, "{}", ordinary.output);
+    assert!(ordinary.output.contains("ordinary"));
+}

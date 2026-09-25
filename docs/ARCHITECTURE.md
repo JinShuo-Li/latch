@@ -628,7 +628,12 @@ The sandbox resolves its real path and masks the whole directory after workspace
 and external mounts. If `secrets.toml` is a symlink outside that directory, its
 resolved target is masked too. The private `/tmp` and `/run` mounts already hide
 paths there unless a workspace or granted external mount exposes them. Failure
-to resolve the configured state directory refuses the command.
+to resolve the configured state directory refuses the command. Kernel-native
+filesystem tools enforce the same boundary on the host: `read_file`,
+`read_image`, and the `search` target refuse the resolved state directory and
+any symlink alias into it, `write`/`patch` refuse to mutate it, and a recursive
+search rooted above it excludes the protected tree with an rg glob instead of
+failing. Credentials stay unreadable whatever the workspace layout.
 
 Non-interactive sessions record `non_interactive` denials; resume marks
 unresolved requests `resume_expired`, and `SafetyChanged`/`PermissionsChanged`

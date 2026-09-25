@@ -111,6 +111,10 @@ impl ToolExecutor {
         } else {
             lexical_normalize(&self.workspace.join(raw))
         };
+        // Credentials and session state are not writable through workspace
+        // tools, whether the state directory lives inside the workspace or is
+        // reached through a symlink alias.
+        self.ensure_not_protected(&candidate)?;
         if resolve_workspace_path(&self.workspace, raw).is_ok() {
             return Ok(candidate);
         }

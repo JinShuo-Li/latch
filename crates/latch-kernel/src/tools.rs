@@ -516,6 +516,84 @@ impl ToolExecutor {
         }
         r
     }
+    /// The configured state directory resolved to its real filesystem
+    /// location. Sandboxed commands are masked from it; kernel-native tools
+    /// enforce the same boundary.
+    fn protected_state_dir(&self) -> PathBuf {
+        std::fs::canonicalize(&self.state_dir)
+            .unwrap_or_else(|_| lexical_normalize(&self.state_dir))
+    }
+    /// True when `path` is the state directory or a descendant of it. Symlinks
+    /// on the deepest existing ancestor are resolved first, so an alias into
+    /// the state directory is protected even when the leaf does not exist yet.
+    pub(super) fn is_protected_path(&self, path: &Path) -> bool {
+        resolve_real_path(path).is_some_and(|real| real.starts_with(self.protected_state_dir()))
+    }
+    /// Refuses agent-visible filesystem access to the configured state
+    /// directory and everything beneath it. Credentials and session state must
+    /// never be readable through kernel-native tools just because the state
+    /// directory happens to live inside the workspace.
+    pub(super) fn ensure_not_protected(&self, path: &Path) -> Result<()> {
+        if self.is_protected_path(path) {
+            let display =
+                relative(&self.workspace, path).unwrap_or_else(|_| path.display().to_string());
+            bail!(
+                "{display} is inside Latch's protected state directory; \
+                 workspace tools cannot read or write it"
+            );
+        }
+        Ok(())
+    }
+    /// Ripgrep `--glob` exclusion that keeps a recursive search from
+    /// traversing the state directory when it lives inside the workspace.
+    /// Patterns are matched relative to rg's cwd, which is the workspace.
+    fn state_dir_exclusion_glob(&self) -> Option<String> {
+        let workspace = std::fs::canonicalize(&self.workspace).ok()?;
+        let relative = self
+            .protected_state_dir()
+            .strip_prefix(&workspace)
+            .ok()?
+            .to_string_lossy()
+            .into_owned();
+        if relative.is_empty() {
+            return None;
+        }
+        Some(format!("!{}/**", escape_glob(&relative)))
+    }
+}
+
+/// Resolves `path` to its real location, following symlinks on the deepest
+/// existing ancestor and appending a nonexistent tail unchanged. Used by the
+/// protected-path check so aliases and not-yet-created leaves resolve to the
+/// same real path.
+fn resolve_real_path(path: &Path) -> Option<PathBuf> {
+    let mut ancestor = path.to_path_buf();
+    let mut tail = Vec::new();
+    loop {
+        if let Ok(mut real) = ancestor.canonicalize() {
+            for component in tail.iter().rev() {
+                real.push(component);
+            }
+            return Some(real);
+        }
+        tail.push(ancestor.file_name()?.to_os_string());
+        if !ancestor.pop() {
+            return None;
+        }
+    }
+}
+
+/// Escapes ripgrep glob metacharacters so a literal path is excluded exactly,
+/// even when a directory name contains glob syntax.
+fn escape_glob(path: &str) -> String {
+    let mut escaped = String::with_capacity(path.len());
+    for character in path.chars() {
+        if matches!(character, '\\' | '*' | '?' | '[' | ']' | '{' | '}') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 fn def(name: &str, description: &str, input_schema: Value) -> latch_protocol::ToolDefinition {

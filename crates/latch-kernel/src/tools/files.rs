@@ -126,6 +126,7 @@ impl ToolExecutor {
             .and_then(Value::as_str)
             .unwrap_or(".");
         let path = resolve_workspace_path(&self.workspace, target)?;
+        self.ensure_not_protected(&path)?;
         let max_results = call
             .arguments
             .get("max_results")
@@ -138,21 +139,27 @@ impl ToolExecutor {
             .get("offset")
             .and_then(Value::as_u64)
             .map_or(0, |value| value as usize);
-        let out = Command::new("rg")
-            .args([
-                "-n",
-                "--color=never",
-                "--no-heading",
-                "--max-columns",
-                "400",
-                "--max-columns-preview",
-                "--max-filesize",
-                "8M",
-                "-m",
-                "1000",
-                "--",
-                q,
-            ])
+        let mut command = Command::new("rg");
+        command.args([
+            "-n",
+            "--color=never",
+            "--no-heading",
+            "--max-columns",
+            "400",
+            "--max-columns-preview",
+            "--max-filesize",
+            "8M",
+            "-m",
+            "1000",
+        ]);
+        // A recursive search from a parent of the state directory must not
+        // traverse it; exclude the protected tree instead of refusing the
+        // search outright.
+        if let Some(exclusion) = self.state_dir_exclusion_glob() {
+            command.arg("--glob").arg(exclusion);
+        }
+        let out = command
+            .args(["--", q])
             .arg(path)
             .current_dir(&self.workspace)
             .output()
@@ -229,7 +236,9 @@ impl ToolExecutor {
         Ok(canonical)
     }
     pub(super) fn path_arg(&self, call: &ToolCall) -> Result<PathBuf> {
-        resolve_workspace_path(&self.workspace, str_arg(call, "path")?)
+        let path = resolve_workspace_path(&self.workspace, str_arg(call, "path")?)?;
+        self.ensure_not_protected(&path)?;
+        Ok(path)
     }
 }
 
