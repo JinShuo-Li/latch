@@ -670,6 +670,7 @@ impl Config {
     /// Semantics are preserved; formatting and comments are not (see the
     /// canonical-write note in the docs).
     pub fn normalize(&mut self) {
+        let mut legacy_created = false;
         if self.providers.is_empty()
             && let Some(kind) =
                 ProviderKind::parse(&self.provider.kind, self.provider.base_url.as_deref())
@@ -693,6 +694,7 @@ impl Config {
                     model_discovery: false,
                 },
             );
+            legacy_created = true;
             if self.inference.provider.is_none() {
                 self.inference.provider = Some(kind.id().to_owned());
             }
@@ -710,6 +712,18 @@ impl Config {
                         .or_insert_with(|| meta.clone());
                 }
             }
+        }
+        if legacy_created
+            && let Some(entry) = self.providers.values_mut().next()
+            && let Some(model) = &entry.default_model
+            && !crate::providers::builtin_catalog(entry.kind)
+                .iter()
+                .any(|known| known.model == *model)
+        {
+            let override_ = entry.models.entry(model.clone()).or_default();
+            override_
+                .transport
+                .get_or_insert(entry.kind.default_transport());
         }
         self.provider = ProviderConfig::default();
     }

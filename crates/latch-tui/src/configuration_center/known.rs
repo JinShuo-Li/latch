@@ -278,6 +278,8 @@ impl KnownProviderFlow {
                     credential,
                     model: self.default_model.clone(),
                     enabled_models: Some(self.enabled.iter().cloned().collect()),
+                    custom_model_display_name: None,
+                    custom_transport: None,
                     effort: ReasoningEffort::ProviderDefault,
                 })
             }

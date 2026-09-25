@@ -120,6 +120,8 @@ pub enum SetupPlan {
         model: String,
         /// Explicit model selection. `None` preserves an existing selection.
         enabled_models: Option<Vec<String>>,
+        custom_model_display_name: Option<String>,
+        custom_transport: Option<String>,
         effort: ReasoningEffort,
     },
     /// Remove one configured provider instance. Credentials are never deleted.
@@ -447,6 +449,8 @@ pub enum SetupStep {
     Secret,
     Model,
     ModelId,
+    ModelDisplayName,
+    AdvancedTransport,
     Effort,
     Review,
 }
@@ -469,6 +473,8 @@ pub struct SetupFlow {
     model: usize,
     /// Model id typed by the user when it is not in the catalog.
     custom_model: Option<String>,
+    custom_model_display_name: Option<String>,
+    custom_transport: Option<String>,
     effort: usize,
     configured: Vec<ConfiguredProvider>,
     remove: usize,
@@ -501,6 +507,8 @@ impl SetupFlow {
             secret: String::new(),
             model: 0,
             custom_model: None,
+            custom_model_display_name: None,
+            custom_transport: None,
             effort: 0,
             configured: Vec::new(),
             remove: 0,
@@ -555,6 +563,8 @@ impl SetupFlow {
             SetupStep::Secret => "Setup · API key".to_owned(),
             SetupStep::Model => "Setup · model".to_owned(),
             SetupStep::ModelId => "Setup · model id".to_owned(),
+            SetupStep::ModelDisplayName => "Setup · model display name".to_owned(),
+            SetupStep::AdvancedTransport => "Setup · Advanced transport".to_owned(),
             SetupStep::Effort => "Setup · reasoning effort".to_owned(),
             SetupStep::Review => "Setup · review".to_owned(),
         }
@@ -568,6 +578,7 @@ impl SetupFlow {
             | SetupStep::Kind
             | SetupStep::Credential
             | SetupStep::Model
+            | SetupStep::AdvancedTransport
             | SetupStep::Effort => "↑↓ select · enter next · esc cancel",
             SetupStep::RemoveConfirm => "↑↓ select · enter confirm · esc cancel",
             SetupStep::Review => "↑↓ select · enter apply · esc cancel",
@@ -683,6 +694,22 @@ impl SetupFlow {
                     )
                 })
                 .collect(),
+            SetupStep::AdvancedTransport => [
+                ("Chat Completions", "chat_completions"),
+                ("OpenAI Responses", "responses"),
+                ("Anthropic Messages", "anthropic_messages"),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, id))| {
+                row(
+                    index,
+                    label.to_owned(),
+                    id.to_owned(),
+                    self.custom_transport.as_deref() == Some(id),
+                )
+            })
+            .collect(),
             SetupStep::Review => vec![
                 row(
                     0,
@@ -696,7 +723,8 @@ impl SetupFlow {
             | SetupStep::Endpoint
             | SetupStep::EnvName
             | SetupStep::Secret
-            | SetupStep::ModelId => Vec::new(),
+            | SetupStep::ModelId
+            | SetupStep::ModelDisplayName => Vec::new(),
         }
     }
 
@@ -730,6 +758,14 @@ impl SetupFlow {
             ("Provider".to_owned(), format!("{kind} ({})", self.name)),
             ("Endpoint".to_owned(), self.endpoint.clone()),
             ("Model".to_owned(), self.effective_model_id()),
+            (
+                "Display name".to_owned(),
+                self.custom_model_display_name.clone().unwrap_or_default(),
+            ),
+            (
+                "Transport".to_owned(),
+                self.custom_transport.clone().unwrap_or_default(),
+            ),
             (
                 "Effort".to_owned(),
                 self.selected_effort().label().to_owned(),
@@ -832,7 +868,15 @@ impl SetupFlow {
                     }
                 }
                 self.effort = 0;
-                self.step = SetupStep::Effort;
+                self.step = if self.custom_model.is_some() {
+                    SetupStep::ModelDisplayName
+                } else {
+                    SetupStep::Effort
+                };
+            }
+            SetupStep::ModelDisplayName => {
+                self.custom_model_display_name = Some(value.trim().to_owned());
+                self.step = SetupStep::AdvancedTransport;
             }
             _ => {}
         }
@@ -889,13 +933,25 @@ impl SetupFlow {
                 self.selected = self.model;
                 true
             }
+            SetupStep::ModelDisplayName => {
+                self.step = SetupStep::ModelId;
+                true
+            }
+            SetupStep::AdvancedTransport => {
+                self.step = SetupStep::ModelDisplayName;
+                true
+            }
             SetupStep::Effort => {
                 self.step = SetupStep::Model;
                 self.selected = self.model;
                 true
             }
             SetupStep::Review => {
-                self.step = SetupStep::Effort;
+                self.step = if self.custom_model.is_some() {
+                    SetupStep::AdvancedTransport
+                } else {
+                    SetupStep::Effort
+                };
                 self.selected = self.effort;
                 true
             }
@@ -1025,6 +1081,21 @@ impl SetupFlow {
                 initial: self.effective_model_id(),
                 masked: false,
             }),
+            SetupStep::ModelDisplayName => SetupStepOutcome::Capture(CaptureSpec {
+                label: "model display name".to_owned(),
+                initial: self
+                    .custom_model_display_name
+                    .clone()
+                    .unwrap_or_else(|| self.effective_model_id()),
+                masked: false,
+            }),
+            SetupStep::AdvancedTransport => {
+                let transport = ["chat_completions", "responses", "anthropic_messages"];
+                self.custom_transport = Some(transport[self.selected.min(2)].to_owned());
+                self.step = SetupStep::Review;
+                self.selected = 0;
+                SetupStepOutcome::None
+            }
             SetupStep::Effort => {
                 let efforts = self.effort_options();
                 if efforts.is_empty() {
@@ -1054,6 +1125,8 @@ impl SetupFlow {
                     credential,
                     model: self.effective_model_id(),
                     enabled_models: None,
+                    custom_model_display_name: self.custom_model_display_name.clone(),
+                    custom_transport: self.custom_transport.clone(),
                     effort: self.selected_effort(),
                 })
             }
@@ -1355,7 +1428,10 @@ mod tests {
         // of cancelling.
         assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
         flow.submit_capture("lab-model-7".into());
-        assert_eq!(flow.step(), SetupStep::Effort);
+        assert_eq!(flow.step(), SetupStep::ModelDisplayName);
+        assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
+        flow.submit_capture("Lab Model 7".into());
+        assert_eq!(flow.step(), SetupStep::AdvancedTransport);
         assert_eq!(flow.confirm(), SetupStepOutcome::None);
         assert_eq!(flow.step(), SetupStep::Review);
         let SetupStepOutcome::Apply(SetupPlan::Apply {
@@ -1363,6 +1439,8 @@ mod tests {
             model,
             effort,
             credential,
+            custom_model_display_name,
+            custom_transport,
             ..
         }) = flow.confirm()
         else {
@@ -1372,6 +1450,8 @@ mod tests {
         assert_eq!(model, "lab-model-7");
         assert_eq!(effort, ReasoningEffort::ProviderDefault);
         assert_eq!(credential, SetupCredential::Env("LAB_KEY".into()));
+        assert_eq!(custom_model_display_name.as_deref(), Some("Lab Model 7"));
+        assert_eq!(custom_transport.as_deref(), Some("chat_completions"));
     }
 
     #[test]
@@ -1385,6 +1465,8 @@ mod tests {
             credential: credential.clone(),
             model: "gpt-5.5".into(),
             enabled_models: None,
+            custom_model_display_name: None,
+            custom_transport: None,
             effort: ReasoningEffort::ProviderDefault,
         };
         assert!(

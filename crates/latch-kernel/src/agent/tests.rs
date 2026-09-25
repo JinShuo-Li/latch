@@ -2614,6 +2614,7 @@ fn profile_descriptor(model: &str, window: Option<usize>) -> crate::providers::M
         }),
         aliases: vec![],
         known: true,
+        resolved: true,
     }
 }
 

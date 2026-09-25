@@ -502,6 +502,8 @@ fn persist_setup(
         credential,
         model,
         enabled_models,
+        custom_model_display_name,
+        custom_transport,
         effort,
     } = plan.clone()
     else {
@@ -537,6 +539,20 @@ fn persist_setup(
     entry.default_model = Some(model.clone());
     if let Some(enabled_models) = enabled_models {
         entry.enabled_models = Some(enabled_models);
+    }
+    if custom_model_display_name.is_some() || custom_transport.is_some() {
+        let override_ = entry.models.entry(model.clone()).or_default();
+        if let Some(display_name) = custom_model_display_name {
+            override_.display_name = Some(display_name);
+        }
+        if let Some(transport) = custom_transport {
+            override_.transport = Some(match transport.as_str() {
+                "chat_completions" => latch_kernel::config::TransportKind::ChatCompletions,
+                "responses" => latch_kernel::config::TransportKind::Responses,
+                "anthropic_messages" => latch_kernel::config::TransportKind::AnthropicMessages,
+                _ => bail!("unknown custom model transport"),
+            });
+        }
     }
     let valid_inference = candidate
         .inference
@@ -934,6 +950,8 @@ mod tests {
             credential: SetupCredential::Secret("sk-super-secret".into()),
             model: "deepseek-v4.1-flash".into(),
             enabled_models: None,
+            custom_model_display_name: None,
+            custom_transport: None,
             effort: ReasoningEffort::High,
         };
         let (provider_id, model, effort) = persist_setup(&mut context, &plan).unwrap();
@@ -1025,6 +1043,75 @@ mod tests {
     }
 
     #[test]
+    fn custom_setup_persists_only_explicit_model_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(config_path.clone())).unwrap();
+        let plan = SetupPlan::Apply {
+            name: "acme".into(),
+            provider_kind: "openai-compatible".into(),
+            base_url: Some("https://api.acme.test/v1".into()),
+            credential: SetupCredential::Env("ACME_KEY".into()),
+            model: "acme-pro".into(),
+            enabled_models: Some(vec!["acme-pro".into()]),
+            custom_model_display_name: Some("Acme Pro".into()),
+            custom_transport: Some("responses".into()),
+            effort: ReasoningEffort::ProviderDefault,
+        };
+        persist_setup(&mut context, &plan).unwrap();
+        let saved = Config::load(Some(&config_path)).unwrap();
+        let model = &saved.providers["acme"].models["acme-pro"];
+        assert_eq!(model.display_name.as_deref(), Some("Acme Pro"));
+        assert_eq!(
+            model.transport,
+            Some(latch_kernel::config::TransportKind::Responses)
+        );
+        assert!(model.context_window_tokens.is_none());
+        assert!(model.efforts.is_none());
+        assert_eq!(
+            saved.providers["acme"].enabled_models.as_deref(),
+            Some(&["acme-pro".into()][..])
+        );
+    }
+
+    #[test]
+    fn unresolved_custom_model_is_visible_in_setup_status_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut entry = latch_kernel::config::ProviderProfileConfig {
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: Some("https://api.acme.test/v1".into()),
+            credential: Some("file:acme".into()),
+            default_model: Some("acme-pro".into()),
+            ..Default::default()
+        };
+        entry.models.insert(
+            "acme-pro".into(),
+            latch_kernel::config::ModelConfig {
+                display_name: Some("Acme Pro".into()),
+                ..Default::default()
+            },
+        );
+        config.providers.insert("acme".into(), entry);
+        let mut context = InferenceContext::new(config, None).unwrap();
+        context.credentials.set("acme", "private").unwrap();
+        let rows = context.setup_providers();
+        assert_eq!(rows[0].model_count, 1);
+        assert_eq!(
+            rows[0].status,
+            latch_tui::configuration_center::ProviderStatus::UnresolvedModels
+        );
+        assert!(context.registry.available_models("acme").is_empty());
+    }
+
+    #[test]
     fn secret_commit_failure_keeps_previous_config() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
@@ -1095,6 +1182,8 @@ mod tests {
             credential,
             model: model.into(),
             enabled_models: None,
+            custom_model_display_name: None,
+            custom_transport: None,
             effort,
         }
     }

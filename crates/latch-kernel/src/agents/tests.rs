@@ -938,6 +938,7 @@ async fn child_inherits_the_live_inference_profile() {
         pricing: None,
         aliases: Vec::new(),
         known: true,
+        resolved: true,
     };
     agent
         .set_inference_profile(
@@ -1035,6 +1036,7 @@ fn named_descriptor(model: &str) -> crate::providers::ModelDescriptor {
         pricing: None,
         aliases: Vec::new(),
         known: true,
+        resolved: true,
     }
 }
 

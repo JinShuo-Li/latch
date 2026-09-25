@@ -37,6 +37,9 @@ and model capabilities come from Latch's catalog. `/model` switches the live inf
 OpenCode Zen is available as `opencode-zen`; its built-in rows currently cover
 the documented Responses, Messages, and Chat Completions endpoints. Gemini
 rows require a separate transport and are not offered yet.
+Custom providers ask for an endpoint and a model request id and display name.
+Their model transport is set in Advanced before the model can run. Unknown
+models with no transport remain visible in setup but are excluded from `/model`.
 
 Configuration is provider-neutral and multi-provider:
 

@@ -90,7 +90,7 @@ impl InferenceContext {
             .available_providers()
             .into_iter()
             .map(|profile| {
-                let model_count = self.registry.available_models(profile.id.as_str()).len();
+                let model_count = profile.configured_model_count();
                 let credential_ready = self
                     .credentials
                     .resolve(&profile.credential)
@@ -101,7 +101,9 @@ impl InferenceContext {
                     .registry
                     .model_descriptor(profile.id.as_str(), &profile.default_model);
                 let unresolved = profile.default_model.is_empty()
-                    || default.as_ref().is_none_or(|descriptor| !descriptor.known);
+                    || default
+                        .as_ref()
+                        .is_none_or(|descriptor| !descriptor.resolved);
                 let status = if !credential_ready {
                     ProviderStatus::MissingCredential
                 } else if unresolved {

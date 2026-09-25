@@ -87,6 +87,9 @@ pub struct ModelDescriptor {
     /// True when metadata comes from the built-in catalog or explicit user
     /// configuration; false for the conservative unknown-model fallback.
     pub known: bool,
+    /// A built-in transport or an explicit user transport resolves the model.
+    /// Discovered ids and display-only custom entries stay in setup only.
+    pub resolved: bool,
 }
 
 impl ModelDescriptor {
@@ -157,6 +160,7 @@ impl ModelDescriptor {
             pricing: None,
             aliases: Vec::new(),
             known: false,
+            resolved: false,
         }
     }
 }
@@ -963,6 +967,7 @@ fn builtin_descriptor(
             .map(|alias| (*alias).to_owned())
             .collect(),
         known: true,
+        resolved: true,
     }
     .with_provider_defaults(kind)
 }
@@ -1059,6 +1064,7 @@ impl ProviderProfile {
                 .unwrap_or_else(|| ModelDescriptor::unknown(&provider_id, kind, name));
             apply_user_metadata(&mut descriptor, user);
             descriptor.known = true;
+            descriptor.resolved |= user.transport.is_some();
             for alias in &descriptor.aliases {
                 aliases.insert(alias.clone(), name.clone());
             }
@@ -1151,8 +1157,21 @@ impl ProviderProfile {
                     .as_ref()
                     .is_none_or(|selected| selected.contains(id))
             })
+            .filter(|(_, model)| model.resolved)
             .map(|(_, model)| model)
             .collect()
+    }
+
+    #[must_use]
+    pub fn configured_model_count(&self) -> usize {
+        self.models
+            .keys()
+            .filter(|id| {
+                self.enabled_models
+                    .as_ref()
+                    .is_none_or(|selected| selected.contains(id))
+            })
+            .count()
     }
 }
 
@@ -1238,6 +1257,19 @@ impl ProviderRegistry {
                 .clone()
                 .map(|env| format!("env:{env}"))
                 .unwrap_or_else(|| kind.default_credential().to_owned());
+            let mut legacy_models = BTreeMap::new();
+            if !builtin_models(kind)
+                .iter()
+                .any(|model| model.id == legacy.model)
+            {
+                let mut override_ = config
+                    .models
+                    .get(&legacy.model)
+                    .cloned()
+                    .unwrap_or_default();
+                override_.transport.get_or_insert(kind.default_transport());
+                legacy_models.insert(legacy.model.clone(), override_);
+            }
             entries.insert(
                 kind.id().to_owned(),
                 ProviderProfileConfig {
@@ -1247,7 +1279,7 @@ impl ProviderRegistry {
                     credential: Some(credential),
                     default_model: Some(legacy.model.clone()),
                     enabled_models: None,
-                    models: BTreeMap::new(),
+                    models: legacy_models,
                     model_discovery: false,
                 },
             );
@@ -1339,6 +1371,11 @@ impl ProviderRegistry {
         let descriptor = profile_models
             .model_descriptor(&model)
             .ok_or_else(|| anyhow!("provider {provider} has no default model"))?;
+        if !descriptor.resolved {
+            bail!(
+                "provider {provider} model {model:?} has unresolved transport; set it in Advanced before activation"
+            );
+        }
         let effort = descriptor.effective_effort(config.inference.effort);
         Ok((
             InferenceProfile::new(provider, descriptor.model.clone(), effort),
@@ -1373,6 +1410,11 @@ impl ProviderRegistry {
         let descriptor = profile
             .model_descriptor(&model)
             .ok_or_else(|| anyhow!("provider {provider_id} has no selectable model"))?;
+        if !descriptor.resolved {
+            bail!(
+                "provider {provider_id} model {model:?} has unresolved transport; set it in Advanced before activation"
+            );
+        }
         let effort = descriptor.effective_effort(requested.effort);
         Ok((
             InferenceProfile::new(provider_id, descriptor.model.clone(), effort),
@@ -1609,7 +1651,10 @@ mod tests {
         assert_eq!(profile.credential.display(), "env:CUSTOM_KEY");
         let (resolved, descriptor) = registry.default_profile(&config).unwrap();
         assert_eq!(resolved.model, "custom-model");
-        assert!(!descriptor.known, "unknown custom model stays conservative");
+        assert!(
+            descriptor.resolved,
+            "legacy model keeps its former transport"
+        );
         assert!(descriptor.supported_efforts.is_empty());
         assert!(descriptor.context_window_tokens.is_none());
         assert!(descriptor.pricing.is_none());
@@ -1712,6 +1757,38 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_custom_model_is_setup_only_until_transport_is_overridden() {
+        let source = r#"
+            [providers.custom]
+            kind = "openai-compatible"
+            base_url = "https://example.com/v1"
+            default_model = "acme-pro"
+            enabled_models = ["acme-pro"]
+
+            [providers.custom.models."acme-pro"]
+            display_name = "Acme Pro"
+        "#;
+        let config: Config = toml::from_str(source).unwrap();
+        let registry = ProviderRegistry::from_config(&config).unwrap();
+        assert!(registry.available_models("custom").is_empty());
+        let descriptor = registry.model_descriptor("custom", "acme-pro").unwrap();
+        assert!(!descriptor.resolved);
+        assert!(
+            registry
+                .default_profile(&config)
+                .unwrap_err()
+                .to_string()
+                .contains("unresolved transport")
+        );
+
+        let ready: Config =
+            toml::from_str(&format!("{source}\ntransport = 'chat_completions'\n")).unwrap();
+        let registry = ProviderRegistry::from_config(&ready).unwrap();
+        assert_eq!(registry.available_models("custom").len(), 1);
+        assert!(registry.default_profile(&ready).is_ok());
+    }
+
+    #[test]
     fn effort_resolution_clamps_unsupported_values() {
         let (_config, registry) = registry(
             r#"
@@ -1750,16 +1827,15 @@ mod tests {
             .unwrap();
         assert_eq!(xhigh.effort, ReasoningEffort::XHigh);
 
-        // A model with no effort controls only ever selects provider default.
-        let (chat, chat_descriptor) = registry
+        // An unknown model has no documented transport and cannot activate.
+        let error = registry
             .resolve_profile(&InferenceProfile::new(
                 "openai",
                 "mystery-1",
                 ReasoningEffort::Max,
             ))
-            .unwrap();
-        assert_eq!(chat.effort, ReasoningEffort::ProviderDefault);
-        assert!(chat_descriptor.supported_efforts.is_empty());
+            .unwrap_err();
+        assert!(error.to_string().contains("unresolved transport"));
     }
 
     #[test]
@@ -1774,6 +1850,7 @@ mod tests {
             [providers.custom.models."my-model"]
             display_name = "My Model"
             aliases = ["mine"]
+            transport = "chat_completions"
             "#,
         );
         let (profile, descriptor) = registry
@@ -2170,14 +2247,22 @@ mod tests {
             credential = "env:ANTHROPIC_API_KEY"
             "#,
         );
-        let (profile, descriptor) = registry
+        let error = registry
             .resolve_profile(&InferenceProfile::new(
                 "anthropic",
                 "claude-sonnet-4-5",
                 ReasoningEffort::High,
             ))
+            .unwrap_err();
+        assert!(error.to_string().contains("unresolved transport"));
+        let (profile, descriptor) = registry
+            .resolve_profile(&InferenceProfile::new(
+                "anthropic",
+                "claude-haiku-4-5",
+                ReasoningEffort::High,
+            ))
             .unwrap();
-        assert_eq!(profile.model, "claude-sonnet-4-5");
+        assert_eq!(profile.model, "claude-haiku-4-5");
         assert_eq!(
             registry.provider("anthropic").unwrap().kind,
             ProviderKind::Anthropic
