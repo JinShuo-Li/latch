@@ -8,6 +8,8 @@ Modes:
   silent-ready        answer initialize, never register or send ready
   silent-rpc          complete the handshake, never answer tool.execute
   silent-shutdown     complete the handshake, never answer shutdown
+  wrong-shutdown-id   answer shutdown with an unrelated id
+  shutdown-error      answer shutdown with a JSON-RPC error
   ignore-exit         complete the handshake, answer shutdown, never exit
   healthy             complete the handshake and answer requests
 
@@ -96,7 +98,11 @@ while True:
                 }
             )
     elif method == "shutdown":
-        if MODE != "silent-shutdown":
+        if MODE == "wrong-shutdown-id":
+            send({"jsonrpc": "2.0", "id": message["id"] + 1, "result": None})
+        elif MODE == "shutdown-error":
+            send({"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32000, "message": "shutdown refused"}})
+        elif MODE != "silent-shutdown":
             send({"jsonrpc": "2.0", "id": message["id"], "result": None})
     elif method == "exit":
         if MODE == "ignore-exit":

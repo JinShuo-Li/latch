@@ -360,23 +360,53 @@ pub struct ExtensionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtensionLifecycleConfig {
     /// Process spawn plus the `initialize` request write deadline.
-    #[serde(default = "default_extension_spawn_seconds")]
+    #[serde(
+        default = "default_extension_spawn_seconds",
+        deserialize_with = "positive_seconds"
+    )]
     pub spawn_seconds: u64,
     /// `initialize` response deadline.
-    #[serde(default = "default_extension_initialize_seconds")]
+    #[serde(
+        default = "default_extension_initialize_seconds",
+        deserialize_with = "positive_seconds"
+    )]
     pub initialize_seconds: u64,
     /// Registration collection deadline, until the `ready` notification.
-    #[serde(default = "default_extension_ready_seconds")]
+    #[serde(
+        default = "default_extension_ready_seconds",
+        deserialize_with = "positive_seconds"
+    )]
     pub ready_seconds: u64,
     /// One ordinary extension RPC deadline.
-    #[serde(default = "default_extension_request_seconds")]
+    #[serde(
+        default = "default_extension_request_seconds",
+        deserialize_with = "positive_seconds"
+    )]
     pub request_seconds: u64,
     /// `shutdown` response deadline.
-    #[serde(default = "default_extension_shutdown_seconds")]
+    #[serde(
+        default = "default_extension_shutdown_seconds",
+        deserialize_with = "positive_seconds"
+    )]
     pub shutdown_seconds: u64,
     /// Graceful child exit deadline before the child is killed and reaped.
-    #[serde(default = "default_extension_exit_seconds")]
+    #[serde(
+        default = "default_extension_exit_seconds",
+        deserialize_with = "positive_seconds"
+    )]
     pub exit_seconds: u64,
+}
+
+fn positive_seconds<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<u64, D::Error> {
+    let value = u64::deserialize(deserializer)?;
+    if value == 0 {
+        return Err(serde::de::Error::custom(
+            "extension_lifecycle timeout must be a positive number of seconds",
+        ));
+    }
+    Ok(value)
 }
 
 impl Default for ExtensionLifecycleConfig {
@@ -697,6 +727,25 @@ mod tests {
             lifecycle.shutdown,
             std::time::Duration::from_secs(crate::extension::DEFAULT_SHUTDOWN_SECONDS)
         );
+    }
+
+    #[test]
+    fn extension_lifecycle_rejects_zero_timeouts() {
+        for field in [
+            "spawn",
+            "initialize",
+            "ready",
+            "request",
+            "shutdown",
+            "exit",
+        ] {
+            let input = format!("[extension_lifecycle]\n{field}_seconds = 0\n");
+            let error = toml::from_str::<Config>(&input).unwrap_err().to_string();
+            assert!(
+                error.contains("positive number of seconds"),
+                "{field}: {error}"
+            );
+        }
     }
 
     #[test]

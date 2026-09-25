@@ -572,7 +572,17 @@ impl ExtensionHost {
             self.writer
                 .write(&request(id, "shutdown", json!({})))
                 .await?;
-            self.reader.read().await.map(|_| ())
+            let response = self.reader.read().await?;
+            if response.id != Some(json!(id)) {
+                bail!(
+                    "extension {name} shutdown response id mismatch: expected {id}, got {:?}",
+                    response.id
+                );
+            }
+            if let Some(error) = response.error {
+                bail!("extension {name} shutdown returned JSON-RPC error: {error}");
+            }
+            Ok(())
         };
         match tokio::time::timeout(deadline, step).await {
             Ok(result) => result.with_context(|| format!("extension {name} shutdown")),
@@ -1235,6 +1245,27 @@ mod tests {
         assert!(message.contains("shutdown"), "{message}");
         assert!(message.contains("timed out"), "{message}");
         assert_gone(&pids).await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_rejects_unrelated_response_and_json_rpc_error() {
+        let Some(fake) = fake_extension() else { return };
+        for (mode, expected) in [
+            ("wrong-shutdown-id", "response id mismatch"),
+            ("shutdown-error", "shutdown refused"),
+        ] {
+            let host = fake
+                .start(
+                    mode,
+                    ExtensionLifecycle::default(),
+                    &CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            let error = host.shutdown().await.expect_err(mode);
+            let message = format!("{error:#}");
+            assert!(message.contains(expected), "{mode}: {message}");
+        }
     }
 
     #[tokio::test]
