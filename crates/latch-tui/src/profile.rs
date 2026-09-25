@@ -197,13 +197,6 @@ pub enum SetupPlan {
     },
 }
 
-/// One configured provider instance shown by the removal surface.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfiguredProvider {
-    pub id: String,
-    pub model: String,
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub enum SetupCredential {
     /// Reference an environment variable by name.

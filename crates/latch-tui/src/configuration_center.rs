@@ -289,8 +289,6 @@ pub struct ConfigurationCenter {
     draft_models: BTreeSet<String>,
     draft_efforts: BTreeSet<ReasoningEffort>,
     capture: Option<CenterCapture>,
-    /// Request id between the custom-model id and display-name captures.
-    pending_model: Option<String>,
     effort_draft: Option<EffortDraft>,
 }
 
@@ -304,7 +302,6 @@ impl ConfigurationCenter {
             draft_models: BTreeSet::new(),
             draft_efforts: BTreeSet::new(),
             capture: None,
-            pending_model: None,
             effort_draft: None,
         }
     }
@@ -570,7 +567,11 @@ impl ConfigurationCenter {
                 rows.push(if entry.from_catalog {
                     (
                         "Reset model overrides".to_owned(),
-                        "restore catalog metadata".to_owned(),
+                        if entry.has_override {
+                            "restore catalog metadata".to_owned()
+                        } else {
+                            "no overrides set".to_owned()
+                        },
                     )
                 } else {
                     (
@@ -638,9 +639,9 @@ impl ConfigurationCenter {
                 }
             }
             CenterPage::Efforts { provider, model } => {
-                let Some(entry) = self.model(provider, model) else {
+                if self.model(provider, model).is_none() {
                     return Vec::new();
-                };
+                }
                 let mut rows: Vec<(String, String)> = ReasoningEffort::LEVELS
                     .iter()
                     .map(|effort| {
@@ -662,7 +663,6 @@ impl ConfigurationCenter {
                     "Save effort levels".to_owned(),
                     format!("{} exposed", self.draft_efforts.len()),
                 ));
-                let _ = entry;
                 rows
             }
             CenterPage::EffortMap { provider, model } => {
@@ -724,7 +724,7 @@ impl ConfigurationCenter {
             } => {
                 let _ = self.model(provider, model);
                 vec![
-                    ("Automatic".to_owned(), complete_effort(effort)),
+                    ("Automatic".to_owned(), "adapter default".to_owned()),
                     ("Value".to_owned(), value_hint(effort)),
                     ("Budget tokens".to_owned(), budget_hint(effort)),
                     ("Disabled".to_owned(), "documented off switch".to_owned()),
@@ -1278,7 +1278,6 @@ impl ConfigurationCenter {
                 if model.is_empty() {
                     return None;
                 }
-                self.pending_model = Some(model.clone());
                 self.capture = Some(CenterCapture::CustomModelName {
                     provider: provider.clone(),
                     model: model.clone(),
@@ -1292,7 +1291,6 @@ impl ConfigurationCenter {
                 } else {
                     display_name
                 };
-                self.pending_model = None;
                 Some(CenterAction::AddCustomModel {
                     name: provider,
                     model,
@@ -1364,16 +1362,6 @@ impl ConfigurationCenter {
         }
     }
 
-    pub fn credential_from_capture(&self, value: String) -> Option<(String, SetupCredential)> {
-        let CenterCapture::CredentialEnv { provider } = self.capture.as_ref()? else {
-            return None;
-        };
-        Some((
-            provider.clone(),
-            SetupCredential::Env(value.trim().to_owned()),
-        ))
-    }
-
     pub fn merge_discovered(&mut self, provider: &str, ids: &[String]) {
         if let Some(row) = self.providers.iter_mut().find(|row| row.id == provider) {
             row.merge_discovered(ids);
@@ -1425,10 +1413,6 @@ fn value_hint(effort: &ReasoningEffort) -> String {
 
 fn budget_hint(effort: &ReasoningEffort) -> String {
     format!("token budget for {}", effort.label())
-}
-
-fn complete_effort(_effort: &ReasoningEffort) -> String {
-    "adapter default".to_owned()
 }
 
 #[cfg(test)]
