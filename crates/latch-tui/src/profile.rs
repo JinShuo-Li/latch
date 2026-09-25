@@ -117,7 +117,7 @@ pub enum ProviderFieldEdit {
 
 /// One model-level field edit. Only the named field changes; every other
 /// override is preserved.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ModelFieldEdit {
     DisplayName(Option<String>),
     /// `None` restores the catalog transport.
@@ -135,6 +135,8 @@ pub enum ModelFieldEdit {
     },
     /// An empty map clears the override and restores the adapter default.
     EffortMap(std::collections::BTreeMap<ReasoningEffort, EffortMapEdit>),
+    /// Replaces the optional pricing override; `None` clears it.
+    Pricing(Option<latch_protocol::ModelPricing>),
     /// Clear every override for this model (built-in catalog models only).
     Reset,
 }
@@ -149,7 +151,7 @@ pub enum EffortMapEdit {
 }
 
 /// A setup flow result that must leave the TUI.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SetupPlan {
     Apply {
         /// Stable provider instance id (may differ from the kind id).
@@ -224,7 +226,7 @@ pub struct CaptureSpec {
 }
 
 /// Output of one `confirm()` on a setup flow.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SetupStepOutcome {
     None,
     Capture(CaptureSpec),

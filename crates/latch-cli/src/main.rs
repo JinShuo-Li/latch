@@ -942,6 +942,7 @@ fn set_model_field(
                         })
                         .collect();
                 }
+                ModelFieldEdit::Pricing(pricing) => entry.pricing = pricing.clone(),
                 ModelFieldEdit::Reset => unreachable!("handled above"),
             }
         }
@@ -1987,6 +1988,81 @@ mod tests {
         // Runtime resolution is read-only: configuration and `[inference]`
         // are byte-identical afterwards.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn pricing_override_round_trips_and_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "deepseek",
+                "deepseek",
+                SetupCredential::Env("DEEPSEEK_API_KEY".into()),
+                "deepseek-flash",
+                ReasoningEffort::ProviderDefault,
+            ),
+        )
+        .unwrap();
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "deepseek-flash",
+            &ModelFieldEdit::Pricing(Some(latch_protocol::ModelPricing {
+                input_per_million: Some(0.28),
+                output_per_million: Some(0.42),
+                currency: "USD".into(),
+                ..Default::default()
+            })),
+        )
+        .unwrap();
+        let descriptor = context
+            .registry
+            .model_descriptor("deepseek", "deepseek-flash")
+            .unwrap();
+        let pricing = descriptor.pricing.unwrap();
+        assert_eq!(pricing.input_per_million, Some(0.28));
+        assert_eq!(pricing.output_per_million, Some(0.42));
+        assert_eq!(pricing.cache_read_per_million, None);
+
+        // A negative amount is rejected without writing.
+        let before = std::fs::read_to_string(&path).unwrap();
+        let error = set_model_field(
+            &mut context,
+            "deepseek",
+            "deepseek-flash",
+            &ModelFieldEdit::Pricing(Some(latch_protocol::ModelPricing {
+                input_per_million: Some(-1.0),
+                currency: "USD".into(),
+                ..Default::default()
+            })),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("non-negative"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "deepseek-flash",
+            &ModelFieldEdit::Pricing(None),
+        )
+        .unwrap();
+        assert!(
+            context
+                .registry
+                .model_descriptor("deepseek", "deepseek-flash")
+                .unwrap()
+                .pricing
+                .is_none()
+        );
     }
 
     #[test]

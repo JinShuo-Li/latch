@@ -101,6 +101,8 @@ pub struct ProviderModelSummary {
     pub has_override: bool,
     /// Current user effort map (empty means the adapter default).
     pub effort_map: BTreeMap<ReasoningEffort, EffortMapEdit>,
+    /// Current user pricing override, when set.
+    pub pricing: Option<latch_protocol::ModelPricing>,
     /// Catalog-suggested transport (for showing "provider default" vs override).
     pub catalog_transport: String,
 }
@@ -127,6 +129,7 @@ impl Default for ProviderModelSummary {
             default_effort: ReasoningEffort::ProviderDefault,
             has_override: false,
             effort_map: BTreeMap::new(),
+            pricing: None,
             catalog_transport: String::new(),
         }
     }
@@ -163,7 +166,21 @@ pub enum CenterPage {
         model: String,
         effort: ReasoningEffort,
     },
+    Pricing {
+        provider: String,
+        model: String,
+    },
     RemoveConfirm(String),
+}
+
+/// One optional pricing component edited by the Advanced pricing page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PricingField {
+    Input,
+    Output,
+    CacheRead,
+    CacheWrite,
+    Currency,
 }
 
 /// Which enumerated model field a choice page edits.
@@ -233,9 +250,14 @@ pub enum CenterCapture {
         model: String,
         effort: ReasoningEffort,
     },
+    Pricing {
+        provider: String,
+        model: String,
+        field: PricingField,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CenterAction {
     StartAdd(String),
     /// The host must open `ConfigurationCenter::capture_spec()`.
@@ -338,6 +360,9 @@ impl ConfigurationCenter {
                 model,
                 effort,
             } => format!("Setup · {provider} · {model} · {} form", effort.label()),
+            CenterPage::Pricing { provider, model } => {
+                format!("Setup · {provider} · {model} · Pricing")
+            }
             CenterPage::RemoveConfirm(id) => format!("Setup · remove {id}"),
         }
     }
@@ -557,6 +582,14 @@ impl ConfigurationCenter {
                     ),
                     ("Input modalities".to_owned(), modalities),
                     ("Aliases".to_owned(), entry.aliases.join(", ")),
+                    (
+                        "Pricing".to_owned(),
+                        if entry.pricing.is_some() {
+                            "custom".to_owned()
+                        } else {
+                            "unset".to_owned()
+                        },
+                    ),
                     ("Effort levels".to_owned(), efforts),
                     (
                         "Default effort".to_owned(),
@@ -730,6 +763,38 @@ impl ConfigurationCenter {
                     ("Disabled".to_owned(), "documented off switch".to_owned()),
                 ]
             }
+            CenterPage::Pricing { provider, model } => {
+                let Some(entry) = self.model(provider, model) else {
+                    return Vec::new();
+                };
+                let pricing = entry.pricing.clone().unwrap_or_default();
+                let amount = |value: Option<f64>| {
+                    value.map_or_else(|| "unset".to_owned(), |value| format!("{value}"))
+                };
+                vec![
+                    (
+                        "Input / million".to_owned(),
+                        amount(pricing.input_per_million),
+                    ),
+                    (
+                        "Output / million".to_owned(),
+                        amount(pricing.output_per_million),
+                    ),
+                    (
+                        "Cache read / million".to_owned(),
+                        amount(pricing.cache_read_per_million),
+                    ),
+                    (
+                        "Cache write / million".to_owned(),
+                        amount(pricing.cache_write_per_million),
+                    ),
+                    ("Currency".to_owned(), pricing.currency.clone()),
+                    (
+                        "Clear pricing".to_owned(),
+                        "amounts become unknown".to_owned(),
+                    ),
+                ]
+            }
             CenterPage::RemoveConfirm(_) => vec![
                 (
                     "Remove provider".to_owned(),
@@ -790,6 +855,10 @@ impl ConfigurationCenter {
             CenterPage::EffortMapForm {
                 provider, model, ..
             } => CenterPage::EffortMap {
+                provider: provider.clone(),
+                model: model.clone(),
+            },
+            CenterPage::Pricing { provider, model } => CenterPage::ModelAdvanced {
                 provider: provider.clone(),
                 model: model.clone(),
             },
@@ -984,13 +1053,18 @@ impl ConfigurationCenter {
                     Some(CenterAction::Capture)
                 }
                 7 => {
+                    self.page = CenterPage::Pricing { provider, model };
+                    self.selected = 0;
+                    None
+                }
+                8 => {
                     let entry = self.model(&provider, &model)?;
                     self.draft_efforts = entry.efforts.iter().copied().collect();
                     self.page = CenterPage::Efforts { provider, model };
                     self.selected = 0;
                     None
                 }
-                8 => {
+                9 => {
                     self.page = CenterPage::ModelChoice {
                         provider,
                         model,
@@ -999,7 +1073,7 @@ impl ConfigurationCenter {
                     self.selected = 0;
                     None
                 }
-                9 => {
+                10 => {
                     let entry = self.model(&provider, &model)?;
                     self.effort_draft = Some(EffortDraft {
                         provider: provider.clone(),
@@ -1127,6 +1201,28 @@ impl ConfigurationCenter {
                     field: ModelFieldEdit::EffortMap(BTreeMap::new()),
                 })
             }
+            CenterPage::Pricing { provider, model } => {
+                let field = match self.selected {
+                    0 => PricingField::Input,
+                    1 => PricingField::Output,
+                    2 => PricingField::CacheRead,
+                    3 => PricingField::CacheWrite,
+                    4 => PricingField::Currency,
+                    _ => {
+                        return Some(CenterAction::SetModelField {
+                            name: provider,
+                            model,
+                            field: ModelFieldEdit::Pricing(None),
+                        });
+                    }
+                };
+                self.capture = Some(CenterCapture::Pricing {
+                    provider,
+                    model,
+                    field,
+                });
+                Some(CenterAction::Capture)
+            }
             CenterPage::EffortMapForm {
                 provider,
                 model,
@@ -1245,6 +1341,44 @@ impl ConfigurationCenter {
                 initial: String::new(),
                 masked: false,
             },
+            CenterCapture::Pricing {
+                provider,
+                model,
+                field,
+            } => {
+                let pricing = self
+                    .model(provider, model)
+                    .and_then(|entry| entry.pricing.clone())
+                    .unwrap_or_default();
+                let (label, initial) = match field {
+                    PricingField::Input => (
+                        "input USD per million",
+                        pricing.input_per_million.map(|value| value.to_string()),
+                    ),
+                    PricingField::Output => (
+                        "output USD per million",
+                        pricing.output_per_million.map(|value| value.to_string()),
+                    ),
+                    PricingField::CacheRead => (
+                        "cache read USD per million",
+                        pricing
+                            .cache_read_per_million
+                            .map(|value| value.to_string()),
+                    ),
+                    PricingField::CacheWrite => (
+                        "cache write USD per million",
+                        pricing
+                            .cache_write_per_million
+                            .map(|value| value.to_string()),
+                    ),
+                    PricingField::Currency => ("currency", Some(pricing.currency.clone())),
+                };
+                CaptureSpec {
+                    label: label.to_owned(),
+                    initial: initial.unwrap_or_default(),
+                    masked: false,
+                }
+            }
         })
     }
 
@@ -1307,11 +1441,20 @@ impl ConfigurationCenter {
                 })
             }
             CenterCapture::ContextWindow { provider, model } => {
-                let parsed = value.trim().parse::<usize>().ok();
+                let trimmed = value.trim();
+                let window = if trimmed.is_empty() {
+                    None
+                } else {
+                    let parsed = trimmed.parse::<usize>().ok()?;
+                    if parsed == 0 {
+                        return None;
+                    }
+                    Some(parsed)
+                };
                 Some(CenterAction::SetModelField {
                     name: provider,
                     model,
-                    field: ModelFieldEdit::ContextWindow(parsed.filter(|tokens| *tokens > 0)),
+                    field: ModelFieldEdit::ContextWindow(window),
                 })
             }
             CenterCapture::Aliases { provider, model } => {
@@ -1359,6 +1502,43 @@ impl ConfigurationCenter {
                 self.selected = 0;
                 None
             }
+            CenterCapture::Pricing {
+                provider,
+                model,
+                field,
+            } => {
+                let mut pricing = self
+                    .model(&provider, &model)
+                    .and_then(|entry| entry.pricing.clone())
+                    .unwrap_or_default();
+                let trimmed = value.trim();
+                let parsed = if trimmed.is_empty() {
+                    None
+                } else {
+                    let parsed = trimmed.parse::<f64>().ok()?;
+                    if !parsed.is_finite() || parsed < 0.0 {
+                        return None;
+                    }
+                    Some(parsed)
+                };
+                match field {
+                    PricingField::Input => pricing.input_per_million = parsed,
+                    PricingField::Output => pricing.output_per_million = parsed,
+                    PricingField::CacheRead => pricing.cache_read_per_million = parsed,
+                    PricingField::CacheWrite => pricing.cache_write_per_million = parsed,
+                    PricingField::Currency => {
+                        if trimmed.is_empty() {
+                            return None;
+                        }
+                        pricing.currency = trimmed.to_owned();
+                    }
+                }
+                Some(CenterAction::SetModelField {
+                    name: provider,
+                    model,
+                    field: ModelFieldEdit::Pricing(Some(pricing)),
+                })
+            }
         }
     }
 
@@ -1389,7 +1569,8 @@ impl ConfigurationCenter {
             CenterPage::EffortMap { provider, model } => self.model(provider, model).is_some(),
             CenterPage::EffortMapForm {
                 provider, model, ..
-            } => self.model(provider, model).is_some(),
+            }
+            | CenterPage::Pricing { provider, model } => self.model(provider, model).is_some(),
         };
         if !valid {
             self.page = CenterPage::Providers;
@@ -1620,7 +1801,7 @@ mod tests {
         center.down();
         center.down();
         center.confirm(); // ModelAdvanced
-        for _ in 0..9 {
+        for _ in 0..10 {
             center.down();
         }
         center.confirm(); // Effort mapping
@@ -1674,6 +1855,70 @@ mod tests {
             EffortMapEdit::Value("low".into())
         );
         assert_eq!(map[&ReasoningEffort::High], EffortMapEdit::Disabled);
+    }
+
+    #[test]
+    fn pricing_editor_preserves_other_components_and_clears() {
+        let mut entry = provider(ProviderStatus::Ready).models.pop().unwrap();
+        entry.pricing = Some(latch_protocol::ModelPricing {
+            input_per_million: Some(1.5),
+            output_per_million: Some(3.0),
+            currency: "USD".into(),
+            ..Default::default()
+        });
+        let mut provider = provider(ProviderStatus::Ready);
+        provider.models = vec![entry];
+        let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
+        open_provider(&mut center);
+        center.down();
+        center.down();
+        center.down();
+        center.confirm(); // Advanced
+        center.down();
+        center.down();
+        center.confirm(); // ModelAdvanced
+        for _ in 0..7 {
+            center.down();
+        }
+        center.confirm(); // Pricing
+        assert_eq!(
+            center.page(),
+            &CenterPage::Pricing {
+                provider: "deepseek".into(),
+                model: "deepseek-flash".into()
+            }
+        );
+        // Output row -> capture -> new amount, preserving input and currency.
+        center.down();
+        assert_eq!(center.confirm(), Some(CenterAction::Capture));
+        assert_eq!(
+            center.capture_spec().unwrap().label,
+            "output USD per million"
+        );
+        let action = center.submit_capture("5.5".into()).expect("pricing edit");
+        let CenterAction::SetModelField {
+            field: ModelFieldEdit::Pricing(Some(pricing)),
+            ..
+        } = action
+        else {
+            panic!("expected pricing edit");
+        };
+        assert_eq!(pricing.input_per_million, Some(1.5));
+        assert_eq!(pricing.output_per_million, Some(5.5));
+        assert_eq!(pricing.currency, "USD");
+
+        // The last row clears the whole override.
+        for _ in 0..4 {
+            center.down();
+        }
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::SetModelField {
+                name: "deepseek".into(),
+                model: "deepseek-flash".into(),
+                field: ModelFieldEdit::Pricing(None),
+            })
+        );
     }
 
     #[test]

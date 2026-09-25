@@ -876,6 +876,27 @@ impl Config {
                 if override_.context_window_tokens == Some(0) {
                     anyhow::bail!("provider {id} model {model:?} needs a positive context window");
                 }
+                if let Some(pricing) = &override_.pricing {
+                    for (field, value) in [
+                        ("input_per_million", pricing.input_per_million),
+                        ("output_per_million", pricing.output_per_million),
+                        ("cache_read_per_million", pricing.cache_read_per_million),
+                        ("cache_write_per_million", pricing.cache_write_per_million),
+                    ] {
+                        if let Some(value) = value
+                            && (!value.is_finite() || value < 0.0)
+                        {
+                            anyhow::bail!(
+                                "provider {id} model {model:?} pricing {field} must be a non-negative number"
+                            );
+                        }
+                    }
+                    if pricing.currency.trim().is_empty() {
+                        anyhow::bail!(
+                            "provider {id} model {model:?} pricing currency must not be empty"
+                        );
+                    }
+                }
                 validate_effort_metadata(id, entry.kind, model, override_)?;
             }
         }
@@ -1101,6 +1122,14 @@ mod tests {
             (
                 "[providers.good]\nkind = 'openai'\ndefault_model = 'gpt-5.5'\n[providers.good.models.'gpt-5.5']\ncontext_window_tokens = 0\n",
                 "positive context",
+            ),
+            (
+                "[providers.good]\nkind = 'openai'\ndefault_model = 'gpt-5.5'\n[providers.good.models.'gpt-5.5'.pricing]\ninput_per_million = -1.0\n",
+                "non-negative number",
+            ),
+            (
+                "[providers.good]\nkind = 'openai'\ndefault_model = 'gpt-5.5'\n[providers.good.models.'gpt-5.5'.pricing]\ncurrency = ''\n",
+                "currency must not be empty",
             ),
         ] {
             let config: Config = toml::from_str(input).unwrap();

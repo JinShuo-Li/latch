@@ -215,6 +215,7 @@ impl InferenceContext {
                                             .collect()
                                     })
                                     .unwrap_or_default(),
+                                pricing: user.and_then(|user| user.pricing.clone()),
                                 catalog_transport: catalog_model
                                     .map(|descriptor| descriptor.transport.label().to_owned())
                                     .unwrap_or_else(|| {
