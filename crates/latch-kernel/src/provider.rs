@@ -126,7 +126,7 @@ pub fn anthropic_thinking_for(
 }
 
 /// User-Agent sent with every provider request. Keep in sync with the workspace version.
-pub const USER_AGENT: &str = "latch/0.2.2";
+pub const USER_AGENT: &str = "latch/0.2.3";
 const OPENCODE_GO_BASE: &str = "https://opencode.ai/zen/go";
 const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
@@ -2926,7 +2926,7 @@ mod tests {
         );
         assert_eq!(
             first.get(reqwest::header::USER_AGENT).unwrap(),
-            "latch/0.2.2"
+            "latch/0.2.3"
         );
     }
     #[test]

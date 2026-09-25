@@ -20,5 +20,5 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Deterministic 0.2.2 release gate
+      - name: Deterministic 0.2.3 release gate
         run: bash scripts/release-gate.sh

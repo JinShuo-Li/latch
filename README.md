@@ -3,7 +3,7 @@
 [Website and install guide](https://jinshuo-li.github.io/latch/)
 
 Latch is a quiet, programmable terminal coding agent built around explicit state,
-evidence, controlled execution, and continuous long-session memory. V0.2.2 is a
+evidence, controlled execution, and continuous long-session memory. V0.2.3 is a
 Linux-first Rust implementation with a native streamed tool loop, durable SQLite
 sessions, OpenAI-compatible and Anthropic providers, kernel-owned validation
 evidence, guarded coding tools, three orthogonal Mode/Safety/Permissions
@@ -91,7 +91,7 @@ as `missing credential` — a recoverable provider status, not a startup
 failure — and `/setup` offers to enter the key again. The legacy single
 `[provider]` table (and global `[models.*]` metadata) still loads and
 migrates automatically, so existing configs keep working. Provider
-requests identify as `latch/0.2.2`; OpenCode Go endpoints additionally receive
+requests identify as `latch/0.2.3`; OpenCode Go endpoints additionally receive
 a stable `x-opencode-session` header carrying the durable session id, so
 `--resume` keeps the same value. Unknown models never
 receive invented context windows, pricing, cache semantics, or reasoning
@@ -809,7 +809,7 @@ LSP-style framed stdio. See [docs/PROTOCOL.md](docs/PROTOCOL.md), the minimal
 TypeScript SDK under `sdk/typescript`, and `extensions/example-ts`. The runtime
 platform model that governs extensions, replaceable backends, and future
 clients is [docs/RUNTIME_CAPABILITY_MODEL.md](docs/RUNTIME_CAPABILITY_MODEL.md).
-V0.2.2 runs
+V0.2.3 runs
 the extension host inside the mandatory sandbox (read-only workspace, masked
 home and resolved Latch state directory, network for protocol work); extension
 tool arguments remain a cooperative
@@ -831,5 +831,5 @@ cargo run -p latch-kernel --example extension_probe -- \
   extensions/example-ts/dist/index.js
 ```
 
-Latch v0.2.2 supports Linux terminals only and requires the system `bwrap` binary. It has no daemon, browser automation,
+Latch v0.2.3 supports Linux terminals only and requires the system `bwrap` binary. It has no daemon, browser automation,
 remote execution, MCP, IDE integration, automatic commits, or automatic pushes.

@@ -1,6 +1,6 @@
 # AGENTS.md — Latch
 
-Latch is a Linux-first Rust terminal coding agent (v0.2.2). Users drive it through
+Latch is a Linux-first Rust terminal coding agent (v0.2.3). Users drive it through
 the `latch` TUI (`cargo install --path crates/latch-cli` installs it).
 
 ## Hard constraints
@@ -24,7 +24,7 @@ the `latch` TUI (`cargo install --path crates/latch-cli` installs it).
 
 ## Commands
 
-The deterministic 0.2.2 reliability gate is `bash scripts/release-gate.sh`.
+The deterministic 0.2.3 reliability gate is `bash scripts/release-gate.sh`.
 CI uses an ephemeral Ubuntu 24.04 runner, installs Bubblewrap, ripgrep, and
 Python, enables user namespaces there, probes the required sandbox namespaces
 and mounts, then runs:
