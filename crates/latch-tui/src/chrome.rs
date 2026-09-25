@@ -262,6 +262,20 @@ pub(super) fn action_surface_lines(app: &App, width: usize, height: u16) -> Vec<
         approval_surface_lines(prompt, width)
     } else if let Some(capture) = &app.capture {
         capture_surface_lines(capture, width)
+    } else if let Some(flow) = &app.known_setup {
+        let review = if flow.phase() == crate::configuration_center::KnownPhase::Review {
+            flow.review_lines()
+        } else {
+            Vec::new()
+        };
+        choice_surface_lines(
+            flow.title(),
+            &flow.rows(),
+            "↑↓ select · enter choose · esc back",
+            &review,
+            width,
+            height,
+        )
     } else if let Some(flow) = &app.setup {
         setup_surface_lines(flow, width, height)
     } else if let Some(center) = &app.setup_center {

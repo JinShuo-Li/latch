@@ -1,27 +1,27 @@
                                                                                             │                           
-                             ███     ████  ██████  █████ ██  ██                             │WORK · 0 turns             
-                             ███    ██  ██   ██   ██     ██  ██                             │                           
-                             ███    ██████   ██   ██     ██████                             │TASK                       
-                             ███    ██  ██   ██   ██     ██  ██                             │InProgress                 
-                             ██████ ██  ██   ██    █████ ██  ██                             │Implementation unchanged   
-                                a quiet terminal coding agent                               │Validation pending         
-                                                                                            │                           
-             Ask Latch to inspect, change, or verify code. /help lists commands.            │CONTEXT                    
+                                                                                            │WORK · 0 turns             
+                             ███     ████  ██████  █████ ██  ██                             │                           
+                             ███    ██  ██   ██   ██     ██  ██                             │TASK                       
+                             ███    ██████   ██   ██     ██████                             │InProgress                 
+                             ███    ██  ██   ██   ██     ██  ██                             │Implementation unchanged   
+                             ██████ ██  ██   ██    █████ ██  ██                             │Validation pending         
+                                a quiet terminal coding agent                               │                           
+                                                                                            │CONTEXT                    
+             Ask Latch to inspect, change, or verify code. /help lists commands.            │                           
                                                                                             │                           
                                                                                             │                           
                                                                                                                         
-  Setup · review                                                                                                        
+  Setup · OpenAI · Save                                                                                                 
                                                                                                                         
-  › Apply & save  (current)                                                                                             
+  › Save provider  config and secret staged                                                                             
     Cancel                                                                                                              
                                                                                                                         
   Provider   OpenAI (openai)                                                                                            
-  Endpoint   https://api.openai.com/v1                                                                                  
-  Model      gpt-5.5                                                                                                    
-  Effort     provider default                                                                                           
   Credential secure local storage (value hidden)                                                                        
+  Models     gpt-5.5                                                                                                    
+  Default    gpt-5.5                                                                                                    
                                                                                                                         
-  ↑↓ select · enter apply · esc cancel                                                                                  
+  ↑↓ select · enter choose · esc back                                                                                   
                                                                                                                         
                                                                                                                         
 › Ask Latch…                                                                                                            

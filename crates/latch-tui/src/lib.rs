@@ -48,7 +48,7 @@ mod session_picker;
 mod sidebar;
 use composer::display_width;
 pub use composer::{Composer, VisualRow};
-use configuration_center::{CenterAction, ConfigurationCenter, ProviderSummary};
+use configuration_center::{CenterAction, ConfigurationCenter, KnownProviderFlow, ProviderSummary};
 pub use diff::{DiffDocument, DiffFile, DiffHunk, DiffLine, DiffLineKind, parse_unified_diff};
 pub use presentation::{
     AgentOperation, Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel,
@@ -386,6 +386,7 @@ struct App {
     setup_catalog: Vec<SetupKind>,
     setup_providers: Vec<ProviderSummary>,
     setup_center: Option<ConfigurationCenter>,
+    known_setup: Option<KnownProviderFlow>,
     /// Open guided setup flow.
     setup: Option<SetupFlow>,
     /// A composer text capture opened by the setup flow.
@@ -520,6 +521,7 @@ impl Default for App {
             setup_catalog: Vec::new(),
             setup_providers: Vec::new(),
             setup_center: None,
+            known_setup: None,
             setup: None,
             capture: None,
             attachments: Vec::new(),
@@ -945,14 +947,54 @@ impl App {
             }
             if cancel {
                 self.capture = None;
+                if let Some(flow) = self.known_setup.as_mut() {
+                    flow.back();
+                }
                 if let Some(flow) = self.setup.as_mut() {
                     flow.back();
                 }
             } else if submit {
                 let finished = self.capture.take().expect("checked above");
-                if let Some(flow) = self.setup.as_mut() {
+                if let Some(flow) = self.known_setup.as_mut() {
+                    flow.submit_capture(finished.value);
+                } else if let Some(flow) = self.setup.as_mut() {
                     flow.submit_capture(finished.value);
                 }
+            }
+            return None;
+        }
+        if let Some(flow) = self.known_setup.as_mut() {
+            let outcome = match key.code {
+                KeyCode::Esc => {
+                    if !flow.back() {
+                        self.known_setup = None;
+                    }
+                    SetupStepOutcome::None
+                }
+                KeyCode::Backspace => {
+                    flow.back();
+                    SetupStepOutcome::None
+                }
+                KeyCode::Up => {
+                    flow.up();
+                    SetupStepOutcome::None
+                }
+                KeyCode::Down => {
+                    flow.down();
+                    SetupStepOutcome::None
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => flow.confirm(),
+                _ => SetupStepOutcome::None,
+            };
+            match outcome {
+                SetupStepOutcome::Capture(spec) => self.capture = Some(CaptureState::new(spec)),
+                SetupStepOutcome::Apply(plan) => {
+                    self.known_setup = None;
+                    self.setup_center = None;
+                    return Some(Action::SetupApply(plan));
+                }
+                SetupStepOutcome::Cancel => self.known_setup = None,
+                SetupStepOutcome::None => {}
             }
             return None;
         }
@@ -1027,11 +1069,15 @@ impl App {
                 Some(CenterAction::StartAdd(kind)) => {
                     if let Some(selected) = self.setup_catalog.iter().find(|item| item.kind == kind)
                     {
-                        let mut flow = SetupFlow::new(vec![selected.clone()]);
-                        if let SetupStepOutcome::Capture(spec) = flow.confirm() {
-                            self.capture = Some(CaptureState::new(spec));
+                        if selected.requires_base_url {
+                            let mut flow = SetupFlow::new(vec![selected.clone()]);
+                            if let SetupStepOutcome::Capture(spec) = flow.confirm() {
+                                self.capture = Some(CaptureState::new(spec));
+                            }
+                            self.setup = Some(flow);
+                        } else {
+                            self.known_setup = Some(KnownProviderFlow::new(selected.clone()));
                         }
-                        self.setup = Some(flow);
                     }
                 }
                 Some(CenterAction::Remove(name)) => {

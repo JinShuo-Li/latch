@@ -4,6 +4,8 @@
 //! model discovery, and persistence belong to the CLI/kernel.
 
 use crate::profile::{ChoiceRow, SetupKind};
+mod known;
+pub use known::{KnownPhase, KnownProviderFlow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderStatus {
@@ -225,6 +227,7 @@ mod tests {
             kind: "deepseek".into(),
             label: "DeepSeek".into(),
             default_base_url: String::new(),
+            requires_base_url: false,
             credential_label: "env:DEEPSEEK_API_KEY".into(),
             default_model: "deepseek-flash".into(),
             models: vec![],

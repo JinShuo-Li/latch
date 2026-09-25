@@ -914,6 +914,7 @@ fn missing_provider_opens_guided_setup_immediately() {
         kind: "openai-compatible".into(),
         label: "Compatible provider".into(),
         default_base_url: "https://example.test/v1".into(),
+        requires_base_url: true,
         credential_label: "env:API_KEY".into(),
         default_model: "model".into(),
         models: vec![],
@@ -931,6 +932,7 @@ fn setup_provider_list_renders_status_and_windows_long_lists() {
         kind: "deepseek".into(),
         label: "DeepSeek".into(),
         default_base_url: String::new(),
+        requires_base_url: false,
         credential_label: "env:DEEPSEEK_API_KEY".into(),
         default_model: "deepseek-flash".into(),
         models: vec![],
@@ -2830,6 +2832,7 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
         kind: "openai".into(),
         label: "OpenAI".into(),
         default_base_url: "https://api.openai.com/v1".into(),
+        requires_base_url: false,
         credential_label: "env:OPENAI_API_KEY".into(),
         default_model: "gpt-5.5".into(),
         models: vec![CatalogModel {
@@ -2842,20 +2845,14 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     }]));
     app.input.set_text("/setup");
     assert!(app.submit_action().is_none());
-    // Provider list -> Add -> kind -> provider name capture.
+    // Provider list -> Add -> known provider credential.
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.capture.is_some());
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    // Name -> endpoint capture, prefilled with the catalog default.
-    assert!(matches!(
-        app.setup.as_ref().map(SetupFlow::step),
-        Some(SetupStep::Endpoint)
-    ));
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.capture.is_some());
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    // Credential list: choose "Enter API key securely".
+    assert_eq!(
+        app.known_setup.as_ref().map(|flow| flow.phase()),
+        Some(crate::configuration_center::KnownPhase::Credential)
+    );
+    // Choose "Enter API key securely".
     app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
@@ -2873,7 +2870,8 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     );
     assert!(rendered.contains("••"), "masked capture renders bullets");
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    // Model and effort steps.
+    // Models -> Default model -> Save.
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     let rendered = render_to_text(&mut app, 100, 30);
@@ -2926,6 +2924,7 @@ fn snapshot_setup_review_surface_masks_the_credential() {
         kind: "openai".into(),
         label: "OpenAI".into(),
         default_base_url: "https://api.openai.com/v1".into(),
+        requires_base_url: false,
         credential_label: "env:OPENAI_API_KEY".into(),
         default_model: "gpt-5.5".into(),
         models: vec![CatalogModel {
@@ -2939,18 +2938,16 @@ fn snapshot_setup_review_surface_masks_the_credential() {
     app.input.set_text("/setup");
     app.submit_action();
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // providers -> Add
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // kind -> name capture
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // accept default name
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // endpoint capture
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // accept default endpoint
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // kind -> credential
     app.on_key(key(KeyCode::Down, KeyModifiers::NONE)); // choose secure entry
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     for ch in "sk-hidden".chars() {
         app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
     }
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // secret submitted
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // model
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // effort
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE)); // Continue
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // models
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // default
     let text = render_to_text(&mut app, 120, 34);
     assert!(!text.contains("sk-hidden"), "{text}");
     assert_snapshot("v6_setup_review.txt", &text);

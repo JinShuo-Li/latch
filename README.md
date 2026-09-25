@@ -29,10 +29,10 @@ export OPENAI_API_KEY=...
 cargo install --path crates/latch-cli
 ```
 
-Run `/setup` in the TUI to configure a provider interactively: choose the
-provider, confirm the endpoint, pick a credential source (environment variable
-or a securely entered key stored `0600` under the state dir), choose a model,
-and choose a reasoning effort. `/model` switches the live inference profile
+Run `/setup` in the TUI to configure a known provider: choose the provider,
+credential source (environment variable or a securely entered key stored
+`0600`), models to enable, and its default model, then Save. Known endpoints
+and model capabilities come from Latch's catalog. `/model` switches the live inference profile
 (provider, model, effort) without restarting the session.
 
 Configuration is provider-neutral and multi-provider:

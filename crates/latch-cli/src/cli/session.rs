@@ -229,6 +229,7 @@ impl InferenceContext {
             kind: kind.id().to_owned(),
             label: kind.display_name().to_owned(),
             default_base_url: kind.default_base_url().to_owned(),
+            requires_base_url: kind.default_base_url().is_empty(),
             credential_label: kind.default_credential().to_owned(),
             default_model: latch_kernel::providers::builtin_catalog(kind)
                 .first()

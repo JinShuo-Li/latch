@@ -125,6 +125,10 @@ statuses; the CLI/kernel owns resolution and persistence. The CLI sends
 `SetupProviders` rows with credential and model readiness, and refreshes them
 after setup changes. The TUI renders the rows through the existing windowed
 choice surface.
+Known providers use `KnownProviderFlow` under the configuration center: it
+collects a credential, enabled model selection, and a provider default before
+Save. The plan carries selections only; catalog metadata stays in the kernel.
+Endpoint and effort controls are absent from this normal path.
 Configuration may come from the interactive flows, `config.toml`, or CLI
 overrides, with precedence CLI/session override > durable session profile >
 user config > built-in defaults.

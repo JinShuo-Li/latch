@@ -14,6 +14,7 @@ default_mode = "WORK"
 # keyring:NAME parses for forward compatibility but is not available in this
 # build and is never advertised by /setup.
 # default_model = "deepseek-v4-flash"
+# enabled_models = ["deepseek-v4-flash"] # optional; otherwise full catalog
 # base_url = "https://opencode.ai/zen/go/v1"   # optional override
 #
 # [providers.opencode-go.models."deepseek-v4-flash"]

@@ -102,6 +102,7 @@ pub struct SetupKind {
     pub kind: String,
     pub label: String,
     pub default_base_url: String,
+    pub requires_base_url: bool,
     pub credential_label: String,
     pub default_model: String,
     pub models: Vec<CatalogModel>,
@@ -117,6 +118,8 @@ pub enum SetupPlan {
         base_url: Option<String>,
         credential: SetupCredential,
         model: String,
+        /// Explicit model selection. `None` preserves an existing selection.
+        enabled_models: Option<Vec<String>>,
         effort: ReasoningEffort,
     },
     /// Remove one configured provider instance. Credentials are never deleted.
@@ -1050,6 +1053,7 @@ impl SetupFlow {
                     base_url: Some(self.endpoint.clone()).filter(|url| !url.trim().is_empty()),
                     credential,
                     model: self.effective_model_id(),
+                    enabled_models: None,
                     effort: self.selected_effort(),
                 })
             }
@@ -1205,6 +1209,7 @@ mod tests {
             kind: "deepseek".into(),
             label: "DeepSeek".into(),
             default_base_url: "https://api.deepseek.com".into(),
+            requires_base_url: false,
             credential_label: "env:DEEPSEEK_API_KEY".into(),
             default_model: "deepseek-v4.1-flash".into(),
             models: vec![CatalogModel {
@@ -1266,6 +1271,7 @@ mod tests {
             kind: "deepseek".into(),
             label: "DeepSeek".into(),
             default_base_url: "https://api.deepseek.com".into(),
+            requires_base_url: false,
             credential_label: "env:DEEPSEEK_API_KEY".into(),
             default_model: "deepseek-flash".into(),
             models: vec![CatalogModel {
@@ -1332,6 +1338,7 @@ mod tests {
             kind: "openai-compatible".into(),
             label: "Custom OpenAI-compatible".into(),
             default_base_url: String::new(),
+            requires_base_url: true,
             credential_label: "env:OPENAI_API_KEY".into(),
             default_model: String::new(),
             models: Vec::new(),
@@ -1377,6 +1384,7 @@ mod tests {
             base_url: None,
             credential: credential.clone(),
             model: "gpt-5.5".into(),
+            enabled_models: None,
             effort: ReasoningEffort::ProviderDefault,
         };
         assert!(
@@ -1391,6 +1399,7 @@ mod tests {
             kind: "openai".into(),
             label: "OpenAI".into(),
             default_base_url: "https://api.openai.com/v1".into(),
+            requires_base_url: false,
             credential_label: "env:OPENAI_API_KEY".into(),
             default_model: "gpt-5.5".into(),
             models: vec![CatalogModel {

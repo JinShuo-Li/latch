@@ -501,6 +501,7 @@ fn persist_setup(
         base_url,
         credential,
         model,
+        enabled_models,
         effort,
     } = plan.clone()
     else {
@@ -534,6 +535,9 @@ fn persist_setup(
     entry.base_url = base_url;
     entry.credential = Some(credential_ref.display());
     entry.default_model = Some(model.clone());
+    if let Some(enabled_models) = enabled_models {
+        entry.enabled_models = Some(enabled_models);
+    }
     let valid_inference = candidate
         .inference
         .provider
@@ -929,6 +933,7 @@ mod tests {
             base_url: Some("https://api.deepseek.com".into()),
             credential: SetupCredential::Secret("sk-super-secret".into()),
             model: "deepseek-v4.1-flash".into(),
+            enabled_models: None,
             effort: ReasoningEffort::High,
         };
         let (provider_id, model, effort) = persist_setup(&mut context, &plan).unwrap();
@@ -1089,6 +1094,7 @@ mod tests {
             base_url: None,
             credential,
             model: model.into(),
+            enabled_models: None,
             effort,
         }
     }
