@@ -34,6 +34,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use std::collections::BTreeMap;
 use std::io::{self, Stdout, Write};
 use tokio::sync::mpsc;
 
@@ -104,6 +105,9 @@ pub enum Input {
     },
     /// The `/setup` flow completed and should be persisted and applied.
     SetupApply(SetupPlan),
+    DiscoverModels {
+        provider: String,
+    },
 }
 #[derive(Debug, Clone)]
 pub enum Output {
@@ -148,6 +152,10 @@ pub enum Output {
     /// Provider kinds and built-in models available to `/setup`.
     SetupCatalog(Vec<SetupKind>),
     SetupProviders(Vec<ProviderSummary>),
+    SetupModels {
+        provider: String,
+        ids: Vec<String>,
+    },
     /// The provider cannot run until setup completes; open the guided flow.
     SetupRequired,
     /// The effective profile changed; update model/effort chrome.
@@ -385,6 +393,7 @@ struct App {
     /// Provider kinds available to `/setup`.
     setup_catalog: Vec<SetupKind>,
     setup_providers: Vec<ProviderSummary>,
+    setup_discovered: BTreeMap<String, Vec<String>>,
     setup_center: Option<ConfigurationCenter>,
     known_setup: Option<KnownProviderFlow>,
     /// Open guided setup flow.
@@ -520,6 +529,7 @@ impl Default for App {
             profile_selector: None,
             setup_catalog: Vec::new(),
             setup_providers: Vec::new(),
+            setup_discovered: BTreeMap::new(),
             setup_center: None,
             known_setup: None,
             setup: None,
@@ -678,7 +688,27 @@ impl App {
             }
             Output::InferenceCatalog(catalog) => self.inference_catalog = catalog,
             Output::SetupCatalog(kinds) => self.setup_catalog = kinds,
-            Output::SetupProviders(providers) => self.setup_providers = providers,
+            Output::SetupProviders(mut providers) => {
+                for row in &mut providers {
+                    if let Some(ids) = self.setup_discovered.get(&row.id) {
+                        row.merge_discovered(ids);
+                    }
+                }
+                self.setup_providers = providers;
+            }
+            Output::SetupModels { provider, ids } => {
+                self.setup_discovered.insert(provider.clone(), ids.clone());
+                if let Some(row) = self
+                    .setup_providers
+                    .iter_mut()
+                    .find(|row| row.id == provider)
+                {
+                    row.merge_discovered(&ids);
+                }
+                if let Some(center) = self.setup_center.as_mut() {
+                    center.merge_discovered(&provider, &ids);
+                }
+            }
             Output::SetupRequired => {
                 if !self.setup_catalog.is_empty() {
                     self.setup_center = Some(ConfigurationCenter::new(
@@ -1132,6 +1162,9 @@ impl App {
                         models,
                     }));
                 }
+                Some(CenterAction::DiscoverModels(provider)) => {
+                    return Some(Action::DiscoverModels { provider });
+                }
                 Some(other) => {
                     self.presentation
                         .push_notice(format!("{other:?} is not available yet"));
@@ -1475,6 +1508,9 @@ pub(crate) enum Action {
         effort: ReasoningEffort,
     },
     SetupApply(SetupPlan),
+    DiscoverModels {
+        provider: String,
+    },
 }
 
 /// Which policy selector is open above the composer.

@@ -138,6 +138,7 @@ impl InferenceContext {
                             resolved: model.resolved,
                         })
                         .collect(),
+                    discovered_ids: vec![],
                 }
             })
             .collect()

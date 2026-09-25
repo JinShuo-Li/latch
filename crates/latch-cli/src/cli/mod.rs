@@ -5,6 +5,7 @@
 //! Everything here stays in `latch-cli`; the kernel is untouched.
 
 pub mod command;
+pub mod discovery;
 pub mod doctor;
 pub mod machine;
 pub mod output;

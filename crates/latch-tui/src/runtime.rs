@@ -117,6 +117,9 @@ pub async fn run(
                 Some(Action::SetupApply(plan)) => {
                     input_tx.send(Input::SetupApply(plan)).await?;
                 }
+                Some(Action::DiscoverModels { provider }) => {
+                    input_tx.send(Input::DiscoverModels { provider }).await?;
+                }
                 None => {}
             },
             Some(Event::Mouse(mouse)) => {

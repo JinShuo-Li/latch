@@ -360,6 +360,26 @@ async fn interactive_session(
                 )
                 .await?;
             }
+            Input::DiscoverModels { provider } => {
+                let result = match context.registry.provider(&provider) {
+                    Some(profile) => cli::discovery::fetch(profile, &context.credentials).await,
+                    None => Err(anyhow!("unknown provider")),
+                };
+                match result {
+                    Ok(ids) => {
+                        output_tx
+                            .send(Output::SetupModels { provider, ids })
+                            .await?;
+                    }
+                    Err(_) => {
+                        output_tx
+                            .send(Output::Notice(
+                                "model refresh failed; using the built-in catalog".into(),
+                            ))
+                            .await?;
+                    }
+                }
+            }
             Input::Attach(path) => {
                 match ingest_attachments(&context.config, session_id, &[PathBuf::from(path)]) {
                     Ok(mut media) => {
@@ -414,7 +434,7 @@ async fn interactive_session(
                             Some(Input::Permission { request_id, approved }) => { broker.resolve(request_id, approved).await; }
                             Some(Input::Quit) | None => { active.cancel(); let _ = (&mut running).await; break 'session; }
                             Some(Input::Resume) => { output_tx.send(Output::Notice("cancel the active turn before resuming another session".into())).await?; }
-                            Some(Input::SetSafety(_)) | Some(Input::SetPermissions(_)) | Some(Input::SetInferenceProfile { .. }) | Some(Input::SetupApply(_)) => {
+                            Some(Input::SetSafety(_)) | Some(Input::SetPermissions(_)) | Some(Input::SetInferenceProfile { .. }) | Some(Input::SetupApply(_)) | Some(Input::DiscoverModels { .. }) => {
                                 output_tx.send(Output::Notice("finish or cancel the active turn before changing the inference profile".into())).await?;
                             }
                             Some(Input::Attach(path)) => {

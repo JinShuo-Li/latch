@@ -949,6 +949,7 @@ fn setup_provider_list_renders_status_and_windows_long_lists() {
                 credential_ref: format!("env:KEY_{index:02}"),
                 available_models: vec!["deepseek-flash".into()],
                 models: vec![],
+                discovered_ids: vec![],
             })
             .collect(),
     ));
@@ -962,6 +963,39 @@ fn setup_provider_list_renders_status_and_windows_long_lists() {
     }
     let scrolled = render_to_text(&mut app, 90, 22);
     assert!(scrolled.contains("Provider 29"), "{scrolled}");
+}
+
+#[test]
+fn discovery_output_merges_ids_without_changing_live_model_catalog() {
+    use crate::configuration_center::{ProviderModelSummary, ProviderStatus, ProviderSummary};
+    let mut app = App::default();
+    let provider = ProviderSummary {
+        id: "opencode-zen".into(),
+        display_name: "OpenCode Zen".into(),
+        kind: "opencode-zen".into(),
+        status: ProviderStatus::Ready,
+        model_count: 1,
+        default_model: "known".into(),
+        credential_ref: "env:OPENCODE_API_KEY".into(),
+        available_models: vec!["known".into()],
+        models: vec![ProviderModelSummary {
+            id: "known".into(),
+            display_name: "Known".into(),
+            enabled: true,
+            resolved: true,
+        }],
+        discovered_ids: vec![],
+    };
+    app.output(Output::SetupProviders(vec![provider.clone()]));
+    app.output(Output::SetupModels {
+        provider: "opencode-zen".into(),
+        ids: vec!["known".into(), "unknown".into()],
+    });
+    assert_eq!(app.setup_providers[0].models.len(), 2);
+    assert!(!app.setup_providers[0].models[1].resolved);
+    assert!(app.inference_catalog.providers.is_empty());
+    app.output(Output::SetupProviders(vec![provider]));
+    assert_eq!(app.setup_providers[0].models.len(), 2);
 }
 
 #[test]
@@ -2922,6 +2956,7 @@ fn setup_credential_editor_masks_and_emits_recovery_action() {
         credential_ref: "file:deepseek".into(),
         available_models: vec!["deepseek-flash".into()],
         models: vec![],
+        discovered_ids: vec![],
     }]));
     app.input.set_text("/setup");
     app.submit_action();

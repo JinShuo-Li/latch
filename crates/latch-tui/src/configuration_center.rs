@@ -37,6 +37,26 @@ pub struct ProviderSummary {
     /// Enabled models with resolved transport, eligible as provider defaults.
     pub available_models: Vec<String>,
     pub models: Vec<ProviderModelSummary>,
+    pub discovered_ids: Vec<String>,
+}
+
+impl ProviderSummary {
+    pub fn merge_discovered(&mut self, ids: &[String]) {
+        if ids.is_empty() {
+            return;
+        }
+        self.discovered_ids = ids.to_vec();
+        for id in ids {
+            if !self.models.iter().any(|model| model.id == *id) {
+                self.models.push(ProviderModelSummary {
+                    id: id.clone(),
+                    display_name: id.clone(),
+                    enabled: false,
+                    resolved: false,
+                });
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +83,7 @@ pub enum CenterAction {
     StartAdd(String),
     EditCredential { name: String, secret: bool },
     SetEnabledModels { name: String, models: Vec<String> },
+    DiscoverModels(String),
     SetProviderDefault { name: String, model: String },
     EditAdvanced(String),
     SetNewSessionDefault(String),
@@ -177,7 +198,13 @@ impl ConfigurationCenter {
                         .models
                         .iter()
                         .map(|model| {
-                            let status = if !model.resolved { "unresolved" } else { "" };
+                            let status = if !model.resolved {
+                                "unresolved"
+                            } else if provider.discovered_ids.contains(&model.id) {
+                                "available"
+                            } else {
+                                ""
+                            };
                             (
                                 format!(
                                     "{} {}",
@@ -195,6 +222,16 @@ impl ConfigurationCenter {
                             "Save model selection".to_owned(),
                             format!("{} selected", self.draft_models.len()),
                         )))
+                        .chain(
+                            if matches!(provider.kind.as_str(), "opencode-go" | "opencode-zen") {
+                                Some((
+                                    "Refresh available models".to_owned(),
+                                    "from provider".to_owned(),
+                                ))
+                            } else {
+                                None
+                            },
+                        )
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -351,7 +388,13 @@ impl ConfigurationCenter {
                         models: self.draft_models.iter().cloned().collect(),
                     });
                 }
+                if self.selected > provider.models.len() {
+                    return Some(CenterAction::DiscoverModels(id.clone()));
+                }
                 let model = provider.models.get(self.selected)?;
+                if !model.resolved {
+                    return None;
+                }
                 if model.id == provider.default_model {
                     return None;
                 }
@@ -373,6 +416,12 @@ impl ConfigurationCenter {
             SetupCredential::Env(value.trim().to_owned())
         };
         Some((id.clone(), credential))
+    }
+
+    pub fn merge_discovered(&mut self, provider: &str, ids: &[String]) {
+        if let Some(row) = self.providers.iter_mut().find(|row| row.id == provider) {
+            row.merge_discovered(ids);
+        }
     }
 }
 
@@ -407,6 +456,7 @@ mod tests {
             credential_ref: "file:deepseek".into(),
             available_models: vec!["deepseek-flash".into()],
             models: vec![],
+            discovered_ids: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         assert!(
@@ -435,6 +485,7 @@ mod tests {
             credential_ref: "env:DEEPSEEK_API_KEY".into(),
             available_models: vec!["deepseek-flash".into()],
             models: vec![],
+            discovered_ids: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();
@@ -461,6 +512,7 @@ mod tests {
             credential_ref: "env:DEEPSEEK_API_KEY".into(),
             available_models: vec!["deepseek-flash".into(), "deepseek-v4-pro".into()],
             models: vec![],
+            discovered_ids: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();
@@ -492,6 +544,7 @@ mod tests {
             credential_ref: "file:deepseek".into(),
             available_models: vec!["deepseek-flash".into()],
             models: vec![],
+            discovered_ids: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();
@@ -548,6 +601,7 @@ mod tests {
                     resolved: false,
                 },
             ],
+            discovered_ids: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();
@@ -559,14 +613,59 @@ mod tests {
         center.confirm(); // Default cannot be deselected.
         assert!(center.rows()[0].label.starts_with("[x]"));
         center.down();
-        center.confirm(); // Enable unresolved in setup only.
+        center.confirm(); // Unresolved cannot be enabled before Advanced resolves it.
         center.down();
         assert_eq!(
             center.confirm(),
             Some(CenterAction::SetEnabledModels {
                 name: "custom".into(),
-                models: vec!["ready".into(), "unknown".into()],
+                models: vec!["ready".into()],
             })
+        );
+    }
+
+    #[test]
+    fn discovery_adds_unknown_ids_as_unresolved_setup_rows() {
+        let provider = ProviderSummary {
+            id: "opencode-zen".into(),
+            display_name: "OpenCode Zen".into(),
+            kind: "opencode-zen".into(),
+            status: ProviderStatus::Ready,
+            model_count: 1,
+            default_model: "known".into(),
+            credential_ref: "env:OPENCODE_API_KEY".into(),
+            available_models: vec!["known".into()],
+            models: vec![ProviderModelSummary {
+                id: "known".into(),
+                display_name: "Known".into(),
+                enabled: true,
+                resolved: true,
+            }],
+            discovered_ids: vec![],
+        };
+        let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
+        center.down();
+        center.confirm();
+        center.down();
+        center.confirm();
+        assert_eq!(
+            center.rows().last().unwrap().label,
+            "Refresh available models"
+        );
+        center.down();
+        center.down();
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::DiscoverModels("opencode-zen".into()))
+        );
+        center.merge_discovered("opencode-zen", &["known".into(), "unknown".into()]);
+        assert_eq!(center.rows().len(), 4);
+        assert!(center.rows()[0].description.contains("available"));
+        assert!(center.rows()[1].description.contains("unresolved"));
+        assert!(
+            !center.providers[0]
+                .available_models
+                .contains(&"unknown".into())
         );
     }
 
@@ -582,6 +681,7 @@ mod tests {
             credential_ref: "env:DEEPSEEK_API_KEY".into(),
             available_models: vec!["deepseek-flash".into()],
             models: vec![],
+            discovered_ids: vec![],
         };
         let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
         center.down();

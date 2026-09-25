@@ -1145,6 +1145,7 @@ dependencies = [
  "latch-kernel",
  "latch-protocol",
  "latch-tui",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
