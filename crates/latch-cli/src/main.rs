@@ -16,7 +16,9 @@ use latch_kernel::{
     prompt::PromptCompiler,
 };
 use latch_protocol::{InferenceProfile, MediaRef, Mode, ReasoningEffort, StreamEvent, UserInput};
-use latch_tui::{Input, Output, SLASH_COMMANDS, SetupCredential, SetupPlan};
+use latch_tui::{
+    Input, ModelFieldEdit, Output, ProviderFieldEdit, SLASH_COMMANDS, SetupCredential, SetupPlan,
+};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -286,6 +288,18 @@ async fn interactive_session(
         .await?;
     output_tx
         .send(Output::SetupProviders(context.setup_providers()))
+        .await?;
+    // The resolved storage destination the configuration center will write to.
+    let resolved_paths = latch_kernel::paths::ResolvedPaths::resolve(
+        context.config_path.as_deref(),
+        Some(&context.config.state_dir),
+    );
+    output_tx
+        .send(Output::SetupPaths(latch_tui::SetupPaths {
+            config_path: resolved_paths.config_path.display().to_string(),
+            state_root: resolved_paths.state_root.display().to_string(),
+            source: resolved_paths.source.label().to_owned(),
+        }))
         .await?;
     if info.needs_setup {
         output_tx.send(Output::SetupRequired).await?;
@@ -745,6 +759,250 @@ fn set_enabled_models(context: &mut InferenceContext, name: &str, models: &[Stri
     Ok(())
 }
 
+/// Saves a configuration-only change atomically and refreshes the registry so
+/// the next resolution matches what the next process will load.
+fn save_candidate(context: &mut InferenceContext, candidate: Config) -> Result<()> {
+    candidate.validate()?;
+    let path = context
+        .config_path
+        .clone()
+        .or_else(Config::default_path)
+        .ok_or_else(|| anyhow!("cannot resolve configuration path"))?;
+    candidate.save(&path)?;
+    context.registry = ProviderRegistry::from_config(&candidate)?;
+    context.config = candidate;
+    Ok(())
+}
+
+/// Adds one sparse custom-model entry. Capabilities stay unresolved until
+/// Advanced sets them; nothing is copied from the built-in catalog.
+fn add_custom_model(
+    context: &mut InferenceContext,
+    name: &str,
+    model: &str,
+    display_name: &str,
+) -> Result<()> {
+    if model.trim().is_empty() {
+        bail!("model request id must not be empty");
+    }
+    let mut candidate = context.config.clone();
+    {
+        let profile = candidate
+            .providers
+            .get_mut(name)
+            .ok_or_else(|| anyhow!("no provider named {name:?}"))?;
+        let entry = profile.models.entry(model.to_owned()).or_default();
+        let display = display_name.trim();
+        if !display.is_empty() {
+            entry.display_name = Some(display.to_owned());
+        }
+    }
+    save_candidate(context, candidate)
+}
+
+/// Edits exactly one provider field; every other provider setting and
+/// `[inference]` are preserved.
+fn set_provider_field(
+    context: &mut InferenceContext,
+    name: &str,
+    field: &ProviderFieldEdit,
+) -> Result<()> {
+    let mut candidate = context.config.clone();
+    let profile = candidate
+        .providers
+        .get_mut(name)
+        .ok_or_else(|| anyhow!("no provider named {name:?}"))?;
+    match field {
+        ProviderFieldEdit::BaseUrl(url) => profile.base_url = url.clone(),
+        ProviderFieldEdit::DisplayName(display) => profile.display_name = display.clone(),
+    }
+    save_candidate(context, candidate)
+}
+
+/// Removes one custom-model entry and repairs the selection/default so the
+/// provider stays valid. Built-in catalog models are reset, not removed.
+fn remove_custom_model(
+    profile: &mut latch_kernel::config::ProviderProfileConfig,
+    kind: ProviderKind,
+    model: &str,
+) -> Result<()> {
+    profile.models.remove(model);
+    if let Some(enabled) = profile.enabled_models.as_mut() {
+        enabled.retain(|id| id != model);
+        if enabled.is_empty() {
+            bail!("provider needs at least one model; add another before removing this one");
+        }
+    }
+    if profile.default_model.as_deref() == Some(model) {
+        let replacement = profile
+            .enabled_models
+            .as_ref()
+            .and_then(|enabled| enabled.first().cloned())
+            .or_else(|| {
+                profile
+                    .models
+                    .iter()
+                    .find(|(_, entry)| entry.transport.is_some())
+                    .map(|(id, _)| id.clone())
+            })
+            .or_else(|| {
+                latch_kernel::providers::builtin_catalog(kind)
+                    .first()
+                    .map(|descriptor| descriptor.model.clone())
+            })
+            .ok_or_else(|| {
+                anyhow!("provider needs another model before this one can be removed")
+            })?;
+        if let Some(enabled) = profile.enabled_models.as_mut()
+            && !enabled.contains(&replacement)
+        {
+            enabled.push(replacement.clone());
+        }
+        profile.default_model = Some(replacement);
+    }
+    Ok(())
+}
+
+/// Applies one model override field. The mutation is field-scoped so unrelated
+/// overrides survive untouched.
+fn set_model_field(
+    context: &mut InferenceContext,
+    name: &str,
+    model: &str,
+    field: &ModelFieldEdit,
+) -> Result<()> {
+    let mut candidate = context.config.clone();
+    let kind = candidate
+        .providers
+        .get(name)
+        .ok_or_else(|| anyhow!("no provider named {name:?}"))?
+        .kind;
+    let from_catalog = latch_kernel::providers::builtin_catalog(kind)
+        .iter()
+        .any(|descriptor| descriptor.model == model);
+    {
+        let profile = candidate
+            .providers
+            .get_mut(name)
+            .expect("provider checked above");
+        if matches!(field, ModelFieldEdit::Reset) {
+            if from_catalog {
+                profile.models.remove(model);
+            } else {
+                remove_custom_model(profile, kind, model)?;
+            }
+        } else {
+            let entry = profile.models.entry(model.to_owned()).or_default();
+            match field {
+                ModelFieldEdit::DisplayName(display) => entry.display_name = display.clone(),
+                ModelFieldEdit::Transport(transport) => {
+                    entry.transport = transport.as_deref().map(parse_transport).transpose()?;
+                }
+                ModelFieldEdit::ContextWindow(window) => entry.context_window_tokens = *window,
+                ModelFieldEdit::ReasoningReplay(policy) => {
+                    entry.reasoning_replay = policy.as_deref().map(parse_replay).transpose()?;
+                }
+                ModelFieldEdit::AdaptiveThinking(adaptive) => entry.adaptive_thinking = *adaptive,
+                ModelFieldEdit::InputModalities(modalities) => {
+                    entry.input_modalities = Some(parse_modalities(modalities)?);
+                }
+                ModelFieldEdit::Aliases(aliases) => entry.aliases = aliases.clone(),
+                ModelFieldEdit::Efforts {
+                    efforts,
+                    default_effort,
+                } => {
+                    let mut exposed: Vec<latch_protocol::ReasoningEffort> = Vec::new();
+                    for effort in efforts {
+                        if !matches!(effort, latch_protocol::ReasoningEffort::ProviderDefault)
+                            && !exposed.contains(effort)
+                        {
+                            exposed.push(*effort);
+                        }
+                    }
+                    entry.efforts = Some(exposed.clone());
+                    entry.default_effort = default_effort.filter(|default| {
+                        matches!(default, latch_protocol::ReasoningEffort::ProviderDefault)
+                            || exposed.contains(default)
+                    });
+                    // A wire map must cover every exposed level exactly; a
+                    // changed exposure clears it rather than failing opaquely.
+                    if !entry.effort_map.is_empty() {
+                        let keys: std::collections::BTreeSet<_> =
+                            entry.effort_map.keys().copied().collect();
+                        if keys != exposed.iter().copied().collect() {
+                            entry.effort_map.clear();
+                        }
+                    }
+                }
+                ModelFieldEdit::EffortMap(map) => {
+                    entry.effort_map = map
+                        .iter()
+                        .filter_map(|(effort, edit)| {
+                            effort_mapping(edit).map(|mapping| (*effort, mapping))
+                        })
+                        .collect();
+                }
+                ModelFieldEdit::Reset => unreachable!("handled above"),
+            }
+        }
+    }
+    save_candidate(context, candidate)
+}
+
+fn parse_transport(raw: &str) -> Result<latch_kernel::config::TransportKind> {
+    Ok(match raw {
+        "chat_completions" => latch_kernel::config::TransportKind::ChatCompletions,
+        "responses" => latch_kernel::config::TransportKind::Responses,
+        "anthropic_messages" => latch_kernel::config::TransportKind::AnthropicMessages,
+        "gemini" => latch_kernel::config::TransportKind::Gemini,
+        _ => bail!("unknown custom model transport"),
+    })
+}
+
+fn parse_replay(raw: &str) -> Result<latch_kernel::config::ReasoningReplayPolicy> {
+    Ok(match raw {
+        "replay" => latch_kernel::config::ReasoningReplayPolicy::Replay,
+        "omit" => latch_kernel::config::ReasoningReplayPolicy::Omit,
+        _ => bail!("unknown reasoning replay policy"),
+    })
+}
+
+fn parse_modalities(raw: &[String]) -> Result<Vec<latch_protocol::InputModality>> {
+    let mut modalities = Vec::new();
+    for item in raw {
+        let modality = match item.as_str() {
+            "text" => latch_protocol::InputModality::Text,
+            "image" => latch_protocol::InputModality::Image,
+            other => bail!("unknown input modality {other:?}"),
+        };
+        if !modalities.contains(&modality) {
+            modalities.push(modality);
+        }
+    }
+    if !modalities.contains(&latch_protocol::InputModality::Text) {
+        modalities.insert(0, latch_protocol::InputModality::Text);
+    }
+    Ok(modalities)
+}
+
+fn effort_mapping(edit: &latch_tui::EffortMapEdit) -> Option<latch_kernel::config::EffortMapping> {
+    Some(match edit {
+        latch_tui::EffortMapEdit::Automatic => return None,
+        latch_tui::EffortMapEdit::Value(value) => latch_kernel::config::EffortMapping {
+            value: Some(value.clone()),
+            ..Default::default()
+        },
+        latch_tui::EffortMapEdit::Budget(budget) => latch_kernel::config::EffortMapping {
+            budget_tokens: Some(*budget),
+            ..Default::default()
+        },
+        latch_tui::EffortMapEdit::Disabled => latch_kernel::config::EffortMapping {
+            disabled: Some(true),
+            ..Default::default()
+        },
+    })
+}
+
 /// Persists a `/setup` plan and applies the resulting change live.
 async fn apply_setup(
     agent: &mut Agent,
@@ -754,6 +1012,45 @@ async fn apply_setup(
     workspace: &Path,
     resumed: bool,
 ) -> Result<()> {
+    if let SetupPlan::AddCustomModel {
+        name,
+        model,
+        display_name,
+    } = &plan
+    {
+        add_custom_model(context, name, model, display_name)?;
+        tx.send(Output::InferenceCatalog(context.catalog())).await?;
+        tx.send(Output::SetupProviders(context.setup_providers()))
+            .await?;
+        let resolved = context
+            .registry
+            .model_descriptor(name, model)
+            .is_some_and(|descriptor| descriptor.resolved);
+        tx.send(Output::Notice(if resolved {
+            format!("added model {model}")
+        } else {
+            format!("added model {model}; set its transport in Advanced before enabling it")
+        }))
+        .await?;
+        return Ok(());
+    }
+    if let SetupPlan::SetProviderField { name, field } = &plan {
+        set_provider_field(context, name, field)?;
+        tx.send(Output::InferenceCatalog(context.catalog())).await?;
+        tx.send(Output::SetupProviders(context.setup_providers()))
+            .await?;
+        tx.send(Output::Notice(format!("{name} updated"))).await?;
+        return Ok(());
+    }
+    if let SetupPlan::SetModelField { name, model, field } = &plan {
+        set_model_field(context, name, model, field)?;
+        tx.send(Output::InferenceCatalog(context.catalog())).await?;
+        tx.send(Output::SetupProviders(context.setup_providers()))
+            .await?;
+        tx.send(Output::Notice(format!("{name} · {model} updated")))
+            .await?;
+        return Ok(());
+    }
     if let SetupPlan::SetEnabledModels { name, models } = &plan {
         set_enabled_models(context, name, models)?;
         tx.send(Output::InferenceCatalog(context.catalog())).await?;
@@ -1399,6 +1696,297 @@ mod tests {
                 .unwrap()
                 .resolved
         );
+    }
+
+    #[test]
+    fn advanced_model_fields_are_edited_one_at_a_time_and_preserve_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "deepseek",
+                "deepseek",
+                SetupCredential::Env("DEEPSEEK_API_KEY".into()),
+                "deepseek-flash",
+                ReasoningEffort::ProviderDefault,
+            ),
+        )
+        .unwrap();
+
+        add_custom_model(&mut context, "deepseek", "future-pro", "Future Pro").unwrap();
+        assert!(
+            !context
+                .registry
+                .model_descriptor("deepseek", "future-pro")
+                .unwrap()
+                .resolved,
+            "a custom model stays unresolved until Advanced sets a transport"
+        );
+
+        // A transport resolves the model and is preserved when a later field
+        // edit arrives.
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::Transport(Some("responses".into())),
+        )
+        .unwrap();
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::ContextWindow(Some(123_000)),
+        )
+        .unwrap();
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::DisplayName(Some("Future Pro Max".into())),
+        )
+        .unwrap();
+        let descriptor = context
+            .registry
+            .model_descriptor("deepseek", "future-pro")
+            .unwrap();
+        assert!(descriptor.resolved);
+        assert_eq!(
+            descriptor.transport,
+            latch_kernel::config::TransportKind::Responses
+        );
+        assert_eq!(descriptor.context_window_tokens, Some(123_000));
+        assert_eq!(descriptor.display_name, "Future Pro Max");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("transport = \"responses\""), "{text}");
+        assert!(text.contains("context_window_tokens = 123000"), "{text}");
+        assert!(text.contains("display_name = \"Future Pro Max\""), "{text}");
+
+        // Reset removes the sparse entry; catalog models keep their metadata.
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::Reset,
+        )
+        .unwrap();
+        assert!(
+            context
+                .config
+                .providers
+                .get("deepseek")
+                .unwrap()
+                .models
+                .is_empty()
+        );
+        assert!(
+            context
+                .registry
+                .model_descriptor("deepseek", "deepseek-flash")
+                .unwrap()
+                .resolved
+        );
+    }
+
+    #[test]
+    fn effort_map_edits_validate_round_trip_and_clear_with_exposure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "deepseek",
+                "deepseek",
+                SetupCredential::Env("DEEPSEEK_API_KEY".into()),
+                "deepseek-flash",
+                ReasoningEffort::ProviderDefault,
+            ),
+        )
+        .unwrap();
+        add_custom_model(&mut context, "deepseek", "future-pro", "Future Pro").unwrap();
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::Transport(Some("chat_completions".into())),
+        )
+        .unwrap();
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::Efforts {
+                efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+                default_effort: Some(ReasoningEffort::High),
+            },
+        )
+        .unwrap();
+
+        // A budget form is not expressible on chat completions and must fail
+        // without writing.
+        let before = std::fs::read_to_string(&path).unwrap();
+        let error = set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::EffortMap(std::collections::BTreeMap::from([(
+                ReasoningEffort::Low,
+                latch_tui::EffortMapEdit::Budget(1_024),
+            )])),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("only supports value or disabled"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::EffortMap(std::collections::BTreeMap::from([
+                (
+                    ReasoningEffort::Low,
+                    latch_tui::EffortMapEdit::Value("1".into()),
+                ),
+                (ReasoningEffort::High, latch_tui::EffortMapEdit::Disabled),
+            ])),
+        )
+        .unwrap();
+        let descriptor = context
+            .registry
+            .model_descriptor("deepseek", "future-pro")
+            .unwrap();
+        assert_eq!(
+            descriptor.effort_map[&ReasoningEffort::Low].form().unwrap(),
+            latch_kernel::config::EffortForm::Value("1".into())
+        );
+        assert_eq!(descriptor.default_effort, ReasoningEffort::High);
+
+        // Changing the exposed set clears a now-incomplete map instead of
+        // leaving an invalid configuration behind.
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::Efforts {
+                efforts: vec![ReasoningEffort::Low],
+                default_effort: Some(ReasoningEffort::Low),
+            },
+        )
+        .unwrap();
+        assert!(
+            context
+                .registry
+                .model_descriptor("deepseek", "future-pro")
+                .unwrap()
+                .effort_map
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn advanced_provider_edits_preserve_models_and_new_session_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "deepseek",
+                "deepseek",
+                SetupCredential::Env("DEEPSEEK_API_KEY".into()),
+                "deepseek-v4-pro",
+                ReasoningEffort::High,
+            ),
+        )
+        .unwrap();
+        let inference = context.config.inference.clone();
+        set_provider_field(
+            &mut context,
+            "deepseek",
+            &ProviderFieldEdit::BaseUrl(Some("https://proxy.example.com/v1".into())),
+        )
+        .unwrap();
+        set_provider_field(
+            &mut context,
+            "deepseek",
+            &ProviderFieldEdit::DisplayName(Some("DeepSeek Proxy".into())),
+        )
+        .unwrap();
+        let profile = &context.config.providers["deepseek"];
+        assert_eq!(
+            profile.base_url.as_deref(),
+            Some("https://proxy.example.com/v1")
+        );
+        assert_eq!(profile.display_name.as_deref(), Some("DeepSeek Proxy"));
+        assert_eq!(profile.default_model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(context.config.inference.provider, inference.provider);
+        assert_eq!(context.config.inference.model, inference.model);
+        assert_eq!(context.config.inference.effort, inference.effort);
+    }
+
+    #[test]
+    fn model_resolution_uses_provider_default_and_never_writes_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "deepseek",
+                "deepseek",
+                SetupCredential::Env("DEEPSEEK_API_KEY".into()),
+                "deepseek-v4-pro",
+                ReasoningEffort::High,
+            ),
+        )
+        .unwrap();
+        add_custom_model(&mut context, "deepseek", "future-pro", "Future Pro").unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        // An empty model selects the provider's configured default, never
+        // catalog index 0.
+        let (profile, _) = context
+            .resolve(&InferenceProfile::new(
+                "deepseek",
+                "",
+                ReasoningEffort::ProviderDefault,
+            ))
+            .unwrap();
+        assert_eq!(profile.model, "deepseek-v4-pro");
+        assert_eq!(profile.effort, ReasoningEffort::ProviderDefault);
+        // An unresolved model cannot be activated.
+        assert!(
+            context
+                .resolve(&InferenceProfile::new(
+                    "deepseek",
+                    "future-pro",
+                    ReasoningEffort::ProviderDefault,
+                ))
+                .is_err()
+        );
+        // Runtime resolution is read-only: configuration and `[inference]`
+        // are byte-identical afterwards.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     }
 
     #[test]

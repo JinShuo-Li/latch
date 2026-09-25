@@ -16,6 +16,7 @@ use latch_kernel::{
     session,
 };
 use latch_protocol::{EventPayload, InferenceProfile, MediaRef, Mode, ProviderId, ReasoningEffort};
+use latch_tui::EffortMapEdit;
 use latch_tui::configuration_center::{ProviderModelSummary, ProviderStatus, ProviderSummary};
 use latch_tui::{CatalogModel, CatalogProvider, InferenceCatalog, SetupKind};
 use std::path::{Path, PathBuf};
@@ -84,6 +85,31 @@ pub struct InferenceContext {
     pub config_path: Option<PathBuf>,
 }
 
+/// True when a model override entry carries any explicit field.
+fn has_model_override(user: &latch_kernel::config::ModelConfig) -> bool {
+    user.display_name.is_some()
+        || user.pricing.is_some()
+        || user.context_window_tokens.is_some()
+        || user.efforts.is_some()
+        || user.default_effort.is_some()
+        || user.reasoning_replay.is_some()
+        || user.transport.is_some()
+        || user.adaptive_thinking.is_some()
+        || user.input_modalities.is_some()
+        || !user.aliases.is_empty()
+        || !user.effort_map.is_empty()
+}
+
+/// Converts one configuration effort mapping into the provider-neutral editor
+/// form the configuration center displays.
+fn effort_map_edit(mapping: &latch_kernel::config::EffortMapping) -> EffortMapEdit {
+    match mapping.form() {
+        Ok(latch_kernel::config::EffortForm::Value(value)) => EffortMapEdit::Value(value),
+        Ok(latch_kernel::config::EffortForm::BudgetTokens(budget)) => EffortMapEdit::Budget(budget),
+        Ok(latch_kernel::config::EffortForm::Disabled) | Err(_) => EffortMapEdit::Disabled,
+    }
+}
+
 impl InferenceContext {
     pub fn setup_providers(&self) -> Vec<ProviderSummary> {
         let cache_root =
@@ -117,6 +143,12 @@ impl InferenceContext {
                 } else {
                     ProviderStatus::Ready
                 };
+                let entry = self.config.providers.get(profile.id.as_str());
+                let catalog: std::collections::BTreeMap<String, latch_kernel::ModelDescriptor> =
+                    latch_kernel::providers::builtin_catalog(profile.kind)
+                        .into_iter()
+                        .map(|descriptor| (descriptor.model.clone(), descriptor))
+                        .collect();
                 ProviderSummary {
                     id: profile.id.as_str().to_owned(),
                     display_name: profile.display_name.clone(),
@@ -125,6 +157,7 @@ impl InferenceContext {
                     model_count,
                     default_model: profile.default_model.clone(),
                     credential_ref: profile.credential.display(),
+                    base_url: profile.base_url.clone(),
                     available_models: profile
                         .available_models()
                         .into_iter()
@@ -133,11 +166,61 @@ impl InferenceContext {
                     models: profile
                         .setup_models()
                         .into_iter()
-                        .map(|(model, enabled)| ProviderModelSummary {
-                            id: model.model.clone(),
-                            display_name: model.display_name.clone(),
-                            enabled,
-                            resolved: model.resolved,
+                        .map(|(model, enabled)| {
+                            let user = entry.and_then(|entry| entry.models.get(&model.model));
+                            let catalog_model = catalog.get(&model.model);
+                            ProviderModelSummary {
+                                id: model.model.clone(),
+                                display_name: model.display_name.clone(),
+                                enabled,
+                                resolved: model.resolved,
+                                from_catalog: catalog_model.is_some(),
+                                transport: model.transport.label().to_owned(),
+                                transport_configured: user
+                                    .is_some_and(|user| user.transport.is_some()),
+                                context_window_tokens: model.context_window_tokens,
+                                reasoning_replay: user.and_then(|user| {
+                                    user.reasoning_replay.map(|policy| match policy {
+                                        latch_kernel::config::ReasoningReplayPolicy::Replay => {
+                                            "replay".to_owned()
+                                        }
+                                        latch_kernel::config::ReasoningReplayPolicy::Omit => {
+                                            "omit".to_owned()
+                                        }
+                                    })
+                                }),
+                                adaptive_thinking: model.adaptive_thinking,
+                                adaptive_thinking_configured: user
+                                    .is_some_and(|user| user.adaptive_thinking.is_some()),
+                                input_modalities: model
+                                    .input_modalities
+                                    .iter()
+                                    .map(|modality| modality.label().to_owned())
+                                    .collect(),
+                                input_modalities_configured: user
+                                    .is_some_and(|user| user.input_modalities.is_some()),
+                                aliases: model.aliases.clone(),
+                                aliases_configured: user
+                                    .is_some_and(|user| !user.aliases.is_empty()),
+                                efforts: model.supported_efforts.clone(),
+                                default_effort: model.default_effort,
+                                has_override: user.is_some_and(has_model_override),
+                                effort_map: user
+                                    .map(|user| {
+                                        user.effort_map
+                                            .iter()
+                                            .map(|(effort, mapping)| {
+                                                (*effort, effort_map_edit(mapping))
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default(),
+                                catalog_transport: catalog_model
+                                    .map(|descriptor| descriptor.transport.label().to_owned())
+                                    .unwrap_or_else(|| {
+                                        profile.kind.default_transport().label().to_owned()
+                                    }),
+                            }
                         })
                         .collect(),
                     discovered_ids: crate::cli::discovery::cached(&cache_root, profile.id.as_str())

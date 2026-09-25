@@ -49,14 +49,17 @@ mod session_picker;
 mod sidebar;
 use composer::display_width;
 pub use composer::{Composer, VisualRow};
-use configuration_center::{CenterAction, ConfigurationCenter, KnownProviderFlow, ProviderSummary};
+use configuration_center::{
+    CenterAction, ConfigurationCenter, CustomProviderFlow, KnownProviderFlow, ProviderSummary,
+};
 pub use diff::{DiffDocument, DiffFile, DiffHunk, DiffLine, DiffLineKind, parse_unified_diff};
 pub use presentation::{
     AgentOperation, Cell, CellStatus, ExplorationOperation, PatchFile, PresentationModel,
 };
 pub use profile::{
-    CaptureSpec, CatalogModel, CatalogProvider, ChoiceRow, ConfiguredProvider, InferenceCatalog,
-    ProfileSelector, SetupCredential, SetupFlow, SetupKind, SetupPlan, SetupStep, SetupStepOutcome,
+    CaptureSpec, CatalogModel, CatalogProvider, ChoiceRow, ConfiguredProvider, EffortMapEdit,
+    InferenceCatalog, ModelFieldEdit, ProfileSelector, ProviderFieldEdit, SetupCredential,
+    SetupKind, SetupPlan, SetupStepOutcome,
 };
 pub use session_picker::{PickerSelection, SessionItem, SessionPreviewLine, run_session_picker};
 pub use sidebar::{Pricing, SidebarModel, SidebarSession};
@@ -156,6 +159,9 @@ pub enum Output {
         provider: String,
         ids: Vec<String>,
     },
+    /// Resolved storage the configuration center will write to. Shown on
+    /// review; never a secret.
+    SetupPaths(SetupPaths),
     /// The provider cannot run until setup completes; open the guided flow.
     SetupRequired,
     /// The effective profile changed; update model/effort chrome.
@@ -173,9 +179,17 @@ pub enum Output {
     },
 }
 
+/// Resolved storage paths shown by `/setup` review surfaces. Values are paths
+/// and a symbolic source label only; no credential material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupPaths {
+    pub config_path: String,
+    pub state_root: String,
+    pub source: String,
+}
+
 /// One slash command: the single source of truth shared by the palette and
-/// `/help`, so command names never live in two places.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `/help`, so command names never live in two places.#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlashCommand {
     pub name: &'static str,
     pub description: &'static str,
@@ -396,8 +410,9 @@ struct App {
     setup_discovered: BTreeMap<String, Vec<String>>,
     setup_center: Option<ConfigurationCenter>,
     known_setup: Option<KnownProviderFlow>,
-    /// Open guided setup flow.
-    setup: Option<SetupFlow>,
+    custom_setup: Option<CustomProviderFlow>,
+    /// Resolved storage the next save will write to, shown on review.
+    setup_paths: Option<SetupPaths>,
     /// A composer text capture opened by the setup flow.
     capture: Option<CaptureState>,
     /// Images validated and ingested by the kernel, waiting to be sent with
@@ -532,7 +547,8 @@ impl Default for App {
             setup_discovered: BTreeMap::new(),
             setup_center: None,
             known_setup: None,
-            setup: None,
+            custom_setup: None,
+            setup_paths: None,
             capture: None,
             attachments: Vec::new(),
             workspace: String::new(),
@@ -694,8 +710,12 @@ impl App {
                         row.merge_discovered(ids);
                     }
                 }
+                if let Some(center) = self.setup_center.as_mut() {
+                    center.set_providers(providers.clone());
+                }
                 self.setup_providers = providers;
             }
+            Output::SetupPaths(paths) => self.setup_paths = Some(paths),
             Output::SetupModels { provider, ids } => {
                 self.setup_discovered.insert(provider.clone(), ids.clone());
                 if let Some(row) = self
@@ -837,6 +857,85 @@ impl App {
     }
 
     /// Opens the full-width diff inspector.
+    /// Dispatches one configuration-center action. Editing actions keep the
+    /// center open so the CLI can refresh the rows; terminal actions close it.
+    fn dispatch_center_action(&mut self, action: CenterAction) -> Option<Action> {
+        match action {
+            CenterAction::Capture => {
+                if let Some(spec) = self
+                    .setup_center
+                    .as_ref()
+                    .and_then(ConfigurationCenter::capture_spec)
+                {
+                    self.capture = Some(CaptureState::new(spec));
+                }
+                None
+            }
+            CenterAction::StartAdd(kind) => {
+                if let Some(selected) = self.setup_catalog.iter().find(|item| item.kind == kind) {
+                    if selected.requires_base_url {
+                        self.custom_setup = Some(CustomProviderFlow::new(selected.clone()));
+                    } else {
+                        self.known_setup = Some(KnownProviderFlow::new(selected.clone()));
+                    }
+                }
+                None
+            }
+            CenterAction::DiscoverModels(provider) => Some(Action::DiscoverModels { provider }),
+            CenterAction::Remove(name) => {
+                self.setup_center = None;
+                Some(Action::SetupApply(SetupPlan::Remove { name }))
+            }
+            CenterAction::SetNewSessionDefault(name) => {
+                self.setup_center = None;
+                Some(Action::SetupApply(SetupPlan::SetNewSessionDefault { name }))
+            }
+            CenterAction::SetProviderDefault { name, model } => {
+                self.setup_center = None;
+                Some(Action::SetupApply(SetupPlan::SetProviderDefault {
+                    name,
+                    model,
+                }))
+            }
+            CenterAction::SetEnabledModels { name, models } => {
+                self.setup_center = None;
+                Some(Action::SetupApply(SetupPlan::SetEnabledModels {
+                    name,
+                    models,
+                }))
+            }
+            CenterAction::SetCredential { name, credential } => {
+                self.setup_center = None;
+                Some(Action::SetupApply(SetupPlan::SetCredential {
+                    name,
+                    credential,
+                }))
+            }
+            CenterAction::AddCustomModel {
+                name,
+                model,
+                display_name,
+            } => Some(Action::SetupApply(SetupPlan::AddCustomModel {
+                name,
+                model,
+                display_name,
+            })),
+            CenterAction::SetProviderField { name, field } => {
+                Some(Action::SetupApply(SetupPlan::SetProviderField {
+                    name,
+                    field,
+                }))
+            }
+            CenterAction::SetModelField { name, model, field } => {
+                Some(Action::SetupApply(SetupPlan::SetModelField {
+                    name,
+                    model,
+                    field,
+                }))
+            }
+        }
+    }
+
     fn open_diff(&mut self, raw: String) {
         self.diff_overlay = Some(parse_unified_diff(&raw));
         self.diff_raw = false;
@@ -977,26 +1076,26 @@ impl App {
             }
             if cancel {
                 self.capture = None;
-                if let Some(flow) = self.known_setup.as_mut() {
-                    flow.back();
-                }
-                if let Some(flow) = self.setup.as_mut() {
-                    flow.back();
+                if self.custom_setup.is_some() {
+                    self.custom_setup.as_mut().expect("checked above").back();
+                } else if self.known_setup.is_some() {
+                    self.known_setup.as_mut().expect("checked above").back();
+                } else if let Some(center) = self.setup_center.as_mut() {
+                    center.cancel_capture();
                 }
             } else if submit {
                 let finished = self.capture.take().expect("checked above");
-                if let Some(flow) = self.known_setup.as_mut() {
+                if let Some(flow) = self.custom_setup.as_mut() {
                     flow.submit_capture(finished.value);
-                } else if let Some(flow) = self.setup.as_mut() {
+                } else if let Some(flow) = self.known_setup.as_mut() {
                     flow.submit_capture(finished.value);
-                } else if let Some(center) = self.setup_center.as_ref() {
-                    if let Some((name, credential)) = center.credential_from_capture(finished.value)
-                    {
-                        self.setup_center = None;
-                        return Some(Action::SetupApply(SetupPlan::SetCredential {
-                            name,
-                            credential,
-                        }));
+                } else if self.setup_center.is_some() {
+                    let action = self
+                        .setup_center
+                        .as_mut()
+                        .and_then(|center| center.submit_capture(finished.value));
+                    if let Some(action) = action {
+                        return self.dispatch_center_action(action);
                     }
                 }
             }
@@ -1037,47 +1136,38 @@ impl App {
             }
             return None;
         }
-        // The guided `/setup` flow.
-        if self.setup.is_some() {
-            let outcome = {
-                let flow = self.setup.as_mut().expect("checked above");
-                match key.code {
-                    KeyCode::Esc => {
-                        if !flow.back() {
-                            Some(SetupStepOutcome::Cancel)
-                        } else {
-                            None
-                        }
+        if let Some(flow) = self.custom_setup.as_mut() {
+            let outcome = match key.code {
+                KeyCode::Esc => {
+                    if !flow.back() {
+                        self.custom_setup = None;
                     }
-                    KeyCode::Backspace => {
-                        flow.back();
-                        None
-                    }
-                    KeyCode::Up => {
-                        flow.up();
-                        None
-                    }
-                    KeyCode::Down => {
-                        flow.down();
-                        None
-                    }
-                    KeyCode::Enter => Some(flow.confirm()),
-                    _ => None,
+                    SetupStepOutcome::None
                 }
+                KeyCode::Backspace => {
+                    flow.back();
+                    SetupStepOutcome::None
+                }
+                KeyCode::Up => {
+                    flow.up();
+                    SetupStepOutcome::None
+                }
+                KeyCode::Down => {
+                    flow.down();
+                    SetupStepOutcome::None
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => flow.confirm(),
+                _ => SetupStepOutcome::None,
             };
-            if let Some(outcome) = outcome {
-                match outcome {
-                    SetupStepOutcome::None => {}
-                    SetupStepOutcome::Capture(spec) => {
-                        self.capture = Some(CaptureState::new(spec));
-                    }
-                    SetupStepOutcome::Apply(plan) => {
-                        self.setup = None;
-                        self.setup_center = None;
-                        return Some(Action::SetupApply(plan));
-                    }
-                    SetupStepOutcome::Cancel => self.setup = None,
+            match outcome {
+                SetupStepOutcome::Capture(spec) => self.capture = Some(CaptureState::new(spec)),
+                SetupStepOutcome::Apply(plan) => {
+                    self.custom_setup = None;
+                    self.setup_center = None;
+                    return Some(Action::SetupApply(plan));
                 }
+                SetupStepOutcome::Cancel => self.custom_setup = None,
+                SetupStepOutcome::None => {}
             }
             return None;
         }
@@ -1104,72 +1194,8 @@ impl App {
                 KeyCode::Enter => center.confirm(),
                 _ => None,
             };
-            match action {
-                Some(CenterAction::StartAdd(kind)) => {
-                    if let Some(selected) = self.setup_catalog.iter().find(|item| item.kind == kind)
-                    {
-                        if selected.requires_base_url {
-                            let mut flow = SetupFlow::new(vec![selected.clone()]);
-                            if let SetupStepOutcome::Capture(spec) = flow.confirm() {
-                                self.capture = Some(CaptureState::new(spec));
-                            }
-                            self.setup = Some(flow);
-                        } else {
-                            self.known_setup = Some(KnownProviderFlow::new(selected.clone()));
-                        }
-                    }
-                }
-                Some(CenterAction::EditCredential { name, secret }) => {
-                    let initial = if secret {
-                        String::new()
-                    } else {
-                        self.setup_providers
-                            .iter()
-                            .find(|provider| provider.id == name)
-                            .and_then(|provider| provider.credential_ref.strip_prefix("env:"))
-                            .unwrap_or("")
-                            .to_owned()
-                    };
-                    self.capture = Some(CaptureState::new(CaptureSpec {
-                        label: if secret {
-                            "API key".to_owned()
-                        } else {
-                            "environment variable".to_owned()
-                        },
-                        initial,
-                        masked: secret,
-                    }));
-                }
-                Some(CenterAction::Remove(name)) => {
-                    self.setup_center = None;
-                    return Some(Action::SetupApply(SetupPlan::Remove { name }));
-                }
-                Some(CenterAction::SetNewSessionDefault(name)) => {
-                    self.setup_center = None;
-                    return Some(Action::SetupApply(SetupPlan::SetNewSessionDefault { name }));
-                }
-                Some(CenterAction::SetProviderDefault { name, model }) => {
-                    self.setup_center = None;
-                    return Some(Action::SetupApply(SetupPlan::SetProviderDefault {
-                        name,
-                        model,
-                    }));
-                }
-                Some(CenterAction::SetEnabledModels { name, models }) => {
-                    self.setup_center = None;
-                    return Some(Action::SetupApply(SetupPlan::SetEnabledModels {
-                        name,
-                        models,
-                    }));
-                }
-                Some(CenterAction::DiscoverModels(provider)) => {
-                    return Some(Action::DiscoverModels { provider });
-                }
-                Some(other) => {
-                    self.presentation
-                        .push_notice(format!("{other:?} is not available yet"));
-                }
-                None => {}
+            if let Some(action) = action {
+                return self.dispatch_center_action(action);
             }
             return None;
         }

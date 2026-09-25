@@ -272,12 +272,24 @@ pub(super) fn action_surface_lines(app: &App, width: usize, height: u16) -> Vec<
             flow.title(),
             &flow.rows(),
             "↑↓ select · enter choose · esc back",
-            &review,
+            &review_with_storage(app, review),
             width,
             height,
         )
-    } else if let Some(flow) = &app.setup {
-        setup_surface_lines(flow, width, height)
+    } else if let Some(flow) = &app.custom_setup {
+        let review = if flow.phase() == crate::configuration_center::CustomPhase::Review {
+            flow.review_lines()
+        } else {
+            Vec::new()
+        };
+        choice_surface_lines(
+            flow.title(),
+            &flow.rows(),
+            "↑↓ select · enter choose · esc back",
+            &review_with_storage(app, review),
+            width,
+            height,
+        )
     } else if let Some(center) = &app.setup_center {
         choice_surface_lines(
             center.title(),
@@ -405,20 +417,15 @@ fn profile_surface_lines(
     )
 }
 
-fn setup_surface_lines(flow: &SetupFlow, width: usize, height: u16) -> Vec<Line<'static>> {
-    let review = if matches!(flow.step(), SetupStep::Review | SetupStep::RemoveConfirm) {
-        flow.review_lines()
-    } else {
-        Vec::new()
-    };
-    choice_surface_lines(
-        flow.title(),
-        &flow.rows(),
-        flow.hint(),
-        &review,
-        width,
-        height,
-    )
+/// Appends the resolved storage destination to a review block. Paths and the
+/// path source are shown; credentials never are.
+fn review_with_storage(app: &App, mut review: Vec<(String, String)>) -> Vec<(String, String)> {
+    if let Some(paths) = &app.setup_paths {
+        review.push(("Storage root".to_owned(), paths.state_root.clone()));
+        review.push(("Config file".to_owned(), paths.config_path.clone()));
+        review.push(("Path source".to_owned(), paths.source.clone()));
+    }
+    review
 }
 
 fn capture_surface_lines(capture: &CaptureState, width: usize) -> Vec<Line<'static>> {

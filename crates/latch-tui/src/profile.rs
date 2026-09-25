@@ -105,6 +105,49 @@ pub struct SetupKind {
     pub models: Vec<CatalogModel>,
 }
 
+/// One provider-level field edit. Only the named field changes; every other
+/// provider setting and `[inference]` stay untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderFieldEdit {
+    /// `None` restores the kind's built-in base URL.
+    BaseUrl(Option<String>),
+    /// `None` restores the kind's display name.
+    DisplayName(Option<String>),
+}
+
+/// One model-level field edit. Only the named field changes; every other
+/// override is preserved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelFieldEdit {
+    DisplayName(Option<String>),
+    /// `None` restores the catalog transport.
+    Transport(Option<String>),
+    /// `None` restores the catalog/default window.
+    ContextWindow(Option<usize>),
+    /// `None` restores the catalog replay policy.
+    ReasoningReplay(Option<String>),
+    AdaptiveThinking(Option<bool>),
+    InputModalities(Vec<String>),
+    Aliases(Vec<String>),
+    Efforts {
+        efforts: Vec<ReasoningEffort>,
+        default_effort: Option<ReasoningEffort>,
+    },
+    /// An empty map clears the override and restores the adapter default.
+    EffortMap(std::collections::BTreeMap<ReasoningEffort, EffortMapEdit>),
+    /// Clear every override for this model (built-in catalog models only).
+    Reset,
+}
+
+/// One effort level's edited wire form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffortMapEdit {
+    Automatic,
+    Value(String),
+    Budget(u64),
+    Disabled,
+}
+
 /// A setup flow result that must leave the TUI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetupPlan {
@@ -134,6 +177,24 @@ pub enum SetupPlan {
     },
     /// Replace the provider's enabled model set; metadata overrides are kept.
     SetEnabledModels { name: String, models: Vec<String> },
+    /// Add a sparse custom-model entry; transport remains unresolved until
+    /// Advanced sets one.
+    AddCustomModel {
+        name: String,
+        model: String,
+        display_name: String,
+    },
+    /// Edit exactly one provider field.
+    SetProviderField {
+        name: String,
+        field: ProviderFieldEdit,
+    },
+    /// Edit exactly one model override field.
+    SetModelField {
+        name: String,
+        model: String,
+        field: ModelFieldEdit,
+    },
 }
 
 /// One configured provider instance shown by the removal surface.
@@ -407,10 +468,24 @@ impl ProfileSelector {
                     return None;
                 }
                 self.provider = self.selected.min(self.catalog.providers.len() - 1);
-                // A provider switch lands on that provider's configured default
-                // model. When the default is not in the live catalog nothing is
-                // preselected; index 0 is never chosen implicitly.
-                self.model = Self::default_model_index(&self.catalog, self.provider);
+                // Staying on the current provider keeps its current model;
+                // switching providers lands on that provider's configured
+                // default model. Index 0 is never chosen implicitly.
+                let same_provider = self
+                    .catalog
+                    .providers
+                    .get(self.provider)
+                    .is_some_and(|provider| provider.id == self.current_provider);
+                self.model = if same_provider {
+                    self.current_provider().and_then(|provider| {
+                        provider
+                            .models
+                            .iter()
+                            .position(|model| model.id == self.current_model)
+                    })
+                } else {
+                    Self::default_model_index(&self.catalog, self.provider)
+                };
                 self.effort_values = Self::efforts_for(&self.catalog, self.provider, self.model);
                 self.effort = 0;
                 self.phase = ProfilePhase::Model;
@@ -459,704 +534,6 @@ impl ProfileSelector {
                     .min(self.effort_values.len().saturating_sub(1));
                 let effort = self.effort_values.get(self.effort).copied()?;
                 Some((provider, model, effort))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetupStep {
-    Action,
-    RemoveSelect,
-    RemoveConfirm,
-    Kind,
-    Name,
-    Endpoint,
-    Credential,
-    EnvName,
-    Secret,
-    Model,
-    ModelId,
-    ModelDisplayName,
-    AdvancedTransport,
-    Effort,
-    Review,
-}
-
-/// `/setup`: guided persistent provider configuration.
-#[derive(Clone)]
-pub struct SetupFlow {
-    kinds: Vec<SetupKind>,
-    step: SetupStep,
-    selected: usize,
-    kind: usize,
-    /// Stable provider instance id. Defaulted from the kind but editable so
-    /// multiple instances of one kind are possible.
-    name: String,
-    endpoint: String,
-    /// True: environment variable; false: enter a secret now.
-    use_env: bool,
-    env_name: String,
-    secret: String,
-    model: usize,
-    /// Model id typed by the user when it is not in the catalog.
-    custom_model: Option<String>,
-    custom_model_display_name: Option<String>,
-    custom_transport: Option<String>,
-    effort: usize,
-    configured: Vec<ConfiguredProvider>,
-    remove: usize,
-}
-
-impl std::fmt::Debug for SetupFlow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SetupFlow")
-            .field("step", &self.step)
-            .field("kind", &self.kind)
-            .field("use_env", &self.use_env)
-            // `secret` is intentionally omitted.
-            .finish_non_exhaustive()
-    }
-}
-
-impl SetupFlow {
-    #[must_use]
-    pub fn new(kinds: Vec<SetupKind>) -> Self {
-        let kind = 0;
-        let mut flow = Self {
-            kinds,
-            step: SetupStep::Kind,
-            selected: 0,
-            kind,
-            name: String::new(),
-            endpoint: String::new(),
-            use_env: true,
-            env_name: String::new(),
-            secret: String::new(),
-            model: 0,
-            custom_model: None,
-            custom_model_display_name: None,
-            custom_transport: None,
-            effort: 0,
-            configured: Vec::new(),
-            remove: 0,
-        };
-        flow.reset_endpoint();
-        flow
-    }
-
-    /// Adds the configured provider instances and starts on the add/remove
-    /// menu. An empty list keeps the flow on the original add/edit path.
-    #[must_use]
-    pub fn with_providers(mut self, configured: Vec<ConfiguredProvider>) -> Self {
-        if !configured.is_empty() {
-            self.configured = configured;
-            self.step = SetupStep::Action;
-            self.selected = 0;
-        }
-        self
-    }
-
-    fn removing(&self) -> Option<&ConfiguredProvider> {
-        self.configured.get(self.remove)
-    }
-
-    fn current_kind(&self) -> Option<&SetupKind> {
-        self.kinds.get(self.kind)
-    }
-
-    fn reset_endpoint(&mut self) {
-        self.endpoint = self
-            .current_kind()
-            .map(|kind| kind.default_base_url.clone())
-            .unwrap_or_default();
-    }
-
-    #[must_use]
-    pub fn step(&self) -> SetupStep {
-        self.step
-    }
-
-    #[must_use]
-    pub fn title(&self) -> String {
-        match self.step {
-            SetupStep::Action => "Setup · providers".to_owned(),
-            SetupStep::RemoveSelect => "Setup · remove provider".to_owned(),
-            SetupStep::RemoveConfirm => "Setup · confirm removal".to_owned(),
-            SetupStep::Kind => "Setup · provider".to_owned(),
-            SetupStep::Name => "Setup · provider name".to_owned(),
-            SetupStep::Endpoint => "Setup · endpoint".to_owned(),
-            SetupStep::Credential => "Setup · credential source".to_owned(),
-            SetupStep::EnvName => "Setup · environment variable".to_owned(),
-            SetupStep::Secret => "Setup · API key".to_owned(),
-            SetupStep::Model => "Setup · model".to_owned(),
-            SetupStep::ModelId => "Setup · model id".to_owned(),
-            SetupStep::ModelDisplayName => "Setup · model display name".to_owned(),
-            SetupStep::AdvancedTransport => "Setup · Advanced transport".to_owned(),
-            SetupStep::Effort => "Setup · reasoning effort".to_owned(),
-            SetupStep::Review => "Setup · review".to_owned(),
-        }
-    }
-
-    #[must_use]
-    pub fn hint(&self) -> &'static str {
-        match self.step {
-            SetupStep::Action
-            | SetupStep::RemoveSelect
-            | SetupStep::Kind
-            | SetupStep::Credential
-            | SetupStep::Model
-            | SetupStep::AdvancedTransport
-            | SetupStep::Effort => "↑↓ select · enter next · esc cancel",
-            SetupStep::RemoveConfirm => "↑↓ select · enter confirm · esc cancel",
-            SetupStep::Review => "↑↓ select · enter apply · esc cancel",
-            _ => "enter next · esc cancel",
-        }
-    }
-
-    #[must_use]
-    pub fn rows(&self) -> Vec<ChoiceRow> {
-        let row = |index: usize, label: String, description: String, current: bool| ChoiceRow {
-            label,
-            description,
-            current,
-            selected: index == self.selected,
-        };
-        match self.step {
-            SetupStep::Action => {
-                let mut rows = vec![row(
-                    0,
-                    "Add or edit provider…".to_owned(),
-                    "configure endpoint, credential, model, and effort".to_owned(),
-                    false,
-                )];
-                rows.push(row(
-                    1,
-                    "Remove provider…".to_owned(),
-                    format!("{} configured", self.configured.len()),
-                    false,
-                ));
-                rows
-            }
-            SetupStep::RemoveSelect => self
-                .configured
-                .iter()
-                .enumerate()
-                .map(|(index, provider)| {
-                    row(
-                        index,
-                        provider.id.clone(),
-                        provider.model.clone(),
-                        index == self.remove,
-                    )
-                })
-                .collect(),
-            SetupStep::RemoveConfirm => vec![
-                row(
-                    0,
-                    "Remove".to_owned(),
-                    "config only; credentials kept".to_owned(),
-                    self.selected == 0,
-                ),
-                row(1, "Cancel".to_owned(), String::new(), self.selected == 1),
-            ],
-            SetupStep::Kind => self
-                .kinds
-                .iter()
-                .enumerate()
-                .map(|(index, kind)| {
-                    row(
-                        index,
-                        kind.label.clone(),
-                        kind.kind.clone(),
-                        index == self.kind,
-                    )
-                })
-                .collect(),
-            SetupStep::Credential => vec![
-                row(
-                    0,
-                    "Use environment variable".to_owned(),
-                    self.current_kind()
-                        .map(|kind| kind.credential_label.clone())
-                        .unwrap_or_default(),
-                    self.use_env,
-                ),
-                row(
-                    1,
-                    "Enter API key securely".to_owned(),
-                    "stored 0600 locally".to_owned(),
-                    !self.use_env,
-                ),
-            ],
-            SetupStep::Model => {
-                let models = self
-                    .current_kind()
-                    .map(|kind| kind.models.clone())
-                    .unwrap_or_default();
-                let mut rows: Vec<ChoiceRow> = models
-                    .iter()
-                    .enumerate()
-                    .map(|(index, model)| {
-                        row(index, model.label(), model.id.clone(), index == self.model)
-                    })
-                    .collect();
-                rows.push(row(
-                    models.len(),
-                    "Enter custom model…".to_owned(),
-                    "conservative capabilities until metadata is added".to_owned(),
-                    self.custom_model.is_some(),
-                ));
-                rows
-            }
-            SetupStep::Effort => self
-                .effort_options()
-                .iter()
-                .enumerate()
-                .map(|(index, effort)| {
-                    row(
-                        index,
-                        effort.label().to_owned(),
-                        String::new(),
-                        index == self.effort,
-                    )
-                })
-                .collect(),
-            SetupStep::AdvancedTransport => [
-                ("Chat Completions", "chat_completions"),
-                ("OpenAI Responses", "responses"),
-                ("Anthropic Messages", "anthropic_messages"),
-            ]
-            .into_iter()
-            .enumerate()
-            .map(|(index, (label, id))| {
-                row(
-                    index,
-                    label.to_owned(),
-                    id.to_owned(),
-                    self.custom_transport.as_deref() == Some(id),
-                )
-            })
-            .collect(),
-            SetupStep::Review => vec![
-                row(
-                    0,
-                    "Apply & save".to_owned(),
-                    String::new(),
-                    self.selected == 0,
-                ),
-                row(1, "Cancel".to_owned(), String::new(), self.selected == 1),
-            ],
-            SetupStep::Name
-            | SetupStep::Endpoint
-            | SetupStep::EnvName
-            | SetupStep::Secret
-            | SetupStep::ModelId
-            | SetupStep::ModelDisplayName => Vec::new(),
-        }
-    }
-
-    /// The review summary shown on the review step. Never contains the secret.
-    #[must_use]
-    pub fn review_lines(&self) -> Vec<(String, String)> {
-        if self.step == SetupStep::RemoveConfirm {
-            let provider = self.removing().cloned().unwrap_or(ConfiguredProvider {
-                id: String::new(),
-                model: String::new(),
-            });
-            return vec![
-                ("Provider".to_owned(), provider.id),
-                ("Model".to_owned(), provider.model),
-                (
-                    "Effect".to_owned(),
-                    "removes provider config only; stored credentials are kept".to_owned(),
-                ),
-            ];
-        }
-        let kind = self
-            .current_kind()
-            .map(|kind| kind.label.clone())
-            .unwrap_or_default();
-        let credential = if self.use_env {
-            format!("environment variable {}", self.env_name)
-        } else {
-            "secure local storage (value hidden)".to_owned()
-        };
-        vec![
-            ("Provider".to_owned(), format!("{kind} ({})", self.name)),
-            ("Endpoint".to_owned(), self.endpoint.clone()),
-            ("Model".to_owned(), self.effective_model_id()),
-            (
-                "Display name".to_owned(),
-                self.custom_model_display_name.clone().unwrap_or_default(),
-            ),
-            (
-                "Transport".to_owned(),
-                self.custom_transport.clone().unwrap_or_default(),
-            ),
-            (
-                "Effort".to_owned(),
-                self.selected_effort().label().to_owned(),
-            ),
-            ("Credential".to_owned(), credential),
-        ]
-    }
-
-    fn current_model(&self) -> Option<&CatalogModel> {
-        self.current_kind()?.models.get(self.model)
-    }
-
-    /// The model id this plan will persist, including a typed custom id.
-    fn effective_model_id(&self) -> String {
-        self.custom_model
-            .clone()
-            .or_else(|| self.current_model().map(|model| model.id.clone()))
-            .or_else(|| self.current_kind().map(|kind| kind.default_model.clone()))
-            .unwrap_or_default()
-    }
-
-    fn effort_options(&self) -> Vec<ReasoningEffort> {
-        if self.custom_model.is_some() {
-            return vec![ReasoningEffort::ProviderDefault];
-        }
-        self.current_model()
-            .map(CatalogModel::selectable_efforts)
-            .unwrap_or_else(|| vec![ReasoningEffort::ProviderDefault])
-    }
-
-    fn selected_effort(&self) -> ReasoningEffort {
-        self.effort_options()
-            .get(self.effort)
-            .copied()
-            .unwrap_or(ReasoningEffort::ProviderDefault)
-    }
-
-    fn row_count(&self) -> usize {
-        self.rows().len()
-    }
-
-    pub fn up(&mut self) {
-        let len = self.row_count();
-        if len > 0 {
-            self.selected = (self.selected + len - 1) % len;
-        }
-    }
-
-    pub fn down(&mut self) {
-        let len = self.row_count();
-        if len > 0 {
-            self.selected = (self.selected + 1) % len;
-        }
-    }
-
-    /// Applies typed text to the current capture step and advances.
-    pub fn submit_capture(&mut self, value: String) {
-        match self.step {
-            SetupStep::Name => {
-                let typed = value.trim();
-                self.name = if typed.is_empty() {
-                    self.current_kind()
-                        .map(|kind| kind.kind.clone())
-                        .unwrap_or_default()
-                } else {
-                    typed.to_owned()
-                };
-                self.step = SetupStep::Endpoint;
-            }
-            SetupStep::Endpoint => {
-                self.endpoint = value.trim().to_owned();
-                self.step = SetupStep::Credential;
-            }
-            SetupStep::EnvName => {
-                self.env_name = value.trim().to_owned();
-                self.step = SetupStep::Model;
-            }
-            SetupStep::Secret => {
-                self.secret = value;
-                self.step = SetupStep::Model;
-            }
-            SetupStep::ModelId => {
-                let typed = value.trim();
-                let matched = self
-                    .current_kind()
-                    .and_then(|kind| kind.models.iter().position(|model| model.id == typed));
-                match matched {
-                    Some(index) => {
-                        self.model = index;
-                        self.custom_model = None;
-                    }
-                    None => {
-                        self.custom_model = Some(if typed.is_empty() {
-                            self.current_kind()
-                                .map(|kind| kind.default_model.clone())
-                                .unwrap_or_default()
-                        } else {
-                            typed.to_owned()
-                        });
-                    }
-                }
-                self.effort = 0;
-                self.step = if self.custom_model.is_some() {
-                    SetupStep::ModelDisplayName
-                } else {
-                    SetupStep::Effort
-                };
-            }
-            SetupStep::ModelDisplayName => {
-                self.custom_model_display_name = Some(value.trim().to_owned());
-                self.step = SetupStep::AdvancedTransport;
-            }
-            _ => {}
-        }
-        self.selected = 0;
-    }
-
-    pub fn back(&mut self) -> bool {
-        match self.step {
-            SetupStep::Action => false,
-            SetupStep::RemoveSelect => {
-                self.step = SetupStep::Action;
-                self.selected = 1;
-                true
-            }
-            SetupStep::RemoveConfirm => {
-                self.step = SetupStep::RemoveSelect;
-                self.selected = self.remove;
-                true
-            }
-            SetupStep::Kind if !self.configured.is_empty() => {
-                self.step = SetupStep::Action;
-                self.selected = 0;
-                true
-            }
-            SetupStep::Kind => false,
-            SetupStep::Name => {
-                self.step = SetupStep::Kind;
-                self.selected = self.kind;
-                true
-            }
-            SetupStep::Endpoint => {
-                self.step = SetupStep::Name;
-                true
-            }
-            SetupStep::Credential => {
-                self.step = SetupStep::Endpoint;
-                true
-            }
-            SetupStep::EnvName | SetupStep::Secret => {
-                self.step = SetupStep::Credential;
-                self.selected = usize::from(!self.use_env);
-                true
-            }
-            SetupStep::Model => {
-                self.step = if self.use_env {
-                    SetupStep::EnvName
-                } else {
-                    SetupStep::Secret
-                };
-                true
-            }
-            SetupStep::ModelId => {
-                self.step = SetupStep::Model;
-                self.selected = self.model;
-                true
-            }
-            SetupStep::ModelDisplayName => {
-                self.step = SetupStep::ModelId;
-                true
-            }
-            SetupStep::AdvancedTransport => {
-                self.step = SetupStep::ModelDisplayName;
-                true
-            }
-            SetupStep::Effort => {
-                self.step = SetupStep::Model;
-                self.selected = self.model;
-                true
-            }
-            SetupStep::Review => {
-                self.step = if self.custom_model.is_some() {
-                    SetupStep::AdvancedTransport
-                } else {
-                    SetupStep::Effort
-                };
-                self.selected = self.effort;
-                true
-            }
-        }
-    }
-
-    pub fn confirm(&mut self) -> SetupStepOutcome {
-        match self.step {
-            SetupStep::Action => {
-                if self.selected == 1 && !self.configured.is_empty() {
-                    self.step = SetupStep::RemoveSelect;
-                    self.selected = 0;
-                } else {
-                    self.step = SetupStep::Kind;
-                    self.selected = self.kind;
-                }
-                SetupStepOutcome::None
-            }
-            SetupStep::RemoveSelect => {
-                if self.configured.is_empty() {
-                    self.step = SetupStep::Action;
-                    self.selected = 0;
-                    return SetupStepOutcome::None;
-                }
-                self.remove = self.selected.min(self.configured.len() - 1);
-                self.step = SetupStep::RemoveConfirm;
-                self.selected = 0;
-                SetupStepOutcome::None
-            }
-            SetupStep::RemoveConfirm => {
-                if self.selected == 1 {
-                    return SetupStepOutcome::Cancel;
-                }
-                SetupStepOutcome::Apply(SetupPlan::Remove {
-                    name: self
-                        .removing()
-                        .map(|provider| provider.id.clone())
-                        .unwrap_or_default(),
-                })
-            }
-            SetupStep::Kind => {
-                if self.kinds.is_empty() {
-                    return SetupStepOutcome::Cancel;
-                }
-                self.kind = self.selected.min(self.kinds.len() - 1);
-                self.name = self
-                    .current_kind()
-                    .map(|kind| kind.kind.clone())
-                    .unwrap_or_default();
-                self.custom_model = None;
-                self.reset_endpoint();
-                self.step = SetupStep::Name;
-                self.selected = 0;
-                SetupStepOutcome::Capture(CaptureSpec {
-                    label: "provider name".to_owned(),
-                    initial: self.name.clone(),
-                    masked: false,
-                })
-            }
-            SetupStep::Name => SetupStepOutcome::Capture(CaptureSpec {
-                label: "provider name".to_owned(),
-                initial: self.name.clone(),
-                masked: false,
-            }),
-            SetupStep::Endpoint => SetupStepOutcome::Capture(CaptureSpec {
-                label: "endpoint".to_owned(),
-                initial: self.endpoint.clone(),
-                masked: false,
-            }),
-            SetupStep::Credential => {
-                self.use_env = self.selected == 0;
-                if self.use_env {
-                    if self.env_name.is_empty() {
-                        self.env_name = self
-                            .current_kind()
-                            .map(|kind| kind.credential_label.trim_start_matches("env:").to_owned())
-                            .unwrap_or_default();
-                    }
-                    self.step = SetupStep::EnvName;
-                    SetupStepOutcome::Capture(CaptureSpec {
-                        label: "environment variable".to_owned(),
-                        initial: self.env_name.clone(),
-                        masked: false,
-                    })
-                } else {
-                    self.step = SetupStep::Secret;
-                    SetupStepOutcome::Capture(CaptureSpec {
-                        label: "API key".to_owned(),
-                        initial: String::new(),
-                        masked: true,
-                    })
-                }
-            }
-            SetupStep::EnvName => SetupStepOutcome::Capture(CaptureSpec {
-                label: "environment variable".to_owned(),
-                initial: self.env_name.clone(),
-                masked: false,
-            }),
-            SetupStep::Secret => SetupStepOutcome::Capture(CaptureSpec {
-                label: "API key".to_owned(),
-                initial: String::new(),
-                masked: true,
-            }),
-            SetupStep::Model => {
-                let count = self.current_kind().map_or(0, |kind| kind.models.len());
-                if self.selected >= count {
-                    // "Enter custom model…" (also the only path when the
-                    // provider kind ships no built-in models, e.g. custom
-                    // OpenAI-compatible endpoints).
-                    self.step = SetupStep::ModelId;
-                    self.selected = 0;
-                    return SetupStepOutcome::Capture(CaptureSpec {
-                        label: "model id".to_owned(),
-                        initial: self.effective_model_id(),
-                        masked: false,
-                    });
-                }
-                self.model = self.selected;
-                self.custom_model = None;
-                self.effort = 0;
-                self.step = SetupStep::Effort;
-                self.selected = 0;
-                SetupStepOutcome::None
-            }
-            SetupStep::ModelId => SetupStepOutcome::Capture(CaptureSpec {
-                label: "model id".to_owned(),
-                initial: self.effective_model_id(),
-                masked: false,
-            }),
-            SetupStep::ModelDisplayName => SetupStepOutcome::Capture(CaptureSpec {
-                label: "model display name".to_owned(),
-                initial: self
-                    .custom_model_display_name
-                    .clone()
-                    .unwrap_or_else(|| self.effective_model_id()),
-                masked: false,
-            }),
-            SetupStep::AdvancedTransport => {
-                let transport = ["chat_completions", "responses", "anthropic_messages"];
-                self.custom_transport = Some(transport[self.selected.min(2)].to_owned());
-                self.step = SetupStep::Review;
-                self.selected = 0;
-                SetupStepOutcome::None
-            }
-            SetupStep::Effort => {
-                let efforts = self.effort_options();
-                if efforts.is_empty() {
-                    return SetupStepOutcome::Cancel;
-                }
-                self.effort = self.selected.min(efforts.len() - 1);
-                self.step = SetupStep::Review;
-                self.selected = 0;
-                SetupStepOutcome::None
-            }
-            SetupStep::Review => {
-                if self.selected == 1 {
-                    return SetupStepOutcome::Cancel;
-                }
-                let credential = if self.use_env {
-                    SetupCredential::Env(self.env_name.clone())
-                } else {
-                    SetupCredential::Secret(self.secret.clone())
-                };
-                SetupStepOutcome::Apply(SetupPlan::Apply {
-                    name: self.name.clone(),
-                    provider_kind: self
-                        .current_kind()
-                        .map(|kind| kind.kind.clone())
-                        .unwrap_or_default(),
-                    base_url: Some(self.endpoint.clone()).filter(|url| !url.trim().is_empty()),
-                    credential,
-                    model: self.effective_model_id(),
-                    enabled_models: None,
-                    custom_model_display_name: self.custom_model_display_name.clone(),
-                    custom_transport: self.custom_transport.clone(),
-                    effort: self.selected_effort(),
-                })
             }
         }
     }
@@ -1321,13 +698,16 @@ mod tests {
 
     #[test]
     fn provider_without_a_resolved_default_preselects_no_model() {
+        // Opening on another provider and switching to one whose default is
+        // not in the live catalog leaves nothing preselected.
         let mut selector = ProfileSelector::new(
             catalog(),
-            "anthropic",
-            "claude-sonnet-4-5",
+            "opencode-go",
+            "deepseek-v4.1-flash",
             ReasoningEffort::ProviderDefault,
         );
-        selector.confirm(); // provider -> model step (fixture default_model is empty)
+        selector.up(); // Anthropic, whose fixture default_model is empty
+        selector.confirm();
         assert!(
             selector.rows().iter().all(|row| !row.current),
             "nothing is current without a configured default"
@@ -1360,184 +740,6 @@ mod tests {
     }
 
     #[test]
-    fn setup_flow_collects_endpoint_credential_model_and_effort() {
-        let kinds = vec![SetupKind {
-            kind: "deepseek".into(),
-            label: "DeepSeek".into(),
-            default_base_url: "https://api.deepseek.com".into(),
-            requires_base_url: false,
-            credential_label: "env:DEEPSEEK_API_KEY".into(),
-            default_model: "deepseek-v4.1-flash".into(),
-            models: vec![CatalogModel {
-                id: "deepseek-v4.1-flash".into(),
-                display_name: "DeepSeek V4.1 Flash".into(),
-                efforts: vec![
-                    ReasoningEffort::Low,
-                    ReasoningEffort::High,
-                    ReasoningEffort::Max,
-                ],
-                default_effort: ReasoningEffort::Low,
-                input_modalities: vec![InputModality::Text],
-            }],
-        }];
-        let mut flow = SetupFlow::new(kinds);
-        assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
-        flow.submit_capture("deepseek".into());
-        assert_eq!(flow.step(), SetupStep::Endpoint);
-        assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
-        flow.submit_capture("https://api.deepseek.com".into());
-        assert_eq!(flow.step(), SetupStep::Credential);
-        assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
-        flow.submit_capture("DEEPSEEK_API_KEY".into());
-        assert_eq!(flow.step(), SetupStep::Model);
-        assert_eq!(flow.confirm(), SetupStepOutcome::None);
-        assert_eq!(flow.step(), SetupStep::Effort);
-        flow.down(); // provider default -> low
-        flow.down(); // low -> high
-        assert_eq!(flow.confirm(), SetupStepOutcome::None);
-        assert_eq!(flow.step(), SetupStep::Review);
-        let lines = flow.review_lines();
-        assert!(
-            lines
-                .iter()
-                .any(|(key, value)| key == "Credential" && value.contains("DEEPSEEK_API_KEY"))
-        );
-        assert!(lines.iter().all(|(_, value)| !value.contains("sk-")));
-        let outcome = flow.confirm();
-        let SetupStepOutcome::Apply(SetupPlan::Apply {
-            name,
-            provider_kind,
-            credential,
-            model,
-            effort,
-            ..
-        }) = outcome
-        else {
-            panic!("expected apply, got {outcome:?}");
-        };
-        assert_eq!(name, "deepseek");
-        assert_eq!(provider_kind, "deepseek");
-        assert_eq!(model, "deepseek-v4.1-flash");
-        assert_eq!(effort, ReasoningEffort::High);
-        assert_eq!(credential, SetupCredential::Env("DEEPSEEK_API_KEY".into()));
-    }
-
-    fn setup_kind() -> SetupKind {
-        SetupKind {
-            kind: "deepseek".into(),
-            label: "DeepSeek".into(),
-            default_base_url: "https://api.deepseek.com".into(),
-            requires_base_url: false,
-            credential_label: "env:DEEPSEEK_API_KEY".into(),
-            default_model: "deepseek-flash".into(),
-            models: vec![CatalogModel {
-                id: "deepseek-flash".into(),
-                display_name: "DeepSeek Flash".into(),
-                efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
-                default_effort: ReasoningEffort::High,
-                input_modalities: vec![InputModality::Text],
-            }],
-        }
-    }
-
-    #[test]
-    fn setup_offers_removal_with_confirmation_and_cancel_preserves() {
-        let configured = vec![
-            ConfiguredProvider {
-                id: "deepseek".into(),
-                model: "deepseek-flash".into(),
-            },
-            ConfiguredProvider {
-                id: "lab-endpoint".into(),
-                model: "lab-model".into(),
-            },
-        ];
-        // Cancel path: menu -> remove -> select -> cancel keeps the flow open
-        // and applies nothing.
-        let mut flow = SetupFlow::new(vec![setup_kind()]).with_providers(configured.clone());
-        assert_eq!(flow.step(), SetupStep::Action);
-        assert_eq!(flow.rows().len(), 2);
-        flow.down(); // select "Remove provider…"
-        assert_eq!(flow.confirm(), SetupStepOutcome::None);
-        assert_eq!(flow.step(), SetupStep::RemoveSelect);
-        flow.down(); // select the second provider
-        assert_eq!(flow.confirm(), SetupStepOutcome::None);
-        assert_eq!(flow.step(), SetupStep::RemoveConfirm);
-        let review = flow.review_lines();
-        assert!(
-            review
-                .iter()
-                .any(|(key, value)| key == "Provider" && value == "lab-endpoint")
-        );
-        assert!(
-            review
-                .iter()
-                .any(|(_, value)| value.contains("credentials are kept"))
-        );
-        flow.down(); // highlight Cancel
-        assert_eq!(flow.confirm(), SetupStepOutcome::Cancel);
-
-        // Confirm path: removing the first provider applies exactly that plan.
-        let mut flow = SetupFlow::new(vec![setup_kind()]).with_providers(configured);
-        flow.down(); // select "Remove provider…"
-        flow.confirm(); // action -> remove select
-        assert_eq!(flow.confirm(), SetupStepOutcome::None); // select first
-        let SetupStepOutcome::Apply(SetupPlan::Remove { name }) = flow.confirm() else {
-            panic!("expected removal");
-        };
-        assert_eq!(name, "deepseek");
-    }
-
-    #[test]
-    fn setup_custom_provider_allows_manual_model_entry() {
-        let kinds = vec![SetupKind {
-            kind: "openai-compatible".into(),
-            label: "Custom OpenAI-compatible".into(),
-            default_base_url: String::new(),
-            requires_base_url: true,
-            credential_label: "env:OPENAI_API_KEY".into(),
-            default_model: String::new(),
-            models: Vec::new(),
-        }];
-        let mut flow = SetupFlow::new(kinds);
-        flow.confirm(); // kind -> provider name
-        flow.submit_capture("lab-endpoint".into());
-        flow.confirm(); // endpoint
-        flow.submit_capture("https://lab.example/v1".into());
-        flow.confirm(); // credential
-        flow.submit_capture("LAB_KEY".into());
-        assert_eq!(flow.step(), SetupStep::Model);
-        // No built-in models: the flow must offer a model-id capture instead
-        // of cancelling.
-        assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
-        flow.submit_capture("lab-model-7".into());
-        assert_eq!(flow.step(), SetupStep::ModelDisplayName);
-        assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
-        flow.submit_capture("Lab Model 7".into());
-        assert_eq!(flow.step(), SetupStep::AdvancedTransport);
-        assert_eq!(flow.confirm(), SetupStepOutcome::None);
-        assert_eq!(flow.step(), SetupStep::Review);
-        let SetupStepOutcome::Apply(SetupPlan::Apply {
-            name,
-            model,
-            effort,
-            credential,
-            custom_model_display_name,
-            custom_transport,
-            ..
-        }) = flow.confirm()
-        else {
-            panic!("expected apply");
-        };
-        assert_eq!(name, "lab-endpoint");
-        assert_eq!(model, "lab-model-7");
-        assert_eq!(effort, ReasoningEffort::ProviderDefault);
-        assert_eq!(credential, SetupCredential::Env("LAB_KEY".into()));
-        assert_eq!(custom_model_display_name.as_deref(), Some("Lab Model 7"));
-        assert_eq!(custom_transport.as_deref(), Some("chat_completions"));
-    }
-
-    #[test]
     fn debug_output_never_formats_secret_material() {
         let credential = SetupCredential::Secret("sk-super-secret".into());
         assert!(!format!("{credential:?}").contains("sk-super-secret"));
@@ -1556,44 +758,5 @@ mod tests {
             !format!("{plan:?}").contains("sk-super-secret"),
             "a setup plan debug log must not leak the typed secret"
         );
-    }
-
-    #[test]
-    fn setup_secret_entry_never_echoes_the_value() {
-        let kinds = vec![SetupKind {
-            kind: "openai".into(),
-            label: "OpenAI".into(),
-            default_base_url: "https://api.openai.com/v1".into(),
-            requires_base_url: false,
-            credential_label: "env:OPENAI_API_KEY".into(),
-            default_model: "gpt-5.5".into(),
-            models: vec![CatalogModel {
-                id: "gpt-5.5".into(),
-                display_name: "GPT-5.5".into(),
-                efforts: vec![ReasoningEffort::High],
-                default_effort: ReasoningEffort::ProviderDefault,
-                input_modalities: vec![InputModality::Text],
-            }],
-        }];
-        let mut flow = SetupFlow::new(kinds);
-        flow.confirm(); // kind -> provider name
-        flow.submit_capture("openai".into());
-        assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
-        flow.submit_capture("https://api.openai.com/v1".into());
-        flow.down(); // choose "Enter API key securely"
-        assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
-        flow.submit_capture("sk-live-secret".into());
-        flow.confirm(); // model
-        flow.confirm(); // effort
-        let review = flow.review_lines();
-        assert!(
-            review
-                .iter()
-                .all(|(key, value)| !(key == "Credential" && value.contains("sk-live-secret")))
-        );
-        let SetupStepOutcome::Apply(SetupPlan::Apply { credential, .. }) = flow.confirm() else {
-            panic!("expected apply");
-        };
-        assert_eq!(credential, SetupCredential::Secret("sk-live-secret".into()));
     }
 }

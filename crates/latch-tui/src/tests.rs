@@ -947,6 +947,7 @@ fn setup_provider_list_renders_status_and_windows_long_lists() {
                 model_count: 2,
                 default_model: "deepseek-flash".into(),
                 credential_ref: format!("env:KEY_{index:02}"),
+                base_url: "https://api.deepseek.com".into(),
                 available_models: vec!["deepseek-flash".into()],
                 models: vec![],
                 discovered_ids: vec![],
@@ -977,12 +978,14 @@ fn discovery_output_merges_ids_without_changing_live_model_catalog() {
         model_count: 1,
         default_model: "known".into(),
         credential_ref: "env:OPENCODE_API_KEY".into(),
+        base_url: "https://opencode.ai/zen/v1".into(),
         available_models: vec!["known".into()],
         models: vec![ProviderModelSummary {
             id: "known".into(),
             display_name: "Known".into(),
             enabled: true,
             resolved: true,
+            ..ProviderModelSummary::default()
         }],
         discovered_ids: vec![],
     };
@@ -2858,7 +2861,7 @@ fn model_and_setup_commands_are_unavailable_during_a_live_turn() {
     assert!(app.profile_selector.is_none());
     app.input.set_text("/setup");
     assert!(app.submit_action().is_none());
-    assert!(app.setup.is_none());
+    assert!(app.setup_center.is_none());
 }
 
 #[test]
@@ -2954,6 +2957,7 @@ fn setup_credential_editor_masks_and_emits_recovery_action() {
         model_count: 1,
         default_model: "deepseek-flash".into(),
         credential_ref: "file:deepseek".into(),
+        base_url: "https://api.deepseek.com".into(),
         available_models: vec!["deepseek-flash".into()],
         models: vec![],
         discovered_ids: vec![],
