@@ -139,7 +139,7 @@ recall share one invariant). `media.rs` owns image validation/ingestion and the
 artifact media resolver; provider adapters serialize durable `MediaRef`s to
 wire images.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
-theme,runtime,agents,group}.rs` and existing siblings.
+theme,runtime,agents,group,configuration_center}.rs` and existing siblings.
 
 Runtime platform rules: kernel invariants, port rules, capability semantics,
 transport independence, and the implemented-vs-deferred port map are normative

@@ -118,6 +118,10 @@ explicit while session totals remain cumulative.
 
 The TUI consumes a provider-neutral catalog from the CLI for `/model` and
 `/setup`; it never inspects base URLs, model families, or wire parameters.
+`configuration_center.rs` owns the provider-list navigation state and emits
+actions for Add, Credential, Models, Default model, Advanced, new-session
+default, and Remove. It holds only symbolic credential references and display
+statuses; the CLI/kernel owns resolution and persistence.
 Configuration may come from the interactive flows, `config.toml`, or CLI
 overrides, with precedence CLI/session override > durable session profile >
 user config > built-in defaults.

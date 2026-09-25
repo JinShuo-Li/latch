@@ -39,6 +39,7 @@ use tokio::sync::mpsc;
 
 mod agents;
 mod composer;
+pub mod configuration_center;
 mod diff;
 mod group;
 mod presentation;
