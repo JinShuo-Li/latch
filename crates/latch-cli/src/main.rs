@@ -361,8 +361,13 @@ async fn interactive_session(
                 .await?;
             }
             Input::DiscoverModels { provider } => {
+                let cache_root =
+                    latch_kernel::paths::ResolvedPaths::for_state(&context.config.state_dir)
+                        .cache_root;
                 let result = match context.registry.provider(&provider) {
-                    Some(profile) => cli::discovery::fetch(profile, &context.credentials).await,
+                    Some(profile) => {
+                        cli::discovery::fetch(profile, &context.credentials, &cache_root).await
+                    }
                     None => Err(anyhow!("unknown provider")),
                 };
                 match result {
@@ -371,13 +376,25 @@ async fn interactive_session(
                             .send(Output::SetupModels { provider, ids })
                             .await?;
                     }
-                    Err(_) => {
-                        output_tx
-                            .send(Output::Notice(
-                                "model refresh failed; using the built-in catalog".into(),
-                            ))
-                            .await?;
-                    }
+                    Err(_) => match cli::discovery::cached(&cache_root, &provider) {
+                        Some(ids) => {
+                            output_tx
+                                .send(Output::Notice(
+                                    "refresh failed; showing the last known availability".into(),
+                                ))
+                                .await?;
+                            output_tx
+                                .send(Output::SetupModels { provider, ids })
+                                .await?;
+                        }
+                        None => {
+                            output_tx
+                                .send(Output::Notice(
+                                    "model refresh failed; using the built-in catalog".into(),
+                                ))
+                                .await?;
+                        }
+                    },
                 }
             }
             Input::Attach(path) => {
@@ -1320,6 +1337,67 @@ mod tests {
         assert!(!config_path.exists());
         assert!(!CredentialStore::default_path(&state_dir).exists());
         assert!(context.config.providers.is_empty());
+    }
+
+    #[test]
+    fn setup_rows_merge_cached_availability_without_writing_config() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let state_dir = dir.path().join("state");
+        let config = Config {
+            state_dir: state_dir.clone(),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &SetupPlan::Apply {
+                name: "opencode-zen".into(),
+                provider_kind: "opencode-zen".into(),
+                base_url: None,
+                credential: SetupCredential::Env("OPENCODE_API_KEY".into()),
+                model: "gpt-5.5".into(),
+                enabled_models: None,
+                custom_model_display_name: None,
+                custom_transport: None,
+                effort: ReasoningEffort::ProviderDefault,
+            },
+        )
+        .unwrap();
+        context.registry = ProviderRegistry::from_config(&context.config).unwrap();
+        assert!(context.setup_providers()[0].discovered_ids.is_empty());
+
+        let cache_root = latch_kernel::paths::ResolvedPaths::for_state(&state_dir).cache_root;
+        std::fs::create_dir_all(&cache_root).unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        std::fs::write(
+            cache_root.join("discovery.json"),
+            format!(
+                "{{\"providers\":{{\"opencode-zen\":{{\"fetched_at\":{now},\"ids\":[\"gpt-5.5\",\"brand-new\"]}}}}}}"
+            ),
+        )
+        .unwrap();
+
+        let rows = context.setup_providers();
+        assert_eq!(
+            rows[0].discovered_ids,
+            vec!["gpt-5.5".to_owned(), "brand-new".to_owned()]
+        );
+        // A discovered id is evidence only: configuration and built-in
+        // metadata stay untouched until the user explicitly configures it.
+        let config_text = std::fs::read_to_string(&path).unwrap();
+        assert!(!config_text.contains("brand-new"), "{config_text}");
+        assert!(
+            context
+                .registry
+                .model_descriptor("opencode-zen", "gpt-5.5")
+                .unwrap()
+                .resolved
+        );
     }
 
     #[test]

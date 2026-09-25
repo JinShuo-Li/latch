@@ -86,6 +86,8 @@ pub struct InferenceContext {
 
 impl InferenceContext {
     pub fn setup_providers(&self) -> Vec<ProviderSummary> {
+        let cache_root =
+            latch_kernel::paths::ResolvedPaths::for_state(&self.config.state_dir).cache_root;
         self.registry
             .available_providers()
             .into_iter()
@@ -138,7 +140,8 @@ impl InferenceContext {
                             resolved: model.resolved,
                         })
                         .collect(),
-                    discovered_ids: vec![],
+                    discovered_ids: crate::cli::discovery::cached(&cache_root, profile.id.as_str())
+                        .unwrap_or_default(),
                 }
             })
             .collect()
