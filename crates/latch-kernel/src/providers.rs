@@ -18,7 +18,8 @@
 //! context window, pricing, cache semantics, or reasoning parameters.
 
 use crate::config::{
-    Config, ModelConfig, ProviderKind, ProviderProfileConfig, ReasoningReplayPolicy, TransportKind,
+    Config, EffortMapping, ModelConfig, ProviderKind, ProviderProfileConfig, ReasoningReplayPolicy,
+    TransportKind,
 };
 use crate::credentials::{CredentialRef, CredentialStore};
 use crate::provider::{
@@ -79,6 +80,10 @@ pub struct ModelDescriptor {
     /// `output_config.effort` control.
     pub adaptive_thinking: bool,
     pub transport: TransportKind,
+    /// Explicit user per-level wire mapping. Empty means the transport adapter
+    /// uses its built-in mapping, which is the normal path for every catalog
+    /// model. Resolution stays at the adapter boundary.
+    pub effort_map: BTreeMap<ReasoningEffort, EffortMapping>,
     /// Provider-neutral input modalities the model accepts. Always contains
     /// `Text`; `Image` is explicit metadata, never inferred from a model name.
     pub input_modalities: Vec<latch_protocol::InputModality>,
@@ -156,6 +161,7 @@ impl ModelDescriptor {
             reasoning_replay: conservative_replay(kind, model),
             adaptive_thinking: false,
             transport: kind.default_transport(),
+            effort_map: BTreeMap::new(),
             input_modalities: vec![latch_protocol::InputModality::Text],
             pricing: None,
             aliases: Vec::new(),
@@ -952,6 +958,7 @@ fn builtin_descriptor(
         reasoning_replay: builtin.replay,
         adaptive_thinking: builtin.adaptive_thinking,
         transport: builtin.transport,
+        effort_map: BTreeMap::new(),
         input_modalities: if builtin.image {
             vec![
                 latch_protocol::InputModality::Text,
@@ -1224,6 +1231,11 @@ fn apply_user_metadata(descriptor: &mut ModelDescriptor, user: &ModelConfig) {
     if let Some(adaptive) = user.adaptive_thinking {
         descriptor.adaptive_thinking = adaptive;
     }
+    if !user.effort_map.is_empty() {
+        // A user map owns the whole exposed range; validation has already
+        // checked coverage and transport expressibility.
+        descriptor.effort_map = user.effort_map.clone();
+    }
     if !user.aliases.is_empty() {
         descriptor.aliases = user.aliases.clone();
     }
@@ -1480,6 +1492,7 @@ impl ProviderRegistry {
                 )
                 .with_identity(provider.id.to_string())
                 .with_reasoning(effort, supports_effort, descriptor.adaptive_thinking)
+                .with_effort_map(descriptor.effort_map.clone())
                 .with_session(session_id)
                 .with_media(media.clone()),
             ),
@@ -1491,6 +1504,7 @@ impl ProviderRegistry {
                 )
                 .with_identity(provider.id.to_string())
                 .with_reasoning(effort, supports_effort)
+                .with_effort_map(descriptor.effort_map.clone())
                 .with_session(session_id)
                 .with_media(media.clone()),
             ),
@@ -1499,6 +1513,7 @@ impl ProviderRegistry {
                     .with_identity(provider.id.to_string())
                     .with_reasoning(effort, descriptor.reasoning_replay, supports_effort)
                     .with_thinking(thinking)
+                    .with_effort_map(descriptor.effort_map.clone())
                     .with_session(session_id)
                     .with_media(media.clone()),
             ),
@@ -2437,5 +2452,40 @@ mod tests {
             vec![ReasoningEffort::Low, ReasoningEffort::High]
         );
         assert_eq!(descriptor.reasoning_replay, ReasoningReplay::Replay);
+    }
+
+    #[test]
+    fn user_effort_map_reaches_the_model_descriptor() {
+        let (_config, registry) = registry(
+            r#"
+            [providers.custom]
+            kind = "openai-compatible"
+            base_url = "https://example.com/v1"
+            default_model = "mapped"
+
+            [providers.custom.models.mapped]
+            transport = "chat_completions"
+            efforts = ["low", "high"]
+            default_effort = "low"
+
+            [providers.custom.models.mapped.effort_map]
+            low = { disabled = true }
+            high = { value = "9" }
+            "#,
+        );
+        let descriptor = registry.model_descriptor("custom", "mapped").unwrap();
+        assert_eq!(
+            descriptor.effort_map[&ReasoningEffort::High]
+                .form()
+                .unwrap(),
+            crate::config::EffortForm::Value("9".into())
+        );
+        assert_eq!(
+            descriptor.effort_map[&ReasoningEffort::Low].form().unwrap(),
+            crate::config::EffortForm::Disabled
+        );
+        // The built-in catalog keeps user config free of copied metadata.
+        let builtin = registry.model_descriptor("openai", "gpt-5.5").unwrap();
+        assert!(builtin.effort_map.is_empty());
     }
 }

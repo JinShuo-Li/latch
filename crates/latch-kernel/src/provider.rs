@@ -10,6 +10,121 @@ use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::config::{EffortForm, EffortMapping};
+use latch_protocol::ReasoningEffort;
+
+/// One user-defined per-level effort map at the adapter boundary.
+pub type EffortMap = BTreeMap<ReasoningEffort, EffortMapping>;
+
+/// The explicit mapped form for one selected effort, when the user configured
+/// one. Malformed maps cannot reach here: configuration validation rejects
+/// them before a provider is built.
+#[must_use]
+pub fn mapped_effort(effort: ReasoningEffort, map: &EffortMap) -> Option<EffortForm> {
+    map.get(&effort).and_then(|mapping| mapping.form().ok())
+}
+
+/// Resolved Chat Completions effort controls. `effort` is the
+/// `reasoning_effort` field value and `thinking` is the DeepSeek-family
+/// `thinking.type` toggle; either may be absent.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChatEffort {
+    pub effort: Option<String>,
+    pub thinking: Option<String>,
+}
+
+/// Resolves the Chat Completions wire form. Without a user map the adapter's
+/// catalog behavior is preserved exactly; a `value` form replaces the field
+/// value, and a `disabled` form emits only the documented off switch.
+#[must_use]
+pub fn chat_effort_for(
+    effort: ReasoningEffort,
+    supports_effort: bool,
+    neutral_thinking: ThinkingToggle,
+    map: &EffortMap,
+) -> ChatEffort {
+    match mapped_effort(effort, map) {
+        Some(EffortForm::Value(value)) => ChatEffort {
+            effort: Some(value),
+            thinking: neutral_thinking.wire().map(str::to_owned),
+        },
+        Some(EffortForm::Disabled) => ChatEffort {
+            effort: None,
+            thinking: Some("disabled".to_owned()),
+        },
+        // `budget_tokens` is rejected at validation for this transport, so it
+        // cannot appear here; fall back to the neutral mapping defensively.
+        _ => ChatEffort {
+            effort: supports_effort
+                .then(|| effort.wire())
+                .flatten()
+                .map(str::to_owned),
+            thinking: neutral_thinking.wire().map(str::to_owned),
+        },
+    }
+}
+
+/// Resolves the Responses `reasoning.effort` field. Only the `value` form is
+/// representable on this transport and is rejected at validation otherwise.
+#[must_use]
+pub fn responses_effort_for(
+    effort: ReasoningEffort,
+    supports_effort: bool,
+    map: &EffortMap,
+) -> Option<String> {
+    match mapped_effort(effort, map) {
+        Some(EffortForm::Value(value)) => Some(value),
+        _ => supports_effort
+            .then(|| effort.wire())
+            .flatten()
+            .map(str::to_owned),
+    }
+}
+
+/// Resolved Anthropic thinking control at the adapter boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum AnthropicThinking {
+    /// Emit nothing; the API and the model default apply.
+    #[default]
+    Default,
+    /// Adaptive thinking with an optional explicit `output_config.effort`.
+    Adaptive { effort: Option<String> },
+    /// Classic extended thinking with an explicit token budget.
+    Budget { budget_tokens: u64 },
+    /// The documented off switch (`thinking.type = "disabled"`).
+    Disabled,
+}
+
+/// Resolves the Messages wire form. Adaptive models speak
+/// `output_config.effort`; classic models speak `thinking.budget_tokens`.
+/// Without a user map the existing catalog behavior is preserved exactly.
+#[must_use]
+pub fn anthropic_thinking_for(
+    effort: ReasoningEffort,
+    supports_effort: bool,
+    adaptive: bool,
+    map: &EffortMap,
+) -> AnthropicThinking {
+    match mapped_effort(effort, map) {
+        Some(EffortForm::Value(value)) if adaptive => AnthropicThinking::Adaptive {
+            effort: Some(value),
+        },
+        Some(EffortForm::BudgetTokens(budget_tokens)) if !adaptive => {
+            AnthropicThinking::Budget { budget_tokens }
+        }
+        Some(EffortForm::Disabled) => AnthropicThinking::Disabled,
+        // A form this model's thinking mode cannot express is rejected at
+        // validation; falling through keeps a hand-built adapter harmless.
+        _ if adaptive => AnthropicThinking::Adaptive {
+            effort: supports_effort
+                .then(|| effort.wire())
+                .flatten()
+                .map(str::to_owned),
+        },
+        _ => AnthropicThinking::Default,
+    }
+}
+
 /// User-Agent sent with every provider request. Keep in sync with the workspace version.
 pub const USER_AGENT: &str = "latch/0.2.2";
 const OPENCODE_GO_BASE: &str = "https://opencode.ai/zen/go";
@@ -177,6 +292,7 @@ pub struct OpenAiProvider {
     effort: latch_protocol::ReasoningEffort,
     supports_effort: bool,
     thinking: ThinkingToggle,
+    effort_map: EffortMap,
     media: Option<MediaStore>,
 }
 impl OpenAiProvider {
@@ -193,6 +309,7 @@ impl OpenAiProvider {
             effort: latch_protocol::ReasoningEffort::ProviderDefault,
             supports_effort: false,
             thinking: ThinkingToggle::Default,
+            effort_map: EffortMap::new(),
             media: None,
         }
     }
@@ -222,6 +339,12 @@ impl OpenAiProvider {
     #[must_use]
     pub fn with_thinking(mut self, thinking: ThinkingToggle) -> Self {
         self.thinking = thinking;
+        self
+    }
+    /// Applies the explicit per-level wire map for a Custom/Advanced model.
+    #[must_use]
+    pub fn with_effort_map(mut self, effort_map: EffortMap) -> Self {
+        self.effort_map = effort_map;
         self
     }
     /// Tags requests with the durable Latch session id. OpenCode Go endpoints
@@ -272,6 +395,7 @@ impl ModelProvider for OpenAiProvider {
             effort: self.effort,
             supports_effort: self.supports_effort,
             thinking: self.thinking,
+            effort_map: self.effort_map.clone(),
             media: self.media.clone(),
         }))
     }
@@ -281,13 +405,18 @@ impl ModelProvider for OpenAiProvider {
         cancel: CancellationToken,
         sink: StreamSink,
     ) -> Result<ModelResponse> {
-        let effort = self.supports_effort.then(|| self.effort.wire()).flatten();
+        let controls = chat_effort_for(
+            self.effort,
+            self.supports_effort,
+            self.thinking,
+            &self.effort_map,
+        );
         let body = openai_request_full(
             &request,
             &self.model,
             self.reasoning,
-            effort,
-            self.thinking.wire(),
+            controls.effort.as_deref(),
+            controls.thinking.as_deref(),
             self.media.as_deref(),
         )?;
         // The transport phase (connect + headers) obeys the same run
@@ -402,6 +531,7 @@ pub struct OpenAiResponsesProvider {
     session_id: Option<Uuid>,
     effort: latch_protocol::ReasoningEffort,
     supports_effort: bool,
+    effort_map: EffortMap,
     media: Option<MediaStore>,
 }
 impl OpenAiResponsesProvider {
@@ -416,6 +546,7 @@ impl OpenAiResponsesProvider {
             session_id: None,
             effort: latch_protocol::ReasoningEffort::ProviderDefault,
             supports_effort: false,
+            effort_map: EffortMap::new(),
             media: None,
         }
     }
@@ -432,6 +563,12 @@ impl OpenAiResponsesProvider {
     ) -> Self {
         self.effort = effort;
         self.supports_effort = supports_effort;
+        self
+    }
+    /// Applies the explicit per-level wire map for a Custom/Advanced model.
+    #[must_use]
+    pub fn with_effort_map(mut self, effort_map: EffortMap) -> Self {
+        self.effort_map = effort_map;
         self
     }
     #[must_use]
@@ -475,6 +612,7 @@ impl ModelProvider for OpenAiResponsesProvider {
             session_id: Some(session_id),
             effort: self.effort,
             supports_effort: self.supports_effort,
+            effort_map: self.effort_map.clone(),
             media: self.media.clone(),
         }))
     }
@@ -484,8 +622,13 @@ impl ModelProvider for OpenAiResponsesProvider {
         cancel: CancellationToken,
         sink: StreamSink,
     ) -> Result<ModelResponse> {
-        let effort = self.supports_effort.then(|| self.effort.wire()).flatten();
-        let body = responses_request(&request, &self.model, effort, self.media.as_deref())?;
+        let effort = responses_effort_for(self.effort, self.supports_effort, &self.effort_map);
+        let body = responses_request(
+            &request,
+            &self.model,
+            effort.as_deref(),
+            self.media.as_deref(),
+        )?;
         let response = tokio::select! {
             response = async {
                 let sent = self
@@ -830,6 +973,7 @@ pub struct AnthropicProvider {
     effort: latch_protocol::ReasoningEffort,
     supports_effort: bool,
     adaptive_thinking: bool,
+    effort_map: EffortMap,
     media: Option<MediaStore>,
 }
 impl AnthropicProvider {
@@ -845,6 +989,7 @@ impl AnthropicProvider {
             effort: latch_protocol::ReasoningEffort::ProviderDefault,
             supports_effort: false,
             adaptive_thinking: false,
+            effort_map: EffortMap::new(),
             media: None,
         }
     }
@@ -873,6 +1018,12 @@ impl AnthropicProvider {
     #[must_use]
     pub fn with_session(mut self, session_id: Uuid) -> Self {
         self.session_id = Some(session_id);
+        self
+    }
+    /// Applies the explicit per-level wire map for a Custom/Advanced model.
+    #[must_use]
+    pub fn with_effort_map(mut self, effort_map: EffortMap) -> Self {
+        self.effort_map = effort_map;
         self
     }
     /// Attaches the resolver that turns durable media references into base64
@@ -912,6 +1063,7 @@ impl ModelProvider for AnthropicProvider {
             effort: self.effort,
             supports_effort: self.supports_effort,
             adaptive_thinking: self.adaptive_thinking,
+            effort_map: self.effort_map.clone(),
             media: self.media.clone(),
         }))
     }
@@ -921,11 +1073,13 @@ impl ModelProvider for AnthropicProvider {
         cancel: CancellationToken,
         sink: StreamSink,
     ) -> Result<ModelResponse> {
-        let effort = self.supports_effort.then(|| self.effort.wire()).flatten();
-        let config = AnthropicConfig {
-            adaptive_thinking: self.adaptive_thinking,
-            effort,
-        };
+        let thinking = anthropic_thinking_for(
+            self.effort,
+            self.supports_effort,
+            self.adaptive_thinking,
+            &self.effort_map,
+        );
+        let config = AnthropicConfig { thinking };
         // The transport phase obeys the same run cancellation as the stream.
         let response = tokio::select! {
             response = async {
@@ -1425,12 +1579,11 @@ fn openai_tool_call(call: &ToolCall) -> Value {
 }
 
 /// Resolved Anthropic request controls.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct AnthropicConfig {
-    /// Enable adaptive thinking with summarized display.
-    pub adaptive_thinking: bool,
-    /// Explicit `output_config.effort`; `None` lets the API use its default.
-    pub effort: Option<&'static str>,
+    /// Resolved thinking control: adaptive effort, classic budget, the
+    /// documented off switch, or nothing at all.
+    pub thinking: AnthropicThinking,
 }
 
 /// Serializes a provider-independent request into the Anthropic Messages wire
@@ -1599,10 +1752,11 @@ pub fn anthropic_request_with_config(
     }]);
     // Adaptive thinking plus a large max_tokens: thinking counts against
     // max_tokens on Anthropic models, so a summary-sized budget would truncate.
-    let max_tokens = if config.adaptive_thinking {
-        32_000
-    } else {
-        8_192
+    // A classic budget must leave room for the visible answer above it.
+    let max_tokens = match &config.thinking {
+        AnthropicThinking::Adaptive { .. } => 32_000,
+        AnthropicThinking::Budget { budget_tokens } => budget_tokens.saturating_add(8_192),
+        AnthropicThinking::Default | AnthropicThinking::Disabled => 8_192,
     };
     let mut body = json!({
         "model": model,
@@ -1616,10 +1770,19 @@ pub fn anthropic_request_with_config(
         })).collect::<Vec<_>>(),
         "stream": true,
     });
-    if config.adaptive_thinking {
-        body["thinking"] = json!({"type": "adaptive", "display": "summarized"});
-        if let Some(effort) = config.effort {
-            body["output_config"] = json!({"effort": effort});
+    match &config.thinking {
+        AnthropicThinking::Default => {}
+        AnthropicThinking::Adaptive { effort } => {
+            body["thinking"] = json!({"type": "adaptive", "display": "summarized"});
+            if let Some(effort) = effort {
+                body["output_config"] = json!({"effort": effort});
+            }
+        }
+        AnthropicThinking::Budget { budget_tokens } => {
+            body["thinking"] = json!({"type": "enabled", "budget_tokens": budget_tokens});
+        }
+        AnthropicThinking::Disabled => {
+            body["thinking"] = json!({"type": "disabled"});
         }
     }
     Ok(body)
@@ -2574,8 +2737,9 @@ mod tests {
             &request,
             "claude-opus-5",
             AnthropicConfig {
-                adaptive_thinking: true,
-                effort: Some("high"),
+                thinking: AnthropicThinking::Adaptive {
+                    effort: Some("high".into()),
+                },
             },
             None,
         )
@@ -2607,6 +2771,219 @@ mod tests {
         .unwrap();
         assert!(plain.get("thinking").is_none());
         assert!(plain.get("output_config").is_none());
+    }
+
+    fn effort_map(entries: &[(ReasoningEffort, EffortMapping)]) -> EffortMap {
+        entries.iter().cloned().collect()
+    }
+
+    fn value(value: &str) -> EffortMapping {
+        EffortMapping {
+            value: Some(value.into()),
+            ..Default::default()
+        }
+    }
+
+    fn disabled() -> EffortMapping {
+        EffortMapping {
+            disabled: Some(true),
+            ..Default::default()
+        }
+    }
+
+    fn budget(budget_tokens: u64) -> EffortMapping {
+        EffortMapping {
+            budget_tokens: Some(budget_tokens),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn chat_transport_emits_the_configured_effort_mapping() {
+        // A value mapping replaces the wire value; the family toggle is the
+        // neutral one the registry resolved.
+        let controls = chat_effort_for(
+            ReasoningEffort::High,
+            true,
+            ThinkingToggle::Default,
+            &effort_map(&[(ReasoningEffort::High, value("4"))]),
+        );
+        assert_eq!(controls.effort.as_deref(), Some("4"));
+        assert_eq!(controls.thinking, None);
+        let body = openai_request_full(
+            &ModelRequest {
+                system: "s".into(),
+                messages: vec![ModelMessage::text("user", "hi")],
+                tools: vec![],
+            },
+            "m",
+            ReasoningReplay::Omit,
+            controls.effort.as_deref(),
+            controls.thinking.as_deref(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(body["reasoning_effort"], "4");
+
+        // Disabled emits only the documented off switch and no effort field.
+        let controls = chat_effort_for(
+            ReasoningEffort::Low,
+            true,
+            ThinkingToggle::Enabled,
+            &effort_map(&[(ReasoningEffort::Low, disabled())]),
+        );
+        assert_eq!(controls.effort, None);
+        assert_eq!(controls.thinking.as_deref(), Some("disabled"));
+
+        // Without a map the neutral provider behavior is preserved.
+        let controls = chat_effort_for(
+            ReasoningEffort::High,
+            true,
+            ThinkingToggle::Enabled,
+            &EffortMap::new(),
+        );
+        assert_eq!(controls.effort.as_deref(), Some("high"));
+        assert_eq!(controls.thinking.as_deref(), Some("enabled"));
+        let controls = chat_effort_for(
+            ReasoningEffort::ProviderDefault,
+            true,
+            ThinkingToggle::Default,
+            &EffortMap::new(),
+        );
+        assert_eq!(controls.effort, None);
+        assert_eq!(controls.thinking, None);
+    }
+
+    #[test]
+    fn responses_transport_emits_the_configured_effort_mapping() {
+        let mapped = responses_effort_for(
+            ReasoningEffort::Medium,
+            true,
+            &effort_map(&[(ReasoningEffort::Medium, value("custom-medium"))]),
+        );
+        assert_eq!(mapped.as_deref(), Some("custom-medium"));
+        let body = responses_request(
+            &ModelRequest {
+                system: "s".into(),
+                messages: vec![ModelMessage::text("user", "hi")],
+                tools: vec![],
+            },
+            "m",
+            mapped.as_deref(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(body["reasoning"]["effort"], "custom-medium");
+        // Built-in models without a map keep the neutral wire value.
+        assert_eq!(
+            responses_effort_for(ReasoningEffort::XHigh, true, &EffortMap::new()).as_deref(),
+            Some("xhigh")
+        );
+        assert_eq!(
+            responses_effort_for(ReasoningEffort::ProviderDefault, true, &EffortMap::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn anthropic_classic_budget_mapping_serializes_a_thinking_budget() {
+        let config = AnthropicConfig {
+            thinking: anthropic_thinking_for(
+                ReasoningEffort::High,
+                true,
+                false,
+                &effort_map(&[(ReasoningEffort::High, budget(4_096))]),
+            ),
+        };
+        assert_eq!(
+            config.thinking,
+            AnthropicThinking::Budget {
+                budget_tokens: 4_096
+            }
+        );
+        let body = anthropic_request_with_config(
+            &ModelRequest {
+                system: "s".into(),
+                messages: vec![ModelMessage::text("user", "hi")],
+                tools: vec![],
+            },
+            "claude-haiku-4-5",
+            config,
+            None,
+        )
+        .unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 4_096);
+        assert!(body["max_tokens"].as_u64().unwrap() > 4_096);
+
+        // The documented off switch is representable for classic thinking.
+        let config = AnthropicConfig {
+            thinking: anthropic_thinking_for(
+                ReasoningEffort::Low,
+                true,
+                false,
+                &effort_map(&[(ReasoningEffort::Low, disabled())]),
+            ),
+        };
+        let body = anthropic_request_with_config(
+            &ModelRequest {
+                system: "s".into(),
+                messages: vec![ModelMessage::text("user", "hi")],
+                tools: vec![],
+            },
+            "claude-haiku-4-5",
+            config,
+            None,
+        )
+        .unwrap();
+        assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn anthropic_adaptive_mapping_replaces_or_disables_output_effort() {
+        let config = AnthropicConfig {
+            thinking: anthropic_thinking_for(
+                ReasoningEffort::Max,
+                true,
+                true,
+                &effort_map(&[(ReasoningEffort::Max, value("custom-max"))]),
+            ),
+        };
+        let body = anthropic_request_with_config(
+            &ModelRequest {
+                system: "s".into(),
+                messages: vec![ModelMessage::text("user", "hi")],
+                tools: vec![],
+            },
+            "claude-opus-5",
+            config,
+            None,
+        )
+        .unwrap();
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["output_config"]["effort"], "custom-max");
+
+        let config = AnthropicConfig {
+            thinking: anthropic_thinking_for(
+                ReasoningEffort::Low,
+                true,
+                true,
+                &effort_map(&[(ReasoningEffort::Low, disabled())]),
+            ),
+        };
+        let body = anthropic_request_with_config(
+            &ModelRequest {
+                system: "s".into(),
+                messages: vec![ModelMessage::text("user", "hi")],
+                tools: vec![],
+            },
+            "claude-opus-5",
+            config,
+            None,
+        )
+        .unwrap();
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body.get("output_config").is_none());
     }
 
     #[test]

@@ -2603,6 +2603,7 @@ fn profile_descriptor(model: &str, window: Option<usize>) -> crate::providers::M
         default_effort: ReasoningEffort::Low,
         reasoning_replay: crate::provider::ReasoningReplay::Replay,
         adaptive_thinking: false,
+        effort_map: std::collections::BTreeMap::new(),
         transport: crate::config::TransportKind::ChatCompletions,
         input_modalities: vec![latch_protocol::InputModality::Text],
         pricing: Some(latch_protocol::ModelPricing {
