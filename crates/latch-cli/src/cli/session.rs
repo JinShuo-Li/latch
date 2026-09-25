@@ -219,6 +219,7 @@ impl InferenceContext {
     pub fn setup_catalog(&self) -> Vec<SetupKind> {
         [
             ProviderKind::OpenCodeGo,
+            ProviderKind::OpenCodeZen,
             ProviderKind::DeepSeek,
             ProviderKind::OpenAi,
             ProviderKind::Anthropic,

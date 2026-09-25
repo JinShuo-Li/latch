@@ -111,6 +111,8 @@ pub enum ProviderKind {
     DeepSeek,
     #[serde(rename = "opencode-go")]
     OpenCodeGo,
+    #[serde(rename = "opencode-zen")]
+    OpenCodeZen,
     #[serde(rename = "openai-compatible")]
     OpenAiCompatible,
 }
@@ -123,6 +125,7 @@ impl ProviderKind {
             Self::Anthropic => "anthropic",
             Self::DeepSeek => "deepseek",
             Self::OpenCodeGo => "opencode-go",
+            Self::OpenCodeZen => "opencode-zen",
             Self::OpenAiCompatible => "openai-compatible",
         }
     }
@@ -134,6 +137,7 @@ impl ProviderKind {
             Self::Anthropic => "Anthropic",
             Self::DeepSeek => "DeepSeek",
             Self::OpenCodeGo => "OpenCode Go",
+            Self::OpenCodeZen => "OpenCode Zen",
             Self::OpenAiCompatible => "Custom OpenAI-compatible",
         }
     }
@@ -145,6 +149,7 @@ impl ProviderKind {
             Self::Anthropic => "env:ANTHROPIC_API_KEY",
             Self::DeepSeek => "env:DEEPSEEK_API_KEY",
             Self::OpenCodeGo => "env:OPENCODE_API_KEY",
+            Self::OpenCodeZen => "env:OPENCODE_API_KEY",
             Self::OpenAiCompatible => "env:OPENAI_API_KEY",
         }
     }
@@ -159,6 +164,7 @@ impl ProviderKind {
             "anthropic" => Self::Anthropic,
             "deepseek" => Self::DeepSeek,
             "opencode-go" | "opencode_go" | "opencode" => Self::OpenCodeGo,
+            "opencode-zen" | "opencode_zen" | "zen" => Self::OpenCodeZen,
             "openai-compatible" | "openai_compatible" | "generic" | "custom" => {
                 if base_url.is_some_and(is_opencode_go_url) {
                     Self::OpenCodeGo
@@ -178,6 +184,7 @@ impl ProviderKind {
             Self::Anthropic => "https://api.anthropic.com",
             Self::DeepSeek => "https://api.deepseek.com",
             Self::OpenCodeGo => "https://opencode.ai/zen/go/v1",
+            Self::OpenCodeZen => "https://opencode.ai/zen/v1",
             Self::OpenAiCompatible => "",
         }
     }
@@ -190,7 +197,7 @@ impl ProviderKind {
         match self {
             Self::OpenAi => TransportKind::Responses,
             Self::Anthropic => TransportKind::AnthropicMessages,
-            Self::DeepSeek | Self::OpenCodeGo | Self::OpenAiCompatible => {
+            Self::DeepSeek | Self::OpenCodeGo | Self::OpenCodeZen | Self::OpenAiCompatible => {
                 TransportKind::ChatCompletions
             }
         }

@@ -34,6 +34,9 @@ credential source (environment variable or a securely entered key stored
 `0600`), models to enable, and its default model, then Save. Known endpoints
 and model capabilities come from Latch's catalog. `/model` switches the live inference profile
 (provider, model, effort) without restarting the session.
+OpenCode Zen is available as `opencode-zen`; its built-in rows currently cover
+the documented Responses, Messages, and Chat Completions endpoints. Gemini
+rows require a separate transport and are not offered yet.
 
 Configuration is provider-neutral and multi-provider:
 

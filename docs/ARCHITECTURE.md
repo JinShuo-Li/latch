@@ -112,8 +112,12 @@ durable assistant event and echoed back exactly once), Anthropic models use
 Messages with adaptive thinking and exact thinking/redacted-block replay,
 DeepSeek uses Chat Completions with explicit `reasoning_effort` and the
 `thinking` toggle, and OpenCode Go resolves transport and reasoning efforts per
-model from its documented list. Run
-boundaries are durable (`RunStarted`/`RunCompleted`), so per-run accounting is
+model from its documented list.
+OpenCode Zen uses the same existing adapters for its documented Responses,
+Messages, and Chat Completions models at `https://opencode.ai/zen/v1`; Go's
+stable session header stays Go-only. The Zen transport list follows
+https://opencode.ai/docs/en/zen/ and excludes Gemini until its adapter is
+implemented. Run boundaries are durable (`RunStarted`/`RunCompleted`), so per-run accounting is
 explicit while session totals remain cumulative.
 
 The TUI consumes a provider-neutral catalog from the CLI for `/model` and

@@ -168,7 +168,7 @@ fn conservative_replay(kind: ProviderKind, model: &str) -> ReasoningReplay {
     let model = model.to_ascii_lowercase();
     match kind {
         ProviderKind::DeepSeek => ReasoningReplay::Replay,
-        ProviderKind::OpenCodeGo => {
+        ProviderKind::OpenCodeGo | ProviderKind::OpenCodeZen => {
             if model.contains("deepseek") {
                 ReasoningReplay::Replay
             } else {
@@ -827,12 +827,108 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
     models
 }
 
+/// Zen's documented endpoint table maps each listed model to an existing
+/// transport. Gemini and System One rows are deliberately omitted until their
+/// distinct transports are implemented. Source: opencode.ai/docs/en/zen/.
+fn builtin_opencode_zen() -> Vec<BuiltinModel> {
+    let mut models = Vec::new();
+    for id in [
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.4",
+        "grok-4.7",
+        "grok-build-0.1",
+        "muse-spark-1.3",
+        "muse-spark-1.2",
+    ] {
+        models.push(opencode_go_model(
+            id,
+            id,
+            TransportKind::Responses,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ));
+    }
+    for id in [
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ] {
+        models.push(opencode_go_model(
+            id,
+            id,
+            TransportKind::AnthropicMessages,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Replay,
+            &[],
+        ));
+    }
+    for id in [
+        "qwen3.8-flash",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.6-plus",
+    ] {
+        models.push(opencode_go_model(
+            id,
+            id,
+            TransportKind::AnthropicMessages,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            ReasoningReplay::Omit,
+            &[],
+        ));
+    }
+    for id in [
+        "deepseek-v4.1-flash",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "minimax-m3",
+        "minimax-m2.7",
+        "glm-5.3",
+        "kimi-k3",
+        "qwen3.8-max",
+        "big-pickle",
+    ] {
+        let replay = if id.starts_with("deepseek-") {
+            ReasoningReplay::Replay
+        } else {
+            ReasoningReplay::Omit
+        };
+        let mut model = opencode_go_model(
+            id,
+            id,
+            TransportKind::ChatCompletions,
+            &[],
+            ReasoningEffort::ProviderDefault,
+            replay,
+            &[],
+        );
+        model.image = id == "deepseek-v4-flash-vision-exp";
+        models.push(model);
+    }
+    models.sort_by(|a, b| a.id.cmp(b.id));
+    models
+}
+
 fn builtin_models(kind: ProviderKind) -> Vec<BuiltinModel> {
     match kind {
         ProviderKind::OpenAi => builtin_openai(),
         ProviderKind::Anthropic => builtin_anthropic(),
         ProviderKind::DeepSeek => builtin_deepseek(),
         ProviderKind::OpenCodeGo => builtin_opencode_go(),
+        ProviderKind::OpenCodeZen => builtin_opencode_zen(),
         ProviderKind::OpenAiCompatible => Vec::new(),
     }
 }
@@ -1457,6 +1553,43 @@ mod tests {
             ))
             .unwrap_err();
         assert!(error.to_string().contains("needs a default_model"));
+    }
+
+    #[test]
+    fn opencode_zen_catalog_routes_documented_models_to_existing_transports() {
+        let (config, registry) = registry(
+            "[providers.opencode-zen]\nkind = 'opencode-zen'\ndefault_model = 'gpt-6-astra'\n",
+        );
+        let provider = registry.provider("opencode-zen").unwrap();
+        assert_eq!(provider.base_url, "https://opencode.ai/zen/v1");
+        assert_eq!(provider.credential.display(), "env:OPENCODE_API_KEY");
+        assert!(
+            !provider.capabilities.session_header,
+            "Go's header remains Go-only"
+        );
+        for (model, transport) in [
+            ("gpt-6-astra", TransportKind::Responses),
+            ("claude-sonnet-5", TransportKind::AnthropicMessages),
+            ("qwen3.8-flash", TransportKind::AnthropicMessages),
+            ("deepseek-v4-flash", TransportKind::ChatCompletions),
+            ("minimax-m3", TransportKind::ChatCompletions),
+        ] {
+            assert_eq!(
+                registry
+                    .model_descriptor("opencode-zen", model)
+                    .unwrap()
+                    .transport,
+                transport
+            );
+        }
+        assert!(
+            !registry
+                .available_models("opencode-zen")
+                .iter()
+                .any(|model| model.model.starts_with("gemini-"))
+        );
+        let (default, _) = registry.default_profile(&config).unwrap();
+        assert_eq!(default.model, "gpt-6-astra");
     }
 
     #[test]
