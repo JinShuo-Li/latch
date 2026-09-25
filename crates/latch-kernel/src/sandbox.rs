@@ -733,18 +733,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_state_credentials_are_hidden_and_workspace_is_readable() {
+    async fn resolved_root_credentials_are_hidden_and_workspace_is_readable() {
         let Some(runner) = runner() else { return };
         let dir = tempdir().unwrap();
         let workspace = dir.path().join("workspace");
         let home = workspace.join("home");
-        let state_dir = home.join(".local/state/latch");
+        let state_dir = home.join(".latch");
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::create_dir_all(&state_dir).unwrap();
         std::fs::write(workspace.join("readable.txt"), "workspace data").unwrap();
         let secret = state_dir.join("secrets.toml");
         std::fs::write(&secret, "fake default secret").unwrap();
         assert_state_hidden(&runner, &workspace, &home, &state_dir, &secret).await;
+    }
+
+    #[test]
+    fn resolved_root_mask_follows_workspace_and_external_mounts() {
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let home = workspace.join("home");
+        let state_dir = home.join(".latch");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let profile = SandboxProfile::new(
+            workspace.clone(),
+            home,
+            state_dir.clone(),
+            [Capability::WorkspaceSourceWrite].into_iter().collect(),
+        )
+        .with_external_roots(vec![state_dir.clone()]);
+        let command = SandboxRunner {
+            bwrap: PathBuf::from("bwrap"),
+        }
+        .command(&profile, "true")
+        .unwrap();
+        let args: Vec<_> = command.as_std().get_args().collect();
+        let bind = args
+            .windows(3)
+            .rposition(|part| part[0] == "--bind" && part[1] == state_dir)
+            .expect("external root is bound");
+        let mask = args
+            .windows(2)
+            .rposition(|part| part[0] == "--tmpfs" && part[1] == state_dir)
+            .expect("resolved root is masked");
+        assert!(mask > bind, "the mask must override external grants");
     }
 
     #[tokio::test]
