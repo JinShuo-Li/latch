@@ -659,8 +659,14 @@ impl Config {
         canonical.normalize();
         let text = toml::to_string_pretty(&canonical).context("serialize config")?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
+            // Only the default storage root is owned by Latch. An explicit
+            // --config may live in an operator-managed directory.
+            if parent == ResolvedPaths::resolve(None, None).state_root {
+                ResolvedPaths::ensure_private_root(parent)
+            } else {
+                std::fs::create_dir_all(parent)
+            }
+            .with_context(|| format!("create {}", parent.display()))?;
         }
         let temp = path.with_extension("toml.tmp");
         std::fs::write(&temp, text).with_context(|| format!("write {}", temp.display()))?;

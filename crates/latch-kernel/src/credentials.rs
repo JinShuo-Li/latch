@@ -217,7 +217,7 @@ impl CredentialStore {
 
     fn flush(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
+            crate::paths::ResolvedPaths::ensure_private_root(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
         }
         let text = toml::to_string(&SecretsFile {
@@ -254,21 +254,16 @@ fn check_restrictive(_path: &Path) -> Result<()> {
 #[cfg(unix)]
 fn write_restricted(path: &Path, text: &str) -> Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let temp = path.with_extension("toml.tmp");
-    {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temp)
-            .with_context(|| format!("create {}", temp.display()))?;
-        file.write_all(text.as_bytes())
-            .with_context(|| format!("write {}", temp.display()))?;
-        file.flush()?;
-    }
-    std::fs::rename(&temp, path).with_context(|| format!("replace {}", path.display()))?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("stage secrets in {}", parent.display()))?;
+    temp.write_all(text.as_bytes())
+        .context("write staged secrets")?;
+    temp.as_file().sync_all().context("sync staged secrets")?;
+    temp.persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("replace {}", path.display()))?;
+    std::fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -345,6 +340,30 @@ mod tests {
         // Debug output never contains the value.
         let debug = format!("{reopened:?}");
         assert!(!debug.contains("sk-test-secret"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_secret_write_does_not_follow_a_preexisting_temp_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".latch");
+        std::fs::create_dir(&root).unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "untouched").unwrap();
+        symlink(&victim, root.join("secrets.toml.tmp")).unwrap();
+        let path = root.join("secrets.toml");
+        let mut store = CredentialStore::open(&path).unwrap();
+        store.set("key", "private-value").unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "untouched");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 
     #[cfg(unix)]

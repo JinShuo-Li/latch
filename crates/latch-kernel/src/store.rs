@@ -125,7 +125,7 @@ pub struct AgentSessionSpec {
 impl EventStore {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::paths::ResolvedPaths::ensure_private_root(parent)?;
         }
         let connection = Connection::open(path)?;
         let store = Self {

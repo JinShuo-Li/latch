@@ -1,5 +1,6 @@
 //! The single place that selects Latch's configuration and storage paths.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +29,27 @@ pub struct ResolvedPaths {
 }
 
 impl ResolvedPaths {
+    /// Create the storage root privately even with a permissive process umask.
+    /// Existing roots are tightened because they can contain secret material.
+    pub fn ensure_state_root(&self) -> io::Result<()> {
+        Self::ensure_private_root(&self.state_root)
+    }
+
+    pub fn ensure_private_root(root: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(root)?;
+            std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))?;
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(root)?;
+        Ok(())
+    }
+
     #[must_use]
     pub fn resolve(explicit_config: Option<&Path>, state_override: Option<&Path>) -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -162,5 +184,21 @@ mod tests {
         assert_eq!(new.config_path, home.join(".latch/config.toml"));
         assert_eq!(new.artifacts_root, home.join(".latch/artifacts"));
         assert_eq!(new.cache_root, home.join(".latch/cache"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn storage_root_is_private_on_creation_and_when_reopened() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".latch");
+        let paths = ResolvedPaths::for_state(&root);
+        paths.ensure_state_root().unwrap();
+        let mode = std::fs::metadata(&root).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        paths.ensure_state_root().unwrap();
+        let mode = std::fs::metadata(&root).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
     }
 }
