@@ -295,7 +295,7 @@ actually set — not a second catalog.
   preserved field by field.
 - `providers.<id>.default_model` is the model selected when switching to that
   provider.
-- `[inference]` is the default profile for a new session.
+- `[inference]` is the new-session default profile.
 - The current session's `/model` choice is live runtime state, durable for
   that session and never written back to configuration.
 
@@ -303,11 +303,14 @@ These are three different defaults and none may stand in for another:
 
 1. `providers.<id>.default_model` — the model `/model` selects when it
    switches to that provider. It must not fall back to catalog index 0.
-2. `[inference]` — the provider/model/effort a fresh session starts with.
+2. `[inference]` — the new-session default profile: the provider/model/effort
+   a fresh session starts with.
 3. The running session's `/model` selection — live state only.
 
-Save persists the provider; it updates `[inference]` only when no session
-default exists or the user explicitly chooses Set as session default. `/model`
+The first successful setup of the first usable provider may seed
+`[inference]`. Later provider edits never change it. Changing it afterwards
+requires an explicit Set as new-session default action in the configuration
+center. The running session's live `/model` state stays separate: `/model`
 never rewrites `[inference]`, a provider default, or an override.
 
 ### Thinking strength
@@ -358,8 +361,10 @@ Discovery is conservative:
 
 - an id in the response proves only that the provider serves that id;
 - known catalog models merge dynamic availability with their built-in
-  metadata, and the catalog metadata still wins for transport and
-  capabilities;
+  metadata: built-in catalog metadata wins over discovered metadata for
+  transport and capabilities, while explicit user overrides still have final
+  precedence, consistent with
+  `builtin catalog -> discovered metadata -> user overrides`;
 - unknown ids are marked `unresolved` for transport and capabilities, appear
   only in `/setup`, and require Advanced configuration before they can be
   activated; `/model` never presents one as ready;
@@ -505,7 +510,8 @@ transport cannot express; and unresolved models cannot be activated.
   correlation, and lossless thought-signature replay, including any
   provider-neutral reasoning-representation extension it requires.
 
-Each phase is independently releasable, keeps the kernel's provider-neutral
-memory and event types intact, and updates `README.md`,
+Each phase is independently releasable, keeps the provider-neutral boundaries
+intact — P3 may extend the durable reasoning representation if lossless Gemini
+thought-signature replay requires it — and updates `README.md`,
 `config.example.toml`, and `ARCHITECTURE.md` where behavior or ownership
 changes.
