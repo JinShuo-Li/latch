@@ -1181,6 +1181,15 @@ impl ProviderProfile {
             .clone()
             .filter(|model| !model.trim().is_empty())
             .unwrap_or_default();
+        // A configured default model that neither the catalog nor an override
+        // describes still needs a descriptor. Catalog providers keep it
+        // unresolved (Advanced must configure it); a user-declared
+        // OpenAI-compatible provider resolves through its chosen protocol.
+        if !default_model.is_empty() && !models.contains_key(&default_model) {
+            let mut descriptor = ModelDescriptor::unknown(&provider_id, kind, &default_model);
+            descriptor.resolved |= kind.resolves_unknown_models();
+            models.insert(default_model.clone(), descriptor);
+        }
         if entry
             .enabled_models
             .as_ref()
@@ -1232,12 +1241,11 @@ impl ProviderProfile {
         {
             return None;
         }
-        Some(
-            self.models
-                .get(&canonical)
-                .cloned()
-                .unwrap_or_else(|| ModelDescriptor::unknown(&self.id, self.kind, &canonical)),
-        )
+        Some(self.models.get(&canonical).cloned().unwrap_or_else(|| {
+            let mut descriptor = ModelDescriptor::unknown(&self.id, self.kind, &canonical);
+            descriptor.resolved |= self.kind.resolves_unknown_models();
+            descriptor
+        }))
     }
 
     #[must_use]
@@ -2616,5 +2624,60 @@ mod tests {
             .find(|descriptor| descriptor.model == "gpt-5.5")
             .unwrap();
         assert!(builtin.effort_map.is_empty());
+    }
+
+    #[test]
+    fn custom_provider_protocol_resolves_its_models_but_catalog_providers_do_not() {
+        // A hand-written custom provider resolves through its declared
+        // protocol without inventing catalog metadata.
+        let (_config, profile_registry) = registry(
+            r#"
+            [providers.mock]
+            kind = "openai-compatible"
+            base_url = "https://mock.example.com/v1"
+            credential = "env:MOCK_API_KEY"
+            default_model = "mock-model"
+            "#,
+        );
+        let descriptor = profile_registry
+            .model_descriptor("mock", "mock-model")
+            .unwrap();
+        assert!(descriptor.resolved);
+        assert!(!descriptor.known);
+        assert_eq!(descriptor.transport, TransportKind::ChatCompletions);
+        assert_eq!(descriptor.context_window_tokens, None);
+
+        // A catalog provider's unknown default model stays unresolved until
+        // Advanced configures it.
+        let (_config, profile_registry) = registry(
+            r#"
+            [providers.deepseek]
+            kind = "deepseek"
+            credential = "env:DEEPSEEK_API_KEY"
+            default_model = "future-model"
+            "#,
+        );
+        let descriptor = profile_registry
+            .model_descriptor("deepseek", "future-model")
+            .unwrap();
+        assert!(!descriptor.resolved);
+
+        // An explicit transport resolves the same model.
+        let (_config, profile_registry) = registry(
+            r#"
+            [providers.deepseek]
+            kind = "deepseek"
+            credential = "env:DEEPSEEK_API_KEY"
+            default_model = "future-model"
+
+            [providers.deepseek.models.future-model]
+            transport = "chat_completions"
+            "#,
+        );
+        let descriptor = profile_registry
+            .model_descriptor("deepseek", "future-model")
+            .unwrap();
+        assert!(descriptor.resolved);
+        assert!(descriptor.known);
     }
 }

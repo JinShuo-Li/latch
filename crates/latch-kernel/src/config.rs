@@ -358,6 +358,15 @@ impl ProviderKind {
             }
         }
     }
+
+    /// Whether the kind's declared default transport resolves models that are
+    /// not in a built-in catalog. True only for a user-declared
+    /// OpenAI-compatible provider, whose protocol is chosen when the provider
+    /// is added; catalog providers never invent a transport for unknown ids.
+    #[must_use]
+    pub const fn resolves_unknown_models(self) -> bool {
+        matches!(self, Self::OpenAiCompatible)
+    }
 }
 
 #[must_use]
