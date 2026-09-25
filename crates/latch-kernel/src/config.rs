@@ -1,3 +1,4 @@
+use crate::paths::ResolvedPaths;
 use anyhow::{Context, Result};
 use latch_protocol::{InputModality, Mode, ModelPricing, PermissionMode, ReasoningEffort, Safety};
 use serde::{Deserialize, Serialize};
@@ -473,9 +474,7 @@ const fn yes() -> bool {
 }
 
 fn default_state_dir() -> PathBuf {
-    dirs::state_dir()
-        .unwrap_or_else(|| PathBuf::from(".local/state"))
-        .join("latch")
+    ResolvedPaths::resolve(None, None).state_root
 }
 
 impl Default for ProviderConfig {
@@ -576,20 +575,27 @@ impl Config {
     /// The config file path `Config::load` would use.
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("latch/config.toml"))
+        Some(ResolvedPaths::resolve(None, None).config_path)
     }
 
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        let Some(path) = path.map(PathBuf::from).or_else(Self::default_path) else {
-            return Ok(Self::default());
-        };
+        let paths = ResolvedPaths::resolve(path, None);
+        let path = paths.config_path;
         if !path.exists() {
             return Ok(Self::default());
         }
-        toml::from_str(
-            &std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
-        )
-        .with_context(|| format!("parse {}", path.display()))
+        let text =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let has_state_override = text
+            .parse::<toml::Table>()
+            .with_context(|| format!("parse {}", path.display()))?
+            .contains_key("state_dir");
+        let mut config: Self =
+            toml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+        if !has_state_override {
+            config.state_dir = paths.state_root;
+        }
+        Ok(config)
     }
 
     /// Writes the canonical configuration representation atomically. Existing

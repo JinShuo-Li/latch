@@ -197,8 +197,10 @@ async fn run(
     result.workspace = requested_workspace.display().to_string();
 
     let config = Config::load(request.config_path.as_deref()).map_err(MachineError::from_anyhow)?;
-    let store = EventStore::open(&config.state_dir.join("latch.sqlite3"))
-        .map_err(|error| MachineError::Runtime(format!("{error:#}")))?;
+    let store = EventStore::open(
+        &latch_kernel::paths::ResolvedPaths::for_state(&config.state_dir).database_path,
+    )
+    .map_err(|error| MachineError::Runtime(format!("{error:#}")))?;
 
     let mut workspace = requested_workspace;
     let mut resume_session = None;

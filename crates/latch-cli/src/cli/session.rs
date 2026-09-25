@@ -11,6 +11,7 @@ use latch_kernel::{
     Agent, AgentRuntime, ArtifactMediaStore, Config, ContinuityEngine, CredentialStore, EventStore,
     ModelDescriptor, ModelProvider, PolicyEngine, ProviderRegistry, ToolExecutor,
     config::ProviderKind,
+    paths::ResolvedPaths,
     provider::{MediaStore, StreamSink},
     session,
 };
@@ -131,7 +132,9 @@ impl InferenceContext {
         let state_dir = self.config.state_dir.clone();
         Arc::new(move |profile: &InferenceProfile, session_id: Uuid| {
             let (resolved, descriptor) = registry.resolve_profile(profile)?;
-            let root = state_dir.join("artifacts").join(session_id.to_string());
+            let root = ResolvedPaths::for_state(&state_dir)
+                .artifacts_root
+                .join(session_id.to_string());
             let media: MediaStore = Arc::new(ArtifactMediaStore::new(root));
             let provider = registry.build_provider(
                 &resolved,
@@ -258,7 +261,7 @@ pub async fn select_session(
     if !request.resume {
         return Ok(SelectedSession::Fresh);
     }
-    let store = EventStore::open(&config.state_dir.join("latch.sqlite3"))?;
+    let store = EventStore::open(&ResolvedPaths::for_state(&config.state_dir).database_path)?;
     if let Some(selector) = &request.session {
         let selected = store.resolve_session(selector)?;
         if Path::new(&selected.workspace) != workspace {
@@ -306,7 +309,7 @@ pub async fn select_session(
 /// Opens the interactive newest-first session picker. The TUI `/resume`
 /// command always uses it, regardless of how many sessions match.
 pub async fn pick_session(workspace: &Path, config: &Config) -> Result<SelectedSession> {
-    let store = EventStore::open(&config.state_dir.join("latch.sqlite3"))?;
+    let store = EventStore::open(&ResolvedPaths::for_state(&config.state_dir).database_path)?;
     let sessions = store
         .list_sessions(None)?
         .into_iter()
@@ -373,7 +376,7 @@ pub async fn build_agent(
     interactive: bool,
     cancel: &CancellationToken,
 ) -> Result<BuiltSession, SessionBuildError> {
-    let db = config.state_dir.join("latch.sqlite3");
+    let db = ResolvedPaths::for_state(&config.state_dir).database_path;
     let store = runtime(EventStore::open(&db))?;
     let mut restored = None;
     let resume = resume_session.is_some();
@@ -608,9 +611,8 @@ impl ModelProvider for UnconfiguredProvider {
 /// One session's immutable artifact store, shared by tool ingestion and the
 /// provider media resolver.
 pub fn artifact_root(config: &Config, session_id: Uuid) -> PathBuf {
-    config
-        .state_dir
-        .join("artifacts")
+    ResolvedPaths::for_state(&config.state_dir)
+        .artifacts_root
         .join(session_id.to_string())
 }
 

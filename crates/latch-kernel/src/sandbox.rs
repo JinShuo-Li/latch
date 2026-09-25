@@ -272,7 +272,7 @@ impl SandboxRunner {
                 state_dir.display()
             );
         }
-        let secret = state_dir.join("secrets.toml");
+        let secret = crate::paths::ResolvedPaths::for_state(&state_dir).secrets_path;
         let secret_target =
             if secret.exists() {
                 Some(std::fs::canonicalize(&secret).with_context(|| {

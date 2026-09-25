@@ -112,8 +112,10 @@ async fn run(
 ) -> Result<(), SessionsErrorKind> {
     let config = Config::load(args.config.as_deref())
         .map_err(|error| SessionsErrorKind::Usage(format!("{error:#}")))?;
-    let store = EventStore::open(&config.state_dir.join("latch.sqlite3"))
-        .map_err(|error| SessionsErrorKind::Runtime(format!("{error:#}")))?;
+    let store = EventStore::open(
+        &latch_kernel::paths::ResolvedPaths::for_state(&config.state_dir).database_path,
+    )
+    .map_err(|error| SessionsErrorKind::Runtime(format!("{error:#}")))?;
     match command {
         SessionsCommand::List { workspace } => {
             let filter = workspace

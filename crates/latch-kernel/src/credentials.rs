@@ -135,7 +135,7 @@ impl CredentialStore {
     /// Default path for the local secrets file under the Latch state dir.
     #[must_use]
     pub fn default_path(state_dir: &Path) -> PathBuf {
-        state_dir.join("secrets.toml")
+        crate::paths::ResolvedPaths::for_state(state_dir).secrets_path
     }
 
     /// Opens the secrets file. A missing file is an empty store, not an error.
