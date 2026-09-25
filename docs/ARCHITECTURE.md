@@ -55,6 +55,9 @@ secrets are staged in their destination directories and synced; a new secret
 is committed before config publishes its `file:<id>` reference. A failed
 config commit can leave an unused secret, while a failed secret commit leaves
 the previous config in place.
+Validation checks provider ids, HTTP(S) URLs, symbolic credential syntax,
+provider defaults, model selections, and positive context windows. Credential
+parse errors omit the supplied value so a pasted key cannot enter diagnostics.
 
 Provider handling is a layered subsystem, not a set of endpoint conditionals:
 

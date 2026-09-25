@@ -540,6 +540,54 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Validate user-owned config fields before a new setup transaction is
+    /// staged. Provider adapters still enforce their own wire constraints.
+    pub fn validate(&self) -> Result<()> {
+        for (id, entry) in &self.providers {
+            if id.is_empty()
+                || !id.chars().all(|ch| {
+                    ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-')
+                })
+            {
+                anyhow::bail!("provider id {id:?} must use [a-z0-9._-]");
+            }
+            if let Some(url) = &entry.base_url {
+                let parsed = reqwest::Url::parse(url)
+                    .with_context(|| format!("provider {id} base_url must be a valid URL"))?;
+                if !matches!(parsed.scheme(), "http" | "https") {
+                    anyhow::bail!("provider {id} base_url must use http or https");
+                }
+            }
+            if let Some(reference) = &entry.credential {
+                reference
+                    .parse::<crate::credentials::CredentialRef>()
+                    .map_err(|error| anyhow::anyhow!("provider {id} credential: {error}"))?;
+            }
+            if entry.default_model.as_deref().is_none_or(str::is_empty) {
+                anyhow::bail!("provider {id} needs a default_model");
+            }
+            for (model, override_) in &entry.models {
+                if model.trim().is_empty() {
+                    anyhow::bail!("provider {id} has an empty model request id");
+                }
+                if override_.context_window_tokens == Some(0) {
+                    anyhow::bail!("provider {id} model {model:?} needs a positive context window");
+                }
+                if let Some(efforts) = &override_.efforts
+                    && let Some(default) = override_.default_effort
+                    && !efforts.contains(&default)
+                {
+                    anyhow::bail!(
+                        "provider {id} model {model:?} default_effort must be in efforts"
+                    );
+                }
+            }
+        }
+        let registry = crate::providers::ProviderRegistry::from_config(self)?;
+        registry.default_profile(self)?;
+        Ok(())
+    }
+
     /// Resolved optional pricing for an exact provider model name.
     #[must_use]
     pub fn pricing_for(&self, model: &str) -> Option<&ModelPricing> {
@@ -721,6 +769,36 @@ mod tests {
             DEFAULT_CONTEXT_WINDOW_TOKENS - config.reserve_tokens()
         );
         assert!(config.models.is_empty(), "pricing is optional");
+    }
+
+    #[test]
+    fn setup_validation_rejects_bad_ids_urls_and_model_overrides() {
+        let base = "[providers.good]\nkind = 'openai'\ndefault_model = 'gpt-5.5'\n";
+        for (input, expected) in [
+            (
+                "[providers.'Bad ID']\nkind = 'openai'\ndefault_model = 'gpt-5.5'\n",
+                "provider id",
+            ),
+            (
+                "[providers.good]\nkind = 'openai'\nbase_url = 'file:///tmp/model'\ndefault_model = 'gpt-5.5'\n",
+                "http or https",
+            ),
+            (
+                "[providers.good]\nkind = 'openai'\ncredential = 'env:NOT-VALID'\ndefault_model = 'gpt-5.5'\n",
+                "identifier",
+            ),
+            ("[providers.good]\nkind = 'openai'\n", "default_model"),
+            (
+                "[providers.good]\nkind = 'openai'\ndefault_model = 'gpt-5.5'\n[providers.good.models.'gpt-5.5']\ncontext_window_tokens = 0\n",
+                "positive context",
+            ),
+        ] {
+            let config: Config = toml::from_str(input).unwrap();
+            let error = config.validate().unwrap_err().to_string();
+            assert!(error.contains(expected), "{input}: {error}");
+        }
+        let config: Config = toml::from_str(base).unwrap();
+        config.validate().unwrap();
     }
 
     #[test]

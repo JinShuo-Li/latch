@@ -80,23 +80,30 @@ impl FromStr for CredentialRef {
     /// field must never be accepted or persisted.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let raw = raw.trim();
-        let (scheme, name) = raw.split_once(':').ok_or_else(|| {
-            format!("credential {raw:?} must be env:NAME, file:NAME, or keyring:NAME")
-        })?;
+        let (scheme, name) = raw
+            .split_once(':')
+            .ok_or_else(|| "credential must be env:NAME, file:NAME, or keyring:NAME".to_owned())?;
         let name = name.trim();
         if name.is_empty() {
-            return Err(format!("credential {raw:?} has an empty name"));
+            return Err("credential reference has an empty name".to_owned());
         }
         if name.contains(char::is_whitespace) {
-            return Err(format!("credential {raw:?} contains whitespace"));
+            return Err("credential reference contains whitespace".to_owned());
         }
         match scheme.trim().to_ascii_lowercase().as_str() {
-            "env" => Ok(Self::Env(name.to_owned())),
+            "env" => {
+                let mut chars = name.chars();
+                let first = chars.next().expect("checked non-empty");
+                if !(first.is_ascii_alphabetic() || first == '_')
+                    || !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                {
+                    return Err("environment credential name must be an identifier (for example, OPENAI_API_KEY)".to_owned());
+                }
+                Ok(Self::Env(name.to_owned()))
+            }
             "file" => Ok(Self::File(name.to_owned())),
             "keyring" => Ok(Self::Keyring(name.to_owned())),
-            other => Err(format!(
-                "unknown credential scheme {other:?}; use env:, file:, or keyring:"
-            )),
+            _ => Err("unknown credential scheme; use env:, file:, or keyring:".to_owned()),
         }
     }
 }
@@ -343,6 +350,14 @@ mod tests {
         assert!("sk-live-12345".parse::<CredentialRef>().is_err());
         assert!("env:".parse::<CredentialRef>().is_err());
         assert!("vault:x".parse::<CredentialRef>().is_err());
+        assert!("env:BAD-NAME".parse::<CredentialRef>().is_err());
+        let secret = "sk-should-never-be-echoed";
+        assert!(
+            !secret
+                .parse::<CredentialRef>()
+                .unwrap_err()
+                .contains(secret)
+        );
     }
 
     #[test]

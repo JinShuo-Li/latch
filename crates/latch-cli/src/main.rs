@@ -557,7 +557,7 @@ fn persist_setup(
             effort,
         };
     }
-    ProviderRegistry::from_config(&candidate)?.default_profile(&candidate)?;
+    candidate.validate()?;
     let config_path = context
         .config_path
         .clone()
