@@ -302,6 +302,11 @@ pub(super) fn sanitize_tool_history(messages: Vec<ModelMessage>) -> Vec<ModelMes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::continuity::ContinuityEngine;
+    use crate::state::{EvidenceLedger, FailureManager};
+    use crate::store::EventStore;
+    use latch_protocol::{EventPayload, ReasoningArtifact, TaskState, ToolCall, ToolResult};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn tool_definitions_stay_within_budget() {
@@ -311,5 +316,121 @@ mod tests {
             tokens <= 3_410,
             "tool schemas grew to {tokens} estimated tokens"
         );
+    }
+
+    #[test]
+    fn positional_replay_artifacts_survive_sqlite_and_reconstruction() {
+        let dir = tempfile::tempdir().unwrap();
+        let path: PathBuf = dir.path().join("latch.sqlite3");
+        let reasoning = vec![
+            ReasoningArtifact::Thinking {
+                text: "check both".into(),
+                signature: "sig-thought".into(),
+            },
+            ReasoningArtifact::ToolCall {
+                call_id: "call-paris".into(),
+                signature: "sig-call".into(),
+            },
+            ReasoningArtifact::SignedText {
+                text: "comparing".into(),
+                signature: "sig-final".into(),
+            },
+        ];
+        let calls = vec![
+            ToolCall {
+                id: "call-paris".into(),
+                name: "get_temperature".into(),
+                arguments: serde_json::json!({"location": "Paris"}),
+            },
+            ToolCall {
+                id: "call-london".into(),
+                name: "get_temperature".into(),
+                arguments: serde_json::json!({"location": "London"}),
+            },
+        ];
+        let session;
+        {
+            let store = EventStore::open(&path).unwrap();
+            session = store.create_session(Path::new("/fixture")).unwrap();
+            store
+                .append(
+                    session,
+                    EventPayload::UserMessage {
+                        text: "compare".into(),
+                        media: vec![],
+                    },
+                )
+                .unwrap();
+            store
+                .append(
+                    session,
+                    EventPayload::AssistantMessageCompleted {
+                        text: "comparing".into(),
+                        tool_calls: calls.clone(),
+                        reasoning_content: None,
+                        reasoning: reasoning.clone(),
+                    },
+                )
+                .unwrap();
+            for (call_id, name, output) in [
+                ("call-paris", "get_temperature", "15C"),
+                ("call-london", "get_temperature", "12C"),
+            ] {
+                store
+                    .append(
+                        session,
+                        EventPayload::ToolCompleted {
+                            result: ToolResult {
+                                call_id: call_id.into(),
+                                name: name.into(),
+                                output: output.into(),
+                                is_error: false,
+                                artifact_id: None,
+                                media: Vec::new(),
+                            },
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+
+        // Reopen the database: this is the resume path, not an in-memory echo.
+        let store = EventStore::open(&path).unwrap();
+        let engine = ContinuityEngine::new(store, Default::default());
+        let budget = crate::continuity::MaterializeBudget {
+            request_tokens: 100_000,
+            window_tokens: 112_192,
+            reserve_tokens: 12_192,
+            recent_tokens: 60_000,
+            reserved_tokens: 0,
+        };
+        let context = engine
+            .materialize(
+                session,
+                &TaskState::default(),
+                None,
+                &EvidenceLedger::default(),
+                &FailureManager::new(3),
+                "system".into(),
+                &budget,
+            )
+            .unwrap();
+        let messages = context_messages(&context);
+        let assistant = messages
+            .iter()
+            .find(|message| message.role == "assistant")
+            .expect("assistant message");
+        assert_eq!(assistant.content, "comparing");
+        assert_eq!(assistant.tool_calls, calls);
+        assert_eq!(
+            assistant.reasoning, reasoning,
+            "exact order, signatures, and call association survive resume"
+        );
+        let tool_ids: Vec<&str> = messages
+            .iter()
+            .filter(|message| message.role == "tool")
+            .filter_map(|message| message.tool_call_id.as_deref())
+            .collect();
+        assert_eq!(tool_ids, vec!["call-paris", "call-london"]);
     }
 }

@@ -2105,6 +2105,21 @@ mod tests {
         let back: EventPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, payload);
 
+        // Signatures and thought text are internal replay state: normal UI
+        // rendering only shows the assistant text.
+        let event = Event {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            sequence: 1,
+            created_at: chrono::Utc::now(),
+            payload: payload.clone(),
+        };
+        let rendered = format!("{:?}", display_items(&event));
+        assert!(rendered.contains("answer"), "{rendered}");
+        for hidden in ["thought one", "sig-one", "sig-call", "sig-final"] {
+            assert!(!rendered.contains(hidden), "UI leaked {hidden}: {rendered}");
+        }
+
         // Old durable events without the new variants deserialize unchanged.
         let legacy: EventPayload = serde_json::from_str(
             r#"{"type":"assistant_message_completed","data":{"text":"hi","tool_calls":[],"reasoning_content":null}}"#,
