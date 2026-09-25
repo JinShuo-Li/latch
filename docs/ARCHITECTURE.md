@@ -538,7 +538,12 @@ of silently continuing. Evidence is persisted before it enters the live ledger,
 and completion is remembered only after its durable announcement. Auxiliary
 work — AI permission review, retry backoff, provider transport, and extension
 RPCs — obeys the run's cancellation token, so Ctrl+C is never pinned by a
-secondary call.
+secondary call. Extension lifecycle stages are additionally bounded end to end
+by the central `ExtensionLifecycle` policy (spawn, initialize,
+registration/ready, ordinary RPC, shutdown, graceful exit). A missed deadline
+kills and reaps the child, and startup observes the same cancellation token, so
+a silent or broken extension can never block startup, RPC handling,
+cancellation, or shutdown.
 
 ## Source layout
 

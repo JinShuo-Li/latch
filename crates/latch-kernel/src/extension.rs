@@ -3,7 +3,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use latch_protocol::{EXTENSION_PROTOCOL_VERSION, RpcMessage};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::process::Stdio;
+use std::future::Future;
+use std::process::{ExitStatus, Stdio};
+use std::time::Duration;
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
@@ -11,6 +13,132 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio_util::sync::CancellationToken;
 
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
+
+/// Default deadline for process spawn plus the `initialize` request write.
+pub const DEFAULT_SPAWN_SECONDS: u64 = 5;
+/// Default deadline for the `initialize` response.
+pub const DEFAULT_INITIALIZE_SECONDS: u64 = 10;
+/// Default deadline for collecting registrations until the `ready` notification.
+pub const DEFAULT_READY_SECONDS: u64 = 30;
+/// Default deadline for one ordinary extension RPC round trip.
+pub const DEFAULT_REQUEST_SECONDS: u64 = 120;
+/// Default deadline for the `shutdown` response.
+pub const DEFAULT_SHUTDOWN_SECONDS: u64 = 5;
+/// Default deadline for graceful child exit after `exit`, before SIGKILL.
+pub const DEFAULT_EXIT_SECONDS: u64 = 5;
+
+/// The one central lifecycle policy for extension hosts. Every stage from
+/// spawn through exit is bounded, so a silent or broken extension can never
+/// pin Latch's startup, RPC handling, cancellation, or shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtensionLifecycle {
+    /// Process spawn plus the `initialize` request write. Process creation is
+    /// local and synchronous; the deadline bounds the first handshake write.
+    pub spawn: Duration,
+    /// The `initialize` response.
+    pub initialize: Duration,
+    /// Registration stream from `initialized` until the `ready` notification.
+    pub ready: Duration,
+    /// One ordinary request (`tool.execute`, guard, transform, context source).
+    pub request: Duration,
+    /// The `shutdown` response.
+    pub shutdown: Duration,
+    /// Graceful exit after `exit`, before the child is killed and reaped.
+    pub exit: Duration,
+}
+
+impl Default for ExtensionLifecycle {
+    fn default() -> Self {
+        Self {
+            spawn: Duration::from_secs(DEFAULT_SPAWN_SECONDS),
+            initialize: Duration::from_secs(DEFAULT_INITIALIZE_SECONDS),
+            ready: Duration::from_secs(DEFAULT_READY_SECONDS),
+            request: Duration::from_secs(DEFAULT_REQUEST_SECONDS),
+            shutdown: Duration::from_secs(DEFAULT_SHUTDOWN_SECONDS),
+            exit: Duration::from_secs(DEFAULT_EXIT_SECONDS),
+        }
+    }
+}
+
+impl From<&crate::config::ExtensionLifecycleConfig> for ExtensionLifecycle {
+    fn from(config: &crate::config::ExtensionLifecycleConfig) -> Self {
+        Self {
+            spawn: Duration::from_secs(config.spawn_seconds),
+            initialize: Duration::from_secs(config.initialize_seconds),
+            ready: Duration::from_secs(config.ready_seconds),
+            request: Duration::from_secs(config.request_seconds),
+            shutdown: Duration::from_secs(config.shutdown_seconds),
+            exit: Duration::from_secs(config.exit_seconds),
+        }
+    }
+}
+
+/// Awaits one startup or registration step under a deadline and the caller's
+/// cancellation token. Every failure names the extension and lifecycle stage.
+async fn bounded_startup_step<T, F>(
+    name: &str,
+    stage: &str,
+    deadline: Duration,
+    cancel: &CancellationToken,
+    step: F,
+) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    tokio::select! {
+        result = tokio::time::timeout(deadline, step) => match result {
+            Ok(inner) => inner.with_context(|| format!("extension {name} {stage}")),
+            Err(_) => bail!(
+                "extension {name} {stage} timed out after {}ms",
+                deadline.as_millis()
+            ),
+        },
+        () = cancel.cancelled() => bail!("extension {name} {stage} cancelled"),
+    }
+}
+
+/// Kills a child that is still running and reaps it, bounded by `deadline`.
+/// Every lifecycle failure path uses this so a timeout or cancellation never
+/// leaves a zombie or orphan behind. `kill_on_drop` remains the last resort;
+/// this is the deterministic path.
+///
+/// Waiting is attempted even when signalling fails: a child that exited in the
+/// race after `try_wait` still has to be reaped.
+async fn terminate_child(
+    name: &str,
+    stage: &str,
+    child: &mut Child,
+    deadline: Duration,
+) -> Result<ExitStatus> {
+    if let Some(status) = child
+        .try_wait()
+        .with_context(|| format!("extension {name} {stage}: reap"))?
+    {
+        return Ok(status);
+    }
+    let kill = child.start_kill();
+    match tokio::time::timeout(deadline, child.wait()).await {
+        // The wait succeeded: the child is reaped. A signalling error means it
+        // had already exited in the `try_wait` race, so it is irrelevant.
+        Ok(result) => result.with_context(|| format!("extension {name} {stage}: reap")),
+        Err(_) => {
+            kill.with_context(|| format!("extension {name} {stage}: kill"))?;
+            bail!(
+                "extension {name} {stage}: child did not exit after kill within {}ms",
+                deadline.as_millis()
+            )
+        }
+    }
+}
+
+/// Attaches a failed kill+reap to the lifecycle error that caused cleanup.
+/// The original stage error is never hidden by a cleanup failure.
+fn with_cleanup(error: anyhow::Error, cleanup: Result<ExitStatus>) -> anyhow::Error {
+    match cleanup {
+        Ok(_) => error,
+        Err(cleanup) => anyhow!("{error:#}; {cleanup:#}"),
+    }
+}
 pub struct FramedReader<R> {
     inner: BufReader<R>,
 }
@@ -94,6 +222,7 @@ pub struct ExtensionHost {
     reader: FramedReader<ChildStdout>,
     writer: FramedWriter<ChildStdin>,
     next_id: u64,
+    lifecycle: ExtensionLifecycle,
     pub capabilities: ExtensionCapabilities,
 }
 impl ExtensionHost {
@@ -103,6 +232,8 @@ impl ExtensionHost {
         args: &[String],
         workspace: &str,
         sandbox: (&SandboxRunner, &SandboxProfile),
+        lifecycle: &ExtensionLifecycle,
+        cancel: &CancellationToken,
     ) -> Result<Self> {
         // Extension hosts always use the same sandbox as command execution.
         // Their tool arguments remain a cooperative boundary.
@@ -116,26 +247,64 @@ impl ExtensionHost {
             .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("start extension {name}"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("extension stdin unavailable"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("extension stdout unavailable"))?;
+        let stdin = match child.stdin.take() {
+            Some(stdin) => stdin,
+            None => {
+                let _ = terminate_child(&name, "startup", &mut child, lifecycle.exit).await;
+                bail!("extension {name} stdin unavailable");
+            }
+        };
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                let _ = terminate_child(&name, "startup", &mut child, lifecycle.exit).await;
+                bail!("extension {name} stdout unavailable");
+            }
+        };
         let mut host = Self {
             name,
             child,
             reader: FramedReader::new(stdout),
             writer: FramedWriter::new(stdin),
             next_id: 2,
+            lifecycle: *lifecycle,
             capabilities: ExtensionCapabilities::default(),
         };
-        host.writer.write(&request(1,"initialize",json!({"protocolVersion":EXTENSION_PROTOCOL_VERSION,"client":{"name":"latch","version":env!("CARGO_PKG_VERSION")},"workspace":workspace,"permissionContract":"cooperative-audit"}))).await?;
-        let response = host.reader.read().await?;
+        if let Err(error) = host.handshake(workspace, cancel).await {
+            // A partial or failed handshake leaves an unusable host. Kill and
+            // reap it before surfacing the error so a silent extension can
+            // never linger.
+            let cleanup = host.terminate("startup cleanup").await;
+            return Err(with_cleanup(error, cleanup));
+        }
+        Ok(host)
+    }
+
+    /// Bounded spawn/initialize plus registration/ready collection. The spawn
+    /// deadline covers the first handshake write, the initialize deadline the
+    /// response, and the ready deadline every registration message up to
+    /// `ready`.
+    async fn handshake(&mut self, workspace: &str, cancel: &CancellationToken) -> Result<()> {
+        let name = self.name.clone();
+        let initialize = request(
+            1,
+            "initialize",
+            json!({"protocolVersion":EXTENSION_PROTOCOL_VERSION,"client":{"name":"latch","version":env!("CARGO_PKG_VERSION")},"workspace":workspace,"permissionContract":"cooperative-audit"}),
+        );
+        bounded_startup_step(&name, "spawn", self.lifecycle.spawn, cancel, async {
+            self.writer.write(&initialize).await
+        })
+        .await?;
+        let response = bounded_startup_step(
+            &name,
+            "initialize",
+            self.lifecycle.initialize,
+            cancel,
+            self.reader.read(),
+        )
+        .await?;
         if response.id != Some(json!(1)) || response.error.is_some() {
-            bail!("extension initialize failed: {:?}", response.error);
+            bail!("extension {name} initialize failed: {:?}", response.error);
         }
         let version = response
             .result
@@ -144,13 +313,16 @@ impl ExtensionHost {
             .and_then(Value::as_str)
             .unwrap_or("");
         if version != EXTENSION_PROTOCOL_VERSION {
-            bail!("extension protocol mismatch: {version}");
+            bail!("extension {name} protocol mismatch: {version}");
         }
-        host.writer
-            .write(&notification("initialized", json!({})))
-            .await?;
-        host.collect_registrations().await?;
-        Ok(host)
+        bounded_startup_step(&name, "registration", self.lifecycle.ready, cancel, async {
+            self.writer
+                .write(&notification("initialized", json!({})))
+                .await?;
+            self.collect_registrations().await
+        })
+        .await?;
+        Ok(())
     }
     async fn collect_registrations(&mut self) -> Result<()> {
         loop {
@@ -301,22 +473,47 @@ impl ExtensionHost {
     ) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
-        self.writer.write(&request(id, method, params)).await?;
-        loop {
-            // An unresponsive extension must not pin a cancelled run.
-            let msg = tokio::select! {
-                message = self.reader.read() => message?,
-                () = cancel.cancelled() => bail!("extension request cancelled"),
-            };
-            if msg.id == Some(json!(id)) {
-                if let Some(e) = msg.error {
-                    bail!("extension tool failed: {e}");
+        let name = self.name.clone();
+        let deadline = self.lifecycle.request;
+        let exchange = request(id, method, params);
+        let mut timed_out = false;
+        let result = tokio::select! {
+            // An unresponsive extension must not pin a cancelled run, and a
+            // resolved request must still complete inside its deadline.
+            result = tokio::time::timeout(deadline, async {
+                self.writer.write(&exchange).await?;
+                loop {
+                    let msg = self.reader.read().await?;
+                    if msg.id == Some(json!(id)) {
+                        if let Some(error) = msg.error {
+                            bail!("extension {name} {method} failed: {error}");
+                        }
+                        return msg
+                            .result
+                            .ok_or_else(|| anyhow!("extension {name} {method} returned no result"));
+                    }
                 }
-                return msg
-                    .result
-                    .ok_or_else(|| anyhow!("extension returned no result"));
-            }
+            }) => match result {
+                Ok(inner) => inner.with_context(|| format!("extension {name} {method}")),
+                Err(_) => {
+                    timed_out = true;
+                    Ok(Value::Null)
+                }
+            },
+            () = cancel.cancelled() => Err(anyhow!("extension {name} {method} cancelled")),
+        };
+        if timed_out {
+            // A timeout means the extension stopped answering: kill and reap
+            // it now so later calls fail fast instead of queueing behind a
+            // request that will never complete.
+            let timeout = anyhow!(
+                "extension {name} {method} timed out after {}ms",
+                deadline.as_millis()
+            );
+            let cleanup = self.terminate(method).await;
+            return Err(with_cleanup(timeout, cleanup));
         }
+        result
     }
     pub async fn observe(&mut self, event: &str, payload: Value) -> Result<()> {
         if self
@@ -325,27 +522,105 @@ impl ExtensionHost {
             .iter()
             .any(|registered| registered == event || registered == "*")
         {
-            self.writer
-                .write(&notification(
-                    "hook.observe",
-                    json!({"event":event,"payload":payload}),
-                ))
-                .await?;
+            let name = self.name.clone();
+            let deadline = self.lifecycle.request;
+            let notification =
+                notification("hook.observe", json!({"event":event,"payload":payload}));
+            match tokio::time::timeout(deadline, self.writer.write(&notification)).await {
+                Ok(result) => {
+                    result.with_context(|| format!("extension {name} observe {event}"))?
+                }
+                Err(_) => {
+                    let timeout = anyhow!(
+                        "extension {name} observe {event} timed out after {}ms",
+                        deadline.as_millis()
+                    );
+                    let cleanup = self.terminate(&format!("observe {event}")).await;
+                    return Err(with_cleanup(timeout, cleanup));
+                }
+            }
         }
         Ok(())
     }
+    /// Bounded protocol shutdown: `shutdown` response, then `exit`, then a
+    /// bounded graceful wait. Every failure kills and reaps the child before
+    /// returning, so no shutdown error leaves a process behind.
     pub async fn shutdown(mut self) -> Result<()> {
-        let id = self.next_id;
-        self.writer
-            .write(&request(id, "shutdown", json!({})))
-            .await?;
-        let _ = self.reader.read().await?;
-        self.writer.write(&notification("exit", json!({}))).await?;
-        let status = self.child.wait().await?;
-        if !status.success() {
-            bail!("extension exited with {status}");
+        let result = match self.request_shutdown().await {
+            Ok(()) => match self.request_exit().await {
+                Ok(()) => self.await_exit().await,
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // `await_exit` already killed and reaped on its own timeout;
+                // this is a no-op then. Protocol failures before it still need
+                // cleanup, and a failed cleanup stays visible.
+                let cleanup = self.terminate("shutdown cleanup").await;
+                Err(with_cleanup(error, cleanup))
+            }
         }
-        Ok(())
+    }
+    async fn request_shutdown(&mut self) -> Result<()> {
+        let name = self.name.clone();
+        let deadline = self.lifecycle.shutdown;
+        let id = self.next_id;
+        let step = async {
+            self.writer
+                .write(&request(id, "shutdown", json!({})))
+                .await?;
+            self.reader.read().await.map(|_| ())
+        };
+        match tokio::time::timeout(deadline, step).await {
+            Ok(result) => result.with_context(|| format!("extension {name} shutdown")),
+            Err(_) => bail!(
+                "extension {name} shutdown timed out after {}ms",
+                deadline.as_millis()
+            ),
+        }
+    }
+    async fn request_exit(&mut self) -> Result<()> {
+        let name = self.name.clone();
+        let deadline = self.lifecycle.exit;
+        let exit = notification("exit", json!({}));
+        match tokio::time::timeout(deadline, self.writer.write(&exit)).await {
+            Ok(result) => result.with_context(|| format!("extension {name} exit")),
+            Err(_) => bail!(
+                "extension {name} exit timed out after {}ms",
+                deadline.as_millis()
+            ),
+        }
+    }
+    async fn await_exit(&mut self) -> Result<()> {
+        match tokio::time::timeout(self.lifecycle.exit, self.child.wait()).await {
+            Ok(Ok(status)) if status.success() => Ok(()),
+            Ok(Ok(status)) => bail!("extension {} exited with {status}", self.name),
+            Ok(Err(error)) => Err(error).with_context(|| format!("extension {} exit", self.name)),
+            Err(_) => {
+                let cleanup = self.terminate("exit").await;
+                if let Err(cleanup) = cleanup {
+                    return Err(anyhow!(
+                        "extension {} did not exit after {}ms; {cleanup:#}",
+                        self.name,
+                        self.lifecycle.exit.as_millis()
+                    ));
+                }
+                bail!(
+                    "extension {} did not exit after {}ms; killed and reaped",
+                    self.name,
+                    self.lifecycle.exit.as_millis()
+                )
+            }
+        }
+    }
+    /// Kills the child if it is still running and reaps it, bounded by the
+    /// exit deadline. Idempotent: a host that was already reaped returns its
+    /// cached status without signalling again.
+    async fn terminate(&mut self, stage: &str) -> Result<ExitStatus> {
+        terminate_child(&self.name, stage, &mut self.child, self.lifecycle.exit).await
     }
 }
 fn request(id: u64, method: &str, params: Value) -> RpcMessage {
@@ -415,13 +690,20 @@ fn guard_decision(value: &Value) -> Result<ExtensionGuardDecision> {
 
 pub struct ExtensionRegistry {
     hosts: BTreeMap<String, ExtensionHost>,
+    lifecycle: ExtensionLifecycle,
 }
 impl ExtensionRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self {
             hosts: BTreeMap::new(),
+            lifecycle: ExtensionLifecycle::default(),
         }
+    }
+    /// Installs the central lifecycle policy used for later `add` calls.
+    /// Already-running hosts keep the policy they started with.
+    pub fn set_lifecycle(&mut self, lifecycle: ExtensionLifecycle) {
+        self.lifecycle = lifecycle;
     }
     pub async fn add(
         &mut self,
@@ -430,8 +712,18 @@ impl ExtensionRegistry {
         args: &[String],
         workspace: &str,
         sandbox: (&SandboxRunner, &SandboxProfile),
+        cancel: &CancellationToken,
     ) -> Result<()> {
-        let host = ExtensionHost::start(name.clone(), command, args, workspace, sandbox).await?;
+        let host = ExtensionHost::start(
+            name.clone(),
+            command,
+            args,
+            workspace,
+            sandbox,
+            &self.lifecycle,
+            cancel,
+        )
+        .await?;
         self.hosts.insert(name, host);
         Ok(())
     }
@@ -525,6 +817,8 @@ impl Default for ExtensionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::time::Instant;
     use tokio::io::duplex;
     #[tokio::test]
     async fn framing_round_trip() {
@@ -587,6 +881,8 @@ mod tests {
             &[fixture],
             &dir.path().to_string_lossy(),
             (&runner, &profile),
+            &ExtensionLifecycle::default(),
+            &CancellationToken::new(),
         )
         .await
         .unwrap();
@@ -656,6 +952,8 @@ mod tests {
             &[fixture],
             &workspace.to_string_lossy(),
             (&runner, &profile),
+            &ExtensionLifecycle::default(),
+            &CancellationToken::new(),
         )
         .await
         .unwrap();
@@ -670,6 +968,373 @@ mod tests {
                 .unwrap();
             assert_eq!(result["readable"], expected, "{}", path.display());
         }
+        host.shutdown().await.unwrap();
+    }
+
+    /// Shared fake-extension harness for lifecycle-bound tests. Returns `None`
+    /// when the host has no usable Bubblewrap sandbox.
+    struct FakeExtension {
+        _dir: tempfile::TempDir,
+        workspace: PathBuf,
+        /// Unique path passed to the fake; its command line is the needle the
+        /// watcher uses to find the host PIDs of the whole process tree.
+        marker: PathBuf,
+        runner: SandboxRunner,
+        profile: SandboxProfile,
+    }
+
+    /// Host PIDs whose command line mentions `needle`. Processes in a child
+    /// PID namespace are visible here under their initial-namespace PIDs.
+    fn matching_pids(needle: &str) -> Vec<u32> {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        let mut pids = Vec::new();
+        for entry in entries.flatten() {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+                continue;
+            };
+            if !cmdline.is_empty() && String::from_utf8_lossy(&cmdline).contains(needle) {
+                pids.push(pid);
+            }
+        }
+        pids
+    }
+
+    /// Records the sandbox and extension PIDs while a lifecycle operation
+    /// runs. Asserting those exact PIDs are gone afterwards proves the child
+    /// was reaped rather than left as a zombie (`/proc/<pid>` persists for a
+    /// zombie).
+    struct ProcessWatch {
+        pids: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl ProcessWatch {
+        fn start(fake: &FakeExtension) -> Self {
+            let needle = fake.marker.to_string_lossy().into_owned();
+            let pids = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let task = tokio::spawn({
+                let pids = pids.clone();
+                async move {
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    while Instant::now() < deadline {
+                        for pid in matching_pids(&needle) {
+                            let mut seen = pids.lock().expect("watch mutex poisoned");
+                            if !seen.contains(&pid) {
+                                seen.push(pid);
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                }
+            });
+            Self { pids, task }
+        }
+
+        /// Stops watching and returns every observed PID.
+        fn finish(self) -> Vec<u32> {
+            self.task.abort();
+            self.pids.lock().expect("watch mutex poisoned").clone()
+        }
+    }
+
+    /// Polls until every observed PID is gone from `/proc` (namespace teardown
+    /// after the sandbox PID 1 is reaped is asynchronous but prompt).
+    async fn assert_gone(pids: &[u32]) {
+        assert!(!pids.is_empty(), "fake extension never ran");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let alive: Vec<u32> = pids
+                .iter()
+                .copied()
+                .filter(|pid| PathBuf::from(format!("/proc/{pid}")).exists())
+                .collect();
+            if alive.is_empty() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "extension pids {alive:?} were not reaped"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn fake_extension() -> Option<FakeExtension> {
+        use crate::sandbox::{Capability, CapabilitySet};
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().to_path_buf();
+        let runner = SandboxRunner::detect(&workspace).ok()?;
+        let state_dir = workspace.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        // The fake needs a writable workspace only to stay a realistic
+        // sandboxed extension; the watcher does not rely on the pid file.
+        let capabilities = [
+            Capability::WorkspaceRead,
+            Capability::WorkspaceSourceWrite,
+            Capability::NetworkAccess,
+            Capability::ExtensionExecution,
+        ]
+        .into_iter()
+        .collect::<CapabilitySet>();
+        let profile = SandboxProfile::new(
+            workspace.clone(),
+            workspace.clone(),
+            state_dir,
+            capabilities,
+        );
+        let marker = workspace.join("extension.marker");
+        Some(FakeExtension {
+            _dir: dir,
+            workspace,
+            marker,
+            runner,
+            profile,
+        })
+    }
+
+    impl FakeExtension {
+        async fn start(
+            &self,
+            mode: &str,
+            lifecycle: ExtensionLifecycle,
+            cancel: &CancellationToken,
+        ) -> Result<ExtensionHost> {
+            let fixture = format!(
+                "{}/tests/fixtures/lifecycle_extension.py",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            ExtensionHost::start(
+                "fake".into(),
+                "python3",
+                &[
+                    fixture,
+                    mode.into(),
+                    self.marker.to_string_lossy().into_owned(),
+                ],
+                &self.workspace.to_string_lossy(),
+                (&self.runner, &self.profile),
+                &lifecycle,
+                cancel,
+            )
+            .await
+        }
+    }
+
+    #[tokio::test]
+    async fn silent_extension_is_reaped_when_initialize_times_out() {
+        let Some(fake) = fake_extension() else { return };
+        let lifecycle = ExtensionLifecycle {
+            initialize: Duration::from_secs(2),
+            ..ExtensionLifecycle::default()
+        };
+        let watch = ProcessWatch::start(&fake);
+        let started = Instant::now();
+        let error = match fake
+            .start("silent-initialize", lifecycle, &CancellationToken::new())
+            .await
+        {
+            Ok(_) => panic!("initialize must time out"),
+            Err(error) => error,
+        };
+        let pids = watch.finish();
+        let message = format!("{error:#}");
+        assert!(message.contains("fake"), "{message}");
+        assert!(message.contains("initialize"), "{message}");
+        assert!(message.contains("timed out"), "{message}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "timeout took {:?}",
+            started.elapsed()
+        );
+        assert_gone(&pids).await;
+    }
+
+    #[tokio::test]
+    async fn silent_extension_is_reaped_when_ready_never_arrives() {
+        let Some(fake) = fake_extension() else { return };
+        let lifecycle = ExtensionLifecycle {
+            ready: Duration::from_millis(500),
+            ..ExtensionLifecycle::default()
+        };
+        let watch = ProcessWatch::start(&fake);
+        let error = match fake
+            .start("silent-ready", lifecycle, &CancellationToken::new())
+            .await
+        {
+            Ok(_) => panic!("registration must time out"),
+            Err(error) => error,
+        };
+        let pids = watch.finish();
+        let message = format!("{error:#}");
+        assert!(message.contains("fake"), "{message}");
+        assert!(message.contains("registration"), "{message}");
+        assert!(message.contains("timed out"), "{message}");
+        assert_gone(&pids).await;
+    }
+
+    #[tokio::test]
+    async fn silent_extension_is_reaped_when_a_request_times_out() {
+        let Some(fake) = fake_extension() else { return };
+        let lifecycle = ExtensionLifecycle {
+            request: Duration::from_millis(500),
+            ..ExtensionLifecycle::default()
+        };
+        let mut host = fake
+            .start("silent-rpc", lifecycle, &CancellationToken::new())
+            .await
+            .unwrap();
+        let watch = ProcessWatch::start(&fake);
+        let error = host
+            .execute_tool(
+                "lifecycle.echo",
+                json!({"value":"x"}),
+                &CancellationToken::new(),
+            )
+            .await
+            .expect_err("tool.execute must time out");
+        let pids = watch.finish();
+        let message = format!("{error:#}");
+        assert!(message.contains("fake"), "{message}");
+        assert!(message.contains("tool.execute"), "{message}");
+        assert!(message.contains("timed out"), "{message}");
+        assert!(
+            host.child.id().is_none(),
+            "timed-out host must be killed and reaped"
+        );
+        assert_gone(&pids).await;
+        // A dead host fails fast instead of hanging again.
+        assert!(host.shutdown().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn silent_extension_is_reaped_when_shutdown_times_out() {
+        let Some(fake) = fake_extension() else { return };
+        let lifecycle = ExtensionLifecycle {
+            shutdown: Duration::from_millis(500),
+            ..ExtensionLifecycle::default()
+        };
+        let host = fake
+            .start("silent-shutdown", lifecycle, &CancellationToken::new())
+            .await
+            .unwrap();
+        let watch = ProcessWatch::start(&fake);
+        let error = host.shutdown().await.expect_err("shutdown must time out");
+        let pids = watch.finish();
+        let message = format!("{error:#}");
+        assert!(message.contains("fake"), "{message}");
+        assert!(message.contains("shutdown"), "{message}");
+        assert!(message.contains("timed out"), "{message}");
+        assert_gone(&pids).await;
+    }
+
+    #[tokio::test]
+    async fn process_that_ignores_exit_is_killed_and_reaped() {
+        let Some(fake) = fake_extension() else { return };
+        let lifecycle = ExtensionLifecycle {
+            exit: Duration::from_millis(500),
+            ..ExtensionLifecycle::default()
+        };
+        let host = fake
+            .start("ignore-exit", lifecycle, &CancellationToken::new())
+            .await
+            .unwrap();
+        let watch = ProcessWatch::start(&fake);
+        let error = host
+            .shutdown()
+            .await
+            .expect_err("graceful exit must time out");
+        let pids = watch.finish();
+        let message = format!("{error:#}");
+        assert!(message.contains("fake"), "{message}");
+        assert!(message.contains("did not exit"), "{message}");
+        assert!(message.contains("killed and reaped"), "{message}");
+        assert_gone(&pids).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_startup_kills_and_reaps_the_extension() {
+        let Some(fake) = fake_extension() else { return };
+        let cancel = CancellationToken::new();
+        let needle = fake.marker.to_string_lossy().into_owned();
+        let canceller = tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while matching_pids(&needle).is_empty() {
+                    assert!(Instant::now() < deadline, "fake extension never started");
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                cancel.cancel();
+            }
+        });
+        let watch = ProcessWatch::start(&fake);
+        // Ten seconds of initialize budget: only the token can stop this.
+        let started = Instant::now();
+        let error = match fake
+            .start("silent-initialize", ExtensionLifecycle::default(), &cancel)
+            .await
+        {
+            Ok(_) => panic!("startup must be cancelled"),
+            Err(error) => error,
+        };
+        canceller.await.unwrap();
+        let pids = watch.finish();
+        let message = format!("{error:#}");
+        assert!(message.contains("fake"), "{message}");
+        // Cancellation may land while the initialize request is being written
+        // (the spawn stage) or while its response is awaited.
+        assert!(
+            message.contains("spawn") || message.contains("initialize"),
+            "{message}"
+        );
+        assert!(message.contains("cancelled"), "{message}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "cancellation took {:?}",
+            started.elapsed()
+        );
+        assert_gone(&pids).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_request_leaves_a_healthy_extension_running() {
+        let Some(fake) = fake_extension() else { return };
+        let mut host = fake
+            .start(
+                "silent-rpc",
+                ExtensionLifecycle::default(),
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let error = match host
+            .execute_tool("lifecycle.echo", json!({"value":"x"}), &cancel)
+            .await
+        {
+            Ok(_) => panic!("cancelled request must fail"),
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+        assert!(message.contains("fake"), "{message}");
+        assert!(message.contains("tool.execute"), "{message}");
+        assert!(message.contains("cancelled"), "{message}");
+        assert!(
+            host.child.id().is_some(),
+            "cancellation must not kill a healthy host"
+        );
+        // The host stays usable after a cancelled RPC.
         host.shutdown().await.unwrap();
     }
 }

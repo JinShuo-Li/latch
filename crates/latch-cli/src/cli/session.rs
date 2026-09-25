@@ -370,6 +370,7 @@ pub async fn build_agent(
     overrides: &ProfileOverrides,
     resume_session: Option<Uuid>,
     interactive: bool,
+    cancel: &CancellationToken,
 ) -> Result<BuiltSession, SessionBuildError> {
     let db = config.state_dir.join("latch.sqlite3");
     let store = runtime(EventStore::open(&db))?;
@@ -496,6 +497,7 @@ pub async fn build_agent(
     });
     agent.set_stagnation_budget(config.failure.stagnation_budget);
     agent.set_max_model_turns(config.failure.max_model_turns);
+    agent.set_extension_lifecycle((&config.extension_lifecycle).into());
     agent.set_provider_factory(context.provider_factory());
     if overridden {
         // A command-line override is durable provenance so a later resume
@@ -522,7 +524,12 @@ pub async fn build_agent(
     {
         runtime(
             agent
-                .load_extension(extension.name.clone(), &extension.command, &extension.args)
+                .load_extension(
+                    extension.name.clone(),
+                    &extension.command,
+                    &extension.args,
+                    cancel,
+                )
                 .await
                 .with_context(|| format!("initialize extension {}", extension.name)),
         )?;

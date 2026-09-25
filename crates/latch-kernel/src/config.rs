@@ -30,6 +30,12 @@ pub struct Config {
     pub failure: FailureConfig,
     #[serde(default)]
     pub extensions: Vec<ExtensionConfig>,
+    /// Central lifecycle deadlines for extension hosts, in whole seconds.
+    /// Extensions are operator-installed but not trusted to answer forever:
+    /// every stage that waits on one is bounded (see
+    /// [`crate::extension::ExtensionLifecycle`]).
+    #[serde(default)]
+    pub extension_lifecycle: ExtensionLifecycleConfig,
     /// Legacy global per-model metadata. Still read as an explicit user
     /// override for any provider; folded into each provider entry on save and
     /// never serialized again.
@@ -348,6 +354,63 @@ pub struct ExtensionConfig {
     pub enabled: bool,
 }
 
+/// Configurable extension lifecycle deadlines, in whole seconds. Defaults are
+/// the single central policy in [`crate::extension::ExtensionLifecycle`];
+/// values must be positive (a zero-second deadline expires immediately).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtensionLifecycleConfig {
+    /// Process spawn plus the `initialize` request write deadline.
+    #[serde(default = "default_extension_spawn_seconds")]
+    pub spawn_seconds: u64,
+    /// `initialize` response deadline.
+    #[serde(default = "default_extension_initialize_seconds")]
+    pub initialize_seconds: u64,
+    /// Registration collection deadline, until the `ready` notification.
+    #[serde(default = "default_extension_ready_seconds")]
+    pub ready_seconds: u64,
+    /// One ordinary extension RPC deadline.
+    #[serde(default = "default_extension_request_seconds")]
+    pub request_seconds: u64,
+    /// `shutdown` response deadline.
+    #[serde(default = "default_extension_shutdown_seconds")]
+    pub shutdown_seconds: u64,
+    /// Graceful child exit deadline before the child is killed and reaped.
+    #[serde(default = "default_extension_exit_seconds")]
+    pub exit_seconds: u64,
+}
+
+impl Default for ExtensionLifecycleConfig {
+    fn default() -> Self {
+        Self {
+            spawn_seconds: default_extension_spawn_seconds(),
+            initialize_seconds: default_extension_initialize_seconds(),
+            ready_seconds: default_extension_ready_seconds(),
+            request_seconds: default_extension_request_seconds(),
+            shutdown_seconds: default_extension_shutdown_seconds(),
+            exit_seconds: default_extension_exit_seconds(),
+        }
+    }
+}
+
+fn default_extension_spawn_seconds() -> u64 {
+    crate::extension::DEFAULT_SPAWN_SECONDS
+}
+fn default_extension_initialize_seconds() -> u64 {
+    crate::extension::DEFAULT_INITIALIZE_SECONDS
+}
+fn default_extension_ready_seconds() -> u64 {
+    crate::extension::DEFAULT_READY_SECONDS
+}
+fn default_extension_request_seconds() -> u64 {
+    crate::extension::DEFAULT_REQUEST_SECONDS
+}
+fn default_extension_shutdown_seconds() -> u64 {
+    crate::extension::DEFAULT_SHUTDOWN_SECONDS
+}
+fn default_extension_exit_seconds() -> u64 {
+    crate::extension::DEFAULT_EXIT_SECONDS
+}
+
 fn default_provider() -> String {
     "openai".into()
 }
@@ -437,6 +500,7 @@ impl Default for Config {
             context: ContextConfig::default(),
             failure: FailureConfig::default(),
             extensions: vec![],
+            extension_lifecycle: ExtensionLifecycleConfig::default(),
             models: BTreeMap::new(),
         }
     }
@@ -588,6 +652,51 @@ mod tests {
             DEFAULT_CONTEXT_WINDOW_TOKENS - config.reserve_tokens()
         );
         assert!(config.models.is_empty(), "pricing is optional");
+    }
+
+    #[test]
+    fn extension_lifecycle_has_one_default_source_and_parses_overrides() {
+        let defaults = ExtensionLifecycleConfig::default();
+        assert_eq!(
+            defaults.spawn_seconds,
+            crate::extension::DEFAULT_SPAWN_SECONDS
+        );
+        assert_eq!(
+            defaults.initialize_seconds,
+            crate::extension::DEFAULT_INITIALIZE_SECONDS
+        );
+        assert_eq!(
+            defaults.ready_seconds,
+            crate::extension::DEFAULT_READY_SECONDS
+        );
+        assert_eq!(
+            defaults.request_seconds,
+            crate::extension::DEFAULT_REQUEST_SECONDS
+        );
+        assert_eq!(
+            defaults.shutdown_seconds,
+            crate::extension::DEFAULT_SHUTDOWN_SECONDS
+        );
+        assert_eq!(
+            defaults.exit_seconds,
+            crate::extension::DEFAULT_EXIT_SECONDS
+        );
+
+        let config: Config = toml::from_str(
+            r#"
+            [extension_lifecycle]
+            initialize_seconds = 3
+            request_seconds = 45
+            "#,
+        )
+        .unwrap();
+        let lifecycle: crate::extension::ExtensionLifecycle = (&config.extension_lifecycle).into();
+        assert_eq!(lifecycle.initialize, std::time::Duration::from_secs(3));
+        assert_eq!(lifecycle.request, std::time::Duration::from_secs(45));
+        assert_eq!(
+            lifecycle.shutdown,
+            std::time::Duration::from_secs(crate::extension::DEFAULT_SHUTDOWN_SECONDS)
+        );
     }
 
     #[test]

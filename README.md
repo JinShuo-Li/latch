@@ -742,7 +742,14 @@ V0.2.2 runs
 the extension host inside the mandatory sandbox (read-only workspace, masked
 home and resolved Latch state directory, network for protocol work); extension
 tool arguments remain a cooperative
-audit contract, and no syscall isolation is claimed inside the host.
+audit contract, and no syscall isolation is claimed inside the host. Extension
+lifecycle stages are bounded end to end by the central `[extension_lifecycle]`
+policy: spawn, initialize, registration/ready, ordinary RPCs, shutdown, and
+graceful exit each have a configurable deadline (defaults are documented in
+`config.example.toml`). A missed deadline kills and reaps the child, and
+extension startup observes the run's cancellation token, so a silent or broken
+extension can never block Latch startup, RPC handling, cancellation, or
+shutdown.
 
 Build and probe the reference extension with:
 

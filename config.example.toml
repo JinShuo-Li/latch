@@ -104,3 +104,15 @@ stagnation_budget = 2
 # name = "example"
 # command = "node"
 # args = ["/absolute/path/to/extensions/example-ts/dist/index.js"]
+
+# Bounded extension lifecycle deadlines, in whole seconds. Every stage from
+# spawn through exit is bounded, so a silent or broken extension can never
+# block startup, RPC handling, or shutdown: a missed deadline kills and reaps
+# the child. Unset fields keep the defaults shown.
+# [extension_lifecycle]
+# spawn_seconds = 5          # process spawn + initialize request write
+# initialize_seconds = 10    # initialize response
+# ready_seconds = 30         # registration stream until `ready`
+# request_seconds = 120      # one tool/guard/transform/context response
+# shutdown_seconds = 5       # shutdown response + exit notification
+# exit_seconds = 5           # graceful exit before SIGKILL + reap

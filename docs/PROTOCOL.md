@@ -26,6 +26,14 @@ Invocation uses `tool.execute` with `{name, arguments}`. Shutdown is a `shutdown
 request followed by `exit`. Observe, transform, and guard remain separate; there
 is no universal hook.
 
+Every lifecycle stage is bounded by the central, configurable
+`[extension_lifecycle]` policy: process spawn plus the `initialize` request
+write, the `initialize` response, registration/ready collection, each ordinary
+RPC response, the `shutdown` response, and graceful exit after `exit`. A missed
+deadline names the extension and stage, kills the child, and reaps it; startup
+also observes the cancellation token, so Ctrl+C cannot be pinned by a silent
+extension.
+
 Extension declarations remain a cooperative auditing contract, but v0.2.1
 changes the process boundary: Latch starts the extension host inside the same
 mandatory Bubblewrap sandbox as every other command, with a read-only

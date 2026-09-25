@@ -6,8 +6,8 @@ use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use cli::command::{Args, Commands, DebugCommand};
 use cli::session::{
-    InferenceContext, ProfileOverrides, Restored, SelectedSession, SessionInfo, SessionRequest,
-    build_agent, ingest_attachments, pick_session, select_session,
+    BuiltSession, InferenceContext, ProfileOverrides, Restored, SelectedSession, SessionInfo,
+    SessionRequest, build_agent, ingest_attachments, pick_session, select_session,
 };
 use latch_kernel::{
     Agent, Config, CredentialRef, ModelDescriptor, ProviderRegistry,
@@ -24,6 +24,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -105,7 +106,8 @@ async fn run_legacy(args: Args) -> Result<ExitCode> {
         SelectedSession::Fresh => None,
         SelectedSession::Exit => return Ok(ExitCode::SUCCESS),
     };
-    let mut built = build_agent(&workspace, &config, &overrides, selected, interactive).await?;
+    let mut built =
+        build_agent_interruptible(&workspace, &config, &overrides, selected, interactive).await?;
     loop {
         let attachments = ingest_attachments(&config, built.agent.session_id, &args.attach)?;
         match interactive_session(
@@ -129,7 +131,8 @@ async fn run_legacy(args: Args) -> Result<ExitCode> {
                     SelectedSession::Fresh => None,
                     SelectedSession::Exit => return Ok(ExitCode::SUCCESS),
                 };
-                built = build_agent(&workspace, &config, &overrides, selected, true).await?;
+                built = build_agent_interruptible(&workspace, &config, &overrides, selected, true)
+                    .await?;
             }
         }
     }
@@ -152,6 +155,31 @@ fn profile_overrides(args: &Args) -> ProfileOverrides {
         effort: args.effort.clone(),
         config_path: args.config.clone(),
     }
+}
+
+/// Builds one session with Ctrl+C wired to startup cancellation. Extension
+/// startup is bounded and cancellable, so a hanging extension cannot block the
+/// interactive path before the TUI exists. The watcher is scoped to
+/// construction: once the TUI owns the terminal its own input handling is
+/// authoritative, and SIGTERM behavior is deliberately unchanged.
+async fn build_agent_interruptible(
+    workspace: &Path,
+    config: &Config,
+    overrides: &ProfileOverrides,
+    selected: Option<Uuid>,
+    interactive: bool,
+) -> Result<BuiltSession> {
+    let cancel = CancellationToken::new();
+    let ctrl_c = tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            let _ = tokio::signal::ctrl_c().await;
+            cancel.cancel();
+        }
+    });
+    let result = build_agent(workspace, config, overrides, selected, interactive, &cancel).await;
+    ctrl_c.abort();
+    Ok(result?)
 }
 
 fn debug_prompt(workspace: &Path, mode: Mode, id: Option<&str>) -> Result<()> {

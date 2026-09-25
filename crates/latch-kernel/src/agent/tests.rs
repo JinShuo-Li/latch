@@ -135,7 +135,12 @@ async fn loop_executes_registered_extension_tool() {
     });
     let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
     agent
-        .load_extension("fixture".into(), "python3", &[fixture])
+        .load_extension(
+            "fixture".into(),
+            "python3",
+            &[fixture],
+            &CancellationToken::new(),
+        )
         .await
         .unwrap();
     agent

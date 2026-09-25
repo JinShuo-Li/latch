@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use latch_kernel::config::Config;
-use latch_kernel::extension::ExtensionHost;
+use latch_kernel::extension::{ExtensionHost, ExtensionLifecycle};
 use latch_kernel::sandbox::{Capability, CapabilitySet, SandboxProfile, SandboxRunner};
 use serde_json::json;
 
@@ -31,6 +31,8 @@ async fn main() -> Result<()> {
         &[script],
         &workspace.to_string_lossy(),
         (&runner, &profile),
+        &ExtensionLifecycle::default(),
+        &tokio_util::sync::CancellationToken::new(),
     )
     .await?;
     let result = host

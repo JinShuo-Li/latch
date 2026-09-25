@@ -8,7 +8,7 @@ use crate::capability::{
 use crate::config::{ContextConfig, DEFAULT_CONTEXT_WINDOW_TOKENS};
 use crate::context::{ContextEngine, ContextEngineFactory, ContextEngineSpec, ContextRequest};
 use crate::continuity::{ContinuityEngine, continuity_context_engine_factory};
-use crate::extension::{ExtensionGuardDecision, ExtensionRegistry};
+use crate::extension::{ExtensionGuardDecision, ExtensionLifecycle, ExtensionRegistry};
 use crate::permissions::PermissionBroker;
 use crate::progress::{DEFAULT_STAGNATION_BUDGET, ProgressSupervisor, StagnationDecision};
 use crate::prompt::PromptCompiler;
@@ -670,11 +670,17 @@ impl Agent {
     pub fn compact(&mut self) -> Result<()> {
         self.continuity.manual_compact(self.session_id)
     }
+    /// Installs the central extension lifecycle policy used by subsequent
+    /// extension loads. Values are configured once, not per call site.
+    pub fn set_extension_lifecycle(&mut self, lifecycle: ExtensionLifecycle) {
+        self.extensions.set_lifecycle(lifecycle);
+    }
     pub async fn load_extension(
         &mut self,
         name: String,
         command: &str,
         args: &[String],
+        cancel: &CancellationToken,
     ) -> Result<()> {
         // The extension host runs inside the mandatory sandbox. If the
         // sandbox is unavailable, loading fails instead of spawning an
@@ -688,6 +694,7 @@ impl Agent {
                 args,
                 &self.workspace.to_string_lossy(),
                 (&runner, &profile),
+                cancel,
             )
             .await
     }

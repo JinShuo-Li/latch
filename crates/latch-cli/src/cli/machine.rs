@@ -233,9 +233,30 @@ async fn run(
         effort: request.effort.clone(),
         config_path: request.config_path.clone(),
     };
-    let mut built = build_agent(&workspace, &config, &overrides, resume_session, false)
-        .await
-        .map_err(MachineError::from_build)?;
+    // Cancellation is installed before any extension starts: a hung extension
+    // must be interruptible before the agent run loop exists.
+    let cancel = CancellationToken::new();
+    spawn_cancellation_signals(cancel.clone());
+    let mut built = match build_agent(
+        &workspace,
+        &config,
+        &overrides,
+        resume_session,
+        false,
+        &cancel,
+    )
+    .await
+    {
+        Ok(built) => built,
+        Err(error) if cancel.is_cancelled() => {
+            result.fail(
+                RunStatus::Cancelled,
+                format!("startup cancelled: {error:#}"),
+            );
+            return Ok(());
+        }
+        Err(error) => return Err(MachineError::from_build(error)),
+    };
     let session_id = built.agent.session_id;
     result.session_id = Some(session_id);
     result.profile = Some(profile_report(&built.info.profile));
@@ -264,9 +285,6 @@ async fn run(
     };
     let telemetry = Arc::new(Mutex::new(Telemetry::default()));
     let sink = machine_sink(reporter, Arc::clone(&telemetry));
-
-    let cancel = CancellationToken::new();
-    spawn_cancellation_signals(cancel.clone());
 
     let run_result = built
         .agent
