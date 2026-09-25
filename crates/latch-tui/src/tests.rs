@@ -2882,6 +2882,11 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
             input_modalities: vec![],
         }],
     }]));
+    app.output(Output::SetupPaths(crate::SetupPaths {
+        config_path: "/tmp/latch/config.toml".into(),
+        state_root: "/tmp/latch".into(),
+        source: "new".into(),
+    }));
     app.input.set_text("/setup");
     assert!(app.submit_action().is_none());
     // Provider list -> Add -> known provider credential.
@@ -2890,8 +2895,7 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     assert_eq!(
         app.known_setup.as_ref().map(|flow| flow.phase()),
         Some(crate::configuration_center::KnownPhase::Credential)
-    );
-    // Choose "Enter API key securely".
+    ); // Choose "Enter API key securely".
     app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
@@ -2917,6 +2921,14 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     assert!(
         rendered.contains("secure local storage (value hidden)"),
         "{rendered}"
+    );
+    assert!(
+        rendered.contains("/tmp/latch/config.toml"),
+        "review names the resolved config path: {rendered}"
+    );
+    assert!(
+        rendered.contains("Path source"),
+        "review names the path source: {rendered}"
     );
     assert!(!rendered.contains("sk-live-secret"));
     let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
