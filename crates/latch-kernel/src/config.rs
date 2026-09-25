@@ -74,9 +74,12 @@ impl TransportKind {
         }
     }
 
-    /// Which effort mapping forms this transport can serialize. A form a
-    /// transport cannot express is rejected at configuration validation, not
-    /// silently dropped at request time.
+    /// Which effort mapping forms this transport can serialize on its own. A
+    /// form a transport cannot express is rejected at configuration
+    /// validation, not silently dropped at request time. Gemini declares its
+    /// forms per model instead; its transport-level answer is
+    /// [`EffortForms::NONE`] and validation reads the resolved model
+    /// capability.
     #[must_use]
     pub const fn supports_effort_forms(self) -> EffortForms {
         match self {

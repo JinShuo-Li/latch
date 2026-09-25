@@ -1381,8 +1381,9 @@ impl GeminiThinkingCapability {
     }
 
     /// The built-in neutral mapping for one effort. `None` means the declared
-    /// capability has no documented expression for that level, so the model
-    /// must map it explicitly or stop exposing it.
+    /// capability has no documented neutral expression for that level; without
+    /// an explicit map the adapter then emits no control and the model's own
+    /// default applies.
     #[must_use]
     pub fn neutral(&self, effort: ReasoningEffort) -> Option<GeminiThinking> {
         match self {
@@ -1464,8 +1465,9 @@ impl std::fmt::Display for GeminiThinkingCapability {
 
 /// Resolves the Gemini wire form from the model's declared capability. A
 /// mapped form is emitted only when the capability can serialize it; an
-/// unmapped level uses the documented neutral mapping. Configuration
-/// validation rejects anything this function would otherwise drop.
+/// unmapped level uses the documented neutral mapping, and a level with
+/// neither emits no control so the model's own default applies. Configuration
+/// validation rejects mapped forms the capability cannot serialize.
 #[must_use]
 pub fn gemini_thinking_for(
     effort: ReasoningEffort,
