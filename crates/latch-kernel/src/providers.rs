@@ -838,8 +838,9 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
 }
 
 /// Zen's documented endpoint table maps each listed model to an existing
-/// transport. Gemini and System One rows are deliberately omitted until their
-/// distinct transports are implemented. Source: opencode.ai/docs/en/zen/.
+/// transport. Deprecated rows are omitted; Gemini rows are added by the Gemini
+/// transport commit, and System One (`jev-*`) is omitted because it needs a
+/// distinct non-conversational transport. Source: opencode.ai/docs/en/zen/.
 fn builtin_opencode_zen() -> Vec<BuiltinModel> {
     let mut models = Vec::new();
     for id in [
@@ -850,11 +851,24 @@ fn builtin_opencode_zen() -> Vec<BuiltinModel> {
         "gpt-5.6-terra",
         "gpt-5.6-luna",
         "gpt-5.5",
+        "gpt-5.5-pro",
         "gpt-5.4",
+        "gpt-5.4-pro",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.2",
+        "gpt-5.1",
+        "gpt-5",
+        "gpt-5-nano",
         "grok-4.7",
+        "grok-4.6",
+        "grok-4.5",
         "grok-build-0.1",
         "muse-spark-1.3",
         "muse-spark-1.2",
+        "muse-spark-1.3-contributor-free",
     ] {
         models.push(opencode_go_model(
             id,
@@ -867,10 +881,17 @@ fn builtin_opencode_zen() -> Vec<BuiltinModel> {
         ));
     }
     for id in [
+        "claude-fable-5-1",
+        "claude-fable-5",
         "claude-opus-5-5",
         "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-opus-4-5",
         "claude-sonnet-5",
         "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
         "claude-haiku-4-5",
     ] {
         models.push(opencode_go_model(
@@ -888,6 +909,7 @@ fn builtin_opencode_zen() -> Vec<BuiltinModel> {
         "qwen3.7-max",
         "qwen3.7-plus",
         "qwen3.6-plus",
+        "qwen3.5-plus",
     ] {
         models.push(opencode_go_model(
             id,
@@ -900,16 +922,27 @@ fn builtin_opencode_zen() -> Vec<BuiltinModel> {
         ));
     }
     for id in [
+        "qwen3.8-max",
         "deepseek-v4.1-flash",
         "deepseek-v4-pro",
         "deepseek-v4-flash",
         "deepseek-v4-flash-vision-exp",
         "minimax-m3",
         "minimax-m2.7",
+        "glm-5.3-flash",
         "glm-5.3",
+        "glm-5.2",
+        "glm-5.1",
+        "kimi-k2.6",
+        "kimi-k2.7-code",
         "kimi-k3",
-        "qwen3.8-max",
         "big-pickle",
+        "space-bunny-free",
+        "mimo-v2.6-flash-free",
+        "mimo-v2.5-free",
+        "ling-3.0-flash-fin-free",
+        "nemotron-3-ultra-free",
+        "nemotron-3.5-lightning-free",
     ] {
         let replay = if id.starts_with("deepseek-") {
             ReasoningReplay::Replay
@@ -1643,10 +1676,22 @@ mod tests {
         );
         for (model, transport) in [
             ("gpt-6-astra", TransportKind::Responses),
+            ("gpt-5.5-pro", TransportKind::Responses),
+            ("gpt-5.1", TransportKind::Responses),
+            ("grok-4.6", TransportKind::Responses),
+            ("muse-spark-1.3-contributor-free", TransportKind::Responses),
             ("claude-sonnet-5", TransportKind::AnthropicMessages),
+            ("claude-fable-5-1", TransportKind::AnthropicMessages),
             ("qwen3.8-flash", TransportKind::AnthropicMessages),
+            ("qwen3.5-plus", TransportKind::AnthropicMessages),
             ("deepseek-v4-flash", TransportKind::ChatCompletions),
             ("minimax-m3", TransportKind::ChatCompletions),
+            ("glm-5.3-flash", TransportKind::ChatCompletions),
+            ("kimi-k2.6", TransportKind::ChatCompletions),
+            (
+                "nemotron-3.5-lightning-free",
+                TransportKind::ChatCompletions,
+            ),
         ] {
             assert_eq!(
                 registry
