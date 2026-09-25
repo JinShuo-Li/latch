@@ -1307,7 +1307,667 @@ struct ThinkingBlock {
     redacted: Option<String>,
 }
 
+/// Resolved Gemini thinking control at the adapter boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum GeminiThinking {
+    /// Emit no thinking fields; the model's own default applies.
+    #[default]
+    Default,
+    /// `thinkingConfig.thinkingLevel` (`minimal`, `low`, `medium`, `high`).
+    Level(String),
+    /// `thinkingConfig.thinkingBudget` token count; zero is the documented
+    /// off switch.
+    Budget(u64),
+}
+
+/// Resolves the Gemini wire form. Neutral levels map onto the documented
+/// `ThinkingLevel` enum, `none` maps onto the documented zero-budget off
+/// switch, and a user map takes precedence field for field.
+#[must_use]
+pub fn gemini_thinking_for(
+    effort: ReasoningEffort,
+    supports_effort: bool,
+    map: &EffortMap,
+) -> GeminiThinking {
+    match mapped_effort(effort, map) {
+        Some(EffortForm::Value(value)) => GeminiThinking::Level(value),
+        Some(EffortForm::BudgetTokens(budget)) => GeminiThinking::Budget(budget),
+        Some(EffortForm::Disabled) => GeminiThinking::Budget(0),
+        _ if supports_effort => match effort {
+            ReasoningEffort::None => GeminiThinking::Budget(0),
+            ReasoningEffort::Minimal => GeminiThinking::Level("minimal".into()),
+            ReasoningEffort::Low => GeminiThinking::Level("low".into()),
+            ReasoningEffort::Medium => GeminiThinking::Level("medium".into()),
+            ReasoningEffort::High => GeminiThinking::Level("high".into()),
+            // Gemini 3 exposes no documented `xhigh`/`max` level; never invent
+            // one, and let the model default apply instead.
+            _ => GeminiThinking::Default,
+        },
+        _ => GeminiThinking::Default,
+    }
+}
+
+/// Maps Gemini `usageMetadata`. Cache reads and thought tokens stay explicit;
+/// `output_tokens` includes thoughts, matching the API's billing categories.
+#[must_use]
+pub fn gemini_usage(usage: &Value) -> Option<Usage> {
+    let input = usage.get("promptTokenCount").and_then(Value::as_u64)?;
+    let candidates = usage
+        .get("candidatesTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let thoughts = usage
+        .get("thoughtsTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_read = usage.get("cachedContentTokenCount").and_then(Value::as_u64);
+    Some(Usage {
+        input_tokens: input,
+        output_tokens: candidates.saturating_add(thoughts),
+        cache_read_tokens: cache_read,
+        cache_write_tokens: None,
+        cache_miss_tokens: cache_read.map(|read| input.saturating_sub(read)),
+        reasoning_tokens: (thoughts > 0).then_some(thoughts),
+    })
+}
+
+/// Encodes one durable reference as raw base64 for a Gemini `inlineData` blob.
+fn gemini_inline_data(
+    media_ref: &MediaRef,
+    store: Option<&dyn MediaBytesProvider>,
+) -> Result<Value> {
+    let store = store.ok_or_else(|| {
+        anyhow!("image input is unavailable: no media artifact store is attached to this provider")
+    })?;
+    let bytes = store.read(media_ref)?;
+    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+    Ok(json!({
+        "inlineData": {
+            "mimeType": media_ref.mime_type,
+            "data": encoded,
+        }
+    }))
+}
+
+/// Serializes one provider-neutral request into the Gemini `generateContent`
+/// shape. Thought, signed-text, and tool-call replay artifacts keep their exact
+/// order; tool results correlate by call id, with the function name recovered
+/// from the matching assistant call because the API requires it on the wire.
+pub fn gemini_request(
+    request: &ModelRequest,
+    thinking: &GeminiThinking,
+    media: Option<&dyn MediaBytesProvider>,
+) -> Result<Value> {
+    // Tool results carry only the call id. Gemini requires the function name
+    // too, so it is recovered from the matching assistant tool call without
+    // using the name as the correlation key.
+    let mut call_names: BTreeMap<&str, &str> = BTreeMap::new();
+    for message in &request.messages {
+        for call in &message.tool_calls {
+            if !call.id.is_empty() {
+                call_names.insert(call.id.as_str(), call.name.as_str());
+            }
+        }
+    }
+    let mut contents: Vec<Value> = Vec::new();
+    let push_user = |contents: &mut Vec<Value>, parts: Vec<Value>| {
+        if let Some(last) = contents.last_mut()
+            && last.get("role").and_then(Value::as_str) == Some("user")
+            && let Some(existing) = last.get_mut("parts").and_then(Value::as_array_mut)
+        {
+            existing.extend(parts);
+            return;
+        }
+        contents.push(json!({"role": "user", "parts": parts}));
+    };
+    let mut index = 0;
+    while index < request.messages.len() {
+        let message = &request.messages[index];
+        match message.role.as_str() {
+            "assistant" => {
+                contents.push(json!({
+                    "role": "model",
+                    "parts": gemini_assistant_parts(message),
+                }));
+                index += 1;
+            }
+            "tool" => {
+                let mut parts = Vec::new();
+                while index < request.messages.len() && request.messages[index].role == "tool" {
+                    let tool = &request.messages[index];
+                    let call_id = tool.tool_call_id.clone().unwrap_or_default();
+                    let name = call_names.get(call_id.as_str()).copied();
+                    let name = name.ok_or_else(|| {
+                        anyhow!(
+                            "tool result {} has no matching function call in history",
+                            call_id
+                        )
+                    })?;
+                    let response = if tool.is_error {
+                        json!({"error": tool.content})
+                    } else {
+                        json!({"result": tool.content})
+                    };
+                    let mut function_response = json!({"name": name, "response": response});
+                    if !call_id.is_empty() {
+                        function_response["id"] = json!(call_id);
+                    }
+                    let mut part = json!({"functionResponse": function_response});
+                    if !tool.media.is_empty() {
+                        let mut media_parts = Vec::new();
+                        for media_ref in &tool.media {
+                            media_parts.push(gemini_inline_data(media_ref, media)?);
+                        }
+                        part["parts"] = Value::Array(media_parts);
+                    }
+                    parts.push(part);
+                    index += 1;
+                }
+                push_user(&mut contents, parts);
+            }
+            _ => {
+                let mut parts = Vec::new();
+                for media_ref in &message.media {
+                    parts.push(gemini_inline_data(media_ref, media)?);
+                }
+                if !message.content.is_empty() || parts.is_empty() {
+                    parts.push(json!({"text": message.content}));
+                }
+                push_user(&mut contents, parts);
+                index += 1;
+            }
+        }
+    }
+    let mut generation_config = json!({"includeThoughts": true});
+    match thinking {
+        GeminiThinking::Default => {}
+        GeminiThinking::Level(level) if !level.trim().is_empty() => {
+            generation_config["thinkingLevel"] = json!(level);
+        }
+        GeminiThinking::Level(_) => {}
+        GeminiThinking::Budget(budget) => {
+            generation_config["thinkingBudget"] = json!(budget);
+        }
+    }
+    let mut body = json!({
+        "systemInstruction": {"parts": [{"text": request.system}]},
+        "contents": contents,
+        "generationConfig": generation_config,
+    });
+    if !request.tools.is_empty() {
+        body["tools"] = json!([{
+            "functionDeclarations": request.tools.iter().map(|tool| json!({
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.input_schema,
+            })).collect::<Vec<_>>(),
+        }]);
+    }
+    Ok(body)
+}
+
+/// One assistant turn's parts in exact original order. Replay artifacts carry
+/// the position; calls are referenced by durable id so parallel and same-name
+/// calls stay distinguishable.
+fn gemini_assistant_parts(message: &latch_protocol::ModelMessage) -> Vec<Value> {
+    let mut parts = Vec::new();
+    let mut visible_text = false;
+    let mut emitted_calls: BTreeSet<&str> = BTreeSet::new();
+    for artifact in &message.reasoning {
+        match artifact {
+            latch_protocol::ReasoningArtifact::Thinking { text, signature } => {
+                let mut part = json!({"text": text, "thought": true});
+                if !signature.is_empty() {
+                    part["thoughtSignature"] = json!(signature);
+                }
+                parts.push(part);
+            }
+            latch_protocol::ReasoningArtifact::SignedText { text, signature } => {
+                visible_text = true;
+                let mut part = json!({"text": text});
+                if !signature.is_empty() {
+                    part["thoughtSignature"] = json!(signature);
+                }
+                parts.push(part);
+            }
+            latch_protocol::ReasoningArtifact::ToolCall { call_id, signature } => {
+                let Some(call) = message.tool_calls.iter().find(|call| call.id == *call_id) else {
+                    continue;
+                };
+                let mut part = json!({"functionCall": gemini_function_call(call)});
+                if !signature.is_empty() {
+                    part["thoughtSignature"] = json!(signature);
+                }
+                parts.push(part);
+                emitted_calls.insert(call.id.as_str());
+            }
+            // Artifacts owned by other transports are never replayed here.
+            _ => {}
+        }
+    }
+    if !visible_text && !message.content.is_empty() {
+        parts.push(json!({"text": message.content}));
+    }
+    for call in &message.tool_calls {
+        if call.id.is_empty() || !emitted_calls.contains(call.id.as_str()) {
+            parts.push(json!({"functionCall": gemini_function_call(call)}));
+        }
+    }
+    if parts.is_empty() {
+        parts.push(json!({"text": ""}));
+    }
+    parts
+}
+
+fn gemini_function_call(call: &ToolCall) -> Value {
+    let mut value = json!({"name": call.name, "args": call.arguments});
+    if !call.id.is_empty() {
+        value["id"] = json!(call.id);
+    }
+    value
+}
+
+/// Incremental Gemini stream state. Parts keep their streamed order; text
+/// deltas continue the current part, a signature closes it, and a signature
+/// that arrives in its own empty part is preserved at that exact position.
 #[derive(Default)]
+struct GeminiStreamState {
+    parts: Vec<GeminiStreamPart>,
+    usage: Option<Usage>,
+    finish_reason: Option<String>,
+    synthesized_calls: usize,
+}
+
+#[derive(Default, Clone)]
+struct GeminiStreamPart {
+    thought: bool,
+    text: String,
+    signature: String,
+    call: Option<ToolCall>,
+    /// Function-call arguments seen so far when the API streams them as a JSON
+    /// string rather than a complete object.
+    pending_args: String,
+    /// True once the call arguments are a complete object.
+    args_complete: bool,
+}
+
+impl GeminiStreamState {
+    fn apply(&mut self, value: &Value) -> Result<Vec<StreamEvent>, String> {
+        let mut events = Vec::new();
+        if let Some(error) = value.get("error") {
+            let detail = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("stream error");
+            return Err(format!("Gemini stream error: {detail}"));
+        }
+        if let Some(reason) = value
+            .pointer("/promptFeedback/blockReason")
+            .and_then(Value::as_str)
+        {
+            return Err(format!("Gemini blocked the prompt: {reason}"));
+        }
+        if let Some(candidate) = value.pointer("/candidates/0") {
+            if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
+                self.finish_reason = Some(reason.to_owned());
+            }
+            if let Some(parts) = candidate
+                .pointer("/content/parts")
+                .and_then(Value::as_array)
+            {
+                for part in parts {
+                    self.apply_part(part, &mut events)?;
+                }
+            }
+        }
+        if let Some(usage) = value.get("usageMetadata").and_then(gemini_usage) {
+            self.usage = Some(usage);
+        }
+        Ok(events)
+    }
+
+    fn apply_part(&mut self, part: &Value, events: &mut Vec<StreamEvent>) -> Result<(), String> {
+        let signature = part
+            .get("thoughtSignature")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if let Some(function_call) = part.get("functionCall") {
+            let name = function_call
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let native_id = function_call
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let index = if native_id.is_empty() {
+                // An id-less fragment continues the previous same-name call only
+                // while its arguments are still incomplete; a complete call
+                // starts a new part so parallel calls stay distinguishable.
+                self.parts.iter().rposition(|part| {
+                    part.call
+                        .as_ref()
+                        .is_some_and(|call| call.name == name && !part.args_complete)
+                })
+            } else {
+                self.parts
+                    .iter()
+                    .position(|part| part.call.as_ref().is_some_and(|call| call.id == native_id))
+            };
+            let index = match index {
+                Some(index) => index,
+                None => {
+                    self.synthesized_calls += 1;
+                    // Preserve provider-native ids; synthesize a deterministic
+                    // fallback only when the API genuinely omits one.
+                    let id = if native_id.is_empty() {
+                        format!("gemini-call-{}", self.synthesized_calls)
+                    } else {
+                        native_id
+                    };
+                    self.parts.push(GeminiStreamPart {
+                        call: Some(ToolCall {
+                            id,
+                            name: name.clone(),
+                            arguments: Value::Object(Default::default()),
+                        }),
+                        ..Default::default()
+                    });
+                    self.parts.len() - 1
+                }
+            };
+            let target = &mut self.parts[index];
+            if let Some(call) = target.call.as_mut() {
+                if !name.is_empty() {
+                    call.name = name;
+                }
+                match function_call.get("args") {
+                    Some(Value::Object(_)) => {
+                        call.arguments = function_call["args"].clone();
+                        target.args_complete = true;
+                    }
+                    Some(Value::String(fragment)) => {
+                        target.pending_args.push_str(fragment);
+                        if let Ok(parsed) = serde_json::from_str::<Value>(&target.pending_args)
+                            && parsed.is_object()
+                        {
+                            call.arguments = parsed;
+                            target.args_complete = true;
+                        }
+                    }
+                    _ => {
+                        call.arguments = Value::Object(Default::default());
+                        target.args_complete = true;
+                    }
+                }
+            }
+            if !signature.is_empty() {
+                target.signature = signature.to_owned();
+            }
+            return Ok(());
+        }
+        let has_text = part.get("text").is_some();
+        let thought = part
+            .get("thought")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !has_text && signature.is_empty() {
+            return Ok(());
+        }
+        if !has_text {
+            // A signature may arrive in its own empty part; attach it to the
+            // part it closes when possible, otherwise keep it as its own
+            // positional marker.
+            if let Some(last) = self.parts.last_mut()
+                && last.signature.is_empty()
+            {
+                last.signature = signature.to_owned();
+                return Ok(());
+            }
+        }
+        let text = part.get("text").and_then(Value::as_str).unwrap_or("");
+        let can_continue = has_text
+            && self.parts.last().is_some_and(|last| {
+                last.call.is_none() && last.thought == thought && last.signature.is_empty()
+            });
+        if !can_continue {
+            self.parts.push(GeminiStreamPart {
+                thought,
+                ..Default::default()
+            });
+        }
+        let target = self.parts.last_mut().expect("part pushed above");
+        if has_text {
+            target.text.push_str(text);
+            if !thought && !text.is_empty() {
+                events.push(StreamEvent::TextDelta(text.to_owned()));
+            }
+        }
+        if !signature.is_empty() {
+            target.signature = signature.to_owned();
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<ModelResponse, String> {
+        let mut text = String::new();
+        let mut tool_calls = Vec::new();
+        let mut reasoning = Vec::new();
+        for mut part in self.parts {
+            if let Some(mut call) = part.call.take() {
+                if !part.pending_args.is_empty() && call.arguments == json!({}) {
+                    call.arguments = serde_json::from_str(&part.pending_args).map_err(|error| {
+                        format!(
+                            "invalid Gemini function-call arguments for {}: {error}",
+                            call.name
+                        )
+                    })?;
+                }
+                reasoning.push(latch_protocol::ReasoningArtifact::ToolCall {
+                    call_id: call.id.clone(),
+                    signature: part.signature,
+                });
+                tool_calls.push(call);
+                continue;
+            }
+            if part.thought {
+                reasoning.push(latch_protocol::ReasoningArtifact::Thinking {
+                    text: part.text,
+                    signature: part.signature,
+                });
+            } else {
+                // Every visible text part keeps its exact position relative to
+                // thought and tool-call parts; the signature is empty for
+                // ordinary text.
+                text.push_str(&part.text);
+                reasoning.push(latch_protocol::ReasoningArtifact::SignedText {
+                    text: part.text,
+                    signature: part.signature,
+                });
+            }
+        }
+        let stop_reason = match self
+            .finish_reason
+            .as_deref()
+            .unwrap_or("STOP")
+            .to_ascii_uppercase()
+            .as_str()
+        {
+            "STOP" => "stop".to_owned(),
+            "MAX_TOKENS" => "length".to_owned(),
+            other => other.to_ascii_lowercase(),
+        };
+        Ok(ModelResponse {
+            text,
+            tool_calls,
+            stop_reason,
+            usage: self.usage,
+            reasoning_content: None,
+            reasoning,
+        })
+    }
+}
+
+/// Gemini `generateContent` transport. Streams `alt=sse` frames, preserves
+/// provider-native function-call ids, and replays ordered thought/signature
+/// artifacts exactly as they were received.
+pub struct GeminiProvider {
+    client: Client,
+    base_url: String,
+    api_key: String,
+    model: String,
+    provider_id: String,
+    session_id: Option<Uuid>,
+    effort: ReasoningEffort,
+    supports_effort: bool,
+    replay: ReasoningReplay,
+    effort_map: EffortMap,
+    media: Option<MediaStore>,
+}
+
+impl GeminiProvider {
+    #[must_use]
+    pub fn new(base_url: String, api_key: String, model: String) -> Self {
+        Self {
+            client: Client::new(),
+            base_url: base_url.trim_end_matches('/').into(),
+            api_key,
+            model,
+            provider_id: "gemini".into(),
+            session_id: None,
+            effort: ReasoningEffort::ProviderDefault,
+            supports_effort: false,
+            replay: ReasoningReplay::Replay,
+            effort_map: EffortMap::new(),
+            media: None,
+        }
+    }
+    #[must_use]
+    pub fn with_identity(mut self, provider_id: impl Into<String>) -> Self {
+        self.provider_id = provider_id.into();
+        self
+    }
+    #[must_use]
+    pub fn with_reasoning(
+        mut self,
+        effort: ReasoningEffort,
+        supports_effort: bool,
+        replay: ReasoningReplay,
+    ) -> Self {
+        self.effort = effort;
+        self.supports_effort = supports_effort;
+        self.replay = replay;
+        self
+    }
+    #[must_use]
+    pub fn with_effort_map(mut self, effort_map: EffortMap) -> Self {
+        self.effort_map = effort_map;
+        self
+    }
+    #[must_use]
+    pub fn with_session(mut self, session_id: Uuid) -> Self {
+        self.session_id = Some(session_id);
+        self
+    }
+    #[must_use]
+    pub fn with_media(mut self, media: Option<MediaStore>) -> Self {
+        self.media = media;
+        self
+    }
+    fn request_headers(&self) -> HeaderMap {
+        let mut headers = user_agent_headers();
+        if is_opencode_go_endpoint(&self.base_url)
+            && let Some(session) = &self.session_id
+            && let Ok(value) = HeaderValue::from_str(&session.to_string())
+        {
+            headers.insert(OPENCODE_SESSION_HEADER, value);
+        }
+        headers
+    }
+}
+
+#[async_trait]
+impl ModelProvider for GeminiProvider {
+    fn name(&self) -> &str {
+        &self.provider_id
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
+    fn for_session(&self, session_id: Uuid) -> Option<Arc<dyn ModelProvider>> {
+        Some(Arc::new(Self {
+            client: self.client.clone(),
+            base_url: self.base_url.clone(),
+            api_key: self.api_key.clone(),
+            model: self.model.clone(),
+            provider_id: self.provider_id.clone(),
+            session_id: Some(session_id),
+            effort: self.effort,
+            supports_effort: self.supports_effort,
+            replay: self.replay,
+            effort_map: self.effort_map.clone(),
+            media: self.media.clone(),
+        }))
+    }
+    async fn stream(
+        &self,
+        request: ModelRequest,
+        cancel: CancellationToken,
+        sink: StreamSink,
+    ) -> Result<ModelResponse> {
+        let thinking = if self.replay == ReasoningReplay::Replay {
+            gemini_thinking_for(self.effort, self.supports_effort, &self.effort_map)
+        } else {
+            GeminiThinking::Default
+        };
+        let body = gemini_request(&request, &thinking, self.media.as_deref())?;
+        let url = format!(
+            "{}/models/{}:streamGenerateContent?alt=sse",
+            self.base_url, self.model
+        );
+        let response = tokio::select! {
+            response = async {
+                let mut sent = self.client.post(url).headers(self.request_headers()).json(&body);
+                // Zen speaks the gateway's bearer auth; the Google Generative
+                // Language API speaks `x-goog-api-key`.
+                if is_opencode_go_endpoint(&self.base_url) || is_opencode_zen_endpoint(&self.base_url) {
+                    sent = sent.bearer_auth(&self.api_key);
+                } else {
+                    sent = sent.header("x-goog-api-key", &self.api_key);
+                }
+                let sent = sent.send().await?;
+                checked_response_redacted("gemini", sent, &self.api_key).await
+            } => response?,
+            () = cancel.cancelled() => bail!("model request cancelled"),
+        };
+        let mut bytes = response.bytes_stream();
+        let mut decoder = SseDecoder::default();
+        let mut state = GeminiStreamState::default();
+        loop {
+            let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
+            let Some(chunk) = next else { break };
+            for data in decoder.push(&chunk?) {
+                if data == "[DONE]" {
+                    continue;
+                }
+                let value: Value = serde_json::from_str(&data)
+                    .map_err(|error| anyhow!("invalid Gemini stream frame: {error}"))?;
+                let events = state.apply(&value).map_err(|error| {
+                    anyhow!("{}", crate::credentials::redact(&error, &[&self.api_key]))
+                })?;
+                for event in events {
+                    sink(event);
+                }
+            }
+        }
+        let result = state.finish().map_err(|error| anyhow!("{error}"))?;
+        sink(StreamEvent::Completed(result.clone()));
+        Ok(result)
+    }
+}
+
 pub struct FakeProvider {
     responses: Mutex<VecDeque<ModelResponse>>,
     model: String,
@@ -1368,6 +2028,18 @@ fn is_opencode_go_endpoint(base_url: &str) -> bool {
     match base_url
         .trim_end_matches('/')
         .strip_prefix(OPENCODE_GO_BASE)
+    {
+        Some(rest) => rest.is_empty() || rest.starts_with('/'),
+        None => false,
+    }
+}
+
+/// Zen serves both OpenAI-compatible and Gemini transports from one base. Only
+/// auth and the stable session header depend on this boundary.
+fn is_opencode_zen_endpoint(base_url: &str) -> bool {
+    match base_url
+        .trim_end_matches('/')
+        .strip_prefix("https://opencode.ai/zen")
     {
         Some(rest) => rest.is_empty() || rest.starts_with('/'),
         None => false,
@@ -3348,5 +4020,459 @@ mod tests {
             error.to_string().contains("no media artifact store"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn gemini_thinking_maps_neutral_levels_and_user_forms() {
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::Low, true, &EffortMap::new()),
+            GeminiThinking::Level("low".into())
+        );
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::None, true, &EffortMap::new()),
+            GeminiThinking::Budget(0)
+        );
+        // Provider default omits thinking fields entirely; the model decides.
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::ProviderDefault, true, &EffortMap::new()),
+            GeminiThinking::Default
+        );
+        // No documented Gemini level for xhigh/max: never invent one.
+        assert_eq!(
+            gemini_thinking_for(ReasoningEffort::Max, true, &EffortMap::new()),
+            GeminiThinking::Default
+        );
+        // A configured map wins field for field.
+        assert_eq!(
+            gemini_thinking_for(
+                ReasoningEffort::High,
+                true,
+                &effort_map(&[(ReasoningEffort::High, value("high"))])
+            ),
+            GeminiThinking::Level("high".into())
+        );
+        assert_eq!(
+            gemini_thinking_for(
+                ReasoningEffort::Low,
+                true,
+                &effort_map(&[(ReasoningEffort::Low, budget(8_192))])
+            ),
+            GeminiThinking::Budget(8_192)
+        );
+        assert_eq!(
+            gemini_thinking_for(
+                ReasoningEffort::Medium,
+                true,
+                &effort_map(&[(ReasoningEffort::Medium, disabled())])
+            ),
+            GeminiThinking::Budget(0)
+        );
+    }
+
+    #[test]
+    fn gemini_request_serializes_system_tools_thinking_and_images() {
+        let request = ModelRequest {
+            system: "be terse".into(),
+            messages: vec![ModelMessage {
+                role: "user".into(),
+                is_error: false,
+                content: "user".into(),
+                tool_calls: vec![],
+                tool_call_id: None,
+                reasoning_content: None,
+                reasoning: vec![],
+                media: vec![image_ref("img-1")],
+            }],
+            tools: vec![ToolDefinition {
+                name: "read_file".into(),
+                description: "read a file".into(),
+                input_schema: json!({"type": "object"}),
+            }],
+        };
+        let store = MemoryMedia(std::collections::HashMap::from([(
+            "img-1".to_owned(),
+            vec![1_u8, 2, 3],
+        )]));
+        let body = gemini_request(
+            &request,
+            &GeminiThinking::Level("high".into()),
+            Some(&store),
+        )
+        .unwrap();
+        assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be terse");
+        let parts = body["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(parts[0]["inlineData"]["data"], "AQID");
+        assert_eq!(parts[1]["text"], "user");
+        assert_eq!(
+            body["tools"][0]["functionDeclarations"][0]["name"],
+            "read_file"
+        );
+        assert_eq!(body["generationConfig"]["includeThoughts"], true);
+        assert_eq!(body["generationConfig"]["thinkingLevel"], "high");
+
+        let body = gemini_request(
+            &ModelRequest {
+                system: "s".into(),
+                messages: vec![ModelMessage::text("user", "hi")],
+                tools: vec![],
+            },
+            &GeminiThinking::Budget(0),
+            None,
+        )
+        .unwrap();
+        assert_eq!(body["generationConfig"]["thinkingBudget"], 0);
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn gemini_request_replays_ordered_thoughts_calls_and_text() {
+        let request = ModelRequest {
+            system: "s".into(),
+            messages: vec![
+                ModelMessage::text("user", "compare Paris and London"),
+                ModelMessage {
+                    role: "assistant".into(),
+                    is_error: false,
+                    content: "checking".into(),
+                    tool_calls: vec![
+                        ToolCall {
+                            id: "call-paris".into(),
+                            name: "get_current_temperature".into(),
+                            arguments: json!({"location": "Paris"}),
+                        },
+                        ToolCall {
+                            id: "call-london".into(),
+                            name: "get_current_temperature".into(),
+                            arguments: json!({"location": "London"}),
+                        },
+                    ],
+                    tool_call_id: None,
+                    reasoning_content: None,
+                    reasoning: vec![
+                        latch_protocol::ReasoningArtifact::Thinking {
+                            text: "I should check both".into(),
+                            signature: "sig-thought".into(),
+                        },
+                        latch_protocol::ReasoningArtifact::SignedText {
+                            text: "checking".into(),
+                            signature: String::new(),
+                        },
+                        latch_protocol::ReasoningArtifact::ToolCall {
+                            call_id: "call-paris".into(),
+                            signature: "sig-first-call".into(),
+                        },
+                        latch_protocol::ReasoningArtifact::ToolCall {
+                            call_id: "call-london".into(),
+                            signature: String::new(),
+                        },
+                    ],
+                    media: Vec::new(),
+                },
+            ],
+            tools: vec![],
+        };
+        let body = gemini_request(&request, &GeminiThinking::Default, None).unwrap();
+        let parts = body["contents"][1]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 4, "{parts:?}");
+        assert_eq!(parts[0]["text"], "I should check both");
+        assert_eq!(parts[0]["thought"], true);
+        assert_eq!(parts[0]["thoughtSignature"], "sig-thought");
+        assert_eq!(parts[1]["text"], "checking");
+        assert!(parts[1].get("thoughtSignature").is_none());
+        assert_eq!(parts[2]["functionCall"]["name"], "get_current_temperature");
+        assert_eq!(parts[2]["functionCall"]["id"], "call-paris");
+        assert_eq!(parts[2]["functionCall"]["args"]["location"], "Paris");
+        assert_eq!(parts[2]["thoughtSignature"], "sig-first-call");
+        assert_eq!(parts[3]["functionCall"]["id"], "call-london");
+        assert_eq!(parts[3]["functionCall"]["args"]["location"], "London");
+        assert!(parts[3].get("thoughtSignature").is_none());
+        // The visible text is never duplicated: replayed signed/plain text
+        // parts already carry it.
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|part| part.get("text") == Some(&json!("checking")))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn gemini_request_correlates_tool_results_by_call_id_and_recovers_names() {
+        let request = ModelRequest {
+            system: "s".into(),
+            messages: vec![
+                ModelMessage {
+                    role: "assistant".into(),
+                    is_error: false,
+                    content: String::new(),
+                    tool_calls: vec![
+                        ToolCall {
+                            id: "call-1".into(),
+                            name: "read_file".into(),
+                            arguments: json!({"path": "a.txt"}),
+                        },
+                        ToolCall {
+                            id: "call-2".into(),
+                            name: "read_file".into(),
+                            arguments: json!({"path": "b.txt"}),
+                        },
+                    ],
+                    tool_call_id: None,
+                    reasoning_content: None,
+                    reasoning: vec![],
+                    media: Vec::new(),
+                },
+                ModelMessage::tool_result("call-1", "contents a", false, vec![]),
+                ModelMessage::tool_result("call-2", "boom", true, vec![]),
+            ],
+            tools: vec![],
+        };
+        let body = gemini_request(&request, &GeminiThinking::Default, None).unwrap();
+        let tool_parts = body["contents"][1]["parts"].as_array().unwrap();
+        assert_eq!(tool_parts.len(), 2);
+        assert_eq!(tool_parts[0]["functionResponse"]["id"], "call-1");
+        assert_eq!(tool_parts[0]["functionResponse"]["name"], "read_file");
+        assert_eq!(
+            tool_parts[0]["functionResponse"]["response"]["result"],
+            "contents a"
+        );
+        assert_eq!(tool_parts[1]["functionResponse"]["id"], "call-2");
+        assert_eq!(
+            tool_parts[1]["functionResponse"]["response"]["error"],
+            "boom"
+        );
+
+        // An orphan tool result is a real inconsistency, not a silent drop.
+        let orphan = ModelRequest {
+            system: "s".into(),
+            messages: vec![ModelMessage::tool_result("missing", "x", false, vec![])],
+            tools: vec![],
+        };
+        let error = gemini_request(&orphan, &GeminiThinking::Default, None).unwrap_err();
+        assert!(
+            error.to_string().contains("no matching function call"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn gemini_stream_assembles_text_thoughts_signatures_and_parallel_calls() {
+        let mut state = GeminiStreamState::default();
+        let mut deltas = Vec::new();
+        for frame in [
+            json!({"candidates": [{"content": {"role": "model", "parts": [
+                {"text": "Let me ", "thought": true}
+            ]}}]}),
+            // The thought signature may arrive in its own empty part.
+            json!({"candidates": [{"content": {"role": "model", "parts": [
+                {"text": "", "thought": true, "thoughtSignature": "sig-thought"}
+            ]}}]}),
+            json!({"candidates": [{"content": {"role": "model", "parts": [
+                {"text": "Checking "}
+            ]}}]}),
+            json!({"candidates": [{"content": {"role": "model", "parts": [
+                {"functionCall": {"id": "native-1", "name": "get_temperature", "args": {"location": "Paris"}}},
+                {"functionCall": {"id": "native-2", "name": "get_temperature", "args": {"location": "London"}}}
+            ]}}]}),
+            // A parallel first call's signature may arrive after both calls.
+            json!({"candidates": [{"content": {"role": "model", "parts": [
+                {"functionCall": {"id": "native-1", "name": "get_temperature", "args": {"location": "Paris"}}, "thoughtSignature": "sig-call"}
+            ]}}]}),
+            json!({"candidates": [{"content": {"role": "model", "parts": [
+                {"text": "weather."}
+            ]}, "finishReason": "STOP"}], "usageMetadata": {
+                "promptTokenCount": 10, "candidatesTokenCount": 4,
+                "thoughtsTokenCount": 6, "cachedContentTokenCount": 2
+            }}),
+        ] {
+            deltas.extend(state.apply(&frame).unwrap());
+        }
+        assert_eq!(
+            deltas,
+            vec![
+                StreamEvent::TextDelta("Checking ".into()),
+                StreamEvent::TextDelta("weather.".into()),
+            ],
+            "thought text is never emitted as assistant text"
+        );
+        let response = state.finish().unwrap();
+        assert_eq!(response.text, "Checking weather.");
+        assert_eq!(response.stop_reason, "stop");
+        assert_eq!(
+            response.tool_calls,
+            vec![
+                ToolCall {
+                    id: "native-1".into(),
+                    name: "get_temperature".into(),
+                    arguments: json!({"location": "Paris"}),
+                },
+                ToolCall {
+                    id: "native-2".into(),
+                    name: "get_temperature".into(),
+                    arguments: json!({"location": "London"}),
+                },
+            ]
+        );
+        assert_eq!(
+            response.reasoning,
+            vec![
+                latch_protocol::ReasoningArtifact::Thinking {
+                    text: "Let me ".into(),
+                    signature: "sig-thought".into(),
+                },
+                latch_protocol::ReasoningArtifact::SignedText {
+                    text: "Checking ".into(),
+                    signature: String::new(),
+                },
+                latch_protocol::ReasoningArtifact::ToolCall {
+                    call_id: "native-1".into(),
+                    signature: "sig-call".into(),
+                },
+                latch_protocol::ReasoningArtifact::ToolCall {
+                    call_id: "native-2".into(),
+                    signature: String::new(),
+                },
+                latch_protocol::ReasoningArtifact::SignedText {
+                    text: "weather.".into(),
+                    signature: String::new(),
+                },
+            ],
+            "part order, signatures, and call association are preserved"
+        );
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 10);
+        assert_eq!(usage.reasoning_tokens, Some(6));
+        assert_eq!(usage.cache_read_tokens, Some(2));
+        assert_eq!(usage.cache_miss_tokens, Some(8));
+    }
+
+    #[test]
+    fn gemini_stream_synthesizes_ids_only_when_the_api_omits_them() {
+        let mut state = GeminiStreamState::default();
+        state
+            .apply(&json!({"candidates": [{"content": {"parts": [
+                {"functionCall": {"name": "read_file", "args": "{\"path\":"}}
+            ]}}]}))
+            .unwrap();
+        state
+            .apply(&json!({"candidates": [{"content": {"parts": [
+                {"functionCall": {"name": "read_file", "args": "\"a.txt\"}"}}
+            ]}}]}))
+            .unwrap();
+        // A second id-less call gets its own deterministic id.
+        state
+            .apply(&json!({"candidates": [{"content": {"parts": [
+                {"functionCall": {"name": "read_file", "args": {"path": "b.txt"}}}
+            ]}}]}))
+            .unwrap();
+        let response = state.finish().unwrap();
+        assert_eq!(
+            response
+                .tool_calls
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gemini-call-1", "gemini-call-2"]
+        );
+        assert_eq!(response.tool_calls[0].arguments, json!({"path": "a.txt"}));
+    }
+
+    #[test]
+    fn gemini_stream_reports_errors_and_malformed_frames() {
+        let mut state = GeminiStreamState::default();
+        let error = state
+            .apply(&json!({"error": {"code": 400, "message": "bad request"}}))
+            .unwrap_err();
+        assert!(error.contains("bad request"), "{error}");
+        let blocked = GeminiStreamState::default()
+            .apply(&json!({"promptFeedback": {"blockReason": "SAFETY"}}))
+            .unwrap_err();
+        assert!(blocked.contains("blocked"), "{blocked}");
+
+        let mut state = GeminiStreamState::default();
+        state
+            .apply(&json!({"candidates": [{"content": {"parts": [
+                {"functionCall": {"name": "read_file", "args": "not json"}}
+            ]}}]}))
+            .unwrap();
+        let error = state.finish().unwrap_err();
+        assert!(
+            error.contains("invalid Gemini function-call arguments"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn gemini_thought_signatures_survive_the_durable_event_round_trip() {
+        // Gemini response -> provider-neutral reasoning artifacts.
+        let mut state = GeminiStreamState::default();
+        for frame in [
+            json!({"candidates": [{"content": {"parts": [
+                {"text": "thinking", "thought": true, "thoughtSignature": "sig-1"}
+            ]}}]}),
+            json!({"candidates": [{"content": {"parts": [
+                {"functionCall": {"id": "call-1", "name": "read_file", "args": {"path": "a"}}},
+                {"functionCall": {"id": "call-2", "name": "read_file", "args": {"path": "b"}}, "thoughtSignature": "sig-2"}
+            ]}}]}),
+        ] {
+            state.apply(&frame).unwrap();
+        }
+        let response = state.finish().unwrap();
+
+        // -> durable event -> JSON (the SQLite representation) -> resume.
+        let event = latch_protocol::EventPayload::AssistantMessageCompleted {
+            text: response.text.clone(),
+            tool_calls: response.tool_calls.clone(),
+            reasoning_content: response.reasoning_content.clone(),
+            reasoning: response.reasoning.clone(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: latch_protocol::EventPayload = serde_json::from_str(&json).unwrap();
+        let latch_protocol::EventPayload::AssistantMessageCompleted {
+            text,
+            tool_calls,
+            reasoning_content,
+            reasoning,
+        } = restored
+        else {
+            panic!("expected assistant message");
+        };
+
+        // -> reconstructed request.
+        let request = ModelRequest {
+            system: "s".into(),
+            messages: vec![
+                ModelMessage::text("user", "read both"),
+                ModelMessage {
+                    role: "assistant".into(),
+                    is_error: false,
+                    content: text,
+                    tool_calls,
+                    tool_call_id: None,
+                    reasoning_content,
+                    reasoning,
+                    media: Vec::new(),
+                },
+                ModelMessage::tool_result("call-1", "a contents", false, vec![]),
+                ModelMessage::tool_result("call-2", "b contents", false, vec![]),
+            ],
+            tools: vec![],
+        };
+        let body = gemini_request(&request, &GeminiThinking::Default, None).unwrap();
+        let parts = body["contents"][1]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["text"], "thinking");
+        assert_eq!(parts[0]["thought"], true);
+        assert_eq!(parts[0]["thoughtSignature"], "sig-1");
+        assert_eq!(parts[1]["functionCall"]["id"], "call-1");
+        assert!(parts[1].get("thoughtSignature").is_none());
+        assert_eq!(parts[2]["functionCall"]["id"], "call-2");
+        assert_eq!(parts[2]["thoughtSignature"], "sig-2");
+        assert_eq!(parts.len(), 3, "no reordering or duplication: {parts:?}");
+        let tool_parts = body["contents"][2]["parts"].as_array().unwrap();
+        assert_eq!(tool_parts[0]["functionResponse"]["id"], "call-1");
+        assert_eq!(tool_parts[1]["functionResponse"]["id"], "call-2");
     }
 }

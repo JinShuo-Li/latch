@@ -587,6 +587,7 @@ fn persist_setup(
                 "chat_completions" => latch_kernel::config::TransportKind::ChatCompletions,
                 "responses" => latch_kernel::config::TransportKind::Responses,
                 "anthropic_messages" => latch_kernel::config::TransportKind::AnthropicMessages,
+                "gemini" => latch_kernel::config::TransportKind::Gemini,
                 _ => bail!("unknown custom model transport"),
             });
         }

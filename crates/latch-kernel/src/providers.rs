@@ -961,6 +961,58 @@ fn builtin_opencode_zen() -> Vec<BuiltinModel> {
         model.image = id == "deepseek-v4-flash-vision-exp";
         models.push(model);
     }
+    // Gemini 3 rows use the Generative Language transport. Thinking levels
+    // follow the official thinking-levels table for each model class; Gemini 3
+    // thought signatures are required replay state.
+    for (id, levels, default_level) in [
+        (
+            "gemini-3.8-flash",
+            &[LOW, MEDIUM, HIGH][..],
+            ReasoningEffort::Medium,
+        ),
+        (
+            "gemini-3.7-flash",
+            &[LOW, MEDIUM, HIGH][..],
+            ReasoningEffort::Medium,
+        ),
+        (
+            "gemini-3.6-flash",
+            &[MINIMAL, LOW, MEDIUM, HIGH][..],
+            ReasoningEffort::Medium,
+        ),
+        (
+            "gemini-3.5-flash",
+            &[MINIMAL, LOW, MEDIUM, HIGH][..],
+            ReasoningEffort::Medium,
+        ),
+        (
+            "gemini-3.5-flash-lite",
+            &[MINIMAL, LOW, MEDIUM, HIGH][..],
+            ReasoningEffort::Minimal,
+        ),
+        (
+            "gemini-3.1-pro",
+            &[LOW, MEDIUM, HIGH][..],
+            ReasoningEffort::High,
+        ),
+        (
+            "gemini-3-flash",
+            &[MINIMAL, LOW, MEDIUM, HIGH][..],
+            ReasoningEffort::High,
+        ),
+    ] {
+        let mut model = opencode_go_model(
+            id,
+            id,
+            TransportKind::Gemini,
+            levels,
+            default_level,
+            ReasoningReplay::Replay,
+            &[],
+        );
+        model.image = true;
+        models.push(model);
+    }
     models.sort_by(|a, b| a.id.cmp(b.id));
     models
 }
@@ -1550,6 +1602,18 @@ impl ProviderRegistry {
                     .with_session(session_id)
                     .with_media(media.clone()),
             ),
+            TransportKind::Gemini => Arc::new(
+                crate::provider::GeminiProvider::new(
+                    provider.base_url.clone(),
+                    api_key,
+                    descriptor.model.clone(),
+                )
+                .with_identity(provider.id.to_string())
+                .with_reasoning(effort, supports_effort, descriptor.reasoning_replay)
+                .with_effort_map(descriptor.effort_map.clone())
+                .with_session(session_id)
+                .with_media(media.clone()),
+            ),
         };
         Ok(provider_impl)
     }
@@ -1692,6 +1756,9 @@ mod tests {
                 "nemotron-3.5-lightning-free",
                 TransportKind::ChatCompletions,
             ),
+            ("gemini-3.8-flash", TransportKind::Gemini),
+            ("gemini-3.5-flash-lite", TransportKind::Gemini),
+            ("gemini-3.1-pro", TransportKind::Gemini),
         ] {
             assert_eq!(
                 registry
@@ -1701,12 +1768,26 @@ mod tests {
                 transport
             );
         }
-        assert!(
-            !registry
-                .available_models("opencode-zen")
-                .iter()
-                .any(|model| model.model.starts_with("gemini-"))
+        // Gemini rows expose the documented thinking levels and require
+        // thought-signature replay; nothing is copied into user config.
+        let gemini = registry
+            .model_descriptor("opencode-zen", "gemini-3.8-flash")
+            .unwrap();
+        assert_eq!(
+            gemini.supported_efforts,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High
+            ]
         );
+        assert_eq!(gemini.default_effort, ReasoningEffort::Medium);
+        assert_eq!(gemini.reasoning_replay, ReasoningReplay::Replay);
+        assert!(gemini.supports_image_input());
+        let flash_lite = registry
+            .model_descriptor("opencode-zen", "gemini-3.5-flash-lite")
+            .unwrap();
+        assert_eq!(flash_lite.default_effort, ReasoningEffort::Minimal);
         let (default, _) = registry.default_profile(&config).unwrap();
         assert_eq!(default.model, "gpt-6-astra");
     }

@@ -58,6 +58,9 @@ pub enum TransportKind {
     Responses,
     /// `POST {base}/messages` (Anthropic Messages API).
     AnthropicMessages,
+    /// `POST {base}/models/{model}:streamGenerateContent?alt=sse` (Google
+    /// Generative Language API).
+    Gemini,
 }
 
 impl TransportKind {
@@ -67,6 +70,7 @@ impl TransportKind {
             Self::ChatCompletions => "chat completions",
             Self::Responses => "responses",
             Self::AnthropicMessages => "messages",
+            Self::Gemini => "gemini",
         }
     }
 
@@ -94,6 +98,13 @@ impl TransportKind {
             // `thinking.budget_tokens` / `thinking.type = "disabled"` for
             // classic thinking.
             Self::AnthropicMessages => EffortForms {
+                value: true,
+                budget_tokens: true,
+                disabled: true,
+            },
+            // Gemini carries `thinkingLevel`, `thinkingBudget`, and the
+            // documented `thinkingBudget = 0` off switch.
+            Self::Gemini => EffortForms {
                 value: true,
                 budget_tokens: true,
                 disabled: true,
