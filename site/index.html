@@ -3,94 +3,120 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0c1113">
-  <meta name="description" content="Latch is a quiet Linux-first terminal coding agent with durable sessions, guarded edits, and sandboxed execution.">
-  <title>Latch — a quiet terminal coding agent</title>
+  <meta name="theme-color" content="#121413">
+  <meta name="description" content="Latch is a Linux-first terminal coding agent with durable sessions, sandboxed execution, and validation tied to workspace state.">
+  <title>Latch — terminal coding agent with durable state</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
   <script src="./app.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
-<div class="page-shell">
+<div class="page">
   <header class="site-header">
-    <a class="brand" href="#top" aria-label="Latch home"><span class="brand-mark" aria-hidden="true"><span></span><span></span></span><span>LATCH<span class="brand-dot">.</span></span></a>
-    <nav class="top-nav" aria-label="Main navigation">
-      <a href="#preview">Preview</a><a href="#why-latch">Why Latch</a><a href="#install">Install</a>
-      <a class="nav-github" href="https://github.com/JinShuo-Li/latch">GitHub <span aria-hidden="true">↗</span></a>
+    <a class="wordmark" href="#top" aria-label="Latch home">latch<span aria-hidden="true">/</span></a>
+    <nav aria-label="Main navigation">
+      <a href="#model">Model</a>
+      <a href="#interface">Interface</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/JinShuo-Li/latch">Source <span aria-hidden="true">↗</span></a>
     </nav>
   </header>
+
   <main id="main">
     <section class="hero" id="top" aria-labelledby="hero-title">
-      <div class="hero-copy">
-        <div class="eyebrow"><span class="live-dot" aria-hidden="true"></span> OPEN SOURCE <span class="eyebrow-separator">/</span> RUST <span class="eyebrow-separator">/</span> LINUX-FIRST</div>
-        <h1 id="hero-title">A coding agent<br>that <em>keeps its place.</em></h1>
-        <p class="hero-lede">Latch works with you in the terminal. It remembers the task, runs tools inside a sandbox, and keeps the evidence behind every change.</p>
-        <div class="hero-actions"><a class="button button-primary" href="#install">Install Latch <span aria-hidden="true">↗</span></a><a class="button button-quiet" href="#preview">Explore the TUI <span aria-hidden="true">↓</span></a></div>
-        <p class="hero-note"><span class="note-line" aria-hidden="true"></span> Current release <strong>v0.2.2</strong> · Built for Linux</p>
-      </div>
-      <div class="hero-art" aria-hidden="true">
-        <div class="orb orb-one"></div><div class="orb orb-two"></div>
-        <div class="hero-console">
-          <div class="mini-title"><span class="mini-lights"><i></i><i></i><i></i></span><span>latch / workspace</span><span>01</span></div>
-          <div class="mini-body"><span class="mini-muted">$</span> latch<br><br><span class="mini-logo">███   ████  ██████  █████ ██  ██<br>███  ██  ██   ██   ██     ██  ██<br>███  ██████   ██   ██     ██████</span><br><br><span class="mini-muted">›</span> Fix the failing test.<br><span class="mini-green">✓</span> read the parser<br><span class="mini-green">✓</span> patch the addend<br><span class="mini-green">✓</span> run targeted tests<br><br><span class="mini-muted">WORK · main · std · ask</span><span class="mini-ready"> ready</span></div>
+      <p class="eyebrow">LATCH <span>/</span> LINUX-FIRST <span>/</span> OPEN SOURCE</p>
+      <h1 id="hero-title">Coding work<br>with a record<span class="period">.</span></h1>
+      <div class="hero-bottom">
+        <div>
+          <p class="lede">A terminal coding agent for work that outlasts a single run. Durable sessions, explicit execution state, and validation tied to the workspace it checked.</p>
+          <div class="hero-links">
+            <a href="#install">Install from source <span aria-hidden="true">↗</span></a>
+            <a href="https://github.com/JinShuo-Li/latch/blob/main/docs/ARCHITECTURE.md">Read the architecture <span aria-hidden="true">↗</span></a>
+          </div>
         </div>
-        <div class="floating-label label-top">DURABLE SESSIONS</div><div class="floating-label label-bottom">SANDBOXED EXECUTION <span>↗</span></div>
+        <dl class="project-facts">
+          <div><dt>RELEASE</dt><dd>0.2.2</dd></div>
+          <div><dt>IMPLEMENTATION</dt><dd>Rust · Linux-first</dd></div>
+          <div><dt>INTERFACE</dt><dd>Terminal / TUI / CLI</dd></div>
+          <div><dt>LICENSE</dt><dd>MIT</dd></div>
+        </dl>
       </div>
     </section>
 
-    <div class="signal-strip" aria-label="Latch capabilities"><span><b>01</b> Remember the work</span><i aria-hidden="true"></i><span><b>02</b> Inspect before editing</span><i aria-hidden="true"></i><span><b>03</b> Verify what changed</span></div>
+    <section class="section model-section" id="model" aria-labelledby="model-title">
+      <div class="section-head">
+        <p class="section-index">01 / RUNTIME MODEL</p>
+        <h2 id="model-title">State is explicit.</h2>
+        <p>Latch keeps the run inspectable: what happened, what changed, and what was actually verified.</p>
+      </div>
+      <div class="principles">
+        <article class="principle"><span class="principle-number">01</span><h3>Durable history</h3><p>Sessions resume from an append-only event log. Task state, tool results, and evidence survive the process.</p></article>
+        <article class="principle"><span class="principle-number">02</span><h3>Bounded execution</h3><p>Commands run in Bubblewrap. Mode, safety, and permissions are separate controls; there is no unsandboxed fallback.</p></article>
+        <article class="principle"><span class="principle-number">03</span><h3>Evidence with a generation</h3><p>Validation belongs to the workspace state it checked. A later write makes the earlier pass stale.</p></article>
+        <article class="principle"><span class="principle-number">04</span><h3>Terminal-native control</h3><p>Inspect the transcript and task state, steer a running turn, or resume the session from the CLI.</p></article>
+      </div>
+    </section>
 
-    <section class="section preview-section" id="preview" aria-labelledby="preview-title">
-      <div class="section-heading"><div><p class="section-kicker">THE INTERFACE / 01</p><h2 id="preview-title">Right where you work.</h2></div><p>Explore captures produced by Latch’s own TUI snapshot tests. Switch views to see the welcome screen, a coding conversation, and a running command.</p></div>
-      <div class="preview-frame">
-        <div class="preview-toolbar">
-          <div class="window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
-          <div class="preview-tabs" role="tablist" aria-label="TUI capture">
+    <section class="section interface-section" id="interface" aria-labelledby="interface-title">
+      <div class="section-head">
+        <p class="section-index">02 / INTERFACE</p>
+        <h2 id="interface-title">The terminal is the surface.</h2>
+        <p>Actual output from Latch’s deterministic TUI fixtures. Select a view to inspect the interface.</p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-head">
+          <span class="terminal-label">LATCH-TUI <span>/</span> 100 COLUMNS</span>
+          <div class="capture-tabs" role="tablist" aria-label="TUI capture">
             <button type="button" role="tab" id="tab-welcome" aria-controls="capture-panel" aria-selected="true" tabindex="0" data-capture="welcome">Welcome</button>
             <button type="button" role="tab" id="tab-session" aria-controls="capture-panel" aria-selected="false" tabindex="-1" data-capture="session">Session</button>
-            <button type="button" role="tab" id="tab-working" aria-controls="capture-panel" aria-selected="false" tabindex="-1" data-capture="working">Working</button>
+            <button type="button" role="tab" id="tab-working" aria-controls="capture-panel" aria-selected="false" tabindex="-1" data-capture="working">Running</button>
           </div>
-          <span class="preview-tag">ACTUAL TUI OUTPUT</span>
         </div>
-        <div class="capture-viewport" id="capture-panel" role="tabpanel" aria-labelledby="tab-welcome"><pre id="tui-capture" aria-live="polite">Opening TUI capture…</pre></div>
-        <div class="preview-footer"><span><span class="status-pip" aria-hidden="true"></span> RENDERED BY LATCH-TUI</span><span>100 COLUMNS <span aria-hidden="true">↗</span></span></div>
+        <div class="terminal-body" id="capture-panel" role="tabpanel" aria-labelledby="tab-welcome"><pre id="tui-capture">Opening TUI capture…</pre></div>
       </div>
-      <p class="capture-note">Captured from the repository’s deterministic TUI fixtures. No model session or credentials are used in this preview.</p>
-    </section>
-
-    <section class="section features-section" id="why-latch" aria-labelledby="features-title">
-      <div class="section-heading features-heading"><div><p class="section-kicker">BUILT FOR REAL WORK / 02</p><h2 id="features-title">Quiet on the surface.<br>Careful underneath.</h2></div></div>
-      <div class="feature-grid">
-        <article class="feature-card"><span class="feature-index">01 / CONTINUITY</span><div class="feature-icon" aria-hidden="true">↺</div><h3>Pick up where you left off.</h3><p>Durable SQLite sessions keep task state, tool results, and evidence available when you resume.</p></article>
-        <article class="feature-card"><span class="feature-index">02 / CONTROL</span><div class="feature-icon" aria-hidden="true">⌑</div><h3>Execution stays contained.</h3><p>Commands run through a mandatory Bubblewrap sandbox, with explicit mode, safety, and permission controls.</p></article>
-        <article class="feature-card"><span class="feature-index">03 / EVIDENCE</span><div class="feature-icon" aria-hidden="true">✓</div><h3>Changes have a trail.</h3><p>Guarded edits and kernel-owned validation connect a completion claim to the workspace state it verified.</p></article>
-        <article class="feature-card"><span class="feature-index">04 / CHOICE</span><div class="feature-icon" aria-hidden="true">◇</div><h3>Bring your provider.</h3><p>Use OpenAI-compatible, Anthropic, DeepSeek, or OpenCode Go models from the same terminal interface.</p></article>
-      </div>
+      <p class="capture-note">Rendered from repository snapshots; no credentials or live model session.</p>
     </section>
 
     <section class="section install-section" id="install" aria-labelledby="install-title">
-      <div class="install-intro"><p class="section-kicker">GET STARTED / 03</p><h2 id="install-title">From source to<br><em>your terminal.</em></h2><p>Latch is Linux-first. Install <a href="https://rust-lang.org/tools/install/">stable Rust</a>, a C toolchain, Git, <code>bwrap</code>, and <code>rg</code> first.</p><div class="prereq-block"><span>DEBIAN / UBUNTU</span><div class="code-block"><pre id="prereq-code">sudo apt install bubblewrap ripgrep git build-essential</pre><button class="copy-button" type="button" data-copy="prereq-code" aria-label="Copy Debian and Ubuntu prerequisite command">Copy</button></div></div><a href="https://github.com/JinShuo-Li/latch/blob/main/README.md">Read the full guide <span aria-hidden="true">↗</span></a></div>
-      <div class="install-steps">
-        <div class="step"><div class="step-heading"><span>01</span><h3>Install the CLI</h3></div><div class="code-block"><pre id="install-code">git clone https://github.com/JinShuo-Li/latch.git
+      <div class="section-head">
+        <p class="section-index">03 / INSTALLATION</p>
+        <h2 id="install-title">Build it. Run it. Resume it.</h2>
+        <p>Stable Rust and a C toolchain are required. The runtime needs Git, <code>bwrap</code>, and <code>rg</code>.</p>
+      </div>
+      <div class="install-layout">
+        <aside class="requirements">
+          <h3>Prerequisites</h3>
+          <p>Install <a href="https://rust-lang.org/tools/install/">stable Rust ↗</a>, then the system packages. For Debian or Ubuntu:</p>
+          <div class="command"><span class="command-label">DEBIAN / UBUNTU</span><pre id="prereq-code">sudo apt install bubblewrap ripgrep git build-essential</pre><button type="button" data-copy="prereq-code" aria-label="Copy prerequisite command">Copy</button></div>
+          <p>Other distributions: install the equivalent packages. Latch does not run commands without <code>bwrap</code>.</p>
+        </aside>
+        <div class="install-procedure">
+          <div class="procedure-step"><span class="step-number">01 / INSTALL</span><div class="command"><pre id="install-code">git clone https://github.com/JinShuo-Li/latch.git
 cd latch
-cargo install --path crates/latch-cli --locked</pre><button class="copy-button" type="button" data-copy="install-code" aria-label="Copy install commands">Copy</button></div></div>
-        <div class="step"><div class="step-heading"><span>02</span><h3>Choose a model</h3></div><p>Run <code>latch</code>, then enter <code>/setup</code> in the TUI. Choose a provider, credential source, model, and reasoning effort.</p></div>
-        <div class="step"><div class="step-heading"><span>03</span><h3>Check your setup</h3></div><div class="code-block"><pre id="doctor-code">latch doctor</pre><button class="copy-button" type="button" data-copy="doctor-code" aria-label="Copy doctor command">Copy</button></div><p><code>doctor</code> checks local prerequisites and config without contacting the provider.</p></div>
+cargo install --path crates/latch-cli --locked</pre><button type="button" data-copy="install-code" aria-label="Copy install commands">Copy</button></div></div>
+          <div class="procedure-step"><span class="step-number">02 / CONFIGURE</span><p>Run <code>latch</code>. Enter <code>/setup</code> in the TUI to choose a provider, credential source, and model.</p></div>
+          <div class="procedure-step"><span class="step-number">03 / CHECK</span><div class="command"><pre id="doctor-code">latch doctor</pre><button type="button" data-copy="doctor-code" aria-label="Copy doctor command">Copy</button></div><p>Read-only preflight. It checks local prerequisites and config without contacting the provider.</p></div>
+        </div>
       </div>
     </section>
 
-    <section class="section use-section" aria-labelledby="use-title">
-      <div class="section-heading"><div><p class="section-kicker">MAKE IT YOURS / 04</p><h2 id="use-title">One agent. Several ways in.</h2></div><p>Stay in the TUI or use a direct command when you know the task. Your session can resume later.</p></div>
-      <div class="usage-panel">
-        <div class="usage-tabs" role="tablist" aria-label="Usage examples"><button type="button" role="tab" id="usage-interactive" aria-controls="usage-panel" aria-selected="true" tabindex="0" data-usage="interactive">Interactive</button><button type="button" role="tab" id="usage-oneoff" aria-controls="usage-panel" aria-selected="false" tabindex="-1" data-usage="oneoff">One prompt</button><button type="button" role="tab" id="usage-resume" aria-controls="usage-panel" aria-selected="false" tabindex="-1" data-usage="resume">Resume</button></div>
-        <div class="usage-code-row" id="usage-panel" role="tabpanel" aria-labelledby="usage-interactive"><pre id="usage-code">latch</pre><button class="copy-button" type="button" data-copy="usage-code" aria-label="Copy usage command">Copy</button></div>
-        <p id="usage-description">Open the terminal UI and ask Latch to inspect, change, or verify code.</p>
+    <section class="section commands-section" aria-labelledby="commands-title">
+      <div class="section-head compact"><p class="section-index">04 / OPERATION</p><h2 id="commands-title">Entry points.</h2></div>
+      <div class="command-list">
+        <div><code>latch</code><span>Interactive TUI</span></div>
+        <div><code>latch -p "Fix the failing test"</code><span>One prompt from the shell</span></div>
+        <div><code>latch --resume --latest</code><span>Resume the newest workspace session</span></div>
       </div>
+      <a class="text-link" href="https://github.com/JinShuo-Li/latch/blob/main/README.md">Full command reference <span aria-hidden="true">↗</span></a>
     </section>
   </main>
-  <footer class="site-footer"><div><a class="brand footer-brand" href="#top"><span class="brand-mark" aria-hidden="true"><span></span><span></span></span><span>LATCH<span class="brand-dot">.</span></span></a><p>A quiet terminal coding agent.</p></div><div class="footer-links"><a href="https://github.com/JinShuo-Li/latch">Source ↗</a><a href="https://github.com/JinShuo-Li/latch/blob/main/README.md">Documentation ↗</a><a href="https://github.com/JinShuo-Li/latch/blob/main/LICENSE">MIT License ↗</a></div><span class="footer-version">v0.2.2 · MADE FOR THE TERMINAL</span></footer>
+
+  <footer class="site-footer">
+    <a class="wordmark" href="#top">latch<span aria-hidden="true">/</span></a>
+    <span>Durable state for long-running coding work.</span>
+    <div><a href="https://github.com/JinShuo-Li/latch">GitHub ↗</a><a href="https://github.com/JinShuo-Li/latch/blob/main/LICENSE">MIT license ↗</a></div>
+  </footer>
 </div>
-<div class="toast" id="copy-toast" role="status" aria-live="polite"></div>
 </body>
 </html>
