@@ -664,16 +664,19 @@ fn system_destructive_target(path: &Path) -> bool {
     #[cfg(windows)]
     {
         let lower = text.replace('/', "\\").to_ascii_lowercase();
-        let components = path.components().collect::<Vec<_>>();
-        if components.len() <= 2 && path.is_absolute() && path.parent().is_none() {
+        if lower.starts_with(r"\\.\") || lower.starts_with(r"\\?\unc\") {
             return true;
         }
-        if lower.starts_with(r"\\.\") || lower.starts_with(r"\\?\") {
+        // Canonical Windows paths normally use the extended-length prefix.
+        // It is not itself a device escape.
+        let normal = lower.strip_prefix(r"\\?\").unwrap_or(&lower);
+        let normal_path = Path::new(normal);
+        if normal_path.is_absolute() && normal_path.parent().is_none() {
             return true;
         }
         if let Ok(system_root) = std::env::var("SystemRoot") {
             let root = system_root.replace('/', "\\").to_ascii_lowercase();
-            if lower == root || lower.starts_with(&(root + "\\")) {
+            if normal == root || normal.starts_with(&(root + "\\")) {
                 return true;
             }
         }
@@ -683,7 +686,7 @@ fn system_destructive_target(path: &Path) -> bool {
             r"c:\program files (x86)",
         ]
         .iter()
-        .any(|root| lower == *root || lower.starts_with(&format!("{root}\\")))
+        .any(|root| normal == *root || normal.starts_with(&format!("{root}\\")))
         {
             return true;
         }
@@ -920,6 +923,9 @@ mod tests {
         ] {
             assert!(system_destructive_target(Path::new(path)), "{path}");
         }
+        assert!(!system_destructive_target(Path::new(
+            r"\\?\C:\Users\user\project\file.rs"
+        )));
     }
 
     #[test]
