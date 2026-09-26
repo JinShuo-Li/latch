@@ -141,7 +141,9 @@ wire images.
 `execution/` owns the platform backend boundary used by command-starting tools
 and extension hosts. Linux delegates to the mandatory Bubblewrap runner in
 `sandbox.rs`; Windows must refuse execution until its capability boundary is
-implemented and verified.
+implemented and verified. Production Windows fallback must not provision local
+accounts; temporary accounts are permitted only in explicitly authorized tests
+and must be removed with their network rules afterward.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,group,configuration_center}.rs` and existing siblings.
 
