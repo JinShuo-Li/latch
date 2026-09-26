@@ -825,7 +825,10 @@ fn read_only_shell_classification_is_conservative() {
     let outside = tempdir().unwrap();
     directory_alias(outside.path(), &d.path().join("link"));
     let ws = d.path().to_path_buf();
-    let workspace_cd = format!("cd {} && git log --oneline -20", d.path().display());
+    let workspace_cd = format!(
+        "cd {} && git log --oneline -20",
+        d.path().display().to_string().replace('\\', "/")
+    );
     for allowed in [
         "git status",
         "git status && git diff",

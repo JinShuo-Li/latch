@@ -317,10 +317,12 @@ impl ToolExecutor {
         {
             return false;
         }
-        grant
-            .external_roots
-            .iter()
-            .any(|root| path.starts_with(root))
+        let Some(resolved) = resolve_real_path(path) else {
+            return false;
+        };
+        grant.external_roots.iter().any(|root| {
+            resolve_real_path(root).is_some_and(|allowed| resolved.starts_with(allowed))
+        })
     }
     pub fn set_mode(&self, mode: Mode) {
         self.policy.set_mode(mode);
@@ -660,6 +662,11 @@ fn resolve_real_path(path: &Path) -> Option<PathBuf> {
             }
             return Some(real);
         }
+        // An existing but unresolvable alias (for example a dangling symlink)
+        // must not be treated as a missing leaf inside an approved directory.
+        if std::fs::symlink_metadata(&ancestor).is_ok() {
+            return None;
+        }
         tail.push(ancestor.file_name()?.to_os_string());
         if !ancestor.pop() {
             return None;
@@ -726,24 +733,11 @@ fn resolve_workspace_path(workspace: &Path, path: &str) -> Result<PathBuf> {
     } else {
         lexical_normalize(&root.join(path))
     };
-    if !candidate.starts_with(&root) {
-        bail!("path escapes workspace");
+    let resolved = resolve_real_path(&candidate).ok_or_else(|| anyhow!("invalid path"))?;
+    if !resolved.starts_with(&root) {
+        bail!("path escapes workspace through a symbolic link or parent traversal");
     }
-    let mut ancestor = candidate.as_path();
-    while !ancestor.exists() {
-        ancestor = ancestor.parent().ok_or_else(|| anyhow!("invalid path"))?;
-    }
-    if !ancestor.canonicalize()?.starts_with(&root) {
-        bail!("path escapes workspace through a symbolic link");
-    }
-    if candidate.exists() {
-        let resolved = candidate.canonicalize()?;
-        if !resolved.starts_with(&root) {
-            bail!("path escapes workspace through a symbolic link");
-        }
-        return Ok(resolved);
-    }
-    Ok(candidate)
+    Ok(resolved)
 }
 fn lexical_normalize(path: &Path) -> PathBuf {
     use std::path::Component;
