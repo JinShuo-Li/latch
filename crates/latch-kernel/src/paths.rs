@@ -3,6 +3,21 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Sync a renamed file's parent where the platform permits directory handles
+/// through `std::fs`. The file itself is synced before the rename on Windows;
+/// opening a directory with `File::open` there returns access denied.
+pub fn sync_parent_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(path)?.sync_all()
+    }
+    #[cfg(windows)]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathSource {
     Explicit,

@@ -240,7 +240,7 @@ impl CredentialStore {
             .map_err(|error| error.error)
             .with_context(|| format!("replace {}", self.path.display()))?;
         if let Some(parent) = self.path.parent() {
-            std::fs::File::open(parent)?.sync_all()?;
+            crate::paths::sync_parent_directory(parent)?;
         }
         self.values = values;
         Ok(())
@@ -303,7 +303,7 @@ fn write_restricted(path: &Path, text: &str) -> Result<()> {
     temp.persist(path)
         .map_err(|error| error.error)
         .with_context(|| format!("replace {}", path.display()))?;
-    std::fs::File::open(parent)?.sync_all()?;
+    crate::paths::sync_parent_directory(parent)?;
     Ok(())
 }
 

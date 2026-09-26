@@ -120,7 +120,7 @@ fn stage_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn sync_dir(path: &Path) -> Result<()> {
-    std::fs::File::open(path)?.sync_all()?;
+    crate::paths::sync_parent_directory(path)?;
     Ok(())
 }
 

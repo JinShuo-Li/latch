@@ -1148,7 +1148,7 @@ impl Config {
             .map_err(|error| error.error)
             .with_context(|| format!("replace {}", path.display()))?;
         if let Some(parent) = path.parent() {
-            std::fs::File::open(parent)?.sync_all()?;
+            crate::paths::sync_parent_directory(parent)?;
         }
         Ok(())
     }

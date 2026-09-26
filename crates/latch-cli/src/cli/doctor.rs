@@ -589,7 +589,8 @@ mod tests {
         assert_eq!(report.migration, "legacy in place");
         assert_eq!(
             report.database,
-            home.join(".local/state/latch/latch.sqlite3")
+            home.join(".local/state/latch")
+                .join("latch.sqlite3")
                 .display()
                 .to_string()
         );
