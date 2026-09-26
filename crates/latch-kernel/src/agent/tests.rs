@@ -2065,10 +2065,14 @@ async fn external_effects_are_asked_even_under_autonomous_auto_approve() {
 async fn auto_approve_never_overrides_hard_deny() {
     use crate::config::OutsidePolicy;
     let d = tempdir().unwrap();
+    #[cfg(unix)]
+    let system_path = "/etc/sudoers";
+    #[cfg(windows)]
+    let system_path = r"C:\Windows\System32\config\SAM";
     let responses = tool_then_final(
         "w1",
         "write",
-        json!({"path": "/etc/sudoers", "content": "x", "base_hash": null}),
+        json!({"path": system_path, "content": "x", "base_hash": null}),
     );
     let (store, sid, mut agent) = policy_agent(
         &d,
