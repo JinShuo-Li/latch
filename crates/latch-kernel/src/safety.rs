@@ -874,6 +874,19 @@ fn resolve_path(workspace: &Path, raw: &str) -> anyhow::Result<PathBuf> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::OnceLock;
+
+    fn test_workspace() -> &'static Path {
+        static DIRECTORY: OnceLock<tempfile::TempDir> = OnceLock::new();
+        static PATH: OnceLock<PathBuf> = OnceLock::new();
+        PATH.get_or_init(|| {
+            DIRECTORY
+                .get_or_init(|| tempfile::tempdir().unwrap())
+                .path()
+                .canonicalize()
+                .unwrap()
+        })
+    }
 
     fn context(mode: Mode, safety: Safety, workspace: &Path) -> Context<'_> {
         Context {
@@ -942,7 +955,7 @@ mod tests {
 
     #[test]
     fn ordinary_workspace_edit_follows_safety() {
-        let workspace = Path::new("/tmp/ws");
+        let workspace = test_workspace();
         for (safety, expect_ask) in [
             (Safety::Strict, true),
             (Safety::Standard, false),
@@ -967,7 +980,7 @@ mod tests {
             let classification = classify(
                 "write",
                 &json!({"path": "src/lib.rs", "content": "x"}),
-                context(mode, Safety::Autonomous, Path::new("/tmp/ws")),
+                context(mode, Safety::Autonomous, test_workspace()),
             );
             assert!(matches!(classification.decision, Decision::Deny(_)));
         }
@@ -979,7 +992,7 @@ mod tests {
             let classification = classify(
                 "patch",
                 &json!({"path": ".git/HEAD"}),
-                context(Mode::Work, safety, Path::new("/tmp/ws")),
+                context(Mode::Work, safety, test_workspace()),
             );
             assert!(
                 matches!(classification.decision, Decision::Ask(_)),
@@ -995,10 +1008,14 @@ mod tests {
 
     #[test]
     fn outside_write_is_ask_even_under_autonomous() {
+        let outside = test_workspace()
+            .parent()
+            .unwrap()
+            .join("elsewhere/file.txt");
         let classification = classify(
             "write",
-            &json!({"path": "/tmp/elsewhere/file.txt"}),
-            context(Mode::Work, Safety::Autonomous, Path::new("/tmp/ws")),
+            &json!({"path": outside}),
+            context(Mode::Work, Safety::Autonomous, test_workspace()),
         );
         assert!(matches!(classification.decision, Decision::Ask(_)));
         assert!(
@@ -1008,6 +1025,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn privileged_and_destructive_targets_are_denied() {
         for path in ["/etc/sudoers", "/usr/lib/x", "/proc/1/mem", "/dev/sda"] {
@@ -1052,7 +1070,7 @@ mod tests {
             let classification = classify(
                 "shell",
                 &json!({"command": command}),
-                context(Mode::Work, safety, Path::new("/tmp/ws")),
+                context(Mode::Work, safety, test_workspace()),
             );
             assert!(
                 !classification
@@ -1067,7 +1085,7 @@ mod tests {
             let classification = classify(
                 "shell",
                 &json!({"command": command}),
-                context(Mode::Work, safety, Path::new("/tmp/ws")),
+                context(Mode::Work, safety, test_workspace()),
             );
             assert!(
                 matches!(classification.decision, Decision::Allow),
@@ -1157,7 +1175,7 @@ mod tests {
             let classification = classify(
                 "shell",
                 &json!({"command": command}),
-                context(Mode::Work, safety, Path::new("/tmp/ws")),
+                context(Mode::Work, safety, test_workspace()),
             );
             assert!(
                 !classification
@@ -1174,7 +1192,7 @@ mod tests {
 
     #[test]
     fn network_follows_safety() {
-        let workspace = Path::new("/tmp/ws");
+        let workspace = test_workspace();
         let strict = classify(
             "shell",
             &json!({"command": "curl https://example.test"}),
@@ -1191,7 +1209,7 @@ mod tests {
 
     #[test]
     fn explicit_capability_requests_are_classified() {
-        let workspace = Path::new("/tmp/ws");
+        let workspace = test_workspace();
         let classification = classify(
             "shell",
             &json!({"command": "git commit -m x", "capabilities": ["network"]}),
@@ -1221,10 +1239,15 @@ mod tests {
 
     #[test]
     fn command_external_write_is_detected() {
-        let workspace = Path::new("/tmp/ws");
+        let workspace = test_workspace();
+        let outside = workspace.parent().unwrap().join("outside/file.txt");
+        let command = format!(
+            "echo hi > {}",
+            outside.display().to_string().replace('\\', "/")
+        );
         let classification = classify(
             "shell",
-            &json!({"command": "echo hi > /tmp/outside/file.txt"}),
+            &json!({"command": command}),
             context(Mode::Work, Safety::Standard, workspace),
         );
         assert!(matches!(classification.decision, Decision::Ask(_)));
@@ -1240,7 +1263,7 @@ mod tests {
         let classification = classify(
             "patch",
             &json!({"path": "Cargo.toml"}),
-            context(Mode::Work, Safety::Standard, Path::new("/tmp/ws")),
+            context(Mode::Work, Safety::Standard, test_workspace()),
         );
         assert!(
             classification

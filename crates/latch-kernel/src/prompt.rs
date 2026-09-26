@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn prompt_stays_within_compact_budget() {
-        let (_d, p) = work_prompt();
+        let (directory, p) = work_prompt();
         let estimator = crate::tokens::TokenEstimator::generic();
         let static_tokens: usize = p
             .fragments
@@ -570,10 +570,13 @@ mod tests {
             static_tokens <= 1_329,
             "static coding prompt grew to {static_tokens} tokens"
         );
+        // The workspace path has a host-dependent length (and gains a drive
+        // prefix on Windows), so exclude its token cost from this budget.
+        let workspace_tokens = estimator.estimate(&directory.path().display().to_string());
         assert!(
-            p.approximate_tokens() <= 1_371,
-            "compiled prompt grew to {} tokens",
-            p.approximate_tokens()
+            p.approximate_tokens().saturating_sub(workspace_tokens) <= 1_371,
+            "compiled prompt excluding workspace path grew to {} tokens",
+            p.approximate_tokens().saturating_sub(workspace_tokens)
         );
         assert!(
             !p.text.contains(" v2]"),

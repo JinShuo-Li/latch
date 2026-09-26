@@ -538,18 +538,19 @@ mod tests {
 
     #[test]
     fn identical_reads_become_redundant_and_reground_at_budget() {
-        let workspace = PathBuf::from("/tmp/ws");
-        let path = "/tmp/ws/src/lib.rs";
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().canonicalize().unwrap();
+        let path = workspace.join("src/lib.rs").to_string_lossy().into_owned();
         let mut supervisor = ProgressSupervisor::new(2, workspace);
-        supervisor.observe_call_result(&read_call(path), &read_result("hash: abc\nfn main() {}"));
+        supervisor.observe_call_result(&read_call(&path), &read_result("hash: abc\nfn main() {}"));
         supervisor.finish_turn();
         assert!(!supervisor.regrounded());
         // First redundant turn: tolerated.
-        supervisor.observe_call_result(&read_call(path), &read_result("hash: abc\nfn main() {}"));
+        supervisor.observe_call_result(&read_call(&path), &read_result("hash: abc\nfn main() {}"));
         assert!(supervisor.finish_turn().is_none());
         assert!(!supervisor.regrounded());
         // Second consecutive redundant turn: re-ground.
-        supervisor.observe_call_result(&read_call(path), &read_result("hash: abc\nfn main() {}"));
+        supervisor.observe_call_result(&read_call(&path), &read_result("hash: abc\nfn main() {}"));
         let decision = supervisor.finish_turn().expect("stagnation detected");
         assert_eq!(
             decision,
