@@ -125,12 +125,26 @@ fn sync_dir(path: &Path) -> Result<()> {
 }
 
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(source)?;
+    if is_filesystem_alias(&metadata) || !metadata.is_dir() {
+        bail!(
+            "legacy artifact {} is not a regular directory",
+            source.display()
+        );
+    }
     ResolvedPaths::ensure_private_root(target)?;
     for item in std::fs::read_dir(source)? {
         let item = item?;
         let source_path = item.path();
         let target_path = target.join(item.file_name());
-        let kind = item.file_type()?;
+        let metadata = std::fs::symlink_metadata(&source_path)?;
+        if is_filesystem_alias(&metadata) {
+            bail!(
+                "legacy artifact {} is a filesystem alias",
+                source_path.display()
+            );
+        }
+        let kind = metadata.file_type();
         if kind.is_dir() {
             copy_tree(&source_path, &target_path)?;
         } else if kind.is_file() {
@@ -143,6 +157,18 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn is_filesystem_alias(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
 }
 
 #[cfg(test)]
@@ -227,6 +253,29 @@ mod tests {
             std::fs::write(home.join("outside"), "do not copy").unwrap();
             std::os::unix::fs::symlink(home.join("outside"), legacy_state.join("artifacts"))
                 .unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let outside = home.join("outside");
+            std::fs::create_dir(&outside).unwrap();
+            std::fs::write(outside.join("secret"), "do not copy").unwrap();
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/C", "mklink", "/J"])
+                .arg(
+                    legacy_state
+                        .join("artifacts")
+                        .display()
+                        .to_string()
+                        .replace('/', "\\"),
+                )
+                .arg(&outside)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         let source =
             ResolvedPaths::resolve_with_roots(home, &legacy_config_root, &legacy_state, None, None);
