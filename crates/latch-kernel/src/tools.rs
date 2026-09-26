@@ -403,7 +403,7 @@ impl ToolExecutor {
             ),
             def(
                 "exec_start",
-                "Start a persistent development process (server, watcher, long build) in the workspace with bash -lc. Returns a process id for exec_poll and exec_terminate. WORK mode only; policy and dangerous-command checks apply.",
+                "Start a persistent development process (server, watcher, long build) in the workspace with Bash. Returns a process id for exec_poll and exec_terminate. WORK mode only; policy and dangerous-command checks apply.",
                 json!({"type":"object","required":["command"],"properties":{"command":{"type":"string"},"label":{"type":"string","description":"short human label"}}}),
             ),
             def(
@@ -428,7 +428,7 @@ impl ToolExecutor {
             ),
             def(
                 "shell",
-                "Run a bounded Linux developer command. Commands execute with the workspace as the working directory, so `cd <workspace> &&` is redundant — prefer plain `git log --oneline -20`. A `cd` into a subdirectory is allowed for read-only inspection (for example `cd src && rg normalize_username .`), but never `cd` out of the workspace. ASK/PLAN allow only conservative read-only commands and deny test/build execution.",
+                "Run a bounded Bash developer command. Commands execute with the workspace as the working directory, so `cd <workspace> &&` is redundant — prefer plain `git log --oneline -20`. A `cd` into a subdirectory is allowed for read-only inspection (for example `cd src && rg normalize_username .`), but never `cd` out of the workspace. ASK/PLAN allow only conservative read-only commands and deny test/build execution.",
                 json!({"type":"object","required":["command"],"properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer"}}}),
             ),
             def(

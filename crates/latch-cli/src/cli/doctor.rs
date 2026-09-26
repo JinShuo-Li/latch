@@ -9,8 +9,8 @@
 //! Exit codes are stable:
 //!
 //! - `0`: every required check passed;
-//! - `1`: a runtime prerequisite is missing or unusable (`bwrap`, `rg`, or a
-//!   writable state directory);
+//! - `1`: a runtime prerequisite is missing or unusable (execution backend,
+//!   `rg`, or a writable state directory);
 //! - `2`: CLI or configuration error (bad workspace, unreadable config, no
 //!   resolvable provider/profile, or a missing credential).
 
@@ -285,19 +285,19 @@ pub fn execute(args: &Args, doctor: DoctorArgs) -> ExitCode {
 }
 
 fn check_sandbox(workspace: &Path) -> Check {
-    match latch_kernel::sandbox::probe(workspace) {
-        Ok(probe) => Check::ok(
-            "sandbox",
-            format!("{} ({})", probe.bwrap.display(), probe.version),
-        ),
+    match latch_kernel::execution::ExecutionBackend::detect(workspace) {
+        Ok(backend) => Check::ok("sandbox", backend.status()),
         Err(error) => Check::failed("sandbox", format!("{error:#}")),
     }
 }
 
 fn check_search() -> Check {
     version_check("ripgrep", "rg", &["--version"]).unwrap_or_else(|error| {
-        Check::failed("ripgrep", error.to_string())
-            .with_detail("install ripgrep (for example `sudo apt install ripgrep`)")
+        Check::failed("ripgrep", error.to_string()).with_detail(if cfg!(windows) {
+            "install ripgrep and add rg.exe to PATH"
+        } else {
+            "install ripgrep (for example `sudo apt install ripgrep`)"
+        })
     })
 }
 

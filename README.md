@@ -263,8 +263,9 @@ construction, attachments, and policy are identical everywhere.
 ## Preflight doctor
 
 `latch doctor` is a read-only preflight for the machine a run depends on. It
-checks the mandatory Bubblewrap sandbox (by probing a minimal sandboxed
-command), the `rg` search runtime, Git, every resolved storage path and its
+probes the execution backend (mandatory Bubblewrap on Linux; Windows currently
+reports an actionable refusal until its security backend is available), the
+`rg` search runtime, Git, every resolved storage path and its
 source (`explicit`, `new`, or `legacy`), migration status, the resolved
 provider/model/effort, and that the provider credential
 resolves. It never contacts the provider, never runs a task, and never prints

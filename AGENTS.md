@@ -55,7 +55,7 @@ bash scripts/release-gate.sh
 - CLI machine interface: `cargo test -p latch-cli` spawns the real binary
   against a loopback SSE mock provider with an isolated state dir; it needs no
   network, credentials, or TTY. It is included in the workspace CI suite.
-- Preflight: `latch doctor` is a read-only check of `bwrap`, `rg`, Git, config,
+- Preflight: `latch doctor` is a read-only check of the execution backend, `rg`, Git, config,
   state dir, profile, and credential. It never contacts the provider; exit 0
   (all pass), 1 (runtime prerequisite), 2 (config/CLI). Keep it in sync when
   adding a prerequisite.
