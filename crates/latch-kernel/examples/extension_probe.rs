@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use latch_kernel::config::Config;
+use latch_kernel::execution::ExecutionBackend;
 use latch_kernel::extension::{ExtensionHost, ExtensionLifecycle};
-use latch_kernel::sandbox::{Capability, CapabilitySet, SandboxProfile, SandboxRunner};
+use latch_kernel::sandbox::{Capability, CapabilitySet, SandboxProfile};
 use serde_json::json;
 
 #[tokio::main]
@@ -12,7 +13,7 @@ async fn main() -> Result<()> {
     let workspace = std::env::current_dir()?.canonicalize()?;
     let state_dir = Config::default().state_dir;
     std::fs::create_dir_all(&state_dir)?;
-    let runner = SandboxRunner::detect(&workspace)?;
+    let runner = ExecutionBackend::detect(&workspace)?;
     let profile = SandboxProfile::new(
         workspace.clone(),
         dirs::home_dir().context("resolve home directory")?,

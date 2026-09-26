@@ -31,5 +31,8 @@ uuid.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+winsafe = { version = "0.0.29", default-features = false, features = ["kernel"] }
+
 [lints]
 workspace = true

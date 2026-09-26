@@ -531,7 +531,7 @@ fn find_on_path(binary: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use tempfile::tempdir;

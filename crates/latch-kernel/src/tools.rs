@@ -571,6 +571,16 @@ impl ToolExecutor {
     /// on the deepest existing ancestor are resolved first, so an alias into
     /// the state directory is protected even when the leaf does not exist yet.
     pub(super) fn is_protected_path(&self, path: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            // NTFS hardlinks have no canonical "original" path. Conservatively
+            // refuse any multiply-linked file, including an alias of secrets.
+            if std::fs::metadata(path)
+                .is_ok_and(|metadata| metadata.is_file() && windows_has_multiple_links(path))
+            {
+                return true;
+            }
+        }
         resolve_real_path(path).is_some_and(|real| real.starts_with(self.protected_state_dir()))
     }
     /// Refuses agent-visible filesystem access to the configured state
@@ -602,8 +612,38 @@ impl ToolExecutor {
         if relative.is_empty() {
             return None;
         }
-        Some(format!("!{}/**", escape_glob(&relative)))
+        // ripgrep matches glob paths with forward slashes even when the host
+        // uses Windows separators. The leading globstar also covers an
+        // absolute search target passed to `rg`.
+        Some(format!(
+            "!**/{}/**",
+            escape_glob(&relative.replace('\\', "/"))
+        ))
     }
+}
+
+#[cfg(windows)]
+fn windows_has_multiple_links(path: &Path) -> bool {
+    use winsafe::{HFILE, co};
+
+    let Some(path) = path.to_str() else {
+        return true;
+    };
+    let Ok((file, _)) = HFILE::CreateFile(
+        path,
+        co::GENERIC::READ,
+        Some(co::FILE_SHARE::READ | co::FILE_SHARE::WRITE | co::FILE_SHARE::DELETE),
+        None,
+        co::DISPOSITION::OPEN_EXISTING,
+        co::FILE_ATTRIBUTE::NORMAL,
+        None,
+        None,
+        None,
+    ) else {
+        return true;
+    };
+    file.GetFileInformationByHandle()
+        .map_or(true, |information| information.nNumberOfLinks > 1)
 }
 
 /// Resolves `path` to its real location, following symlinks on the deepest

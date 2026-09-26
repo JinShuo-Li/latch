@@ -23,11 +23,11 @@ impl ExecutionBackend {
     pub fn detect(workspace: &Path) -> Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            return Ok(Self::Linux(linux::LinuxBackend::detect(workspace)?));
+            Ok(Self::Linux(linux::LinuxBackend::detect(workspace)?))
         }
         #[cfg(windows)]
         {
-            return Ok(Self::Windows(windows::WindowsBackend::detect(workspace)?));
+            Ok(Self::Windows(windows::WindowsBackend::detect(workspace)?))
         }
         #[cfg(not(any(target_os = "linux", windows)))]
         anyhow::bail!("Latch has no execution backend for this operating system")

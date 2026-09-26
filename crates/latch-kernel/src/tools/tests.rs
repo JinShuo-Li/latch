@@ -1,6 +1,36 @@
 use super::*;
 use crate::config::{OutsidePolicy, PermissionConfig};
 use tempfile::tempdir;
+
+#[cfg(unix)]
+fn directory_alias(target: &Path, alias: &Path) {
+    std::os::unix::fs::symlink(target, alias).unwrap();
+}
+
+#[cfg(windows)]
+fn directory_alias(target: &Path, alias: &Path) {
+    let output = std::process::Command::new("cmd.exe")
+        .args(["/C", "mklink", "/J"])
+        .arg(alias)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+fn file_alias(target: &Path, alias: &Path) {
+    std::os::unix::fs::symlink(target, alias).unwrap();
+}
+
+#[cfg(windows)]
+fn file_alias(target: &Path, alias: &Path) {
+    std::fs::hard_link(target, alias).unwrap();
+}
 fn setup(mode: Mode) -> (tempfile::TempDir, ToolExecutor) {
     let d = tempdir().unwrap();
     std::fs::write(d.path().join("a.txt"), "old").unwrap();
@@ -477,12 +507,11 @@ async fn read_file_refuses_the_state_directory_and_symlink_aliases() {
     }
     // A symlink alias resolving into the state directory is the same boundary,
     // whether it aliases the directory or a single secret file.
-    std::os::unix::fs::symlink(d.path().join("state"), d.path().join("alias")).unwrap();
-    std::os::unix::fs::symlink(
-        d.path().join("state/secrets.toml"),
-        d.path().join("secret-link"),
-    )
-    .unwrap();
+    directory_alias(&d.path().join("state"), &d.path().join("alias"));
+    file_alias(
+        &d.path().join("state/secrets.toml"),
+        &d.path().join("secret-link"),
+    );
     for path in ["alias", "alias/secrets.toml", "secret-link"] {
         let denied = e
             .execute(
@@ -565,7 +594,7 @@ async fn search_refuses_and_excludes_the_state_directory() {
         );
     }
     // A symlink target resolving into the protected tree is refused.
-    std::os::unix::fs::symlink(d.path().join("state"), d.path().join("alias")).unwrap();
+    directory_alias(&d.path().join("state"), &d.path().join("alias"));
     let via_alias = e
         .execute(
             &call("search", json!({"query":"FAKE_SECRET","path":"alias"})),
@@ -631,7 +660,7 @@ async fn writes_and_patches_cannot_target_the_state_directory() {
         patch.output
     );
     // Symlink aliases are blocked for writes too, and nothing was mutated.
-    std::os::unix::fs::symlink(d.path().join("state"), d.path().join("alias")).unwrap();
+    directory_alias(&d.path().join("state"), &d.path().join("alias"));
     let via_alias = e
         .execute(
             &call("write", json!({"path":"alias/new.txt","content":"owned"})),
@@ -794,7 +823,7 @@ fn read_only_shell_classification_is_conservative() {
     let d = tempdir().unwrap();
     std::fs::create_dir(d.path().join("src")).unwrap();
     let outside = tempdir().unwrap();
-    std::os::unix::fs::symlink(outside.path(), d.path().join("link")).unwrap();
+    directory_alias(outside.path(), &d.path().join("link"));
     let ws = d.path().to_path_buf();
     let workspace_cd = format!("cd {} && git log --oneline -20", d.path().display());
     for allowed in [
@@ -972,7 +1001,7 @@ async fn writes_nested_new_file_without_path_collapse() {
 async fn symlink_cannot_escape_workspace() {
     let (d, executor) = setup(Mode::Work);
     let outside = tempdir().unwrap();
-    std::os::unix::fs::symlink(outside.path(), d.path().join("link")).unwrap();
+    directory_alias(outside.path(), &d.path().join("link"));
     let result = executor
         .execute(
             &call("write", json!({"path":"link/escaped.txt","content":"bad"})),

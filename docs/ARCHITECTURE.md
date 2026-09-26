@@ -742,6 +742,8 @@ filesystem tools enforce the same boundary on the host: `read_file`,
 any symlink alias into it, `write`/`patch` refuse to mutate it, and a recursive
 search rooted above it excludes the protected tree with an rg glob instead of
 failing. Credentials stay unreadable whatever the workspace layout.
+On Windows, kernel-native file tools also reject multiply-linked files because
+an NTFS hardlink has no canonical path identifying its state-directory alias.
 
 `read_file` and `read_artifact` share one bounded text page policy: at most
 64 KiB fetched and decoded, and at most 24 KiB / 8000 estimated tokens in the

@@ -1931,7 +1931,22 @@ async fn native_filesystem_tools_cannot_reach_the_state_directory() {
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(state.join("secrets.toml"), "FAKE_SECRET = true\n").unwrap();
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&state, dir.path().join("alias")).unwrap();
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(dir.path().join("alias"))
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let store = EventStore::open_memory().unwrap();
     let session = store.create_session(dir.path()).unwrap();
     let tools = ToolExecutor::new_with_state_dir(
