@@ -273,6 +273,11 @@ secret material: a credential is reported only by its symbolic reference
 (`env:NAME`, `file:NAME`).
 The JSON report uses schema version 2 for the added `paths` object.
 
+The unfinished native Windows implementation is tracked in the
+[Windows checkpoint](native/windows/boundary/README.md), including verified
+subprocess checks and work that has not been tested. It is not enabled in
+production; version 0.2.3 remains Linux-first.
+
 ```sh
 latch doctor
 latch doctor --output json                                  # one versioned object for CI

@@ -24,6 +24,15 @@ impl WindowsBackend {
         bail!("Windows execution sandbox is unavailable; command refused")
     }
 
+    pub fn fixed_command(
+        &self,
+        _profile: &SandboxProfile,
+        _program: &str,
+        _args: &[&str],
+    ) -> Result<Command> {
+        bail!("Windows execution sandbox is unavailable; command refused")
+    }
+
     pub fn status(&self) -> String {
         format!("windows/Git Bash: {}", self.bash.display())
     }

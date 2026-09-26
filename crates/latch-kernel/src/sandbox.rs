@@ -406,7 +406,7 @@ fn is_real_directory(path: &Path) -> bool {
 /// Host paths under the user's home that are masked inside the sandbox. These
 /// are the conventional locations for credentials and agent sockets; the
 /// sandbox never exposes them unless a future profile explicitly binds them.
-fn secret_paths(home: &Path) -> Vec<PathBuf> {
+pub(crate) fn secret_paths(home: &Path) -> Vec<PathBuf> {
     const RELATIVE: &[&str] = &[
         ".ssh",
         ".gnupg",

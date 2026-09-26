@@ -34,5 +34,8 @@ tempfile.workspace = true
 [target.'cfg(windows)'.dependencies]
 winsafe = { version = "0.0.29", default-features = false, features = ["kernel"] }
 
+[target.'cfg(windows)'.build-dependencies]
+cc = "1.2"
+
 [lints]
 workspace = true
