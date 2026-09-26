@@ -42,6 +42,23 @@ impl ExecutionBackend {
         }
     }
 
+    /// Run a fixed inspection program through the same capability boundary as
+    /// model shell commands. Quote each argument for Bash so paths and search
+    /// terms cannot turn an internal inspection into another shell command.
+    pub fn fixed_command(
+        &self,
+        profile: &SandboxProfile,
+        program: &str,
+        args: &[&str],
+    ) -> Result<Command> {
+        let script = std::iter::once(program)
+            .chain(args.iter().copied())
+            .map(bash_quote)
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.command(profile, &script)
+    }
+
     pub fn status(&self) -> String {
         match self {
             #[cfg(target_os = "linux")]
@@ -49,5 +66,19 @@ impl ExecutionBackend {
             #[cfg(windows)]
             Self::Windows(backend) => backend.status(),
         }
+    }
+}
+
+fn bash_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bash_quote;
+
+    #[test]
+    fn fixed_arguments_cannot_escape_bash_quotes() {
+        assert_eq!(bash_quote("a'b; touch outside"), "'a'\\''b; touch outside'");
     }
 }

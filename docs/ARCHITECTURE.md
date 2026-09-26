@@ -727,9 +727,9 @@ inspection; writable with `.git` remounted read-only unless `GitMetadataWrite`
 was granted), adds call-scoped external writable roots, provides private tmpfs
 `/tmp` and `/run`, masks home credentials, clears the environment, and isolates
 user/PID/IPC/UTS namespaces plus network (re-shared only when the profile
-grants it). Kernel-internal bookkeeping (`git status`, drift snapshots) also
-runs through the sandbox for model-visible calls; host-side drift bookkeeping
-uses fixed read-only Git commands. Extension hosts start through the same
+grants it). Kernel-internal bookkeeping (`git status`, `git show`, drift
+snapshots) and `search` run fixed, Bash-quoted inspection commands through the
+same backend. Extension hosts start through the same
 sandbox with a read-only workspace and network; their individual tool arguments
 remain a cooperative boundary, documented rather than overclaimed.
 

@@ -190,7 +190,7 @@ impl ToolExecutor {
     /// classification. `Ok(None)` means the workspace is not a Git worktree and
     /// honest drift detection is unavailable.
     pub(super) async fn snapshot_dirty(&self) -> Result<Option<Vec<(PathBuf, Vec<u8>)>>> {
-        let listing = git_porcelain(&self.workspace)?;
+        let listing = git_porcelain(&self.sandbox_runner()?, &self.workspace, &self.state_dir)?;
         let Some(listing) = listing else {
             return Ok(None);
         };
@@ -242,7 +242,8 @@ impl ToolExecutor {
         let Some(before) = before else {
             return mark_unavailable(self);
         };
-        let Ok(listing) = git_porcelain(&self.workspace) else {
+        let Ok(listing) = git_porcelain(&self.sandbox_runner()?, &self.workspace, &self.state_dir)
+        else {
             return mark_unavailable(self);
         };
         let listing = listing.unwrap_or_default();
@@ -291,7 +292,12 @@ impl ToolExecutor {
                     // content was exactly the HEAD version. A path with no
                     // HEAD blob that now exists was created by the command and
                     // is reversible by deletion (before = None).
-                    match git_show_head(&self.workspace, &path) {
+                    match git_show_head(
+                        &self.sandbox_runner()?,
+                        &self.workspace,
+                        &self.state_dir,
+                        &path,
+                    ) {
                         Some(bytes) => Some(bytes),
                         None if current.is_some() => None,
                         None => {
@@ -512,8 +518,12 @@ const DRIFT_MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 /// workspace diff remains available through `git_diff` and `/diff`.
 const DIFF_PREVIEW_LINES: usize = 160;
 
-pub(super) fn git_dirty_hashes(workspace: &Path) -> Result<HashMap<PathBuf, String>> {
-    let Some(paths) = git_porcelain(workspace)? else {
+pub(super) fn git_dirty_hashes(
+    runner: &ExecutionBackend,
+    workspace: &Path,
+    state_dir: &Path,
+) -> Result<HashMap<PathBuf, String>> {
+    let Some(paths) = git_porcelain(runner, workspace, state_dir)? else {
         return Ok(HashMap::new());
     };
     let mut map = HashMap::new();
@@ -527,11 +537,17 @@ pub(super) fn git_dirty_hashes(workspace: &Path) -> Result<HashMap<PathBuf, Stri
 
 /// `git status --porcelain -z --untracked-files=all` parsed into workspace
 /// paths, or `None` when the workspace is not inside a Git worktree.
-pub(super) fn git_porcelain(workspace: &Path) -> Result<Option<Vec<PathBuf>>> {
-    let out = std::process::Command::new("git")
-        .args(["status", "--porcelain", "-z", "--untracked-files=all"])
-        .current_dir(workspace)
-        .output()?;
+pub(super) fn git_porcelain(
+    runner: &ExecutionBackend,
+    workspace: &Path,
+    state_dir: &Path,
+) -> Result<Option<Vec<PathBuf>>> {
+    let out = git_output(
+        runner,
+        workspace,
+        state_dir,
+        &["status", "--porcelain", "-z", "--untracked-files=all"],
+    )?;
     if !out.status.success() {
         return Ok(None);
     }
@@ -552,13 +568,32 @@ pub(super) fn git_porcelain(workspace: &Path) -> Result<Option<Vec<PathBuf>>> {
 /// The exact HEAD blob for a path, used as pre-change content for files that
 /// were clean before a shell command. This reads Git data; it never rewrites
 /// history or resets the worktree.
-pub(super) fn git_show_head(workspace: &Path, path: &Path) -> Option<Vec<u8>> {
+pub(super) fn git_show_head(
+    runner: &ExecutionBackend,
+    workspace: &Path,
+    state_dir: &Path,
+    path: &Path,
+) -> Option<Vec<u8>> {
     let rel = path.strip_prefix(workspace).ok()?;
-    let out = std::process::Command::new("git")
-        .arg("show")
-        .arg(format!("HEAD:{}", rel.to_string_lossy()))
-        .current_dir(workspace)
-        .output()
-        .ok()?;
+    let blob = format!("HEAD:{}", rel.to_string_lossy().replace('\\', "/"));
+    let out = git_output(runner, workspace, state_dir, &["show", &blob]).ok()?;
     out.status.success().then_some(out.stdout)
+}
+
+fn git_output(
+    runner: &ExecutionBackend,
+    workspace: &Path,
+    state_dir: &Path,
+    args: &[&str],
+) -> Result<std::process::Output> {
+    let profile = SandboxProfile::new(
+        workspace.to_path_buf(),
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+        state_dir.to_path_buf(),
+        std::iter::once(crate::sandbox::Capability::WorkspaceRead).collect(),
+    );
+    Ok(runner
+        .fixed_command(&profile, "git", args)?
+        .as_std_mut()
+        .output()?)
 }

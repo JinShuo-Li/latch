@@ -190,29 +190,30 @@ impl ToolExecutor {
             .get("offset")
             .and_then(Value::as_u64)
             .map_or(0, |value| value as usize);
-        let mut command = Command::new("rg");
-        command.args([
-            "-n",
-            "--color=never",
-            "--no-heading",
-            "--max-columns",
-            "400",
-            "--max-columns-preview",
-            "--max-filesize",
-            "8M",
-            "-m",
-            "1000",
-        ]);
+        let mut args = vec![
+            "-n".to_owned(),
+            "--color=never".to_owned(),
+            "--no-heading".to_owned(),
+            "--max-columns".to_owned(),
+            "400".to_owned(),
+            "--max-columns-preview".to_owned(),
+            "--max-filesize".to_owned(),
+            "8M".to_owned(),
+            "-m".to_owned(),
+            "1000".to_owned(),
+        ];
         // A recursive search from a parent of the state directory must not
         // traverse it; exclude the protected tree instead of refusing the
         // search outright.
         if let Some(exclusion) = self.state_dir_exclusion_glob() {
-            command.arg("--glob").arg(exclusion);
+            args.push("--glob".to_owned());
+            args.push(exclusion);
         }
-        let out = command
-            .args(["--", q])
-            .arg(path)
-            .current_dir(&self.workspace)
+        args.extend(["--".to_owned(), q.to_owned(), path.display().to_string()]);
+        let arguments = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let out = self
+            .sandbox_runner()?
+            .fixed_command(&self.sandbox_profile(call), "rg", &arguments)?
             .output()
             .await?;
         if !out.status.success() && out.status.code() != Some(1) {

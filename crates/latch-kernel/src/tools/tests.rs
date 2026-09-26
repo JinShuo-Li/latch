@@ -616,11 +616,24 @@ async fn search_refuses_and_excludes_the_state_directory() {
             CancellationToken::new(),
         )
         .await;
-    assert!(!found.is_error, "{}", found.output);
-    assert!(found.output.contains("visible.txt"), "{}", found.output);
-    assert!(!found.output.contains("secrets.toml"), "{}", found.output);
-    assert!(!found.output.contains("state/"), "{}", found.output);
-    assert!(!found.output.contains("nested"), "{}", found.output);
+    #[cfg(windows)]
+    {
+        assert!(found.is_error);
+        assert!(
+            found
+                .output
+                .contains("Windows execution sandbox is unavailable")
+        );
+        return;
+    }
+    #[cfg(not(windows))]
+    {
+        assert!(!found.is_error, "{}", found.output);
+        assert!(found.output.contains("visible.txt"), "{}", found.output);
+        assert!(!found.output.contains("secrets.toml"), "{}", found.output);
+        assert!(!found.output.contains("state/"), "{}", found.output);
+        assert!(!found.output.contains("nested"), "{}", found.output);
+    }
 }
 
 #[tokio::test]

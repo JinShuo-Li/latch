@@ -29,7 +29,7 @@ use std::process::Stdio;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -141,10 +141,15 @@ impl ToolExecutor {
     ) -> Result<Self> {
         std::fs::create_dir_all(&state_dir)?;
         std::fs::create_dir_all(&artifacts)?;
-        let initial = git_dirty_hashes(&workspace).unwrap_or_default();
         let sandbox = match ExecutionBackend::detect(&workspace) {
             Ok(runner) => SandboxState::Ready(runner),
             Err(error) => SandboxState::Unavailable(format!("{error:#}")),
+        };
+        let initial = match &sandbox {
+            SandboxState::Ready(runner) => {
+                git_dirty_hashes(runner, &workspace, &state_dir).unwrap_or_default()
+            }
+            SandboxState::Unavailable(_) => HashMap::new(),
         };
         let search_runtime = probe_search_runtime();
         if let Some(message) = &search_runtime {
