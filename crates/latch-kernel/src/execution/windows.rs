@@ -437,4 +437,39 @@ mod tests {
         }
         panic!("Windows grandchild {pid} survived runner termination");
     }
+
+    #[tokio::test]
+    #[ignore = "security regression: Users-readable files outside the workspace are currently exposed"]
+    async fn users_readable_private_file_outside_workspace_is_denied() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let private = directory.path().join("private.txt");
+        fs::write(&private, "USERS_READABLE_SECRET").unwrap();
+        let acl = std::process::Command::new("icacls")
+            .arg(&private)
+            .args(["/grant", "*S-1-5-32-545:(R)"])
+            .status()
+            .unwrap();
+        assert!(acl.success());
+        let backend = WindowsBackend::detect(&workspace).unwrap();
+        let read = SandboxProfile::new(
+            workspace,
+            directory.path().to_path_buf(),
+            directory.path().join("state"),
+            CapabilitySet::from_iter([Capability::WorkspaceRead]),
+        );
+        let script = format!(
+            "powershell.exe -NoProfile -Command 'Get-Content -LiteralPath \"{}\"'",
+            private.display()
+        );
+        let output = backend
+            .command(&read, &script)
+            .unwrap()
+            .output()
+            .await
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("USERS_READABLE_SECRET"));
+    }
 }
