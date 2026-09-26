@@ -15,6 +15,7 @@ const PROCESS_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// mid-setup init from surviving as an orphan that holds the output pipes.
 /// Uses the system `kill` utility so no unsafe signal call is needed; if the
 /// utility is unavailable the bounded drain still bounds teardown.
+#[cfg(target_os = "linux")]
 fn kill_direct_children(pid: Option<u32>) {
     let Some(pid) = pid else { return };
     let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
@@ -34,6 +35,12 @@ fn kill_direct_children(pid: Option<u32>) {
         }
     }
 }
+
+/// On Windows the child is the native runner. It owns a kill-on-close Job
+/// Object containing Git Bash and every descendant, so killing the runner in
+/// the common lifecycle path below terminates the whole tree.
+#[cfg(windows)]
+fn kill_direct_children(_pid: Option<u32>) {}
 
 /// Waits for the output readers with a bound, aborting a reader that can never
 /// reach EOF because an orphaned sandbox process still holds the pipe.
