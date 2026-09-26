@@ -10,6 +10,27 @@ use tokio::process::Command;
 mod linux;
 #[cfg(windows)]
 mod windows;
+#[cfg(all(windows, test))]
+mod windows_runtime;
+
+#[cfg(all(windows, test))]
+fn windows_secret_paths(home: &Path) -> Vec<std::path::PathBuf> {
+    let mut paths = crate::sandbox::secret_paths(home);
+    for relative in [
+        ".latch",
+        "AppData/Roaming/Microsoft/Credentials",
+        "AppData/Local/Microsoft/Credentials",
+        "AppData/Local/Microsoft/Vault",
+        "AppData/Roaming/gh",
+        "AppData/Roaming/gcloud",
+    ] {
+        let path = home.join(relative);
+        if path.exists() {
+            paths.push(path);
+        }
+    }
+    paths
+}
 
 #[derive(Debug, Clone)]
 pub enum ExecutionBackend {
@@ -43,20 +64,29 @@ impl ExecutionBackend {
     }
 
     /// Run a fixed inspection program through the same capability boundary as
-    /// model shell commands. Quote each argument for Bash so paths and search
-    /// terms cannot turn an internal inspection into another shell command.
+    /// model shell commands. Linux quotes for Bash; Windows delegates native
+    /// argument handling to its backend. Inspection arguments cannot become
+    /// additional shell commands.
     pub fn fixed_command(
         &self,
         profile: &SandboxProfile,
         program: &str,
         args: &[&str],
     ) -> Result<Command> {
-        let script = std::iter::once(program)
-            .chain(args.iter().copied())
-            .map(bash_quote)
-            .collect::<Vec<_>>()
-            .join(" ");
-        self.command(profile, &script)
+        #[cfg(windows)]
+        {
+            let Self::Windows(backend) = self;
+            backend.fixed_command(profile, program, args)
+        }
+        #[cfg(not(windows))]
+        {
+            let script = std::iter::once(program)
+                .chain(args.iter().copied())
+                .map(bash_quote)
+                .collect::<Vec<_>>()
+                .join(" ");
+            self.command(profile, &format!("exec {script}"))
+        }
     }
 
     pub fn status(&self) -> String {
@@ -69,6 +99,7 @@ impl ExecutionBackend {
     }
 }
 
+#[cfg(any(not(windows), test))]
 fn bash_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

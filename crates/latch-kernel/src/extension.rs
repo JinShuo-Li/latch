@@ -238,9 +238,11 @@ impl ExtensionHost {
     ) -> Result<Self> {
         // Extension hosts always use the same sandbox as command execution.
         // Their tool arguments remain a cooperative boundary.
-        let mut process = sandbox
-            .0
-            .command(sandbox.1, &sandbox_command(command, args))?;
+        let mut process = sandbox.0.fixed_command(
+            sandbox.1,
+            command,
+            &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        )?;
         let mut child = process
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -658,18 +660,6 @@ fn string<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
     v.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing {key}"))
-}
-
-fn sandbox_command(command: &str, args: &[String]) -> String {
-    fn quote(value: &str) -> String {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
-    let mut line = format!("exec {}", quote(command));
-    for arg in args {
-        line.push(' ');
-        line.push_str(&quote(arg));
-    }
-    line
 }
 
 /// Parses a guard hook response. A malformed response must not silently

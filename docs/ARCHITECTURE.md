@@ -716,7 +716,15 @@ fabricating a bash judgment.
 Linux backend delegates to the existing `SandboxRunner`. The Windows backend
 currently probes Git for Windows Bash but refuses command execution because a
 Windows capability sandbox has not yet been implemented. Bash discovery alone
-does not establish a security boundary.
+does not establish a security boundary. An experimental AppContainer plus
+restricted-token native runner and a test-only Rust adapter now live under
+`native/windows/boundary/` and `execution/windows_runtime.rs`. They are not
+selected by production detection. The [checkpoint and untested work](../native/windows/boundary/README.md)
+record the exact native evidence and remaining security/integration gates.
+
+Fixed Git inspections and extension hosts share `fixed_command`; Linux quotes
+each argument and explicitly execs the program inside Bubblewrap. Windows fixed
+commands continue to fail closed until the candidate passes its complete gate.
 
 On Linux, the startup probe verifies
 `bwrap`, unprivileged user namespaces, bind mounts, and the required namespace

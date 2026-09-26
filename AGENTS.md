@@ -144,6 +144,13 @@ and extension hosts. Linux delegates to the mandatory Bubblewrap runner in
 implemented and verified. Production Windows fallback must not provision local
 accounts; temporary accounts are permitted only in explicitly authorized tests
 and must be removed with their network rules afterward.
+The experimental native candidate is `native/windows/boundary/`, built by
+`crates/latch-kernel/build.rs` on Windows (x64 MSVC C++ Build Tools + Windows
+SDK required). Its Rust adapter `execution/windows_runtime.rs` is test-only;
+production detection remains fail-closed. Focused check:
+`cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked`.
+See `native/windows/boundary/README.md` for native fixture commands, verified
+results, known limitations and the outstanding security/release gates.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,group,configuration_center}.rs` and existing siblings.
 
