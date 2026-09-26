@@ -707,9 +707,16 @@ the one-sentence reason returned to the coding model; unparseable output
 rejects conservatively. Non-command asks use human resolution rather than
 fabricating a bash judgment.
 
-### Mandatory Bubblewrap sandbox
+### Execution backend and mandatory Linux sandbox
 
-`SandboxRunner` is the only way any command starts. The startup probe verifies
+`ToolExecutor` and extension hosts now request commands through
+`ExecutionBackend`. `SandboxProfile` remains the shared capability policy; the
+Linux backend delegates to the existing `SandboxRunner`. The Windows backend
+currently probes Git for Windows Bash but refuses command execution because a
+Windows capability sandbox has not yet been implemented. Bash discovery alone
+does not establish a security boundary.
+
+On Linux, the startup probe verifies
 `bwrap`, unprivileged user namespaces, bind mounts, and the required namespace
 set; failure is stored as an actionable refusal and shell/exec/validation/git
 inspection all fail rather than running unsandboxed. A `SandboxProfile` binds

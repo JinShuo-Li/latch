@@ -1,4 +1,5 @@
-use crate::sandbox::{SandboxProfile, SandboxRunner};
+use crate::execution::ExecutionBackend;
+use crate::sandbox::SandboxProfile;
 use anyhow::{Context, Result, anyhow, bail};
 use latch_protocol::{EXTENSION_PROTOCOL_VERSION, RpcMessage};
 use serde_json::{Value, json};
@@ -231,7 +232,7 @@ impl ExtensionHost {
         command: &str,
         args: &[String],
         workspace: &str,
-        sandbox: (&SandboxRunner, &SandboxProfile),
+        sandbox: (&ExecutionBackend, &SandboxProfile),
         lifecycle: &ExtensionLifecycle,
         cancel: &CancellationToken,
     ) -> Result<Self> {
@@ -721,7 +722,7 @@ impl ExtensionRegistry {
         command: &str,
         args: &[String],
         workspace: &str,
-        sandbox: (&SandboxRunner, &SandboxProfile),
+        sandbox: (&ExecutionBackend, &SandboxProfile),
         cancel: &CancellationToken,
     ) -> Result<()> {
         let host = ExtensionHost::start(
@@ -871,7 +872,7 @@ mod tests {
         use crate::sandbox::{Capability, CapabilitySet};
 
         let dir = tempfile::tempdir().unwrap();
-        let Ok(runner) = SandboxRunner::detect(dir.path()) else {
+        let Ok(runner) = ExecutionBackend::detect(dir.path()) else {
             return;
         };
         let state_dir = dir.path().join("state");
@@ -935,7 +936,7 @@ mod tests {
         use crate::sandbox::{Capability, CapabilitySet};
 
         let dir = tempfile::tempdir().unwrap();
-        let Ok(runner) = SandboxRunner::detect(dir.path()) else {
+        let Ok(runner) = ExecutionBackend::detect(dir.path()) else {
             return;
         };
         let workspace = dir.path().join("workspace");
@@ -989,7 +990,7 @@ mod tests {
         /// Unique path passed to the fake; its command line is the needle the
         /// watcher uses to find the host PIDs of the whole process tree.
         marker: PathBuf,
-        runner: SandboxRunner,
+        runner: ExecutionBackend,
         profile: SandboxProfile,
     }
 
@@ -1083,7 +1084,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().to_path_buf();
-        let runner = SandboxRunner::detect(&workspace).ok()?;
+        let runner = ExecutionBackend::detect(&workspace).ok()?;
         let state_dir = workspace.join("state");
         std::fs::create_dir_all(&state_dir).unwrap();
         // The fake needs a writable workspace only to stay a realistic

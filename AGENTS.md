@@ -138,6 +138,10 @@ default engine implementation and intentionally one module (rollover, episodes,
 recall share one invariant). `media.rs` owns image validation/ingestion and the
 artifact media resolver; provider adapters serialize durable `MediaRef`s to
 wire images.
+`execution/` owns the platform backend boundary used by command-starting tools
+and extension hosts. Linux delegates to the mandatory Bubblewrap runner in
+`sandbox.rs`; Windows must refuse execution until its capability boundary is
+implemented and verified.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,group,configuration_center}.rs` and existing siblings.
 

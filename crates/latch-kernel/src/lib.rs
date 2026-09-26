@@ -7,6 +7,7 @@ pub mod config;
 pub mod context;
 pub mod continuity;
 pub mod credentials;
+pub mod execution;
 pub mod extension;
 pub mod linediff;
 pub mod media;

@@ -11,8 +11,9 @@ use process::ManagedProcess;
 pub(crate) use process::is_read_only_shell;
 
 use crate::config::PermissionConfig;
+use crate::execution::ExecutionBackend;
 use crate::safety;
-use crate::sandbox::{CapabilitySet, SandboxProfile, SandboxRunner};
+use crate::sandbox::{CapabilitySet, SandboxProfile};
 use crate::store::EventStore;
 use crate::tokens::TokenEstimator;
 use anyhow::{Context, Result, anyhow, bail};
@@ -38,7 +39,7 @@ use uuid::Uuid;
 /// silently running unsandboxed.
 #[derive(Clone)]
 enum SandboxState {
-    Ready(SandboxRunner),
+    Ready(ExecutionBackend),
     Unavailable(String),
 }
 
@@ -141,7 +142,7 @@ impl ToolExecutor {
         std::fs::create_dir_all(&state_dir)?;
         std::fs::create_dir_all(&artifacts)?;
         let initial = git_dirty_hashes(&workspace).unwrap_or_default();
-        let sandbox = match SandboxRunner::detect(&workspace) {
+        let sandbox = match ExecutionBackend::detect(&workspace) {
             Ok(runner) => SandboxState::Ready(runner),
             Err(error) => SandboxState::Unavailable(format!("{error:#}")),
         };
@@ -228,12 +229,12 @@ impl ToolExecutor {
             capabilities,
         )
     }
-    pub fn sandbox_runner_for_extension(&self) -> Result<SandboxRunner> {
+    pub fn sandbox_runner_for_extension(&self) -> Result<ExecutionBackend> {
         self.sandbox_runner()
     }
     /// The sandbox is required, not best-effort: a failed probe refuses every
     /// command execution with the probe's actionable message.
-    fn sandbox_runner(&self) -> Result<SandboxRunner> {
+    fn sandbox_runner(&self) -> Result<ExecutionBackend> {
         let state = self
             .sandbox
             .read()
@@ -245,8 +246,7 @@ impl ToolExecutor {
     }
     /// Human-readable sandbox status for startup banners and diagnostics.
     pub fn sandbox_status(&self) -> Result<String> {
-        self.sandbox_runner()
-            .map(|runner| format!("{} ready", runner.bwrap().display()))
+        self.sandbox_runner().map(|runner| runner.status())
     }
     #[cfg(test)]
     pub(crate) fn force_sandbox_unavailable(&self, message: &str) {
