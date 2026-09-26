@@ -265,6 +265,15 @@ fn classify_command(tool: &str, args: &Value, context: Context<'_>) -> Classific
         capabilities.insert(Capability::PrivilegedOperation);
         return Classification::deny(capabilities, operation, reason);
     }
+    if contains_unmodelled_windows_shell(&command) {
+        let mut capabilities = CapabilitySet::new();
+        capabilities.insert(Capability::UnknownCapability);
+        return Classification::deny(
+            capabilities,
+            operation,
+            "Windows shell or administration executable cannot be granted by the current execution policy",
+        );
+    }
 
     let mut capabilities = CapabilitySet::new();
     capabilities.insert(Capability::WorkspaceRead);
@@ -652,6 +661,33 @@ fn is_metadata_file(path: &Path) -> bool {
 
 fn system_destructive_target(path: &Path) -> bool {
     let text = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        let lower = text.replace('/', "\\").to_ascii_lowercase();
+        let components = path.components().collect::<Vec<_>>();
+        if components.len() <= 2 && path.is_absolute() && path.parent().is_none() {
+            return true;
+        }
+        if lower.starts_with(r"\\.\") || lower.starts_with(r"\\?\") {
+            return true;
+        }
+        if let Ok(system_root) = std::env::var("SystemRoot") {
+            let root = system_root.replace('/', "\\").to_ascii_lowercase();
+            if lower == root || lower.starts_with(&(root + "\\")) {
+                return true;
+            }
+        }
+        if [
+            r"c:\windows",
+            r"c:\program files",
+            r"c:\program files (x86)",
+        ]
+        .iter()
+        .any(|root| lower == *root || lower.starts_with(&format!("{root}\\")))
+        {
+            return true;
+        }
+    }
     text.starts_with("/proc")
         || text.starts_with("/sys")
         || text.starts_with("/dev")
@@ -739,8 +775,41 @@ pub fn hard_deny_command(command: &str) -> Option<String> {
             first,
             "mount" | "umount" | "insmod" | "modprobe" | "capsh" | "setcap" | "pivot_root"
         )
-        || lower.contains("unshare");
+        || lower.contains("unshare")
+        || command_tokens(command).iter().any(|token| {
+            matches!(
+                windows_executable_name(token),
+                "diskpart.exe" | "format.com" | "bcdedit.exe" | "shutdown.exe"
+            )
+        });
     denied.then(|| "destructive or privileged shell command denied by policy".to_owned())
+}
+
+/// A Bash command can launch native Windows executables. Until the execution
+/// backend can model their effects, approval must not turn these surfaces into
+/// a general-purpose escape from the capability policy.
+fn contains_unmodelled_windows_shell(command: &str) -> bool {
+    command_tokens(command).iter().any(|token| {
+        matches!(
+            windows_executable_name(token),
+            "powershell.exe"
+                | "pwsh.exe"
+                | "cmd.exe"
+                | "reg.exe"
+                | "regedit.exe"
+                | "sc.exe"
+                | "net.exe"
+                | "netsh.exe"
+                | "schtasks.exe"
+                | "wmic.exe"
+                | "rundll32.exe"
+                | "mshta.exe"
+        )
+    })
+}
+
+fn windows_executable_name(token: &str) -> &str {
+    token.rsplit(['/', '\\']).next().unwrap_or(token)
 }
 
 fn resolve_path(workspace: &Path, raw: &str) -> anyhow::Result<PathBuf> {
@@ -799,6 +868,57 @@ mod tests {
             workspace,
             outside: OutsidePolicy::Ask,
             workspace_write: true,
+        }
+    }
+
+    #[test]
+    fn windows_native_shells_and_admin_tools_cannot_bypass_capability_review() {
+        let workspace = tempfile::tempdir().unwrap();
+        for command in [
+            "powershell.exe -Command Get-ChildItem",
+            "C:\\Windows\\System32\\cmd.exe /c dir",
+            "pwsh.exe -NoProfile -Command whoami",
+            "reg.exe add HKCU\\Software\\LatchTest /v x /d y",
+            "netsh.exe interface show interface",
+            "schtasks.exe /query",
+            "rundll32.exe something.dll,Entry",
+            "mshta.exe test.hta",
+        ] {
+            let classified = classify(
+                "shell",
+                &json!({"command": command}),
+                context(Mode::Work, Safety::Autonomous, workspace.path()),
+            );
+            assert!(
+                matches!(classified.decision, Decision::Deny(_)),
+                "{command}"
+            );
+            assert!(
+                classified
+                    .capabilities
+                    .contains(Capability::UnknownCapability)
+            );
+        }
+        for command in [
+            "diskpart.exe",
+            "format.com C:",
+            "bcdedit.exe /delete x",
+            "shutdown.exe /s",
+        ] {
+            assert!(hard_deny_command(command).is_some(), "{command}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_system_paths_are_destructive_targets() {
+        for path in [
+            r"C:\Windows\System32\drivers\etc\hosts",
+            r"c:\PROGRAM FILES\app\file",
+            r"\\.\PhysicalDrive0",
+            r"C:\",
+        ] {
+            assert!(system_destructive_target(Path::new(path)), "{path}");
         }
     }
 
