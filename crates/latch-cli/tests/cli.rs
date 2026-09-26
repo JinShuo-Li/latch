@@ -190,7 +190,7 @@ fn fixture_with_mock(mock: MockProvider, safety: &str, extra_config: &str) -> Fi
     let state_dir = root.join("state");
     let config_path = root.join("config.toml");
     let text = format!(
-        "state_dir = \"{state}\"\n\
+        "state_dir = {state}\n\
          default_mode = \"WORK\"\n\
          \n\
          [providers.mock]\n\
@@ -209,7 +209,7 @@ fn fixture_with_mock(mock: MockProvider, safety: &str, extra_config: &str) -> Fi
          [safety]\n\
          level = \"{safety}\"\n\
          {extra_config}",
-        state = state_dir.display(),
+        state = toml::Value::String(state_dir.to_string_lossy().into_owned()),
         base = mock.base_url,
     );
     std::fs::write(&config_path, text).expect("write config");
@@ -1219,6 +1219,7 @@ fn legacy_flags_cannot_mix_with_machine_subcommands() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn sigterm_ends_a_run_with_an_orderly_cancelled_result() {
     // A 30s provider delay keeps the run in flight until the signal lands.

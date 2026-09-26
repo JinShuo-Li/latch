@@ -103,9 +103,12 @@ async fn run_legacy(args: Args) -> Result<ExitCode> {
         return Ok(cli::machine::execute(cli::machine::legacy_request(&args, prompt)).await);
     }
     let config = Config::load(args.config.as_deref())?;
-    let mut workspace = std::env::current_dir()?;
+    let mut workspace = std::env::current_dir()?.canonicalize()?;
     let overrides = profile_overrides(&args);
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    if !interactive {
+        anyhow::bail!("interactive mode requires a terminal; use `latch run` for piped input");
+    }
     let mut selected = match select_session(
         &workspace,
         &config,

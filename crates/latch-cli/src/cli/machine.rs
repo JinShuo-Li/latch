@@ -192,6 +192,7 @@ async fn run(
     let requested_workspace = match &request.workspace {
         Some(path) => resolve_workspace(path).map_err(MachineError::from_anyhow)?,
         None => std::env::current_dir()
+            .and_then(|path| path.canonicalize())
             .map_err(|error| MachineError::configuration(format!("current directory: {error}")))?,
     };
     result.workspace = requested_workspace.display().to_string();
