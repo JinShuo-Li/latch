@@ -664,12 +664,25 @@ fn system_destructive_target(path: &Path) -> bool {
     #[cfg(windows)]
     {
         let lower = text.replace('/', "\\").to_ascii_lowercase();
-        if lower.starts_with(r"\\.\") || lower.starts_with(r"\\?\unc\") {
+        if lower.starts_with(r"\\.\") {
             return true;
         }
         // Canonical Windows paths normally use the extended-length prefix.
-        // It is not itself a device escape.
+        // Permit only its drive form; volume, UNC and GLOBALROOT forms do not
+        // identify a root that the current policy can safely grant.
         let normal = lower.strip_prefix(r"\\?\").unwrap_or(&lower);
+        if lower.starts_with(r"\\?\")
+            && !(normal
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphabetic)
+                && normal
+                    .as_bytes()
+                    .get(1..3)
+                    .is_some_and(|bytes| bytes == b":\\"))
+        {
+            return true;
+        }
         let normal_path = Path::new(normal);
         if normal_path.is_absolute() && normal_path.parent().is_none() {
             return true;
@@ -680,15 +693,13 @@ fn system_destructive_target(path: &Path) -> bool {
                 return true;
             }
         }
-        if [
-            r"c:\windows",
-            r"c:\program files",
-            r"c:\program files (x86)",
-        ]
-        .iter()
-        .any(|root| normal == *root || normal.starts_with(&format!("{root}\\")))
-        {
-            return true;
+        for key in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Ok(value) = std::env::var(key) {
+                let root = value.replace('/', "\\").to_ascii_lowercase();
+                if normal == root || normal.starts_with(&(root + "\\")) {
+                    return true;
+                }
+            }
         }
     }
     text.starts_with("/proc")
@@ -919,6 +930,7 @@ mod tests {
             r"C:\Windows\System32\drivers\etc\hosts",
             r"c:\PROGRAM FILES\app\file",
             r"\\.\PhysicalDrive0",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\Windows",
             r"C:\",
         ] {
             assert!(system_destructive_target(Path::new(path)), "{path}");
