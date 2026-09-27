@@ -644,7 +644,9 @@ diff --git a/文档.txt b/文档.txt
             .join("\n");
         assert_eq!(
             plain.trim_end(),
-            include_str!("../tests/snapshots/v31_diff.txt").trim_end()
+            include_str!("../tests/snapshots/v31_diff.txt")
+                .replace("\r\n", "\n")
+                .trim_end()
         );
     }
 

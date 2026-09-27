@@ -1402,7 +1402,9 @@ mod tests {
         ];
         assert_eq!(
             super::super::render_cells_plain(&cells, false).trim_end(),
-            include_str!("../tests/snapshots/v3_semantic.txt").trim_end()
+            include_str!("../tests/snapshots/v3_semantic.txt")
+                .replace("\r\n", "\n")
+                .trim_end()
         );
     }
 
@@ -1523,7 +1525,9 @@ mod tests {
         ];
         assert_eq!(
             super::super::render_cells_plain(&cells, false).trim_end(),
-            include_str!("../tests/snapshots/v3_narrow.txt").trim_end()
+            include_str!("../tests/snapshots/v3_narrow.txt")
+                .replace("\r\n", "\n")
+                .trim_end()
         );
     }
 

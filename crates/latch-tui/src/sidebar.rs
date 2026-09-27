@@ -2596,7 +2596,9 @@ mod tests {
         let model = SidebarModel::from_events(priced, &events);
         assert_eq!(
             render(&model, 42, 40).trim_end(),
-            include_str!("../tests/snapshots/v31_sidebar.txt").trim_end()
+            include_str!("../tests/snapshots/v31_sidebar.txt")
+                .replace("\r\n", "\n")
+                .trim_end()
         );
     }
 
