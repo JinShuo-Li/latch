@@ -27,7 +27,7 @@ std::filesystem::path local_appdata() {
   return output;
 }
 std::wstring user_acl() {
-  return L"D:P(A;;FA;;;SY)(A;;FA;;;" + current_user() + L")";
+  return L"O:" + current_user() + L"D:P(A;;FA;;;SY)(A;;FA;;;" + current_user() + L")";
 }
 uint32_t checksum(const std::vector<BYTE>& bytes) {
   uint32_t crc = 0xffffffffu;
