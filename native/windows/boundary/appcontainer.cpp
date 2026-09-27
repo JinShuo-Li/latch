@@ -18,7 +18,7 @@ AppContainer::AppContainer(Recovery& recovery) {
 AppContainer::~AppContainer() {
   if (sid) FreeSid(sid);
 }
-void validate_profile_mapping(const std::wstring& profile,
+bool validate_profile_mapping(const std::wstring& profile,
                               const std::wstring& sid, bool must_be_absent) {
   const auto path =
       LR"(Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings\)" +
@@ -26,7 +26,7 @@ void validate_profile_mapping(const std::wstring& profile,
   HKEY key = nullptr;
   const LSTATUS code =
       RegOpenKeyExW(HKEY_CURRENT_USER, path.c_str(), 0, KEY_QUERY_VALUE, &key);
-  if (code == ERROR_FILE_NOT_FOUND) return;
+  if (code == ERROR_FILE_NOT_FOUND) return false;
   if (code) fail(L"inspect AppContainer mapping", code);
   std::vector<wchar_t> moniker(32768);
   DWORD bytes = static_cast<DWORD>(moniker.size() * sizeof(wchar_t));
@@ -36,6 +36,7 @@ void validate_profile_mapping(const std::wstring& profile,
   require(!must_be_absent && query == ERROR_SUCCESS &&
               _wcsicmp(profile.c_str(), moniker.data()) == 0,
           L"AppContainer registration changed; refusing profile mutation");
+  return true;
 }
 void grant_appcontainer_namespace(PSID sid, PSID write_sid) {
   wchar_t object_path[1024]{};

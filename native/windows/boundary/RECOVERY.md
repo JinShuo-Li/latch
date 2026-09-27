@@ -1,7 +1,7 @@
 # Experimental Windows recovery protocol
 
 Scope: native candidate only, starting from `39111c8`. Production Windows
-execution remains disabled; this is not a release or a complete port.
+execution remains disabled pending the wider security and integration gate.
 
 ## Protocol and ownership
 
@@ -41,9 +41,12 @@ ACEs, retaining all unrelated entries, and journals those removals too.
 A missing `.git` is created privately as a delete-on-close reservation. Its
 file identity and destination parent identity are durable before a handle
 rename publishes it. Cross-volume publication fails closed. AppContainer
-creation intent records original absence, the nonce name, derived SID,
-package path and parent identity; after the API returns, the actual package
-identity is sealed before grants or child launch. See the remaining gap below.
+creation intent records original absence, the unique nonce name, derived SID,
+package path and parent identity. Both the mapping and directory are rechecked
+for absence immediately before publishing the intent. The profile identity is
+the name and derived SID with its matching registry moniker, not the NTFS ID
+of a directory that CreateAppContainerProfile may replace. The directory ID
+is additionally sealed after the API returns.
 
 Rollback validates all recorded host objects first, restores original ACLs,
 removes new-object grants and reservations, then deletes the verified profile.
@@ -63,8 +66,10 @@ ACL edit or replacement is a conflict: no approximate ACE subtraction is
 used to overwrite an existing object's ACL. Diagnostics name the path and
 retained journal. The caller must reconcile the host change before retrying.
 
-AppContainer SID derivation, package path, registry moniker, directory identity
-and absence of reparses are verified before profile cleanup. Resource handles
+AppContainer SID derivation, package path, registry moniker and absence of
+reparses are verified before profile cleanup. A sealed directory ID is also
+verified when available. An unsealed directory without a matching mapping
+is ambiguous and retained with the journal, not deleted. Resource handles
 are scoped and noncopyable. This is not a claim of atomic compare-and-swap
 against a fully privileged host process concurrently changing ACLs.
 
@@ -83,28 +88,26 @@ forcibly kills the actual cleanup-owner PID, rather than throwing an exception
 that could unwind destructors. All credentials are synthetic. Negative cases
 retain their journal and fixture for inspection.
 
-Recovery assertions cover: after the header; before profile creation; first
-ACL; all grants; sealed AppContainer creation; suspended child launch; four
+Recovery assertions cover: after the header; before profile creation; the
+unsealed interval after the API returns; first ACL; all grants; sealed
+AppContainer creation; suspended child launch; four
 live generations; first normal rollback; rollback seal; profile deletion;
 reboot-equivalent normal startup; torn intent. Each successful recovery checks
 exact original workspace/runtime/sensitive ACLs, no reservation, no package or
 registry profile, no pending journal, and a second safe recovery. Corrupted
 records, unrelated ACL edits and replacement objects must fail closed without
-overwriting host state. An unsealed profile creation is an explicit refusal
-test, not a successful automatic recovery result.
+overwriting host state. A matching unsealed mapping recovers automatically;
+an unregistered directory or a mismatched mapping retains the journal.
 
-## Remaining recovery blockers
+## Remaining recovery risks
 
-1. **AppContainer creation has an unsealed interval.** Windows'
-   CreateAppContainerProfile replaces a precreated package directory, including
-   a populated directory held open without delete sharing (observed moved to
-   NTFS `$Extend/$Deleted`). Pre-recording a staged file ID therefore does not
-   describe the actual resource. A profileless token probe failed process
-   creation. If the owner dies inside the API or before the returned package
-   ID is durably recorded, startup retains the creation intent and fails
-   closed with operator-reconciliation diagnostics. It does not delete an
-   unverified directory. This interval is tested and **prevents claiming P0
-   fully complete** or enabling production execution.
+1. The unsealed API interval now recovers by the matching unique profile
+   name/derived SID registration and moniker, after durable absence checks.
+   CreateAppContainerProfile can replace a precreated directory, so its ID
+   cannot serve as advance authority. A directory without a registration
+   remains ambiguous and is retained; a wrong moniker is also refused. The
+   tests kill the owner immediately before and after the API, not at an
+   arbitrary instruction inside the Windows API itself.
 2. Physical reboot/power-loss has not been performed. The automated test
    removes every relevant process and handle; durability assumes NTFS and
    storage honoring flush/write-through requests.
@@ -141,9 +144,10 @@ provisioning is performed. Linux Bubblewrap policy is unchanged.
 - CMake x64 MSVC runner/DLL/fixture: `/W4 /WX` build passed after refactor.
 - `cargo fmt --all -- --check`: passed.
 - Kernel Clippy, all targets/all features, locked, `-D warnings`: passed.
-- `recovery.ps1`: 16 focused cases passed their expected outcomes: 12 automatic
-  rollback/idempotence cases and four deliberate fail-closed cases (unsealed
-  API creation, corrupt record, host ACL conflict, replaced object).
+- `recovery.ps1`: 18 focused cases passed on September 27, 2026: automatic
+  rollback/idempotence including owner death before and immediately after the
+  profile API; mismatched mapping and unregistered-directory conflicts retain
+  the journal, as do corrupt records, host ACL conflicts and replacements.
 - `test.ps1`: all 18 baseline assertions and four-generation teardown passed.
 - `adversarial.ps1`: all assertions passed, including outside hardlink refusal,
   junction/NULL-DACL writes, protected credentials and Git reservation.
@@ -189,9 +193,11 @@ cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundar
 & <reported latch_kernel test executable> native_shell_and_fixed_git_use_embedded_boundary --nocapture
 ```
 
-These gates were run on September 27, 2026. The AppContainer unsealed-creation
-case remains a tested refusal and an unresolved P0 requirement. Passing the
-other gates does not authorize production integration.
+The mapping-based recovery revision passed the `/W4 /WX` native build and
+`recovery.ps1`, `test.ps1`, `adversarial.ps1`, and `lifecycle.ps1` on September
+27, 2026 (fixtures `target/recovery-mapping-04` and `target/mapping-*`).
+This closes the tested unsealed-creation refusal, but does not itself certify
+the wider production boundary.
 
 No physical reboot/power-cut, full native Windows workspace gate, Windows CI,
 production integration, doctor/version changes or NTFS agent dogfood is claimed.

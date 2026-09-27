@@ -12,6 +12,8 @@ struct AppContainer {
 };
 
 void grant_appcontainer_namespace(PSID sid, PSID write_sid);
-void validate_profile_mapping(const std::wstring& profile,
+// Returns false only when the SID registration is absent. A registration with
+// a different moniker is a conflict, never authority to delete a profile.
+bool validate_profile_mapping(const std::wstring& profile,
                               const std::wstring& sid, bool must_be_absent);
 }  // namespace latch

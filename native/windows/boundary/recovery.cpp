@@ -181,8 +181,13 @@ Handle Recovery::reserve_git(const std::filesystem::path& path) {
 void Recovery::prepare_profile() {
   const auto target = local_appdata() / L"Packages" / profile_;
   PinnedObject parent(target.parent_path());
-  // AppContainer creation replaces preexisting package directories. Its
-  // original absence and parent identity must be durable before the API.
+  // Recheck both namespaces immediately before the durable creation intent.
+  // The unique name and derived SID identify the profile even if the API
+  // replaces its package directory before returning.
+  validate_profile_mapping(profile_, package_sid_, true);
+  require(GetFileAttributesW(target.c_str()) == INVALID_FILE_ATTRIBUTES &&
+              GetLastError() == ERROR_FILE_NOT_FOUND,
+          L"AppContainer package appeared before creation intent");
   record({L"package-intent", target.wstring(), parent.state().identity});
   pause(L"profile-intent");
 }
