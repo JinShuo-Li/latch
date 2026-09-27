@@ -267,6 +267,12 @@ BOOL init_failed(const char* stage) {
 
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (DetourIsHelperProcess() || reason != DLL_PROCESS_ATTACH) return TRUE;
+#ifdef LATCH_RECOVERY_TESTING
+  const char entered[] = "Latch compatibility entered\r\n";
+  DWORD entered_bytes = 0;
+  WriteFile(GetStdHandle(STD_ERROR_HANDLE), entered, sizeof(entered) - 1,
+            &entered_bytes, nullptr);
+#endif
 
   const DWORD length = GetModuleFileNameA(module, hook_path, MAX_PATH);
   if (!length || length >= MAX_PATH) return init_failed("module path");
