@@ -11,8 +11,10 @@ use latch_kernel::{
     Agent, AgentRuntime, ArtifactMediaStore, Config, ContinuityEngine, CredentialStore, EventStore,
     ModelDescriptor, ModelProvider, PolicyEngine, ProviderRegistry, ToolExecutor,
     config::ProviderKind,
+    execution::ExecutionBackend,
     paths::ResolvedPaths,
     provider::{MediaStore, StreamSink},
+    sandbox::{CapabilitySet, SandboxProfile},
     session,
 };
 use latch_protocol::{EventPayload, InferenceProfile, MediaRef, Mode, ProviderId, ReasoningEffort};
@@ -562,7 +564,7 @@ pub async fn build_agent(
         session
     } else {
         let session = runtime(store.create_session(workspace))?;
-        let (head, dirty_paths) = observe_git(workspace);
+        let (head, dirty_paths) = observe_git(workspace, &config.state_dir).await;
         runtime(store.append(
             session,
             EventPayload::GitStateObserved { head, dirty_paths },
@@ -808,19 +810,37 @@ pub fn resolve_workspace(path: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
-fn observe_git(workspace: &Path) -> (Option<String>, Vec<String>) {
-    let head = std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(workspace)
+pub async fn sandboxed_git_output(
+    workspace: &Path,
+    state_dir: &Path,
+    args: &[&str],
+) -> Result<std::process::Output> {
+    let backend = ExecutionBackend::detect(workspace)?;
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.to_path_buf());
+    let profile = SandboxProfile::new(
+        workspace.to_path_buf(),
+        home,
+        state_dir.to_path_buf(),
+        CapabilitySet::new(),
+    );
+    Ok(backend
+        .fixed_command(&profile, "git", args)?
         .output()
+        .await?)
+}
+
+async fn observe_git(workspace: &Path, state_dir: &Path) -> (Option<String>, Vec<String>) {
+    let head = sandboxed_git_output(workspace, state_dir, &["rev-parse", "HEAD"])
+        .await
         .ok()
         .filter(|output| output.status.success())
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|value| value.trim().to_owned());
-    let dirty_paths = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(workspace)
-        .output()
+    let dirty_paths = sandboxed_git_output(workspace, state_dir, &["status", "--porcelain"])
+        .await
         .ok()
         .filter(|output| output.status.success())
         .map(|output| {
