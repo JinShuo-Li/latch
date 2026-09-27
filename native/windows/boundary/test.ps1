@@ -35,6 +35,11 @@ function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra =
       try {
         & $runner $workspace $fixture "read-allow `"$path`"" $mode @base @extra
         Write-Output "Restricted diagnostic without compatibility injection exited $LASTEXITCODE"
+        & $runner $workspace $fixture "read-allow `"$path`"" $mode @base --network yes
+        Write-Output "Restricted diagnostic with network capabilities and without injection exited $LASTEXITCODE"
+        $cmdExe = Join-Path $env:SystemRoot 'System32/cmd.exe'
+        & $runner $workspace $cmdExe '/d /c type read.txt' $mode @base
+        Write-Output "Restricted cmd diagnostic without injection exited $LASTEXITCODE"
       } finally {
         Remove-Item Env:LATCH_DIAG_SKIP_INJECTION
       }
