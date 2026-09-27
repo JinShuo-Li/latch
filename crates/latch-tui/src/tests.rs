@@ -1953,7 +1953,7 @@ fn assert_snapshot(name: &str, actual: &str) {
         std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing snapshot {name}"));
     assert_eq!(
         actual.trim_end(),
-        expected.trim_end(),
+        expected.replace("\r\n", "\n").trim_end(),
         "snapshot {name} changed"
     );
 }
