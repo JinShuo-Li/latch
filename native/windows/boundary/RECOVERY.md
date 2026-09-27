@@ -155,11 +155,43 @@ provisioning is performed. Linux Bubblewrap policy is unchanged.
   from a concurrent integration fixture using a different test journal root.
   It is **not** counted as a successful complete run. The first Rust fixture
   was cancelled during oversized toolchain journaling, also not a pass.
-- Those two fixture journals are retained with identity-checked operator repair
-  evidence under `target/recovery-overlap-reconciliation`; focused retries
-  must run sequentially using executable/library roots or isolated homes.
-- Fresh focused Cargo/embedded-runner retry and Linux CI results are recorded
-  in the follow-up evidence commit after they finish.
+- Identity-checked operator reconciliation of that fixture overlap completed:
+  74,969 ACLs restored, one already-deleted disposable fixture object recorded,
+  and both profiles removed. Original journals are archived, with evidence
+  under `target/recovery-overlap-reconciliation`. The repair is a disposable
+  operator tool, not product recovery behavior.
+- Fresh sequential `cargo.ps1` passed compile/link, one unit test, one actual
+  rustdoc test, and cleanup. Evidence: `target/recovery-final-cargo`. Its
+  read roots include toolchain `bin` and `lib`, not the HTML documentation.
+- The Rust embedded-runner test compiled with `cargo test -p latch-kernel
+  --lib native_shell_and_fixed_git_use_embedded_boundary --locked --no-run`.
+  The resulting real Rust test executable then passed that test with isolated
+  disposable `RUSTUP_HOME`/`CARGO_HOME`, and `GOPATH`/`JAVA_HOME`/`VIRTUAL_ENV`
+  unset. Result: one passed, zero failed, 375 filtered out, 0.91 seconds; no
+  pending default journal remained. Evidence: `target/recovery-embedded-final`.
+  This tests native shell reads, denied writes and fixed Git execution through
+  the embedded runner; it is not the full Windows Rust workspace suite.
+- Linux GitHub Actions CI passed for implementation checkpoint
+  `f8421c67ce517eba4ffa0c56f71997b983096612`: run `36298360007`,
+  <https://github.com/JinShuo-Li/latch/actions/runs/36298360007>. The unchanged
+  Ubuntu reliability job runs the mandatory Bubblewrap security probe plus
+  fmt, workspace Clippy, invariants, full workspace tests and release build.
+
+Sequential retry commands (native fixture builds need the MSVC x64 developer
+environment; use a new disposable directory for each run):
+
+```powershell
+./native/windows/boundary/cargo.ps1 -Binaries <absolute build/bin> -FixtureRoot <new disposable NTFS directory> -Toolchain <absolute rustup toolchain>
+cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked --no-run
+# Run the test executable reported by --no-run in a fresh process with:
+# RUSTUP_HOME and CARGO_HOME = an empty disposable directory
+# GOPATH, JAVA_HOME and VIRTUAL_ENV unset
+& <reported latch_kernel test executable> native_shell_and_fixed_git_use_embedded_boundary --nocapture
+```
+
+These gates were run on September 27, 2026. The AppContainer unsealed-creation
+case remains a tested refusal and an unresolved P0 requirement. Passing the
+other gates does not authorize production integration.
 
 No physical reboot/power-cut, full native Windows workspace gate, Windows CI,
 production integration, doctor/version changes or NTFS agent dogfood is claimed.
