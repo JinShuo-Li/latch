@@ -215,7 +215,21 @@ void Recovery::recover_pending() {
     // launch, even if no child reached execution-start. Reopen by the exact
     // recorded NTFS identity in both phases and verify absence by path below.
     pins.emplace_back(rollback.original);
-    if (!pins.back().object.value) continue;
+    if (!pins.back().object.value) {
+      if (!execution_started)
+        require(GetFileAttributesW(rollback.original.path.c_str()) ==
+                        INVALID_FILE_ATTRIBUTES &&
+                    (GetLastError() == ERROR_FILE_NOT_FOUND ||
+                     GetLastError() == ERROR_PATH_NOT_FOUND),
+                L"recovery object was replaced before execution");
+      continue;
+    }
+    if (!execution_started)
+      require(GetFileAttributesW(rollback.original.path.c_str()) !=
+                      INVALID_FILE_ATTRIBUTES &&
+                  PinnedObject(rollback.original.path).state().identity ==
+                      rollback.original.identity,
+              L"recovery object was renamed or replaced before execution");
     const auto path = std::filesystem::path(rollback.original.path).lexically_normal();
     const auto relative = path.relative_path();
     auto component = relative.begin();
