@@ -131,7 +131,13 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
       !DetourCopyPayloadToProcess(pi.hProcess, latch_handles_id, &devices,
                                   sizeof(devices)))
     fail(L"device payload");
-  grant_appcontainer_namespace(sid, write_sid);
+  bool package_boundary = true;
+#ifdef LATCH_RECOVERY_TESTING
+  wchar_t package_diagnostic[2]{};
+  package_boundary = GetEnvironmentVariableW(L"LATCH_DIAG_NO_APPCONTAINER",
+                                              package_diagnostic, 2) == 0;
+#endif
+  if (package_boundary) grant_appcontainer_namespace(sid, write_sid);
   wchar_t module[32768];
   const DWORD module_length = GetModuleFileNameW(nullptr, module, 32768);
   if (!module_length || module_length >= 32768) fail(L"module path");
