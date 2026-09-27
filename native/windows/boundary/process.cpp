@@ -137,7 +137,13 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
   WideCharToMultiByte(CP_UTF8, 0, hook.c_str(), -1, hook_utf8.data(), count,
                       nullptr, nullptr);
   LPCSTR dll = hook_utf8.c_str();
-  if (!DetourUpdateProcessWithDll(pi.hProcess, &dll, 1)) {
+  bool inject = true;
+#ifdef LATCH_RECOVERY_TESTING
+  wchar_t diagnostic[2]{};
+  inject = GetEnvironmentVariableW(L"LATCH_DIAG_SKIP_INJECTION", diagnostic,
+                                    2) == 0;
+#endif
+  if (inject && !DetourUpdateProcessWithDll(pi.hProcess, &dll, 1)) {
     TerminateProcess(pi.hProcess, 125);
     fail(L"inject");
   }
