@@ -724,8 +724,14 @@ record the exact native evidence and remaining security/integration gates.
 The candidate launcher starts a trusted cleanup owner which holds the sandbox
 job, temporary ACL grants and AppContainer profile. The owner observes launcher
 termination through a synchronization-only process handle and drains the job
-before revoking grants. Killing the cleanup owner itself or crashing the
-machine still needs journal-based recovery; this is a production enablement gate.
+before revoking grants. The native candidate now writes durable, identity-bound
+ACL and resource intents and recovers stale state before accepting another
+command. Sensitive ACL sealing is temporary and exact rollback is checked.
+The [recovery protocol](../native/windows/boundary/RECOVERY.md) documents the
+module split, real owner-kill tests, conflicts and the remaining unsealed
+AppContainer creation interval. P0 is not fully complete: that interval fails
+closed and requires operator reconciliation. Production detection stays
+disabled; the Linux boundary and Rust/native interface are unchanged.
 
 Fixed Git inspections and extension hosts share `fixed_command`; Linux quotes
 each argument and explicitly execs the program inside Bubblewrap. Windows fixed

@@ -18,8 +18,8 @@ working Windows backend based on the checks below.
   approved roots cause refusal before any workspace grant. Handles without
   delete sharing pin scanned objects through grant setup.
 - Sensitive trees have package-authority allow ACEs removed and inheritance
-  sealed, preserving ordinary host ACEs. This persists on the supplied
-  sensitive paths. Per-package deny ACEs alone were insufficient against
+  sealed, preserving ordinary host ACEs. These changes are now journaled
+  and restored exactly during normal or stale recovery. Per-package deny ACEs alone were insufficient against
   All Application Packages read grants, including on protected child DACLs.
   This behavior needs a production compatibility/security review.
 - A private desktop on WinSta0 permits USER32/GDI startup without granting a
@@ -90,7 +90,7 @@ Local disposable evidence directories are under `C:/project/latch/target/`:
 `windows-port-probes/cargo-boundary.log`. They are intentionally not committed.
 Final native matrix logs are in `windows-port-final/{test,adversarial,lifecycle}.log`.
 
-## Cleanup follow-up (2026-09-27)
+## Historical cleanup follow-up (39111c8)
 
 The public launcher now starts a trusted cleanup owner from the same executable.
 Only that owner holds the job and per-call resources. No model command is run
@@ -145,6 +145,17 @@ each with `-Binaries <absolute build/bin>` and
 The scripts refuse an existing fixture directory. Fixtures contain synthetic
 credentials only; do not point them at actual credential or state directories.
 
+## Recovery/refactor follow-up (2026-09-27)
+
+See [RECOVERY.md](RECOVERY.md) for the implemented durable protocol, module
+ownership, focused failure tests and explicit remaining blockers. The previous
+cleanup-only limitations above describe 39111c8, not the new journal.
+
+**P0 is not fully complete:** an owner crash during the nontransactional
+AppContainer creation API, before the actual package ID is sealed, deliberately
+fails closed and requires operator reconciliation. No known filesystem escape
+is accepted to avoid this refusal. Production execution remains disabled.
+
 ## Not verified / not finished
 
 - **Full Windows gates:** workspace fmt/clippy/test/release combination;
@@ -159,8 +170,8 @@ credentials only; do not point them at actual credential or state directories.
 - **Integration:** production detection, doctor, model shell instructions,
   all CLI Git inspection paths, search, validation, extension fixtures and
   exec_start/exec_poll/exec_terminate/cancellation/drop through Latch itself.
-- **Filesystem adversaries:** concurrent grants and revocations, crash
-  recovery/ACL journals, hostile rename/reparse/hardlink races, all existing
+- **Filesystem adversaries:** concurrent grants and revocations beyond the journal lock,
+  remaining recovery intervals described in RECOVERY.md, hostile rename/reparse/hardlink races, all existing
   open-handle races, nested Git repositories, worktree/common-dir cases,
   alternate streams, Unicode/long paths, ACL size limits, network filesystems,
   and conflicts with unrelated host programs.
