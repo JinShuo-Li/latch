@@ -70,6 +70,19 @@ pub struct ToolExecutor {
 }
 /// Probes the optional `rg` runtime dependency once at startup. Returns the
 /// actionable refusal message when ripgrep is missing or unusable.
+#[cfg(windows)]
+fn probe_search_runtime() -> Option<String> {
+    let found = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|directory| directory.join("rg.exe"))
+        .any(|path| path.is_file() && !path.to_string_lossy().contains("WindowsApps"));
+    (!found).then(|| {
+        "ripgrep (`rg.exe`) is required by the search tool but was not found on PATH; install ripgrep and restart Latch".to_owned()
+    })
+}
+
+#[cfg(not(windows))]
 fn probe_search_runtime() -> Option<String> {
     match std::process::Command::new("rg")
         .arg("--version")

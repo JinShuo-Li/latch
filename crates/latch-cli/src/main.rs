@@ -1222,7 +1222,9 @@ async fn send_profile_header(
         provider_id: profile.provider.to_string(),
         effort: profile.effort,
         workspace: workspace.display().to_string(),
-        branch: git_branch().unwrap_or_else(|_| "-".into()),
+        branch: git_branch(workspace, &context.config.state_dir)
+            .await
+            .unwrap_or_else(|_| "-".into()),
         resumed,
         pricing: descriptor.pricing.clone(),
     })
@@ -1363,16 +1365,16 @@ async fn send_tool(agent: &mut Agent, name: &str, tx: &mpsc::Sender<Output>) -> 
     tx.send(Output::ToolResult(r)).await?;
     Ok(())
 }
-fn git_branch() -> Result<String> {
-    let out = std::process::Command::new("git")
-        .args(["branch", "--show-current"])
-        .output()?;
+async fn git_branch(workspace: &Path, state_dir: &Path) -> Result<String> {
+    let out =
+        cli::session::sandboxed_git_output(workspace, state_dir, &["branch", "--show-current"])
+            .await?;
     let mut branch = String::from_utf8(out.stdout)?.trim().to_string();
-    let dirty = !std::process::Command::new("git")
-        .args(["status", "--porcelain"])
-        .output()?
-        .stdout
-        .is_empty();
+    let dirty =
+        !cli::session::sandboxed_git_output(workspace, state_dir, &["status", "--porcelain"])
+            .await?
+            .stdout
+            .is_empty();
     if dirty {
         branch.push('*');
     }
