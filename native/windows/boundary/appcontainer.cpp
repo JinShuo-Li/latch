@@ -4,9 +4,16 @@
 #include <userenv.h>
 
 #include "recovery.h"
+#include "recovery_store.h"
+#ifdef LATCH_RECOVERY_TESTING
+#include "profile_crash.h"
+#endif
 namespace latch {
 AppContainer::AppContainer(Recovery& recovery) {
   recovery.prepare_profile();
+#ifdef LATCH_RECOVERY_TESTING
+  ProfileCrashHooks crash_hooks(recovery);
+#endif
   const auto& name = recovery.profile();
   const HRESULT code =
       CreateAppContainerProfile(name.c_str(), name.c_str(),
@@ -25,7 +32,8 @@ bool validate_profile_mapping(const std::wstring& profile,
       sid;
   HKEY key = nullptr;
   const LSTATUS code =
-      RegOpenKeyExW(HKEY_CURRENT_USER, path.c_str(), 0, KEY_QUERY_VALUE, &key);
+      RegOpenKeyExW(HKEY_CURRENT_USER, path.c_str(), REG_OPTION_OPEN_LINK,
+                    KEY_QUERY_VALUE, &key);
   if (code == ERROR_FILE_NOT_FOUND) return false;
   if (code) fail(L"inspect AppContainer mapping", code);
   std::vector<wchar_t> moniker(32768);
@@ -34,8 +42,40 @@ bool validate_profile_mapping(const std::wstring& profile,
                                      nullptr, moniker.data(), &bytes);
   RegCloseKey(key);
   require(!must_be_absent && query == ERROR_SUCCESS &&
+              bytes >= sizeof(wchar_t) && bytes <= moniker.size() * sizeof(wchar_t) &&
+              bytes % sizeof(wchar_t) == 0 &&
+              moniker[bytes / sizeof(wchar_t) - 1] == L'\0' &&
               _wcsicmp(profile.c_str(), moniker.data()) == 0,
           L"AppContainer registration changed; refusing profile mutation");
+  PWSTR folder = nullptr;
+  const auto folder_result = GetAppContainerFolderPath(sid.c_str(), &folder);
+  if (FAILED(folder_result))
+    fail(L"resolve registered AppContainer folder", static_cast<DWORD>(folder_result));
+  const auto expected = recovery_store::local_appdata() / L"Packages" / profile / L"AC";
+  const bool matches = folder && _wcsicmp(expected.c_str(), folder) == 0;
+  CoTaskMemFree(folder);
+  require(matches, L"AppContainer folder mapping changed; refusing cleanup");
+  return true;
+}
+bool remove_empty_profile_mapping(const std::wstring& sid) {
+  const auto path =
+      LR"(Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings\)" + sid;
+  HKEY key = nullptr;
+  const auto opened = RegOpenKeyExW(HKEY_CURRENT_USER, path.c_str(),
+      REG_OPTION_OPEN_LINK, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key);
+  if (opened == ERROR_FILE_NOT_FOUND) return false;
+  if (opened) fail(L"inspect incomplete profile mapping", opened);
+  DWORD subkeys = 0, values = 0;
+  const auto queried = RegQueryInfoKeyW(key, nullptr, nullptr, nullptr,
+      &subkeys, nullptr, nullptr, &values, nullptr, nullptr, nullptr, nullptr);
+  RegCloseKey(key);
+  if (queried) fail(L"inspect incomplete profile contents", queried);
+  if (subkeys || values) return false;
+  // This deletes the single empty key, never a key tree. Sandbox children
+  // cannot alter this namespace, and no child has launched in this interval.
+  const auto removed = RegDeleteKeyExW(HKEY_CURRENT_USER, path.c_str(), 0, 0);
+  if (removed && removed != ERROR_FILE_NOT_FOUND)
+    fail(L"remove empty profile mapping", removed);
   return true;
 }
 void grant_appcontainer_namespace(PSID sid, PSID write_sid) {

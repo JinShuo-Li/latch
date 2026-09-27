@@ -88,3 +88,4 @@ foreach ($mode in @('timeout','parent-exit','drop')) {
 if ($LASTEXITCODE -ne 125) { throw 'Missing executable did not fail closed' }
 Assert-Cleanup
 Write-Output 'PASS failed-create ACL/reservation cleanup'
+$global:LASTEXITCODE=0

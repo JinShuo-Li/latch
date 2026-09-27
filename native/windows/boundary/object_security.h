@@ -14,6 +14,9 @@ struct PinnedObject {
   explicit PinnedObject(const std::filesystem::path& path,
                         DWORD access = READ_CONTROL | WRITE_DAC |
                                        FILE_READ_ATTRIBUTES);
+  // Recovery after execution may reopen a renamed file by exact NTFS ID.
+  // A null object means the original ID no longer exists, not a path miss.
+  explicit PinnedObject(const ObjectState& original);
   ObjectState state() const;
 };
 std::wstring read_security(HANDLE handle);

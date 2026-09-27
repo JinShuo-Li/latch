@@ -16,4 +16,8 @@ void grant_appcontainer_namespace(PSID sid, PSID write_sid);
 // a different moniker is a conflict, never authority to delete a profile.
 bool validate_profile_mapping(const std::wstring& profile,
                               const std::wstring& sid, bool must_be_absent);
+// Removes only the empty SID key left before the profile API writes Moniker.
+// The caller must hold a durable absence-checked creation intent, and prove
+// that no package directory exists. No subtree deletion is permitted here.
+bool remove_empty_profile_mapping(const std::wstring& sid);
 }  // namespace latch

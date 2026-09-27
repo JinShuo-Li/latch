@@ -54,6 +54,27 @@ $internal = Join-Path $workspace 'internal.txt'
 [IO.File]::WriteAllText($internal,'fixture')
 New-Item -ItemType HardLink -Path $alias -Target $internal | Out-Null
 Check 'write-allow' $alias
+$unicode = Join-Path $workspace (([string][char]0x6D4B)+([string][char]0x8BD5)+' file.txt')
+[IO.File]::WriteAllText($unicode,'unicode fixture')
+Check 'read-allow' $unicode
+Check 'write-allow' $unicode
+Set-Content -LiteralPath $plain -Stream boundary -Value 'outside stream'
+Set-Content -LiteralPath $secret -Stream boundary -Value 'protected stream'
+Set-Content -LiteralPath $internal -Stream boundary -Value 'workspace stream'
+Check 'write-deny' ($plain+':boundary')
+Check 'create-deny' ($plain+':new-stream')
+Check 'read-deny' ($secret+':boundary')
+Check 'write-allow' ($internal+':boundary')
+$replaced=Join-Path $workspace 'replace.txt'
+[IO.File]::WriteAllText($replaced,'original contents')
+Check 'replace-file' $replaced
+if([IO.File]::ReadAllText($replaced) -ne 'replacement contents'){throw 'Replacement data changed during rollback'}
+$renamed=Join-Path $workspace 'renamed.txt'
+$renameAcl=(Get-Acl -LiteralPath $replaced).Sddl
+& $runner $workspace $fixture ('rename-file "'+$replaced+'" "'+$renamed+'"') write --read-root $runtime --deny $state
+if($LASTEXITCODE -or (Get-Acl -LiteralPath $renamed).Sddl -ne $renameAcl){throw 'Renamed object ACL was not restored exactly'}
+Check 'delete-file' $renamed
+if(Test-Path -LiteralPath $renamed){throw 'Rollback recreated a deleted file'}
 $gitMarker = Join-Path $workspace '.git'
 & $runner $workspace $fixture ('mkdir-deny "'+$gitMarker+'"') write --read-root $runtime --protect-git $workspace
 if ($LASTEXITCODE) { throw 'Missing .git metadata was not protected' }

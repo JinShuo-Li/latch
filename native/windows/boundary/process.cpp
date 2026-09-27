@@ -142,6 +142,7 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
     fail(L"inject");
   }
   cancel.check();
+  recovery.execution_start();
   if (ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) fail(L"resume child");
   recovery.pause(L"descendants");
   const HANDLE waits[] = {cancel.handle(), process.value};

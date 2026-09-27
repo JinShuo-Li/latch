@@ -22,6 +22,7 @@ class Recovery {
 
   void prepare_profile();
   void profile_created();
+  void execution_start();
   std::filesystem::path scratch_path() const;
   void pause(const wchar_t* point) const;
   const std::wstring& profile() const { return profile_; }
