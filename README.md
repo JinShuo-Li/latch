@@ -842,5 +842,7 @@ cargo run -p latch-kernel --example extension_probe -- \
   extensions/example-ts/dist/index.js
 ```
 
-Latch v0.2.3 supports Linux terminals only and requires the system `bwrap` binary. It has no daemon, browser automation,
-remote execution, MCP, IDE integration, automatic commits, or automatic pushes.
+Latch v0.2.3 requires system `bwrap` on Linux. The Windows native runtime is
+available on the port branch while its hosted CI qualification is in progress.
+It has no daemon, browser automation, remote execution, MCP, IDE integration,
+automatic commits, or automatic pushes.

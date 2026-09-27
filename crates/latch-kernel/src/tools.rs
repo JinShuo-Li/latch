@@ -400,6 +400,16 @@ impl ToolExecutor {
 
     #[must_use]
     pub fn definitions() -> Vec<latch_protocol::ToolDefinition> {
+        let process_description = if cfg!(windows) {
+            "Start a persistent development process (server, watcher, long build) in the workspace with cmd.exe. Returns a process id for exec_poll and exec_terminate. WORK mode only; policy and dangerous-command checks apply."
+        } else {
+            "Start a persistent development process (server, watcher, long build) in the workspace with Bash. Returns a process id for exec_poll and exec_terminate. WORK mode only; policy and dangerous-command checks apply."
+        };
+        let shell_description = if cfg!(windows) {
+            "Run a bounded Windows cmd.exe developer command in the workspace. Use cmd syntax for pipelines, redirection, and command chaining. ASK/PLAN allow only conservative read-only commands and deny test/build execution."
+        } else {
+            "Run a bounded Bash developer command. Commands execute with the workspace as the working directory, so `cd <workspace> &&` is redundant — prefer plain `git log --oneline -20`. A `cd` into a subdirectory is allowed for read-only inspection (for example `cd src && rg normalize_username .`), but never `cd` out of the workspace. ASK/PLAN allow only conservative read-only commands and deny test/build execution."
+        };
         vec![
             def(
                 "read_file",
@@ -423,7 +433,7 @@ impl ToolExecutor {
             ),
             def(
                 "exec_start",
-                "Start a persistent development process (server, watcher, long build) in the workspace with Bash. Returns a process id for exec_poll and exec_terminate. WORK mode only; policy and dangerous-command checks apply.",
+                process_description,
                 json!({"type":"object","required":["command"],"properties":{"command":{"type":"string"},"label":{"type":"string","description":"short human label"}}}),
             ),
             def(
@@ -448,7 +458,7 @@ impl ToolExecutor {
             ),
             def(
                 "shell",
-                "Run a bounded Bash developer command. Commands execute with the workspace as the working directory, so `cd <workspace> &&` is redundant — prefer plain `git log --oneline -20`. A `cd` into a subdirectory is allowed for read-only inspection (for example `cd src && rg normalize_username .`), but never `cd` out of the workspace. ASK/PLAN allow only conservative read-only commands and deny test/build execution.",
+                shell_description,
                 json!({"type":"object","required":["command"],"properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer"}}}),
             ),
             def(
