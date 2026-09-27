@@ -61,7 +61,23 @@ mod windows {
                 .arg(boundary.join(format!("{name}.cpp")))
                 .arg(format!("/Fo{}", out.join(format!("{name}.obj")).display())));
         };
-        compile("probe");
+        let runner = [
+            "runner",
+            "common",
+            "token",
+            "filesystem_acl",
+            "process",
+            "recovery",
+            "recovery_rollback",
+            "object_security",
+            "recovery_store",
+            "appcontainer",
+            "desktop",
+            "job",
+        ];
+        for name in runner {
+            compile(name);
+        }
         compile("compat");
         let link = |object: &str, output: &Path, dll: bool| {
             let mut command = compiler.to_command();
@@ -69,7 +85,13 @@ mod windows {
             if dll {
                 command.arg("/LD");
             }
-            command.arg(out.join(format!("{object}.obj")));
+            if dll {
+                command.arg(out.join(format!("{object}.obj")));
+            } else {
+                for name in runner {
+                    command.arg(out.join(format!("{name}.obj")));
+                }
+            }
             for name in vendor {
                 command.arg(out.join(format!("{name}.obj")));
             }
@@ -85,6 +107,7 @@ mod windows {
                 "userenv.lib",
                 "rpcrt4.lib",
                 "ole32.lib",
+                "shell32.lib",
             ]);
             if dll {
                 command.arg("/EXPORT:DetourFinishHelperProcess,@1,NONAME");
@@ -92,6 +115,6 @@ mod windows {
             run(&mut command);
         };
         link("compat", &out.join("latch-boundary-compat.dll"), true);
-        link("probe", &out.join("latch-windows-runner.exe"), false);
+        link("runner", &out.join("latch-windows-runner.exe"), false);
     }
 }

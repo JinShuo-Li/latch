@@ -153,7 +153,13 @@ See `native/windows/boundary/README.md` for native fixture commands, verified
 results, known limitations and the outstanding security/release gates.
 The candidate helper has public-launcher and trusted-cleanup-owner roles;
 `lifecycle.ps1` verifies launcher cancellation, tree termination and temporary
-ACL/profile cleanup. It does not establish owner-crash or reboot recovery.
+ACL/profile cleanup. `recovery.ps1` adds forced owner-kill and stale-state checks;
+its CMake runner needs `-DLATCH_RECOVERY_TESTING=ON` (never enabled by Cargo).
+The journal/identity protocol and remaining unsealed-profile blocker are in
+`native/windows/boundary/RECOVERY.md`. Run overlapping native fixtures
+sequentially: test-only journal overrides do not share the production lock.
+Native ownership is split into runner/token/AppContainer/ACL/recovery/desktop/
+job/process modules; Win32 complexity stays outside the safe Rust kernel.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,group,configuration_center}.rs` and existing siblings.
 

@@ -1,0 +1,161 @@
+#include "common.h"
+
+#include <objbase.h>
+#include <userenv.h>
+
+#include "appcontainer.h"
+#include "filesystem_acl.h"
+#include "process.h"
+#include "token.h"
+namespace latch {
+int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
+  cancel.check();
+  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
+               SEM_NOOPENFILEERRORBOX);
+  Recovery recovery(cancel);
+  recovery.begin();
+  int result = 125;
+  try {
+    AppContainer container(recovery);
+    PSID sid = container.sid;
+    recovery.profile_created();
+    Grants grants(sid, cancel, recovery);
+    // Remove AppContainer read grants on sensitive paths; package-specific
+    // deny ACEs do not suppress the All Application Packages allow route.
+    std::set<std::wstring> protected_paths;
+    GitReservation git_reservation;
+    DWORD timeout_ms = INFINITE;
+
+    constexpr DWORD read_rights = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+    constexpr DWORD write_rights = FILE_GENERIC_WRITE | DELETE;
+    const bool writable = std::wcscmp(argv[4], L"write") == 0;
+    std::vector<std::wstring> write_roots;
+    if (writable)
+      write_roots.push_back(std::filesystem::canonical(argv[1]).wstring());
+    for (int i = 5; i < argc; i += 2) {
+      if (i + 1 >= argc) fail(L"missing option path", ERROR_INVALID_PARAMETER);
+      if (std::wcscmp(argv[i], L"--write-root") == 0)
+        write_roots.push_back(
+            std::filesystem::canonical(argv[i + 1]).wstring());
+    }
+    std::vector<Handle> grant_locks;
+    for (const auto& root : write_roots)
+      validate_write_tree(root, write_roots, grant_locks, cancel, recovery);
+    recovery.track_root(argv[1]);
+    grants.add(argv[1], GRANT_ACCESS,
+               read_rights | (writable ? write_rights : 0));
+    Attributes attributes(3);
+    auto* attrs = attributes.value;
+    Local internet = parse_sid(L"S-1-15-3-1");
+    Local private_network = parse_sid(L"S-1-15-3-3");
+    SID_AND_ATTRIBUTES network_caps[] = {
+        {internet.value, SE_GROUP_ENABLED},
+        {private_network.value, SE_GROUP_ENABLED}};
+    SECURITY_CAPABILITIES caps{};
+    caps.AppContainerSid = sid;
+    for (int i = 5; i + 1 < argc; i += 2) {
+      if (std::wcscmp(argv[i], L"--network") == 0 &&
+          std::wcscmp(argv[i + 1], L"yes") == 0) {
+        caps.Capabilities = network_caps;
+        caps.CapabilityCount = 2;
+      }
+    }
+    if (!UpdateProcThreadAttribute(attrs, 0,
+                                   PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                                   &caps, sizeof(caps), nullptr, nullptr))
+      fail(L"Update attrs");
+    Local write_sid = parse_sid(recovery.write_sid().c_str());
+    Grants write_grants(write_sid.value, cancel, recovery);
+    // Windows redirects GetTempPath inside an AppContainer to this private
+    // per-call directory, regardless of TEMP/TMP. Grant only this scratch tree.
+    const auto scratch = recovery.scratch_path();
+    std::filesystem::create_directories(scratch);
+    grants.add(scratch.wstring(), GRANT_ACCESS, read_rights | write_rights);
+    write_grants.add(scratch.wstring(), GRANT_ACCESS,
+                     read_rights | write_rights);
+    write_grants.add(argv[1], GRANT_ACCESS,
+                     read_rights | (writable ? write_rights : 0));
+    for (int i = 5; i < argc; ++i) {
+      const std::wstring option = argv[i++];
+      if (i >= argc) fail(L"missing option path", ERROR_INVALID_PARAMETER);
+      if (option == L"--read-root") {
+        recovery.track_root(argv[i]);
+        grants.add(argv[i], GRANT_ACCESS, read_rights);
+      } else if (option == L"--network") {
+        if (std::wcscmp(argv[i], L"yes") != 0 &&
+            std::wcscmp(argv[i], L"no") != 0)
+          fail(L"invalid network mode", ERROR_INVALID_PARAMETER);
+      } else if (option == L"--timeout-ms") {
+        wchar_t* end = nullptr;
+        const unsigned long value = std::wcstoul(argv[i], &end, 10);
+        if (!end || *end || value == 0 || value >= INFINITE)
+          fail(L"invalid timeout", ERROR_INVALID_PARAMETER);
+        timeout_ms = value;
+      } else if (option == L"--protect-git") {
+        git_reservation.create(argv[i], recovery);
+      } else if (option == L"--write-root") {
+        recovery.track_root(argv[i]);
+        grants.add(argv[i], GRANT_ACCESS, read_rights | write_rights);
+        write_grants.add(argv[i], GRANT_ACCESS, read_rights | write_rights);
+      } else if (option == L"--deny") {
+        protect_sensitive_tree(argv[i], protected_paths, cancel, recovery);
+        grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
+        write_grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
+      } else if (option == L"--deny-write") {
+        constexpr DWORD mutate = FILE_WRITE_DATA | FILE_APPEND_DATA |
+                                 FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
+                                 DELETE | WRITE_DAC | WRITE_OWNER |
+                                 FILE_DELETE_CHILD;
+        grants.add(argv[i], DENY_ACCESS, mutate);
+        write_grants.add(argv[i], DENY_ACCESS, mutate);
+      } else
+        fail(L"invalid option", ERROR_INVALID_PARAMETER);
+    }
+    // Existing objects cannot be renamed or hardlinked between validation
+    // and grant propagation. Release these pins before developer commands.
+    grant_locks.clear();
+    recovery.pause(L"all-grants");
+    Handle restricted = restrict_token(write_sid.value);
+    result = execute_target(argv, cancel, restricted.value, write_sid.value,
+                            sid, attrs, timeout_ms, recovery);
+
+  } catch (const Error& e) {
+    std::fwprintf(stderr, L"%ls: %lu\n", e.api, e.code);
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "Windows boundary: %s", e.what());
+  }
+
+  recovery.finish();
+  return result;
+}
+
+}  // namespace latch
+using namespace latch;
+int wmain(int argc, wchar_t** argv) {
+  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
+               SEM_NOOPENFILEERRORBOX);
+  try {
+    if (argc >= 3 && std::wcscmp(argv[1], L"--cleanup-owner") == 0) {
+      wchar_t* end = nullptr;
+      const auto raw = _wcstoui64(argv[2], &end, 10);
+      if (!raw || !end || *end) return 2;
+      Handle owner(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(raw)));
+      Cancellation cancel(owner.value);
+      cancel.check();
+      if (argc < 7) return 2;
+      return run_boundary(argc - 2, argv + 2, cancel);
+    }
+    if (argc == 2 && std::wcscmp(argv[1], L"--recover-only") == 0) {
+      Cancellation cancel;
+      Recovery recovery(cancel);
+      return 0;
+    }
+    if (argc < 5) return 2;
+    return launch_owner(argc, argv);
+  } catch (const Error& error) {
+    std::fwprintf(stderr, L"%ls: %lu\n", error.api, error.code);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "Windows launcher: %s\n", error.what());
+  }
+  return 125;
+}

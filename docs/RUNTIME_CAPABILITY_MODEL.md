@@ -349,6 +349,7 @@ disturb the other.
 | `ContextEngine` port + `ContextRequest`/`ContextBudget`/`ContextView`; default `ContinuityEngine`; runtime-wide `ContextEngineFactory` for root and child sessions | **implemented**, behavior-preserving; port invariants in CI |
 | Provider adapter boundary (`ModelProvider`) and tool boundary (`ToolExecutor`, extensions) | already existed; mapped, unchanged |
 | Transport-agnostic framing (`FramedReader`/`FramedWriter` over generic `AsyncRead`/`AsyncWrite`) | already existed; documented as the transport seam |
+| Experimental Windows runner recovery | native durable intent journal and identity-checked rollback; production disabled, unsealed AppContainer creation remains a blocker; see `native/windows/boundary/RECOVERY.md` |
 | Remote extension transports, authentication, lifecycle | deferred |
 | `WorkspaceBackend`, `ExecutorBackend`, `ComputerBackend`, `BrowserBackend`, `ServiceProvider` traits | deferred; first real implementation introduces its port |
 | `Coordinator` / `PreferenceProvider` port traits | deferred; concrete supervisors and policy already exist |
