@@ -22,3 +22,38 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Deterministic 0.2.3 release gate
         run: bash scripts/release-gate.sh
+
+  windows-native:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build native boundary with strict MSVC warnings
+        shell: pwsh
+        run: |
+          cmake -S native/windows/boundary -B target/windows-native-ci -G "Visual Studio 17 2022" -A x64 -DLATCH_RECOVERY_TESTING=ON
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build target/windows-native-ci --config Release --parallel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Native recovery, filesystem and process security
+        shell: pwsh
+        run: |
+          $binaries = Join-Path $PWD 'target/windows-native-ci/bin'
+          foreach ($suite in @('recovery', 'test', 'adversarial', 'lifecycle', 'developer', 'deleted_root')) {
+            & "native/windows/boundary/$suite.ps1" -Binaries $binaries -FixtureRoot (Join-Path $env:RUNNER_TEMP "latch-native-$suite")
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+      - name: Windows Rust release gate
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --workspace --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build --release --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
