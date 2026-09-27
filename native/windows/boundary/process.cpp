@@ -81,6 +81,41 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
   Handle thread(pi.hThread);
   recovery.pause(L"child-launch");
   LatchHandles devices{};
+  Handle workspace(CreateFileW(argv[1], FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (workspace.value == INVALID_HANDLE_VALUE) fail(L"open workspace volume identity");
+  FILE_ID_INFO workspace_id{};
+  if (!GetFileInformationByHandleEx(workspace.value, FileIdInfo,
+                                    &workspace_id, sizeof(workspace_id)))
+    fail(L"workspace volume identity");
+  // Host-opened ancestor handles carry metadata rights only.  They make
+  // realpath/lstat traversal possible without changing a parent ACL.
+  std::vector<Handle> ancestors;
+  for (auto parent = std::filesystem::path(argv[1]).parent_path();
+       !parent.empty(); parent = parent.parent_path()) {
+    if (ancestors.size() == latch_max_ancestors)
+      fail(L"workspace ancestry exceeds compatibility handle limit", ERROR_BUFFER_OVERFLOW);
+    Handle ancestor(CreateFileW(parent.c_str(), FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (ancestor.value == INVALID_HANDLE_VALUE) fail(L"open metadata ancestor");
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    if (!GetFileInformationByHandleEx(ancestor.value, FileAttributeTagInfo,
+                                     &tag, sizeof(tag)) ||
+        !(tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+        (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+      fail(L"invalid workspace metadata ancestor", ERROR_INVALID_DATA);
+    ancestors.push_back(std::move(ancestor));
+    if (parent == parent.root_path()) break;
+  }
+  devices.ancestor_count = static_cast<DWORD>(ancestors.size());
+  devices.workspace_volume = workspace_id.VolumeSerialNumber;
+  devices.workspace_drive = argv[1][0];
+  for (DWORD i = 0; i < devices.ancestor_count; ++i)
+    if (!DuplicateHandle(GetCurrentProcess(), ancestors[i].value, pi.hProcess,
+                         &devices.ancestors[i], 0, FALSE, DUPLICATE_SAME_ACCESS))
+      fail(L"metadata ancestor payload");
   if (!DuplicateHandle(GetCurrentProcess(), nul.value, pi.hProcess,
                        &devices.null_device, 0, FALSE, DUPLICATE_SAME_ACCESS) ||
       !DuplicateHandle(GetCurrentProcess(), kh.value, pi.hProcess,
