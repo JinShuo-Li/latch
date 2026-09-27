@@ -56,6 +56,14 @@ Handle restrict_token(PSID write_sid) {
   Handle original, restricted;
   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &original.value))
     fail(L"open parent token");
+#ifdef LATCH_RECOVERY_TESTING
+  wchar_t direct_diagnostic[2]{};
+  // The child still receives PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES.
+  // This control isolates CreateRestrictedToken from AppContainer startup.
+  if (GetEnvironmentVariableW(L"LATCH_DIAG_DIRECT_LOWBOX_TOKEN",
+                              direct_diagnostic, 2))
+    return original;
+#endif
   SID_AND_ATTRIBUTES restrictors[] = {{write_sid, 0}};
   Local admin = parse_sid(L"S-1-5-32-544");
   SID_AND_ATTRIBUTES disabled[] = {{admin.value, 0}};
