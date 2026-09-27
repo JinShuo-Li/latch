@@ -248,13 +248,28 @@ HANDLE inherited(const wchar_t* name) {
   if (!length || length >= 40) return nullptr;
   return reinterpret_cast<HANDLE>(_wcstoui64(raw, nullptr, 16));
 }
+
+BOOL init_failed(const char* stage) {
+  // DllMain has no caller to report a hook failure to. The fixture captures
+  // stderr from the child, including when the loader returns DLL_INIT_FAILED.
+  const HANDLE output = GetStdHandle(STD_ERROR_HANDLE);
+  if (output && output != INVALID_HANDLE_VALUE) {
+    DWORD written = 0;
+    const char prefix[] = "Latch compatibility initialization failed: ";
+    WriteFile(output, prefix, sizeof(prefix) - 1, &written, nullptr);
+    WriteFile(output, stage, static_cast<DWORD>(std::strlen(stage)), &written, nullptr);
+    const char suffix[] = "\r\n";
+    WriteFile(output, suffix, sizeof(suffix) - 1, &written, nullptr);
+  }
+  return FALSE;
+}
 } // namespace
 
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (DetourIsHelperProcess() || reason != DLL_PROCESS_ATTACH) return TRUE;
 
   const DWORD length = GetModuleFileNameA(module, hook_path, MAX_PATH);
-  if (!length || length >= MAX_PATH) return FALSE;
+  if (!length || length >= MAX_PATH) return init_failed("module path");
   null_handle = inherited(L"LATCH_NULL_HANDLE");
   ksec_handle = inherited(L"LATCH_KSEC_HANDLE");
   DWORD payload_size = 0;
@@ -265,7 +280,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
     ksec_handle = handles->crypto_device;
     workspace_volume = handles->workspace_volume;
     workspace_drive = handles->workspace_drive;
-    if (handles->ancestor_count > latch_max_ancestors) return FALSE;
+    if (handles->ancestor_count > latch_max_ancestors) return init_failed("ancestor count");
     ancestor_count = handles->ancestor_count;
     for (DWORD i = 0; i < ancestor_count; ++i)
       ancestor_handles[i] = handles->ancestors[i];
@@ -277,14 +292,16 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   real_open = reinterpret_cast<decltype(real_open)>(GetProcAddress(ntdll, "NtOpenFile"));
   real_create = reinterpret_cast<decltype(real_create)>(GetProcAddress(ntdll, "NtCreateFile"));
 
-  if (!real_open || !real_create || !DetourRestoreAfterWith() ||
-      DetourTransactionBegin() || DetourUpdateThread(GetCurrentThread()) ||
-      DetourAttach(reinterpret_cast<void**>(&real_create), create) ||
-      DetourAttach(reinterpret_cast<void**>(&real_open), open) ||
-      DetourAttach(reinterpret_cast<void**>(&real_final_path), final_path) ||
-      DetourAttach(reinterpret_cast<void**>(&real_attributes), attributes) ||
-      DetourAttach(reinterpret_cast<void**>(&real_attributes_ex), attributes_ex) ||
-      DetourAttach(reinterpret_cast<void**>(&real_process), spawn) ||
-      DetourTransactionCommit()) return FALSE;
+  if (!real_open || !real_create) return init_failed("native exports");
+  if (!DetourRestoreAfterWith()) return init_failed("restore process image");
+  if (DetourTransactionBegin()) return init_failed("begin hooks");
+  if (DetourUpdateThread(GetCurrentThread())) return init_failed("update thread");
+  if (DetourAttach(reinterpret_cast<void**>(&real_create), create)) return init_failed("NtCreateFile hook");
+  if (DetourAttach(reinterpret_cast<void**>(&real_open), open)) return init_failed("NtOpenFile hook");
+  if (DetourAttach(reinterpret_cast<void**>(&real_final_path), final_path)) return init_failed("final path hook");
+  if (DetourAttach(reinterpret_cast<void**>(&real_attributes), attributes)) return init_failed("file attributes hook");
+  if (DetourAttach(reinterpret_cast<void**>(&real_attributes_ex), attributes_ex)) return init_failed("file attributes ex hook");
+  if (DetourAttach(reinterpret_cast<void**>(&real_process), spawn)) return init_failed("process hook");
+  if (DetourTransactionCommit()) return init_failed("commit hooks");
   return TRUE;
 }
