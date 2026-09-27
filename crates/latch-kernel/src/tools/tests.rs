@@ -616,17 +616,7 @@ async fn search_refuses_and_excludes_the_state_directory() {
             CancellationToken::new(),
         )
         .await;
-    #[cfg(windows)]
-    {
-        assert!(found.is_error);
-        assert!(
-            found
-                .output
-                .contains("Windows execution sandbox is unavailable")
-        );
-        return;
-    }
-    #[cfg(not(windows))]
+
     {
         assert!(!found.is_error, "{}", found.output);
         assert!(found.output.contains("visible.txt"), "{}", found.output);
@@ -941,12 +931,22 @@ async fn ask_allows_workspace_local_read_only_cd_compound() {
         PolicyEngine::new(Mode::Ask, d.path().into(), PermissionConfig::default()),
     )
     .unwrap();
-    for command in [
-        "cd . && git status --short",
-        "cd src && ls",
-        "pwd && git diff",
-        "git log --oneline -20 | head",
-    ] {
+    let commands: &[&str] = if cfg!(windows) {
+        &[
+            "cd . && git status --short",
+            "cd src && dir",
+            "cd && git diff",
+            "git log --oneline -20 | findstr .",
+        ]
+    } else {
+        &[
+            "cd . && git status --short",
+            "cd src && ls",
+            "pwd && git diff",
+            "git log --oneline -20 | head",
+        ]
+    };
+    for &command in commands {
         let result = executor
             .execute(
                 &call("shell", json!({"command":command})),
@@ -979,16 +979,26 @@ async fn ask_allows_workspace_local_read_only_cd_compound() {
 #[tokio::test]
 async fn ask_allows_conservative_read_only_compound_shell() {
     let (_d, executor) = setup(Mode::Ask);
+    let command = if cfg!(windows) {
+        "cd && dir"
+    } else {
+        "pwd && ls"
+    };
     let allowed = executor
         .execute(
-            &call("shell", json!({"command":"pwd && ls"})),
+            &call("shell", json!({"command":command})),
             CancellationToken::new(),
         )
         .await;
     assert!(!allowed.is_error, "{}", allowed.output);
+    let denied_command = if cfg!(windows) {
+        "cd && echo injected > injected.txt"
+    } else {
+        "pwd && touch injected"
+    };
     let denied = executor
         .execute(
-            &call("shell", json!({"command":"pwd && touch injected"})),
+            &call("shell", json!({"command":denied_command})),
             CancellationToken::new(),
         )
         .await;
@@ -1357,7 +1367,7 @@ async fn shell_mutation_is_classified_as_shell_owned_and_undoable() {
         .execute(
             &call(
                 "shell",
-                json!({"command":"printf reformatted > tracked.txt"}),
+                json!({"command":if cfg!(windows) { "echo reformatted>tracked.txt" } else { "printf reformatted > tracked.txt" }}),
             ),
             CancellationToken::new(),
         )
@@ -1395,7 +1405,7 @@ async fn non_git_shell_mutation_is_marked_non_reversible() {
     .unwrap();
     let out = e
         .execute(
-            &call("shell", json!({"command":"printf mutated > plain.txt"})),
+            &call("shell", json!({"command":if cfg!(windows) { "echo mutated>plain.txt" } else { "printf mutated > plain.txt" }})),
             CancellationToken::new(),
         )
         .await;
@@ -1431,7 +1441,7 @@ async fn preexisting_dirty_work_is_preserved_and_distinguishable() {
     assert_eq!(e.preexisting_change_count().await, 1);
     let out = e
         .execute(
-            &call("shell", json!({"command":"printf x >> pre.txt"})),
+            &call("shell", json!({"command":if cfg!(windows) { "echo x>>pre.txt" } else { "printf x >> pre.txt" }})),
             CancellationToken::new(),
         )
         .await;
@@ -1538,7 +1548,7 @@ async fn approved_shell_external_write_uses_only_its_call_scoped_mount() {
         "external-shell",
         "shell",
         json!({
-            "command": format!("printf approved > {}", target.display())
+            "command": if cfg!(windows) { format!("echo approved > {}", target.display()) } else { format!("printf approved > {}", target.display()) }
         }),
     );
     let classification = executor.classify_call(&shell.name, &shell.arguments);
@@ -1558,7 +1568,7 @@ async fn approved_shell_external_write_uses_only_its_call_scoped_mount() {
     );
     let allowed = executor.execute(&shell, CancellationToken::new()).await;
     assert!(!allowed.is_error, "{}", allowed.output);
-    assert_eq!(std::fs::read_to_string(&target).unwrap(), "approved");
+    assert_eq!(std::fs::read_to_string(&target).unwrap().trim(), "approved");
     let reused = executor.execute(&shell, CancellationToken::new()).await;
     assert!(reused.is_error);
 }
@@ -1916,7 +1926,7 @@ async fn managed_process_start_poll_and_terminate() {
         .execute(
             &call(
                 "exec_start",
-                json!({"command":"printf 'one\\n'; sleep 0.3; printf 'two\\n'","label":"fixture"}),
+                json!({"command":if cfg!(windows) { "echo one && echo two" } else { "printf 'one\\n'; sleep 0.3; printf 'two\\n'" },"label":"fixture"}),
             ),
             CancellationToken::new(),
         )
@@ -1965,7 +1975,7 @@ async fn managed_process_start_poll_and_terminate() {
     // cannot turn scheduling delay into a false failure.
     let long = e
         .execute(
-            &call("exec_start", json!({"command":"sleep 0.5"})),
+            &call("exec_start", json!({"command":if cfg!(windows) { "python -c \"import time; time.sleep(3)\"" } else { "sleep 0.5" }})),
             CancellationToken::new(),
         )
         .await;
@@ -2011,12 +2021,22 @@ async fn exec_start_is_work_only_and_dangerous_commands_are_denied() {
 async fn ask_runs_complex_inspection_and_blocks_workspace_writes() {
     let (d, e) = setup(Mode::Ask);
     std::fs::write(d.path().join("a.rs"), "fn main() {}\nfn helper() {}\n").unwrap();
-    for command in [
-        "find . -name '*.rs' | wc -l",
-        "awk '{print $1}' a.rs",
-        "cat a.rs | grep -c fn",
-        "python3 -c 'print(6 * 7)'",
-    ] {
+    let commands: &[&str] = if cfg!(windows) {
+        &[
+            "dir /b *.rs | find /c /v \"\"",
+            "type a.rs | findstr /c:fn",
+            "type a.rs | find /c \"fn\"",
+            "python -c \"print(6 * 7)\"",
+        ]
+    } else {
+        &[
+            "find . -name '*.rs' | wc -l",
+            "awk '{print $1}' a.rs",
+            "cat a.rs | grep -c fn",
+            "python3 -c 'print(6 * 7)'",
+        ]
+    };
+    for &command in commands {
         let result = e
             .execute(
                 &call("shell", json!({"command": command})),
@@ -2045,14 +2065,18 @@ async fn ask_build_output_is_redirected_to_private_scratch() {
         .execute(
             &call(
                 "shell",
-                json!({"command":"printf '%s' \"$CARGO_TARGET_DIR\""}),
+                json!({"command":if cfg!(windows) { "echo %CARGO_TARGET_DIR%" } else { "printf '%s' \"$CARGO_TARGET_DIR\"" }}),
             ),
             CancellationToken::new(),
         )
         .await;
     assert!(!result.is_error, "{}", result.output);
     assert!(
-        result.output.contains("/tmp/latch-target"),
+        result.output.contains(if cfg!(windows) {
+            "latch-target"
+        } else {
+            "/tmp/latch-target"
+        }),
         "{}",
         result.output
     );
@@ -2070,7 +2094,11 @@ async fn workspace_write_is_allowed_in_work_but_git_metadata_is_not() {
     assert!(!allowed.is_error, "{}", allowed.output);
     assert_eq!(
         std::fs::read_to_string(d.path().join("a.txt")).unwrap(),
-        "changed\n"
+        if cfg!(windows) {
+            "changed \r\n"
+        } else {
+            "changed\n"
+        }
     );
 
     std::fs::create_dir_all(d.path().join(".git")).unwrap();

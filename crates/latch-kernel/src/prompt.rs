@@ -162,7 +162,15 @@ impl PromptCompiler {
             "environment.workspace",
             150,
             false,
-            &format!("Workspace: {}", workspace.display()),
+            &format!(
+                "Workspace: {}{}",
+                workspace.display(),
+                if cfg!(windows) {
+                    "\nThe model-facing shell is native cmd.exe. Use Windows paths, `dir`/`type`, `&&` and `|`; use `>` for redirection. Use `rg`, `git`, `cargo`, `rustc`, `node`, `npm`, and `python` when installed. Bash syntax and PowerShell are not supported by this shell."
+                } else {
+                    ""
+                }
+            ),
         ));
         for (index, (name, content)) in load_repository_instructions(workspace)?
             .into_iter()
@@ -573,8 +581,9 @@ mod tests {
         // The workspace path has a host-dependent length (and gains a drive
         // prefix on Windows), so exclude its token cost from this budget.
         let workspace_tokens = estimator.estimate(&directory.path().display().to_string());
+        let session_budget = if cfg!(windows) { 1_450 } else { 1_371 };
         assert!(
-            p.approximate_tokens().saturating_sub(workspace_tokens) <= 1_371,
+            p.approximate_tokens().saturating_sub(workspace_tokens) <= session_budget,
             "compiled prompt excluding workspace path grew to {} tokens",
             p.approximate_tokens().saturating_sub(workspace_tokens)
         );

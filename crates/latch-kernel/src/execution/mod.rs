@@ -10,10 +10,12 @@ use tokio::process::Command;
 mod linux;
 #[cfg(windows)]
 mod windows;
-#[cfg(all(windows, test))]
+#[cfg(windows)]
 mod windows_runtime;
+#[cfg(windows)]
+mod windows_runtime_tools;
 
-#[cfg(all(windows, test))]
+#[cfg(windows)]
 fn windows_secret_paths(home: &Path) -> Vec<std::path::PathBuf> {
     let mut paths = crate::sandbox::secret_paths(home);
     for relative in [
@@ -41,6 +43,20 @@ pub enum ExecutionBackend {
 }
 
 impl ExecutionBackend {
+    /// Read-only prerequisite check for `doctor`. Installation and a sandbox
+    /// launch happen only when a task actually starts.
+    pub fn inspect(workspace: &Path) -> Result<String> {
+        #[cfg(windows)]
+        {
+            let _ = workspace;
+            windows::WindowsBackend::inspect()
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(Self::detect(workspace)?.status())
+        }
+    }
+
     pub fn detect(workspace: &Path) -> Result<Self> {
         #[cfg(target_os = "linux")]
         {

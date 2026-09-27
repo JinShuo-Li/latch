@@ -709,33 +709,32 @@ the one-sentence reason returned to the coding model; unparseable output
 rejects conservatively. Non-command asks use human resolution rather than
 fabricating a bash judgment.
 
-### Execution backend and mandatory Linux sandbox
+### Execution backend and mandatory platform sandbox
 
 `ToolExecutor` and extension hosts now request commands through
 `ExecutionBackend`. `SandboxProfile` remains the shared capability policy; the
-Linux backend delegates to the existing `SandboxRunner`. The Windows backend
-currently probes Git for Windows Bash but refuses command execution because a
-Windows capability sandbox has not yet been implemented. Bash discovery alone
-does not establish a security boundary. An experimental AppContainer plus
-restricted-token native runner and a test-only Rust adapter now live under
-`native/windows/boundary/` and `execution/windows_runtime.rs`. They are not
-selected by production detection. The [checkpoint and untested work](../native/windows/boundary/README.md)
-record the exact native evidence and remaining security/integration gates.
-The candidate launcher starts a trusted cleanup owner which holds the sandbox
+Linux delegates to `SandboxRunner`. Windows embeds its native runner and
+compatibility DLL, verifies installed bytes, and launches `cmd.exe` through an
+AppContainer token restricted again for writes and a kill-on-close Job Object.
+There is no Git Bash, WSL, local-account, or unsandboxed fallback. The
+[Windows boundary](../native/windows/boundary/README.md) records the native
+security fixtures and platform limits. The launcher starts a trusted cleanup owner which holds the sandbox
 job, temporary ACL grants and AppContainer profile. The owner observes launcher
 termination through a synchronization-only process handle and drains the job
-before revoking grants. The native candidate now writes durable, identity-bound
+before revoking grants. The runner writes durable, identity-bound
 ACL and resource intents and recovers stale state before accepting another
 command. Sensitive ACL sealing is temporary and exact rollback is checked.
 The [recovery protocol](../native/windows/boundary/RECOVERY.md) documents the
-module split, real owner-kill tests, conflicts and the remaining unsealed
-AppContainer creation interval. P0 is not fully complete: that interval fails
-closed and requires operator reconciliation. Production detection stays
-disabled; the Linux boundary and Rust/native interface are unchanged.
+module split, real owner-kill tests, and retained conflict cases. AppContainer
+creation is pre-journaled by a unique name and derived SID; recovery verifies
+the mapping before cleanup. Missing or changed objects fail closed when exact
+recovery cannot be proven.
 
 Fixed Git inspections and extension hosts share `fixed_command`; Linux quotes
 each argument and explicitly execs the program inside Bubblewrap. Windows fixed
-commands continue to fail closed until the candidate passes its complete gate.
+commands quote arguments and run through the same native runner. Python and
+Node runtimes are staged as read-only assets; Python's standard library is one
+ZIP archive to avoid thousands of per-command ACL changes.
 
 On Linux, the startup probe verifies
 `bwrap`, unprivileged user namespaces, bind mounts, and the required namespace

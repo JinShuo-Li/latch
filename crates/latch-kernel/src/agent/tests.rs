@@ -169,7 +169,7 @@ async fn validate_links_kernel_provenance_without_model_ids() {
                 name: "validate".into(),
                 arguments: json!({
                     "requirement": "content is good",
-                    "command": "test \"$(cat x.txt)\" = good"
+                    "command": (if cfg!(windows) { "python -c \"import pathlib,sys;sys.exit(pathlib.Path('x.txt').read_text() != 'good')\"" } else { "test \"$(cat x.txt)\" = good" })
                 }),
             }],
             stop_reason: "tool_calls".into(),
@@ -224,6 +224,16 @@ async fn validate_links_kernel_provenance_without_model_ids() {
         .await
         .unwrap();
     let events = store.events(sid).unwrap();
+    eprintln!(
+        "validation details: {:?}",
+        events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                EventPayload::ValidationResult { detail, .. } => Some(detail),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    );
     // Kernel recorded a ValidationResult and evidence with real provenance.
     let validation = events
         .iter()
@@ -234,7 +244,18 @@ async fn validate_links_kernel_provenance_without_model_ids() {
             _ => None,
         })
         .expect("validation result recorded");
-    assert_eq!(validation, ("test \"$(cat x.txt)\" = good".into(), true));
+    assert_eq!(
+        validation,
+        (
+            (if cfg!(windows) {
+                "python -c \"import pathlib,sys;sys.exit(pathlib.Path('x.txt').read_text() != 'good')\""
+            } else {
+                "test \"$(cat x.txt)\" = good"
+            })
+            .into(),
+            true,
+        )
+    );
     let evidence = events
         .iter()
         .filter_map(|e| match &e.payload {
@@ -349,7 +370,11 @@ async fn fail_then_pass_validation_supersedes_completion() {
     let failed = agent
         .run_validation(
             "content good",
-            "test \"$(cat x.txt)\" = good",
+            if cfg!(windows) {
+                "python -c \"import pathlib,sys;sys.exit(pathlib.Path('x.txt').read_text() != 'good')\""
+            } else {
+                "test \"$(cat x.txt)\" = good"
+            },
             CancellationToken::new(),
         )
         .await
@@ -359,7 +384,11 @@ async fn fail_then_pass_validation_supersedes_completion() {
     agent
         .run_validation(
             "content good",
-            "test \"$(cat x.txt)\" = good",
+            if cfg!(windows) {
+                "python -c \"import pathlib,sys;sys.exit(pathlib.Path('x.txt').read_text() != 'good')\""
+            } else {
+                "test \"$(cat x.txt)\" = good"
+            },
             CancellationToken::new(),
         )
         .await
@@ -373,7 +402,11 @@ async fn fail_then_pass_validation_supersedes_completion() {
     let passed = agent
         .run_validation(
             "content good",
-            "test \"$(cat x.txt)\" = good",
+            if cfg!(windows) {
+                "python -c \"import pathlib,sys;sys.exit(pathlib.Path('x.txt').read_text() != 'good')\""
+            } else {
+                "test \"$(cat x.txt)\" = good"
+            },
             CancellationToken::new(),
         )
         .await
@@ -410,7 +443,15 @@ fn freshness_agent(dir: &tempfile::TempDir) -> (EventStore, Uuid, Agent) {
 
 async fn freshness_validate(agent: &mut Agent) {
     let result = agent
-        .run_validation("workspace check", "test -f x.txt", CancellationToken::new())
+        .run_validation(
+            "workspace check",
+            if cfg!(windows) {
+                "if exist x.txt (exit /b 0) else (exit /b 1)"
+            } else {
+                "test -f x.txt"
+            },
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert!(!result.is_error, "{}", result.output);
@@ -498,14 +539,21 @@ async fn freshness_write_capable_shell_after_validation_cannot_complete_verified
     let dir = tempdir().unwrap();
     let (_, _, mut agent) = freshness_agent(&dir);
     freshness_validate(&mut agent).await;
-    freshness_tool(&mut agent, "shell", json!({"command":"printf new > x.txt"})).await;
+    freshness_tool(
+        &mut agent,
+        "shell",
+        json!({"command":(if cfg!(windows) { "echo new>x.txt" } else { "printf new > x.txt" })}),
+    )
+    .await;
     freshness_complete(&mut agent);
     assert_eq!(
         agent.state().completion,
         CompletionState::ImplementedNotVerified
     );
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("x.txt")).unwrap(),
+        std::fs::read_to_string(dir.path().join("x.txt"))
+            .unwrap()
+            .trim_end(),
         "new"
     );
 }
@@ -559,7 +607,7 @@ async fn freshness_resume_then_mutate_cannot_reuse_prior_validation() {
     freshness_tool(
         &mut resumed,
         "shell",
-        json!({"command":"printf new > x.txt"}),
+        json!({"command":(if cfg!(windows) { "echo new>x.txt" } else { "printf new > x.txt" })}),
     )
     .await;
     freshness_complete(&mut resumed);
@@ -597,7 +645,7 @@ async fn freshness_other_session_mutation_invalidates_same_workspace() {
             &ToolCall {
                 id: Uuid::new_v4().to_string(),
                 name: "shell".into(),
-                arguments: json!({"command":"printf child > x.txt"}),
+                arguments: json!({"command":(if cfg!(windows) { "echo child>x.txt" } else { "printf child > x.txt" })}),
             },
             CancellationToken::new(),
         )
@@ -617,13 +665,23 @@ async fn freshness_read_only_action_preserves_current_validation() {
     freshness_validate(&mut agent).await;
     let generation = agent.evidence().workspace_generation();
     freshness_tool(&mut agent, "read_file", json!({"path":"x.txt"})).await;
-    freshness_tool(&mut agent, "shell", json!({"command":"cat x.txt"})).await;
+    freshness_tool(
+        &mut agent,
+        "shell",
+        json!({"command":(if cfg!(windows) { "type x.txt" } else { "cat x.txt" })}),
+    )
+    .await;
     store
         .append(
             sid,
             EventPayload::ProcessStarted {
                 id: "proc-reader".into(),
-                command: "cat x.txt".into(),
+                command: (if cfg!(windows) {
+                    "type x.txt"
+                } else {
+                    "cat x.txt"
+                })
+                .into(),
                 label: String::new(),
                 may_write_workspace: Some(false),
                 pid: Some(1),
@@ -651,7 +709,12 @@ async fn freshness_revalidation_after_mutation_restores_verified_completion() {
     let (store, sid, mut agent) = freshness_agent(&dir);
     freshness_validate(&mut agent).await;
     let old = agent.evidence().current("workspace check").unwrap().clone();
-    freshness_tool(&mut agent, "shell", json!({"command":"printf new > x.txt"})).await;
+    freshness_tool(
+        &mut agent,
+        "shell",
+        json!({"command":(if cfg!(windows) { "echo new>x.txt" } else { "printf new > x.txt" })}),
+    )
+    .await;
     freshness_complete(&mut agent);
     assert_eq!(
         agent.state().completion,
@@ -2915,7 +2978,7 @@ async fn steering_during_a_running_tool_waits_for_its_result() {
                 "running",
                 "t1",
                 "shell",
-                json!({"command":"sleep 0.3 && echo done"}),
+                json!({"command":(if cfg!(windows) { "python -c \"import time; time.sleep(0.3)\" && echo done" } else { "sleep 0.3 && echo done" })}),
             ),
             ModelResponse {
                 text: "adapted".into(),
@@ -3439,7 +3502,11 @@ async fn a_steer_between_sequential_mutations_supersedes_the_stale_tail() {
             multi_tool_response(
                 "working",
                 vec![
-                    ("m1", "shell", json!({"command":"sleep 0.5 && echo first"})),
+                    (
+                        "m1",
+                        "shell",
+                        json!({"command":(if cfg!(windows) { "python -c \"import time; time.sleep(0.5)\" && echo first" } else { "sleep 0.5 && echo first" })}),
+                    ),
                     ("m2", "shell", json!({"command":"printf stale > stale.txt"})),
                 ],
             ),
@@ -4798,7 +4865,7 @@ async fn a_passing_validation_still_terminates_as_verified() {
                 "validate",
                 json!({
                     "requirement": "added.txt holds hello",
-                    "command": "test \"$(cat added.txt)\" = hello"
+                    "command": (if cfg!(windows) { "python -c \"import pathlib,sys;sys.exit(pathlib.Path('added.txt').read_text() != 'hello')\"" } else { "test \"$(cat added.txt)\" = hello" })
                 }),
             ),
             complete_response("c1"),

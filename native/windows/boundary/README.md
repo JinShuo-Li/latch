@@ -1,11 +1,9 @@
-# Native Windows boundary checkpoint — 2026-09-27
+# Native Windows boundary — 2026-09-27
 
-This is unfinished experimental code on `codex/windows-native-port`. The
-maintainer requested scoped bug fixes, a committed record of the remaining
-tests, and a pushed checkpoint. It is **not a completed Windows port**.
-Production `ExecutionBackend::detect` on Windows still refuses execution.
-Version remains 0.2.3. Do not enable this candidate or merge it into main as a
-working Windows backend based on the checks below.
+`codex/windows-native-port` selects this runner from the production
+`ExecutionBackend`. Version remains 0.2.3 while the full Windows CI gate and
+production NTFS dogfood are completed. Native fixture results below establish
+the listed cases only; do not merge a red Windows gate into main.
 
 ## Implemented candidate
 
@@ -37,10 +35,10 @@ working Windows backend based on the checks below.
 - Native cmd.exe shell and direct executable/argv inspection are exercised
   by a Rust test. Git Bash/MSYS is not supported by this candidate.
 - Native helpers build from the Windows Cargo build script with MSVC and are
-  embedded in a test-only runtime module. No unsafe Rust was introduced.
+  embedded in the production Windows runtime module. No unsafe Rust was introduced.
 - No account provisioning, firewall changes, WSL, or unrestricted retry.
 
-## Bugs fixed in this checkpoint
+## Native bugs fixed
 
 Outside-write escape through pre-existing workspace hardlinks; credential reads
 through protected child DACLs and package allow grants; accidental Git read
@@ -52,7 +50,7 @@ and stale .git reservation cleanup on runner death.
 
 Git inspection and extension hosts now use the fixed-program execution entry
 point. Linux still uses mandatory Bubblewrap and explicitly execs that fixed
-program. Windows production entry points continue to refuse execution.
+program. Production Windows entry points now use the same embedded runner.
 
 ## Verified with real native subprocesses on this Windows 11/NTFS host
 
@@ -103,7 +101,8 @@ This fixes retained grants/profiles after killing the public launcher. Grant
 records are allocated before ACL mutation, process attribute lists use RAII,
 and ACL/profile cleanup failures make the command fail (125). If job teardown
 cannot be confirmed, the owner exits without attempting ACL revocation; closing
-its job handle still requests process termination. This is not a crash journal.
+its job handle still requests process termination. The durable recovery journal
+described below was added after this historical cleanup-only change.
 
 Verified again with real native subprocesses: all 18 baseline file assertions;
 all adversarial assertions; timeout, root-exit and launcher-kill of four-generation
@@ -121,7 +120,7 @@ Evidence directories for this follow-up: `boundary-owner-matrix-02`,
 `C:/project/latch/target/`. Killing the cleanup owner itself, machine crashes,
 cancellation at every startup phase, and concurrent ACL mutation are still
 unverified; killing both trusted processes can still leave temporary grants
-and profiles behind. Production detection remains disabled.
+and profiles behind. This paragraph records the historical `39111c8` state.
 
 ## Reproduce focused checks
 
@@ -151,10 +150,10 @@ See [RECOVERY.md](RECOVERY.md) for the implemented durable protocol, module
 ownership, focused failure tests and explicit remaining blockers. The previous
 cleanup-only limitations above describe 39111c8, not the new journal.
 
-**P0 is not fully complete:** an owner crash during the nontransactional
-AppContainer creation API, before the actual package ID is sealed, deliberately
-fails closed and requires operator reconciliation. No known filesystem escape
-is accepted to avoid this refusal. Production execution remains disabled.
+The AppContainer creation gap now has a pre-journaled unique name and derived
+SID. Recovery verifies the profile mapping before cleanup, including crashes
+on both sides of the creation API. Deleted grant roots are also recovered by
+recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
 
 ## Not verified / not finished
 
@@ -164,12 +163,13 @@ is accepted to avoid this refusal. Production execution remains disabled.
   host. The previous checkpoint (730dbdd) passed the full Ubuntu CI release
   gate in GitHub Actions run 36257342807. Follow-up commits require their own
   CI run; no Linux behavior or security relaxation is intended.
-- **CI:** no Windows CI workflow has been added. Existing Linux CI remains.
+- **CI:** the Windows workflow runs native fixtures and the Rust release gate;
+  confirm a green run before merging. Linux Bubblewrap CI remains separate.
 - **Real dogfood:** no native Latch NTFS coding task; no live/model agent proof
   of inspection, editing, search, validation, Git and managed tools together.
-- **Integration:** production detection, doctor, model shell instructions,
-  all CLI Git inspection paths, search, validation, extension fixtures and
-  exec_start/exec_poll/exec_terminate/cancellation/drop through Latch itself.
+- **Integration:** production detection, `cmd.exe` model instructions, Git and
+  search tools, validation, Python extensions, and managed-process lifecycle
+  have local tests. CLI host-side Git inspection paths still need audit.
 - **Filesystem adversaries:** concurrent grants and revocations beyond the journal lock,
   remaining recovery intervals described in RECOVERY.md, hostile rename/reparse/hardlink races, all existing
   open-handle races, nested Git repositories, worktree/common-dir cases,
@@ -193,5 +193,5 @@ is accepted to avoid this refusal. Production execution remains disabled.
 - **Release:** README installation instructions, doctor, security/runtime docs
   for an enabled backend, Windows packaging, version bump and release build.
 
-The kernel integration module is deliberately `cfg(all(windows, test))`.
-Production Windows execution is still fail-closed, including fixed commands.
+The kernel integration module is compiled for production Windows. Version
+remains 0.2.3 until CI, packaging, and real NTFS dogfood finish.

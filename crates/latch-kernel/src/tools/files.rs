@@ -216,7 +216,8 @@ impl ToolExecutor {
             .fixed_command(&self.sandbox_profile(call), "rg", &arguments)?
             .output()
             .await?;
-        if !out.status.success() && out.status.code() != Some(1) {
+        let partial = cfg!(windows) && out.status.code() == Some(2) && !out.stdout.is_empty();
+        if !out.status.success() && out.status.code() != Some(1) && !partial {
             bail!(
                 "search failed with {}: {}",
                 out.status,
@@ -239,6 +240,9 @@ impl ToolExecutor {
             end,
             matches[offset..end].join("\n")
         );
+        if partial {
+            result.push_str("\n[search incomplete: inaccessible entries were skipped]");
+        }
         if end < total {
             result.push_str(&format!("\n[continue with offset={end}]"));
         }

@@ -204,7 +204,20 @@ if __name__ == '__main__':
         "def add(a, b):\n    return a + b\n"
     );
     // Kernel-derived completion is VERIFIED.
-    assert_eq!(agent.state().completion, CompletionState::Verified);
+    let validation_details = store
+        .events(session)
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.payload {
+            EventPayload::ValidationResult { passed, detail, .. } => Some((passed, detail)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::Verified,
+        "validation details: {validation_details:?}"
+    );
     let events = store.events(session).unwrap();
     // Both validation attempts are durable; the current evidence is Passed.
     assert_eq!(

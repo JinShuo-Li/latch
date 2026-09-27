@@ -446,6 +446,10 @@ pub(super) fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(
 /// actual grammar so ASK/PLAN can never be used to mutate the workspace.
 pub(crate) fn is_read_only_shell(command: &str, workspace: &Path) -> bool {
     let command = command.trim();
+    #[cfg(windows)]
+    if command.contains(['%', '^']) {
+        return false;
+    }
     if command.is_empty() || command.contains("||") {
         return false;
     }
@@ -556,6 +560,8 @@ pub(super) fn is_read_only_command(command: &str) -> bool {
     match first {
         "rg" => !args.iter().any(|arg| arg.starts_with("--pre")),
         "grep" | "ls" | "pwd" | "head" | "tail" | "wc" | "cat" => true,
+        #[cfg(windows)]
+        "dir" | "type" | "where" | "ver" => true,
         "find" => !args.iter().any(|arg| {
             matches!(
                 *arg,

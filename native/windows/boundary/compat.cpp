@@ -93,7 +93,7 @@ bool cwd_ancestor(LPCWSTR path) {
 bool metadata_ancestor(POBJECT_ATTRIBUTES attributes, ACCESS_MASK access,
                        PHANDLE handle, PIO_STATUS_BLOCK status) {
   if (!attributes || attributes->RootDirectory || !attributes->ObjectName ||
-      (access & ~(FILE_READ_ATTRIBUTES | FILE_READ_DATA | SYNCHRONIZE)) != 0)
+      (access & ~(FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | SYNCHRONIZE)) != 0)
     return false;
   const auto* object = attributes->ObjectName;
   std::wstring native(object->Buffer, object->Length / sizeof(wchar_t));
@@ -148,7 +148,10 @@ NTSTATUS NTAPI open(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES attri
   if (named(attributes, L"\\Device\\KsecDD") &&
       duplicate(ksec_handle, handle, io,
                 (attributes->Attributes & OBJ_INHERIT) != 0)) return 0;
-  return real_open(handle, access, attributes, io, share, options);
+  const NTSTATUS result = real_open(handle, access, attributes, io, share, options);
+  if (result == static_cast<NTSTATUS>(0xc0000022u) &&
+      metadata_ancestor(attributes, access, handle, io)) return 0;
+  return result;
 }
 
 BOOL WINAPI spawn(LPCWSTR app, LPWSTR command, LPSECURITY_ATTRIBUTES process_attributes,

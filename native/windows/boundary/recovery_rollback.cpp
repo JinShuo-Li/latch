@@ -211,8 +211,10 @@ void Recovery::recover_pending() {
   std::map<std::wstring, Handle> ancestor_pins;
   for (const auto* entry : ordered) {
     const auto& rollback = *entry;
-    if (execution_started) pins.emplace_back(rollback.original);
-    else pins.emplace_back(rollback.original.path);
+    // The trusted caller may remove a temporary workspace after a failed
+    // launch, even if no child reached execution-start. Reopen by the exact
+    // recorded NTFS identity in both phases and verify absence by path below.
+    pins.emplace_back(rollback.original);
     if (!pins.back().object.value) continue;
     const auto path = std::filesystem::path(rollback.original.path).lexically_normal();
     const auto relative = path.relative_path();
@@ -236,7 +238,7 @@ void Recovery::recover_pending() {
   }
   std::set<std::wstring> absent_roots;
   for (const auto& [path, id] : roots) {
-    if (execution_started) {
+    {
       PinnedObject pin(ObjectState{path, id, L""});
       if (!pin.object.value) {
         require(GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES &&
@@ -250,14 +252,11 @@ void Recovery::recover_pending() {
               L"recovery grant root was renamed");
       require(PinnedObject(path).state().identity == id,
               L"recovery grant root was replaced");
-    } else {
-      PinnedObject pin(path);
-      require(pin.state().identity == id, L"recovery grant root was replaced");
     }
   }
   for (const auto& [path, parent] : reservation_intents) {
     const auto directory = std::filesystem::path(path).parent_path();
-    if (execution_started && absent_roots.contains(directory.wstring())) {
+    if (absent_roots.contains(directory.wstring())) {
       require(GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES,
               L"reservation appeared after its root disappeared");
       continue;
@@ -321,7 +320,13 @@ void Recovery::recover_pending() {
   const auto visit = [&](const auto& self,
                          const std::filesystem::path& path) -> void {
     const auto attrs = GetFileAttributesW(path.c_str());
-    if (attrs == INVALID_FILE_ATTRIBUTES) fail(L"scan recovery grant tree");
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+      const auto error = GetLastError();
+      // A child may remove a newly created file before cleanup reaches it.
+      // Such a file has no pre-call ACL and no remaining grant to revoke.
+      if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return;
+      fail(L"scan recovery grant tree", error);
+    }
     if (attrs & FILE_ATTRIBUTE_REPARSE_POINT)
       return;  // never follow a link out of a grant tree
     PinnedObject pinned(path);
@@ -381,8 +386,19 @@ void Recovery::recover_pending() {
   pins.clear();
   ancestor_pins.clear();
   for (const auto& [path, id] : roots) {
-    (void)id;
-    if (!absent_roots.contains(path)) visit(visit, path);
+    if (absent_roots.contains(path)) continue;
+    PinnedObject pin(ObjectState{path, id, L""});
+    if (!pin.object.value) {
+      require(GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES &&
+                  (GetLastError() == ERROR_FILE_NOT_FOUND ||
+                   GetLastError() == ERROR_PATH_NOT_FOUND),
+              L"recovery grant root was replaced during cleanup");
+      continue;
+    }
+    require(GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES &&
+                PinnedObject(path).state().identity == id,
+            L"recovery grant root changed during cleanup");
+    visit(visit, path);
   }
   if (!rollback_complete) record({L"rollback-complete"});
   pause(L"rollback-sealed");

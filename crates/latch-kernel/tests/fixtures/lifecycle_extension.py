@@ -19,6 +19,7 @@ to prove they are gone afterwards. The fake also writes the file at startup as
 a liveness record.
 """
 import json
+import os
 import sys
 import time
 
@@ -29,7 +30,7 @@ MARKER = sys.argv[2] if len(sys.argv) > 2 else ""
 def record_started():
     if MARKER:
         with open(MARKER, "w") as out:
-            out.write("started\n")
+            out.write(f"{os.getpid()}\n")
 
 
 def read_message():
