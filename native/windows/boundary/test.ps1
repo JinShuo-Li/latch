@@ -45,6 +45,20 @@ function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra =
         try {
           & $runner $workspace $fixture "read-allow `"$path`"" $mode @base
           Write-Output "Write-restricted diagnostic without AppContainer exited $LASTEXITCODE"
+          $env:LATCH_DIAG_WITH_WINDOW = '1'
+          try {
+            & $runner $workspace $fixture "read-allow `"$path`"" $mode @base
+            Write-Output "Write-restricted diagnostic without CREATE_NO_WINDOW exited $LASTEXITCODE"
+          } finally {
+            Remove-Item Env:LATCH_DIAG_WITH_WINDOW
+          }
+          $env:LATCH_DIAG_DEFAULT_DESKTOP = '1'
+          try {
+            & $runner $workspace $fixture "read-allow `"$path`"" $mode @base
+            Write-Output "Write-restricted diagnostic with default desktop exited $LASTEXITCODE"
+          } finally {
+            Remove-Item Env:LATCH_DIAG_DEFAULT_DESKTOP
+          }
         } finally {
           Remove-Item Env:LATCH_DIAG_NO_APPCONTAINER
         }

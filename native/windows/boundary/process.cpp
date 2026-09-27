@@ -18,6 +18,12 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
   si.StartupInfo.cb = sizeof(si);
   si.lpAttributeList = attrs;
   si.StartupInfo.lpDesktop = desktop.name.data();
+#ifdef LATCH_RECOVERY_TESTING
+  wchar_t desktop_diagnostic[2]{};
+  if (GetEnvironmentVariableW(L"LATCH_DIAG_DEFAULT_DESKTOP",
+                              desktop_diagnostic, 2))
+    si.StartupInfo.lpDesktop = nullptr;
+#endif
   si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
   si.StartupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
   si.StartupInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -79,9 +85,17 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
     fail(L"handle allowlist");
   PROCESS_INFORMATION pi{};
   cancel.check();
+  DWORD creation_flags =
+      EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED;
+#ifdef LATCH_RECOVERY_TESTING
+  wchar_t window_diagnostic[2]{};
+  if (GetEnvironmentVariableW(L"LATCH_DIAG_WITH_WINDOW", window_diagnostic,
+                              2))
+    creation_flags &= ~CREATE_NO_WINDOW;
+#endif
   if (!CreateProcessAsUserW(
           restricted, argv[2], line.data(), nullptr, nullptr, TRUE,
-          EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED,
+          creation_flags,
           nullptr, argv[1], &si.StartupInfo, &pi))
     fail(L"CreateProcessW");
   Handle process(pi.hProcess);
