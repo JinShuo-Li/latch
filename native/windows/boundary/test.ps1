@@ -32,6 +32,7 @@ function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra =
     $status = $LASTEXITCODE
     if ($status -eq -1073741502) {
       $env:LATCH_DIAG_SKIP_INJECTION = '1'
+      $env:LATCH_DIAG_WINDOW_STATION = '1'
       try {
         & $runner $workspace $fixture "read-allow `"$path`"" $mode @base @extra
         Write-Output "Restricted diagnostic without compatibility injection exited $LASTEXITCODE"
@@ -42,6 +43,7 @@ function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra =
         Write-Output "Restricted cmd diagnostic without injection exited $LASTEXITCODE"
       } finally {
         Remove-Item Env:LATCH_DIAG_SKIP_INJECTION
+        Remove-Item Env:LATCH_DIAG_WINDOW_STATION
       }
       $dumpbin = Get-ChildItem (Join-Path $env:ProgramFiles 'Microsoft Visual Studio/2022') -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
       if ($dumpbin) {
