@@ -711,6 +711,13 @@ fabricating a bash judgment.
 
 ### Execution backend and mandatory Linux sandbox
 
+Windows native helper build configuration is owned by latch-kernel/build.rs
+and build_support/windows.rs. MSVC and SDK discovery is delegated to
+find-msvc-tools, honoring developer environments and registered installations
+without fixing Visual Studio versions or installation roots. CMake executable
+and generator overrides are build-time configuration; they do not alter the
+runtime capability boundary. Native target architecture follows Cargo.
+
 `ToolExecutor` and extension hosts now request commands through
 `ExecutionBackend`. `SandboxProfile` remains the shared capability policy; the
 Linux backend delegates to the existing `SandboxRunner`. The Windows backend

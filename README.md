@@ -21,6 +21,18 @@ are recorded under `references/`.
 
 Stable Rust and a C toolchain are required.
 
+Windows source builds additionally need MSVC C++ Build Tools, a Windows SDK,
+and CMake 3.25 or newer for the native execution helpers. The full Visual
+Studio IDE is not required. Compiler discovery uses an initialized Developer
+PowerShell/Command Prompt or registered Visual Studio installations, without
+pinning a Visual Studio release, edition, or installation directory. CMake is
+located through CMAKE, then PATH, then the detected Visual Studio installation.
+Set CMAKE to an executable path without surrounding quotes to override it.
+CMAKE_GENERATOR selects the generator; the default is Ninja when available
+on PATH, otherwise NMake Makefiles. The native build uses the Cargo target
+architecture and rebuilds its CMake configuration when build inputs change.
+This discovery does not establish GNU/MinGW support for the native helpers.
+
 ```sh
 cargo build --release
 export OPENAI_API_KEY=...

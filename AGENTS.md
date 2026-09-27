@@ -24,6 +24,13 @@ the `latch` TUI (`cargo install --path crates/latch-cli` installs it).
 
 ## Commands
 
+Windows native build discovery lives in crates/latch-kernel/build.rs and
+build_support/windows.rs. It uses find-msvc-tools for MSVC/SDK discovery; never
+pin Visual Studio versions, editions, installation roots, or the target to x64.
+CMake 3.25+ is resolved via CMAKE, PATH, then the detected VS bundle.
+CMAKE_GENERATOR overrides Ninja-on-PATH / NMake selection. Discovery regression
+tests are in crates/latch-kernel/tests/windows_build.rs and run on every host.
+
 The deterministic 0.2.3 reliability gate is `bash scripts/release-gate.sh`.
 CI uses an ephemeral Ubuntu 24.04 runner, installs Bubblewrap, ripgrep, and
 Python, enables user namespaces there, probes the required sandbox namespaces

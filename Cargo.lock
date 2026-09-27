@@ -1167,6 +1167,7 @@ dependencies = [
  "bytes",
  "chrono",
  "dirs",
+ "find-msvc-tools",
  "futures",
  "hex",
  "latch-protocol",

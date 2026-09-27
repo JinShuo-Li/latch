@@ -37,3 +37,6 @@ winsafe = { version = "0.0.29", default-features = false, features = ["kernel"] 
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+find-msvc-tools = "0.1.12"
