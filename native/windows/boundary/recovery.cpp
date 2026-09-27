@@ -125,7 +125,9 @@ void Recovery::pause(const wchar_t* point) const {
   if (!MoveFileExW(marker.c_str(), (root_ / L"pause.pid").c_str(),
                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
     fail(L"publish crash-test PID");
-  for (;;) Sleep(1000);
+  const auto release = root_ / L"pause.resume";
+  while (GetFileAttributesW(release.c_str()) == INVALID_FILE_ATTRIBUTES)
+    Sleep(20);
 #else
   (void)point;
 #endif
@@ -203,5 +205,6 @@ void Recovery::profile_created() {
 }
 
 void Recovery::finish() { recover_pending(); }
+void Recovery::execution_start() { record({L"execution-start"}); }
 
 }  // namespace latch

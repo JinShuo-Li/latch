@@ -117,11 +117,15 @@ void Recovery::recover_pending() {
   std::vector<std::pair<std::wstring, std::wstring>> roots, reservations;
   std::map<std::wstring, std::wstring> reservation_intents;
   std::wstring package_identity;
+  bool profile_intent = false;
   bool rollback_complete = false;
+  bool execution_started = false;
   for (const auto& file : records) {
     const auto row = read_record(file);
     if (row == std::vector<std::wstring>{L"rollback-complete"})
       rollback_complete = true;
+    if (row == std::vector<std::wstring>{L"execution-start"})
+      execution_started = true;
   }
   // Unpublished intents cannot have authorized a mutation. Discard torn
   // temporary writes before reusing the next immutable sequence number.
@@ -156,7 +160,7 @@ void Recovery::recover_pending() {
       }
       // The primary path is pinned in the complete preflight below. A
       // second hardlink name must still designate the recorded identity.
-      if (!inserted && it->second.original.path != row[1]) {
+      if (!execution_started && !inserted && it->second.original.path != row[1]) {
         PinnedObject alias(row[1]);
         require(alias.state().identity == row[2],
                 L"recovery hardlink alias was replaced");
@@ -177,6 +181,7 @@ void Recovery::recover_pending() {
       PinnedObject parent(expected_package.parent_path());
       require(parent.state().identity == row[2],
               L"package parent was replaced");
+      profile_intent = true;
     } else if (row[0] == L"package") {
       require(row.size() == 3 &&
                   _wcsicmp(row[1].c_str(), expected_package.c_str()) == 0,
@@ -184,6 +189,8 @@ void Recovery::recover_pending() {
       package_identity = row[2];
     } else if (row[0] == L"rollback-complete") {
       require(row.size() == 1, L"invalid rollback seal");
+    } else if (row[0] == L"execution-start") {
+      require(row.size() == 1, L"invalid execution intent");
     } else
       fail(L"unknown recovery record", ERROR_INVALID_DATA);
   }
@@ -198,9 +205,24 @@ void Recovery::recover_pending() {
     return a->original.path.size() < b->original.path.size();
   });
   std::vector<PinnedObject> pins;
+  // Each PinnedObject checks every path component. Retain one no-delete-share
+  // handle per ancestor for the entire rollback, not one per file: a large
+  // dependency tree otherwise consumes millions of duplicate handles.
+  std::map<std::wstring, Handle> ancestor_pins;
   for (const auto* entry : ordered) {
     const auto& rollback = *entry;
-    pins.emplace_back(rollback.original.path);
+    if (execution_started) pins.emplace_back(rollback.original);
+    else pins.emplace_back(rollback.original.path);
+    if (!pins.back().object.value) continue;
+    const auto path = std::filesystem::path(rollback.original.path).lexically_normal();
+    const auto relative = path.relative_path();
+    auto component = relative.begin();
+    auto ancestor_path = path.root_path();
+    for (auto& handle : pins.back().ancestors) {
+      ancestor_path /= *component++;
+      ancestor_pins.try_emplace(ancestor_path.wstring(), std::move(handle));
+    }
+    pins.back().ancestors.clear();
     const auto now = pins.back().state();
     if (now.identity != rollback.original.identity ||
         !rollback.versions.contains(now.security)) {
@@ -235,10 +257,18 @@ void Recovery::recover_pending() {
   }
   bool package_exists =
       GetFileAttributesW(expected_package.c_str()) != INVALID_FILE_ATTRIBUTES;
+  if (!package_exists)
+    require(GetLastError() == ERROR_FILE_NOT_FOUND ||
+                GetLastError() == ERROR_PATH_NOT_FOUND,
+            L"cannot inspect stale package");
+  if (profile_intent && !package_exists && objects.empty() && roots.empty())
+    remove_empty_profile_mapping(package_sid_);
   // The API may replace its directory before it returns. In that interval
   // only the prechecked unique name, derived SID and matching registry
   // moniker prove profile ownership. A directory alone is not authority.
   const bool mapped = validate_profile_mapping(profile_, package_sid_, false);
+  require(profile_intent || (!mapped && !package_exists),
+          L"profile appeared without a creation intent");
   if (package_exists) {
     if (package_identity.empty() && !mapped) {
       std::fwprintf(stderr,
@@ -252,11 +282,13 @@ void Recovery::recover_pending() {
     if (!package_identity.empty())
       require(package.state().identity == package_identity,
               L"AppContainer directory replaced; refusing cleanup");
+    else {
+      package_identity = package.state().identity;
+      record({L"package", expected_package.wstring(), package_identity});
+      pause(L"profile-resealed");
+    }
     reject_reparse_tree(expected_package);
-  } else
-    require(GetLastError() == ERROR_FILE_NOT_FOUND ||
-                GetLastError() == ERROR_PATH_NOT_FOUND,
-            L"cannot inspect stale package");
+  }
   // New developer-created objects have no pre-call descriptor. Remove only
   // this transaction's unique ACEs, preserving every unrelated ACE/control.
   // Write these removals ahead too, so recovery itself is restartable.
@@ -315,6 +347,7 @@ void Recovery::recover_pending() {
   for (const auto* entry : ordered) {
     const auto& rollback = *entry;
     auto& pinned = pins[index++];
+    if (!pinned.object.value) continue;
     const auto current = read_security(pinned.object.value);
     require(rollback.versions.contains(current),
             L"host ACL changed during recovery");
@@ -323,6 +356,7 @@ void Recovery::recover_pending() {
     if (index == 1) pause(L"cleanup");
   }
   pins.clear();
+  ancestor_pins.clear();
   for (const auto& [path, id] : roots) {
     (void)id;
     visit(visit, path);

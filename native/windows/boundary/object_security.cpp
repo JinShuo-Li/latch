@@ -57,6 +57,90 @@ PinnedObject::PinnedObject(const std::filesystem::path& input, DWORD access) {
   }
   if (!object.value) fail(L"cannot mutate a volume root", ERROR_ACCESS_DENIED);
 }
+PinnedObject::PinnedObject(const ObjectState& original) {
+  const auto separator = original.identity.rfind(L':');
+  require(separator != std::wstring::npos &&
+              original.identity.size() - separator - 1 == 32,
+          L"invalid recovery file ID");
+  FILE_ID_DESCRIPTOR file_id{};
+  file_id.dwSize = sizeof(file_id);
+  file_id.Type = ExtendedFileIdType;
+  const auto digit = [](wchar_t value) -> unsigned {
+    if (value >= L'0' && value <= L'9') return value - L'0';
+    if (value >= L'a' && value <= L'f') return value - L'a' + 10;
+    fail(L"invalid recovery identity hex", ERROR_INVALID_DATA);
+  };
+  for (size_t i = 0; i < 16; ++i) {
+    const auto at = separator + 1 + i * 2;
+    file_id.ExtendedFileId.Identifier[i] = static_cast<BYTE>(
+        digit(original.identity[at]) * 16 + digit(original.identity[at + 1]));
+  }
+  const auto volume_path = std::filesystem::path(original.path).root_path();
+  Handle volume(CreateFileW(volume_path.c_str(), FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (volume.value == INVALID_HANDLE_VALUE) fail(L"open recovery volume hint");
+  const auto volume_identity = identity(volume.value);
+  wchar_t filesystem[32]{};
+  if (!GetVolumeInformationByHandleW(volume.value, nullptr, 0, nullptr,
+      nullptr, nullptr, filesystem, 32)) fail(L"inspect recovery filesystem");
+  require(std::wcscmp(filesystem, L"NTFS") == 0, L"identity recovery requires NTFS");
+  require(original.identity.substr(0, original.identity.find(L':')) ==
+              volume_identity.substr(0, volume_identity.find(L':')),
+          L"recovery volume identity changed");
+  object.value = OpenFileById(volume.value, &file_id,
+      READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+  if (object.value == INVALID_HANDLE_VALUE && GetLastError() == ERROR_INVALID_PARAMETER &&
+      std::all_of(file_id.ExtendedFileId.Identifier + 8,
+                  file_id.ExtendedFileId.Identifier + 16,
+                  [](BYTE byte) { return byte == 0; })) {
+    // NTFS also exposes the same reference number through the 64-bit query.
+    // Keep creation time/type checks below even when that query succeeds.
+    file_id.Type = FileIdType;
+    object.value = OpenFileById(volume.value, &file_id,
+        READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+  }
+  if (object.value == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    object.value = nullptr;
+    // A pending deletion, sharing violation, or access denial is not proof
+    // that the inode is gone. Preserve the journal on every other error.
+    if (error == ERROR_FILE_NOT_FOUND) return;
+    if (error == ERROR_INVALID_PARAMETER) {
+      // NTFS reports an unallocated/stale file reference as INVALID_PARAMETER,
+      // including through its legacy 64-bit API. Distinguish that from an
+      // unsupported descriptor/query by opening a known live reference with
+      // the identical ID type and flags. Never interpret access/sharing errors
+      // (including a delete-pending file) as absence.
+      FILE_ID_INFO live_id{};
+      if (!GetFileInformationByHandleEx(volume.value, FileIdInfo, &live_id, sizeof(live_id)))
+        fail(L"read recovery reference control");
+      FILE_ID_DESCRIPTOR live = file_id;
+      live.ExtendedFileId = live_id.FileId;
+      Handle control(OpenFileById(volume.value, &live, FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT));
+      if (control.value != INVALID_HANDLE_VALUE && identity(control.value) == volume_identity)
+        return;
+    }
+    std::fwprintf(stderr, L"Unresolved recovery file ID at %ls: %ls\n",
+                  original.path.c_str(), original.identity.c_str());
+    fail(L"reopen original recovery identity", error);
+  }
+  require(identity(object.value) == original.identity,
+          L"recovery file ID was reused or changed");
+  FILE_ATTRIBUTE_TAG_INFO tag{};
+  if (!GetFileInformationByHandleEx(object.value, FileAttributeTagInfo,
+                                    &tag, sizeof(tag)))
+    fail(L"inspect reopened recovery object");
+  require(!(tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT),
+          L"recovery object became a reparse point");
+}
+
 std::wstring identity(HANDLE handle) {
   FILE_ID_INFO id{};
   FILE_BASIC_INFO basic{};

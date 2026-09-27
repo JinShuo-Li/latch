@@ -15,6 +15,90 @@
 int wmain(int argc, wchar_t** argv) {
   if (argc < 3) return 2;
   const std::wstring operation = argv[1];
+  if (operation == L"root-stat") {
+    for (int i = 2; i < argc; ++i) {
+      WIN32_FILE_ATTRIBUTE_DATA data{};
+      const BOOL stat = GetFileAttributesExW(argv[i], GetFileExInfoStandard, &data);
+      const DWORD stat_error = GetLastError();
+      const DWORD attributes = GetFileAttributesW(argv[i]);
+      const DWORD attributes_error = GetLastError();
+      HANDLE handle = CreateFileW(argv[i], FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+          OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+      const DWORD open_error = GetLastError();
+      std::fwprintf(stdout, L"root-stat %ls ex=%d/%lu attrs=%lu/%lu open=%d/%lu\n",
+          argv[i], stat, stat_error, attributes, attributes_error,
+          handle != INVALID_HANDLE_VALUE, open_error);
+      if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    }
+    return 0;
+  }
+  if (operation == L"root-boundary") {
+    if (argc != 3) return 2;
+    HANDLE root = CreateFileW(argv[2], FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (root == INVALID_HANDLE_VALUE) return 3;
+    FILE_ID_INFO id{};
+    const bool metadata = GetFileInformationByHandleEx(root, FileIdInfo, &id, sizeof(id)) != FALSE;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const DWORD acl = GetSecurityInfo(root, SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr, &descriptor);
+    if (descriptor) LocalFree(descriptor);
+    CloseHandle(root);
+    if (!metadata || acl != ERROR_ACCESS_DENIED) return 4;
+    std::puts("PASS root ancestor handle has metadata rights, no ACL read");
+    return 0;
+  }
+  if (operation == L"cwd-probe") {
+    wchar_t cwd[32768]{};
+    if (!GetCurrentDirectoryW(32768, cwd)) return 3;
+    for (DWORD share : {static_cast<DWORD>(FILE_SHARE_READ | FILE_SHARE_WRITE),
+                        static_cast<DWORD>(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)}) {
+      HANDLE opened = CreateFileW(cwd, 0, share, nullptr, OPEN_EXISTING,
+                                  FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+      const DWORD error = GetLastError();
+      std::fwprintf(stdout, L"cwd share=%lu opened=%d error=%lu path=%ls\n",
+                    share, opened != INVALID_HANDLE_VALUE, error, cwd);
+      if (opened != INVALID_HANDLE_VALUE) {
+        wchar_t resolved[32768]{};
+        for (DWORD flags : {static_cast<DWORD>(0),
+                            static_cast<DWORD>(FILE_NAME_OPENED),
+                            static_cast<DWORD>(FILE_NAME_OPENED | VOLUME_NAME_NONE)}) {
+          const DWORD length = GetFinalPathNameByHandleW(opened, resolved, 32768, flags);
+          std::fwprintf(stdout, L"cwd final flags=%lu length=%lu error=%lu value=%ls\n",
+                        flags, length, GetLastError(), resolved);
+        }
+        CloseHandle(opened);
+      }
+    }
+    return 0;
+  }
+  if (operation == L"replace-file") {
+    const std::wstring staging = std::wstring(argv[2]) + L".replacement";
+    HANDLE file = CreateFileW(staging.c_str(), GENERIC_WRITE, 0, nullptr,
+        CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return 3;
+    constexpr char content[] = "replacement contents";
+    DWORD written = 0;
+    const BOOL stored = WriteFile(file, content, sizeof(content) - 1, &written, nullptr);
+    CloseHandle(file);
+    if (!stored || written != sizeof(content) - 1) return 4;
+    if (!MoveFileExW(staging.c_str(), argv[2],
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return 5;
+    std::puts("PASS existing file replacement");
+    return 0;
+  }
+  if (operation == L"delete-file") {
+    if (!DeleteFileW(argv[2])) return 3;
+    std::puts("PASS existing file deletion");
+    return 0;
+  }
+  if (operation == L"rename-file") {
+    if (argc != 4 || !MoveFileExW(argv[2], argv[3], MOVEFILE_WRITE_THROUGH)) return 3;
+    std::puts("PASS existing file rename");
+    return 0;
+  }
   if (operation == L"network-deny" || operation == L"network-allow") {
     WSADATA data{};
     if (WSAStartup(MAKEWORD(2, 2), &data)) return 3;
