@@ -26,8 +26,23 @@ foreach ($path in @($readable,$secret,$gitFile,$outside)) { [IO.File]::WriteAllT
 if ($LASTEXITCODE) { throw 'Fixture ACL setup failed' }
 $base = @('--read-root',$runtime,'--deny',$state)
 function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra = @()) {
+  $started = Get-Date
   & $runner $workspace $fixture "$operation `"$path`"" $mode @base @extra
-  if ($LASTEXITCODE) { throw "Subprocess assertion failed: $operation $path ($LASTEXITCODE)" }
+  if ($LASTEXITCODE) {
+    $status = $LASTEXITCODE
+    if ($status -eq -1073741502) {
+      $dumpbin = Get-ChildItem (Join-Path $env:ProgramFiles 'Microsoft Visual Studio/2022') -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($dumpbin) {
+        & $dumpbin.FullName /dependents (Join-Path $runtime 'latch-boundary-compat.dll')
+        & $dumpbin.FullName /dependents $fixture
+      }
+      Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=$started} -ErrorAction SilentlyContinue |
+        Where-Object { $_.Message -match 'latch-boundary|0xc0000142' } |
+        Select-Object -First 5 TimeCreated,ProviderName,Id,Message |
+        Format-List | Out-String | Write-Output
+    }
+    throw "Subprocess assertion failed: $operation $path ($status)"
+  }
 }
 Check 'read-allow' $readable 'read'
 Check 'write-deny' $readable 'read'
