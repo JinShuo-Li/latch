@@ -52,6 +52,27 @@ void PrivateDesktop::create(PSID unique, const std::wstring& unique_name) {
                                              sizeof(actual_station),
                                              &station_bytes))
     fail(L"query parent window station");
+#ifdef LATCH_RECOVERY_TESTING
+  if (GetEnvironmentVariableW(L"LATCH_DIAG_WINDOW_STATION", nullptr, 0)) {
+    PSECURITY_DESCRIPTOR station_sd = nullptr;
+    const DWORD status = GetSecurityInfo(station, SE_WINDOW_OBJECT,
+                                         DACL_SECURITY_INFORMATION, nullptr,
+                                         nullptr, nullptr, nullptr, &station_sd);
+    Local sd_owner(station_sd);
+    LPWSTR station_sddl = nullptr;
+    if (status == ERROR_SUCCESS &&
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            station_sd, SDDL_REVISION_1, DACL_SECURITY_INFORMATION,
+            &station_sddl, nullptr)) {
+      Local sddl_owner(station_sddl);
+      std::fwprintf(stderr, L"Diagnostic window station %ls ACL %ls\n",
+                    actual_station, station_sddl);
+    } else {
+      std::fwprintf(stderr, L"Diagnostic window station %ls ACL unavailable %lu\n",
+                    actual_station, status);
+    }
+  }
+#endif
   name = std::wstring(actual_station) + L"\\" + station_name;
 }
 
