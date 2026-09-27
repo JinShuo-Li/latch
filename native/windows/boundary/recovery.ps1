@@ -11,7 +11,7 @@ function Header([string]$journal){
     $fields=@(); for($i=0;$i -lt $count;$i++){ $length=$reader.ReadUInt32();$fields += [Text.Encoding]::Unicode.GetString($reader.ReadBytes($length*2)) }; return ,$fields
   } finally {$reader.Dispose()}
 }
-foreach($point in @('after-journal','profile-intent','profile-unsealed','first-acl','all-grants','appcontainer','child-launch','descendants','cleanup','rollback-sealed','profile-removed','reboot-equivalent','torn-intent','corrupt-record','host-acl-conflict','replaced-object')) {
+foreach($point in @('after-journal','profile-intent','profile-orphan-conflict','profile-unsealed','profile-mapping-conflict','first-acl','all-grants','appcontainer','child-launch','descendants','cleanup','rollback-sealed','profile-removed','reboot-equivalent','torn-intent','corrupt-record','host-acl-conflict','replaced-object')) {
   $case=Join-Path $root $point;$workspace=Join-Path $case 'workspace';$runtime=Join-Path $case 'runtime';$state=Join-Path $case 'state';$journal=Join-Path $case 'journal'
   New-Item -ItemType Directory $case,$workspace,$runtime,$state | Out-Null
   foreach($file in @('latch-boundary-probe.exe','latch-boundary-files.exe','latch-boundary-compat.dll')){Copy-Item -LiteralPath (Join-Path $Binaries $file) -Destination $runtime}
@@ -23,7 +23,7 @@ foreach($point in @('after-journal','profile-intent','profile-unsealed','first-a
   $before=@{}
   foreach($path in @($workspace,$ordinary,$runtime,$state,$secret)+(Get-ChildItem -LiteralPath $runtime -File | ForEach-Object FullName)){ $before[$path]=(Get-Acl -LiteralPath $path).Sddl }
   $runner=Join-Path $runtime 'latch-boundary-probe.exe';$fixture=Join-Path $runtime 'latch-boundary-files.exe';$marker=Join-Path $workspace 'tree'
-  $pause=if($point -in @('host-acl-conflict','replaced-object','torn-intent','corrupt-record')){'all-grants'}elseif($point -eq 'reboot-equivalent'){'descendants'}else{$point}
+  $pause=if($point -in @('host-acl-conflict','replaced-object','torn-intent','corrupt-record')){'all-grants'}elseif($point -eq 'profile-mapping-conflict'){'profile-unsealed'}elseif($point -eq 'profile-orphan-conflict'){'profile-intent'}elseif($point -eq 'reboot-equivalent'){'descendants'}else{$point}
   $command=if($point -in @('descendants','reboot-equivalent')){'tree 3 '+$marker}else{'read-allow '+$ordinary}
   $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$runner;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$q=[char]34
   $info.Arguments=$q+$workspace+$q+' '+$q+$fixture+$q+' '+$q+$command+$q+' write --read-root '+$q+$runtime+$q+' --deny '+$q+$state+$q+' --protect-git '+$q+$workspace+$q
@@ -60,16 +60,35 @@ foreach($point in @('after-journal','profile-intent','profile-unsealed','first-a
       $hostAcl=(Get-Acl -LiteralPath $ordinary).Sddl
     }
     $env:LATCH_RECOVERY_ROOT=$journal;Remove-Item Env:LATCH_RECOVERY_PAUSE -ErrorAction SilentlyContinue
+    if($point -eq 'profile-orphan-conflict'){
+      New-Item -ItemType Directory -Path $header[7] | Out-Null
+      $orphan=Join-Path $header[7] 'sentinel.txt'
+      [IO.File]::WriteAllText($orphan,'unrelated directory')
+      try {
+        & $runner --recover-only
+        if($LASTEXITCODE -ne 125 -or !(Test-Path -LiteralPath (Join-Path $journal 'pending'))){throw 'Unregistered directory did not retain journal'}
+        if([IO.File]::ReadAllText($orphan) -ne 'unrelated directory'){throw 'Unregistered directory was changed'}
+      } finally {
+        Remove-Item -LiteralPath $orphan
+        Remove-Item -LiteralPath $header[7]
+      }
+    }
+    if($point -eq 'profile-mapping-conflict'){
+      $mapping='HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings\'+$header[4]
+      if(!(Test-Path -LiteralPath $mapping)){throw 'Unsealed profile has no registration'}
+      $moniker=(Get-ItemProperty -LiteralPath $mapping -Name Moniker).Moniker
+      if($moniker -ne $header[3]){throw 'Unexpected profile moniker'}
+      try {
+        Set-ItemProperty -LiteralPath $mapping -Name Moniker -Value 'unrelated-profile'
+        & $runner --recover-only
+        if($LASTEXITCODE -ne 125 -or !(Test-Path -LiteralPath (Join-Path $journal 'pending'))){throw 'Mismatched mapping did not retain journal'}
+        if(!(Test-Path -LiteralPath $header[7])){throw 'Mismatched mapping deleted package'}
+      } finally {Set-ItemProperty -LiteralPath $mapping -Name Moniker -Value $moniker}
+    }
     if($point -eq 'reboot-equivalent'){
       # Normal runner startup must recover stale state before launching again.
       & $runner $workspace $fixture ('read-allow '+$ordinary) write --read-root $runtime --deny $state --protect-git $workspace
     }else{& $runner --recover-only}
-    if($point -eq 'profile-unsealed'){
-      if($LASTEXITCODE -ne 125){throw 'Unsealed API mutation was not blocked'}
-      if(!(Test-Path -LiteralPath (Join-Path $journal 'pending'))){throw 'Unsealed journal was lost'}
-      foreach($path in $before.Keys){if((Get-Acl -LiteralPath $path).Sddl -ne $before[$path]){throw 'Unsealed creation changed host ACLs'}}
-      Write-Output 'PASS unsealed profile creation fails closed and requires operator reconciliation';continue
-    }
     if($point -in @('host-acl-conflict','replaced-object','corrupt-record')){
       if($LASTEXITCODE -ne 125){throw 'Host conflict did not fail closed'}
       if((Get-Acl -LiteralPath $ordinary).Sddl -ne $hostAcl){throw 'Recovery overwrote an unrelated host change'}

@@ -235,19 +235,23 @@ void Recovery::recover_pending() {
   }
   bool package_exists =
       GetFileAttributesW(expected_package.c_str()) != INVALID_FILE_ATTRIBUTES;
+  // The API may replace its directory before it returns. In that interval
+  // only the prechecked unique name, derived SID and matching registry
+  // moniker prove profile ownership. A directory alone is not authority.
+  const bool mapped = validate_profile_mapping(profile_, package_sid_, false);
   if (package_exists) {
-    if (package_identity.empty()) {
+    if (package_identity.empty() && !mapped) {
       std::fwprintf(stderr,
-                    L"Unsealed AppContainer creation: %ls. Preserve journal "
-                    L"%ls; an operator must verify the package and SID mapping "
-                    L"before removal. Automatic execution is blocked.%lc",
+                    L"Unregistered AppContainer directory: %ls. Preserve "
+                    L"journal %ls; automatic deletion is unsafe.%lc",
                     expected_package.c_str(), pending_.c_str(), 10);
-      fail(L"profile creation interrupted before identity seal",
+      fail(L"profile directory exists without ownership mapping",
            ERROR_RECOVERY_FAILURE);
     }
     PinnedObject package(expected_package);
-    require(package.state().identity == package_identity,
-            L"AppContainer directory replaced; refusing cleanup");
+    if (!package_identity.empty())
+      require(package.state().identity == package_identity,
+              L"AppContainer directory replaced; refusing cleanup");
     reject_reparse_tree(expected_package);
   } else
     require(GetLastError() == ERROR_FILE_NOT_FOUND ||
