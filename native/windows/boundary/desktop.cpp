@@ -42,7 +42,17 @@ void PrivateDesktop::create(PSID unique, const std::wstring& unique_name) {
   const DWORD desktop_error = GetLastError();
 
   if (desktop == nullptr) fail(L"CreateDesktopW(private)", desktop_error);
-  name = L"WinSta0\\" + station_name;
+  // CreateDesktopW uses this process's window station. Hosted CI runners can
+  // use a noninteractive station, so never assume that it is WinSta0.
+  wchar_t actual_station[256]{};
+  DWORD station_bytes = 0;
+  const HWINSTA station = GetProcessWindowStation();
+  if (!station || !GetUserObjectInformationW(station, UOI_NAME,
+                                             actual_station,
+                                             sizeof(actual_station),
+                                             &station_bytes))
+    fail(L"query parent window station");
+  name = std::wstring(actual_station) + L"\\" + station_name;
 }
 
 void PrivateDesktop::grant_package(PSID sid) {
