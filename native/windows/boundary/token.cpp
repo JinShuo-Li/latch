@@ -65,12 +65,12 @@ Handle restrict_token(PSID write_sid) {
     return original;
 #endif
   SID_AND_ATTRIBUTES restrictors[] = {{write_sid, 0}};
-  Local admin = parse_sid(L"S-1-5-32-544");
-  SID_AND_ATTRIBUTES disabled[] = {{admin.value, 0}};
+  // Do not disable the caller's Administrators group here. Hosted Windows
+  // runners may need it while the loader initializes, before user code runs.
+  // AppContainer and the independent write-restricted SID still gate file
+  // access; disabling privileges removes elevation powers from the child.
   DWORD flags = WRITE_RESTRICTED | DISABLE_MAX_PRIVILEGE;
-  DWORD disabled_count = 1;
   DWORD restrictor_count = 1;
-  bool update_default_dacl = true;
 #ifdef LATCH_RECOVERY_TESTING
   wchar_t diagnostic[2]{};
   if (GetEnvironmentVariableW(L"LATCH_DIAG_NO_WRITE_RESTRICTION", diagnostic,
@@ -78,31 +78,12 @@ Handle restrict_token(PSID write_sid) {
     flags = DISABLE_MAX_PRIVILEGE;
     restrictor_count = 0;
   }
-  wchar_t style[32]{};
-  if (GetEnvironmentVariableW(L"LATCH_DIAG_TOKEN_STYLE", style, 32)) {
-    if (std::wcscmp(style, L"keep-admin") == 0)
-      disabled_count = 0;
-    else if (std::wcscmp(style, L"keep-privileges") == 0)
-      flags = WRITE_RESTRICTED;
-    else if (std::wcscmp(style, L"write-only") == 0) {
-      flags = WRITE_RESTRICTED;
-      disabled_count = 0;
-    } else if (std::wcscmp(style, L"clone") == 0 ||
-               std::wcscmp(style, L"clone-no-dacl") == 0) {
-      flags = 0;
-      disabled_count = 0;
-      restrictor_count = 0;
-      update_default_dacl = std::wcscmp(style, L"clone-no-dacl") != 0;
-    } else
-      fail(L"invalid token diagnostic style", ERROR_INVALID_PARAMETER);
-  }
 #endif
   if (!CreateRestrictedToken(
-          original.value, flags, disabled_count,
-          disabled_count ? disabled : nullptr, 0, nullptr, restrictor_count,
+          original.value, flags, 0, nullptr, 0, nullptr, restrictor_count,
           restrictor_count ? restrictors : nullptr, &restricted.value))
     fail(L"Restrict");
-  if (update_default_dacl) prepare_default_dacl(restricted.value, write_sid);
+  prepare_default_dacl(restricted.value, write_sid);
   return restricted;
 }
 }  // namespace latch
