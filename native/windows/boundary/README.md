@@ -1,8 +1,8 @@
 # Native Windows boundary checkpoint — 2026-09-27
 
 This is unfinished experimental code on `codex/windows-native-port`. The
-maintainer requested fixing the known bugs, recording the remaining tests,
-committing/pushing, and stopping. It is **not a completed Windows port**.
+maintainer requested scoped bug fixes, a committed record of the remaining
+tests, and a pushed checkpoint. It is **not a completed Windows port**.
 Production `ExecutionBackend::detect` on Windows still refuses execution.
 Version remains 0.2.3. Do not enable this candidate or merge it into main as a
 working Windows backend based on the checks below.
@@ -28,8 +28,11 @@ working Windows backend based on the checks below.
   and injects compatibility support into descendants. These hooks are not
   the security boundary; restrictions and job membership are OS properties.
 - Explicit inherited standard-handle allowlist, and atomic creation inside
-  a kill-on-close Job Object. Normal exit waits for the job's processes to
-  disappear before revoking grants.
+  a kill-on-close Job Object. A separate trusted cleanup owner holds the
+  job, profile and ACL grants. It watches a synchronization-only handle to
+  the public launcher; launcher termination stops the entire sandbox job,
+  waits for every process to exit, then revokes grants and deletes the profile.
+  Error paths drain the job before unwinding into ACL cleanup as well.
 - Missing top-level .git is reserved by a temporary delete-on-close file.
 - Native cmd.exe shell and direct executable/argv inspection are exercised
   by a Rust test. Git Bash/MSYS is not supported by this candidate.
@@ -87,6 +90,39 @@ Local disposable evidence directories are under `C:/project/latch/target/`:
 `windows-port-probes/cargo-boundary.log`. They are intentionally not committed.
 Final native matrix logs are in `windows-port-final/{test,adversarial,lifecycle}.log`.
 
+## Cleanup follow-up (2026-09-27)
+
+The public launcher now starts a trusted cleanup owner from the same executable.
+Only that owner holds the job and per-call resources. No model command is run
+outside the restricted AppContainer. The owner receives an explicit inherited
+launcher-lifetime handle and standard handles; the lifetime handle is excluded
+from sandboxed children. It observes launcher exit during filesystem setup and
+waits on launcher/target exit while the command runs.
+
+This fixes retained grants/profiles after killing the public launcher. Grant
+records are allocated before ACL mutation, process attribute lists use RAII,
+and ACL/profile cleanup failures make the command fail (125). If job teardown
+cannot be confirmed, the owner exits without attempting ACL revocation; closing
+its job handle still requests process termination. This is not a crash journal.
+
+Verified again with real native subprocesses: all 18 baseline file assertions;
+all adversarial assertions; timeout, root-exit and launcher-kill of four-generation
+trees; exact restoration of workspace/runtime ACLs and removal of the temporary
+.git marker and observed AppContainer profile; and cleanup after a missing
+executable fails to start. Fixture targets record their actual AppContainer SID
+so checking cleanup does not race short-lived targets. C++ /W4 /WX, workspace
+format checking, and kernel Clippy with all targets/features also pass. The
+embedded-runner Rust test passed again (one test, 375 filtered; 48.64 seconds).
+A fresh dependency-free Cargo build in workspace/target-owner-followup also
+compiled, linked and passed its unit test and rustdoc phase inside the boundary.
+
+Evidence directories for this follow-up: `boundary-owner-matrix-02`,
+`boundary-owner-adversarial-02`, and `boundary-owner-lifecycle-06` under
+`C:/project/latch/target/`. Killing the cleanup owner itself, machine crashes,
+cancellation at every startup phase, and concurrent ACL mutation are still
+unverified; killing both trusted processes can still leave temporary grants
+and profiles behind. Production detection remains disabled.
+
 ## Reproduce focused checks
 
 Use native PowerShell as an ordinary user. The outer Codex restricted tool
@@ -114,8 +150,9 @@ credentials only; do not point them at actual credential or state directories.
 - **Full Windows gates:** workspace fmt/clippy/test/release combination;
   all Windows test failures, CLI/TUI suites, and installation/package behavior.
 - **Linux:** the local Bubblewrap release gate has not run on this Windows
-  host. Branch CI must validate the fixed Git/extension changes; no Linux
-  behavior or security relaxation is intended.
+  host. The previous checkpoint (730dbdd) passed the full Ubuntu CI release
+  gate in GitHub Actions run 36257342807. Follow-up commits require their own
+  CI run; no Linux behavior or security relaxation is intended.
 - **CI:** no Windows CI workflow has been added. Existing Linux CI remains.
 - **Real dogfood:** no native Latch NTFS coding task; no live/model agent proof
   of inspection, editing, search, validation, Git and managed tools together.
@@ -134,7 +171,8 @@ credentials only; do not point them at actual credential or state directories.
 - **Processes:** Latch managed-process durability and cancellation paths;
   forced runner death at every startup phase; all handle inheritance modes;
   32-bit children; descendants bypassing compatibility injection; resource
-  exhaustion; retained per-call profiles and ACL cleanup after crashes.
+  exhaustion; recovery after cleanup-owner termination or machine crashes.
+  Public-launcher termination cleanup is covered by the follow-up tests.
 - **Network:** DNS, UDP, IPv6, private LAN, listening servers, proxies, named
   pipes and other IPC. TCP evidence is limited to the tested endpoint and host.
 - **Compatibility:** PowerShell, Python extensions, npm workflows, full

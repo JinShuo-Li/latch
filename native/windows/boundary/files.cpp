@@ -127,6 +127,32 @@ int wmain(int argc, wchar_t** argv) {
   if (operation == L"tree" || operation == L"tree-root-exit") {
     const int generation = _wtoi(argv[2]);
     if (argc != 4 || generation < 0 || generation > 3) return 2;
+    if (generation == 3) {
+      HANDLE token = nullptr;
+      if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return 7;
+      DWORD size = 0;
+      GetTokenInformation(token, TokenAppContainerSid, nullptr, 0, &size);
+      std::vector<BYTE> bytes(size);
+      const BOOL queried = GetTokenInformation(token, TokenAppContainerSid, bytes.data(), size, &size);
+      CloseHandle(token);
+      if (!queried) return 7;
+      const auto* info = reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(bytes.data());
+      LPWSTR sid = nullptr;
+      if (!info->TokenAppContainer || !ConvertSidToStringSidW(info->TokenAppContainer, &sid)) return 7;
+      const std::wstring wide_sid(sid);
+      LocalFree(sid);
+      std::string package;
+      for (const wchar_t character : wide_sid) package.push_back(static_cast<char>(character));
+      const auto package_file = std::wstring(argv[3]) + L".package";
+      HANDLE output = CreateFileW(package_file.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+          nullptr, CREATE_NEW, 0, nullptr);
+      if (output == INVALID_HANDLE_VALUE) return 7;
+      DWORD written = 0;
+      const BOOL stored = WriteFile(output, package.data(), static_cast<DWORD>(package.size()),
+                                    &written, nullptr);
+      CloseHandle(output);
+      if (!stored || written != package.size()) return 7;
+    }
     const std::wstring file = std::wstring(argv[3]) + L"." + std::to_wstring(generation);
     HANDLE marker = CreateFileW(file.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
                                nullptr, CREATE_ALWAYS, 0, nullptr);

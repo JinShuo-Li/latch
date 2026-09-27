@@ -151,6 +151,9 @@ production detection remains fail-closed. Focused check:
 `cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked`.
 See `native/windows/boundary/README.md` for native fixture commands, verified
 results, known limitations and the outstanding security/release gates.
+The candidate helper has public-launcher and trusted-cleanup-owner roles;
+`lifecycle.ps1` verifies launcher cancellation, tree termination and temporary
+ACL/profile cleanup. It does not establish owner-crash or reboot recovery.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,group,configuration_center}.rs` and existing siblings.
 

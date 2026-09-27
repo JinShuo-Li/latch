@@ -41,6 +41,67 @@ struct Handle {
   Handle& operator=(Handle&&) = delete;
 };
 
+// Only the cleanup owner receives this synchronization handle. Sandboxed
+// children inherit only their explicit standard-handle allowlist.
+HANDLE controller = nullptr;
+
+void check_controller() {
+  if (!controller) return;
+  const DWORD status = WaitForSingleObject(controller, 0);
+  if (status == WAIT_OBJECT_0) fail(L"launcher cancelled", ERROR_CANCELLED);
+  if (status != WAIT_TIMEOUT) fail(L"wait launcher");
+}
+
+struct Attributes {
+  std::vector<BYTE> storage;
+  LPPROC_THREAD_ATTRIBUTE_LIST value = nullptr;
+  explicit Attributes(DWORD count) {
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, count, 0, &size);
+    storage.resize(size);
+    auto* list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+    if (!InitializeProcThreadAttributeList(list, count, 0, &size))
+      fail(L"initialize process attributes");
+    value = list;
+  }
+  ~Attributes() { if (value) DeleteProcThreadAttributeList(value); }
+  Attributes(const Attributes&) = delete;
+  Attributes& operator=(const Attributes&) = delete;
+};
+
+// Closing the last job handle only requests asynchronous termination. Wait
+// for every process before ACL revocation, including on failed injection.
+struct Job {
+  Handle handle{CreateJobObjectW(nullptr, nullptr)};
+  Job() {
+    if (!handle.value) fail(L"create job");
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(handle.value, JobObjectExtendedLimitInformation,
+                                  &limits, sizeof(limits))) fail(L"job limits");
+  }
+  bool stopped = false;
+  bool stop(DWORD exit_code) noexcept {
+    if (stopped) return true;
+    if (!TerminateJobObject(handle.value, exit_code)) return false;
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+    for (;;) {
+      if (!QueryInformationJobObject(handle.value, JobObjectBasicAccountingInformation,
+                                     &accounting, sizeof(accounting), nullptr)) return false;
+      if (accounting.ActiveProcesses == 0) { stopped = true; return true; }
+      Sleep(1);
+    }
+  }
+  ~Job() {
+    if (!stop(125)) {
+      // Do not unwind into ACL revocation while ownership is uncertain.
+      // Process exit closes the job; crash recovery is a separate gate.
+      std::fwprintf(stderr, L"windows runner: cannot confirm job teardown (%lu)\n", GetLastError());
+      ExitProcess(125);
+    }
+  }
+};
+
 struct Local {
   void* value = nullptr;
   ~Local() { if (value != nullptr) LocalFree(value); }
@@ -90,6 +151,7 @@ std::wstring quote(const std::wstring& value) {
 
 DWORD update_acl(const std::wstring& path, PSID sid, ACCESS_MODE mode,
                  DWORD rights, DWORD inheritance) {
+  check_controller();
   PACL old_acl = nullptr;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   DWORD code = GetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT,
@@ -171,7 +233,7 @@ DWORD remove_sid_aces(const std::wstring& path, PSID sid) {
 
 class Grants {
  public:
-  explicit Grants(PSID sid) : sid_(sid) {}
+  Grants(PSID sid, bool& cleanup_failed) : sid_(sid), cleanup_failed_(cleanup_failed) {}
   ~Grants() { cleanup(); }
   void add(const std::wstring& path, ACCESS_MODE mode, DWORD rights) {
     if (mode == DENY_ACCESS) {
@@ -195,22 +257,25 @@ class Grants {
     if (attributes == INVALID_FILE_ATTRIBUTES) fail(L"grant attributes");
     const DWORD inheritance = (attributes & FILE_ATTRIBUTE_DIRECTORY) ?
         SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
-    const DWORD code = update_acl(path, sid_, mode, rights,
-                                  inheritance);
-    if (code != ERROR_SUCCESS) fail(L"SetNamedSecurityInfoW(grant)", code);
+    // Record before mutation: allocation failure cannot leave an untracked ACE.
     paths_.push_back(path);
+    const DWORD code = update_acl(path, sid_, mode, rights, inheritance);
+    if (code != ERROR_SUCCESS) fail(L"SetNamedSecurityInfoW(grant)", code);
   }
   void cleanup() noexcept {
     for (auto it = paths_.rbegin(); it != paths_.rend(); ++it) {
       const DWORD code = remove_sid_aces(*it, sid_);
-      if (code != ERROR_SUCCESS)
+      if (code != ERROR_SUCCESS) {
+        cleanup_failed_ = true;
         std::fwprintf(stderr, L"windows runner: ACL revoke failed (%lu)\n", code);
+      }
     }
     paths_.clear();
   }
 
  private:
   PSID sid_;
+  bool& cleanup_failed_;
   std::vector<std::wstring> paths_;
   std::set<std::wstring> denied_;
 };
@@ -221,6 +286,7 @@ class Grants {
 void validate_write_tree(const std::filesystem::path& path,
                          const std::vector<std::wstring>& allowed,
                          std::vector<Handle>& locks) {
+  check_controller();
   Handle object(CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
@@ -271,6 +337,7 @@ std::vector<BYTE> token_info(HANDLE token, TOKEN_INFORMATION_CLASS type) {
 }
 
 void protect_sensitive_tree(const std::filesystem::path& input, std::set<std::wstring>& visited) {
+  check_controller();
   const auto path = std::filesystem::canonical(input).wstring();
   if (!visited.insert(path).second) return;
   PACL acl = nullptr;
@@ -400,16 +467,17 @@ struct GitReservation {
 #include <objbase.h>
 #include "detours.h"
 #include "handles.h"
-int wmain(int argc, wchar_t** argv) {
-  if (argc < 5) return 2;
+int run_boundary(int argc, wchar_t** argv) {
+  check_controller();
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
   PSID sid = nullptr;
   const std::wstring name = L"LatchProbe." + unique_sid_string();
   HRESULT hr = CreateAppContainerProfile(name.c_str(), name.c_str(), L"Disposable Latch probe", nullptr, 0, &sid);
   if (FAILED(hr)) { std::fwprintf(stderr,L"CreateAppContainerProfile %lx\n",hr); return 125; }
   int result=125;
+  bool cleanup_failed = false;
   try {
-    Grants grants(sid);
+    Grants grants(sid, cleanup_failed);
     // Remove AppContainer read grants on sensitive paths; package-specific
     // deny ACEs do not suppress the All Application Packages allow route.
     std::set<std::wstring> protected_paths;
@@ -430,11 +498,8 @@ int wmain(int argc, wchar_t** argv) {
     std::vector<Handle> grant_locks;
     for (const auto& root : write_roots) validate_write_tree(root, write_roots, grant_locks);
     grants.add(argv[1], GRANT_ACCESS, read_rights | (writable ? write_rights : 0));
-    SIZE_T size=0;
-    InitializeProcThreadAttributeList(nullptr,3,0,&size);
-    std::vector<BYTE> buffer(size);
-    auto* attrs=reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(buffer.data());
-    if (!InitializeProcThreadAttributeList(attrs,3,0,&size)) fail(L"Initialize attrs");
+    Attributes attributes(3);
+    auto* attrs = attributes.value;
     Local internet = parse_sid(L"S-1-15-3-1");
     Local private_network = parse_sid(L"S-1-15-3-3");
     SID_AND_ATTRIBUTES network_caps[] = {{internet.value, SE_GROUP_ENABLED},
@@ -450,7 +515,7 @@ int wmain(int argc, wchar_t** argv) {
     Handle original, restricted;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &original.value)) fail(L"Open token");
     Local write_sid=parse_sid(unique_sid_string().c_str());
-    Grants write_grants(write_sid.value);
+    Grants write_grants(write_sid.value, cleanup_failed);
     // Windows redirects GetTempPath inside an AppContainer to this private
     // per-call directory, regardless of TEMP/TMP. Grant only this scratch tree.
     LPWSTR sid_text = nullptr;
@@ -530,15 +595,11 @@ int wmain(int argc, wchar_t** argv) {
     NTSTATUS kstatus=ntopen(&kh.value,0x100003,&ka,&ks,FILE_SHARE_READ|FILE_SHARE_WRITE,0);
     if(kstatus<0) fail(L"ksec",static_cast<DWORD>(kstatus));
     swprintf_s(raw,L"%llx",reinterpret_cast<unsigned long long>(kh.value)); SetEnvironmentVariableW(L"LATCH_KSEC_HANDLE",raw);
-    Handle job(CreateJobObjectW(nullptr,nullptr));
-    if(!job.value)fail(L"create job");
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-    limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if(!SetInformationJobObject(job.value,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))fail(L"job limits");
+    Job job;
     // Assign the child atomically at creation, before any possible runner
     // teardown. No suspended child can be stranded between create and assign.
     if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
-                                    &job.value, sizeof(job.value), nullptr, nullptr))
+                                    &job.handle.value, sizeof(job.handle.value), nullptr, nullptr))
       fail(L"job attribute");
     std::array<Handle, 3> standard_handles;
     std::array<HANDLE, 3> inherited_handles{};
@@ -556,6 +617,7 @@ int wmain(int argc, wchar_t** argv) {
         inherited_handles.data(), sizeof(inherited_handles), nullptr, nullptr))
       fail(L"handle allowlist");
     PROCESS_INFORMATION pi{};
+    check_controller();
     if (!CreateProcessAsUserW(restricted.value,argv[2],line.data(),nullptr,nullptr,TRUE,EXTENDED_STARTUPINFO_PRESENT|CREATE_NO_WINDOW|CREATE_SUSPENDED,nullptr,argv[1],&si.StartupInfo,&pi)) fail(L"CreateProcessW");
     Handle process(pi.hProcess); Handle thread(pi.hThread);
     LatchHandles devices{};
@@ -595,25 +657,99 @@ int wmain(int argc, wchar_t** argv) {
     WideCharToMultiByte(CP_UTF8,0,hook.c_str(),-1,hook_utf8.data(),count,nullptr,nullptr);
     LPCSTR dll=hook_utf8.c_str();
     if(!DetourUpdateProcessWithDll(pi.hProcess,&dll,1)) {TerminateProcess(pi.hProcess,125);fail(L"inject");}
-    ResumeThread(pi.hThread);
-    const DWORD waited = WaitForSingleObject(process.value,timeout_ms);
-    if (waited == WAIT_FAILED) fail(L"wait child");
-    DWORD code=0; GetExitCodeProcess(process.value,&code);
-    if(waited == WAIT_TIMEOUT) { TerminateJobObject(job.value,124); code = 124; }
-    std::fwprintf(stderr,L"child exit %lx\n",code); result=static_cast<int>(code);
-    TerminateJobObject(job.value,125);
-    WaitForSingleObject(process.value,5000);
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
-    for (;;) {
-      if (!QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation,
-                                     &accounting, sizeof(accounting), nullptr)) fail(L"query job exit");
-      if (accounting.ActiveProcesses == 0) break;
-      Sleep(1);
+    check_controller();
+    if (ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) fail(L"resume child");
+    const HANDLE waits[] = {controller, process.value};
+    const DWORD waited = WaitForMultipleObjects(2, waits, FALSE, timeout_ms);
+    if (waited == WAIT_FAILED) fail(L"wait child or launcher");
+    DWORD code = 125;
+    if (waited == WAIT_OBJECT_0 + 1) {
+      if (!GetExitCodeProcess(process.value, &code)) fail(L"child exit code");
+    } else if (waited == WAIT_TIMEOUT) {
+      code = 124;
+    } else if (waited != WAIT_OBJECT_0) {
+      fail(L"unexpected child wait", ERROR_INVALID_DATA);
     }
-    DeleteProcThreadAttributeList(attrs);
+    if (!job.stop(code)) fail(L"drain job");
+    result = static_cast<int>(code);
   } catch(const Error& e) { std::fwprintf(stderr,L"%ls: %lu\n",e.api,e.code); }
     catch(const std::exception& e) { std::fprintf(stderr, "Windows boundary: %s", e.what()); }
+  if (cleanup_failed) result = 125;
   FreeSid(sid);
-  DeleteAppContainerProfile(name.c_str());
+  const HRESULT removed = DeleteAppContainerProfile(name.c_str());
+  if (FAILED(removed)) {
+    std::fwprintf(stderr, L"windows runner: profile cleanup failed (%lx)\n", removed);
+    result = 125;
+  }
   return result;
+}
+
+// The public launcher is the handle Latch owns. A separate trusted helper
+// owns profiles, grants and the sandbox job, so killing the launcher still
+// executes normal cleanup. It never executes a model command unrestricted.
+int launch_owner(int argc, wchar_t** argv) {
+  Handle lifetime;
+  if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(),
+                        &lifetime.value, SYNCHRONIZE, TRUE, 0)) fail(L"launcher lifetime");
+  wchar_t module[32768]{};
+  const DWORD length = GetModuleFileNameW(nullptr, module, 32768);
+  if (!length || length >= 32768) fail(L"launcher path");
+  std::wstring line = quote(std::wstring(module, length)) + L" --cleanup-owner " +
+      std::to_wstring(reinterpret_cast<uintptr_t>(lifetime.value));
+  for (int i = 1; i < argc; ++i) line += L" " + quote(argv[i]);
+  Handle nul(CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
+  if (nul.value == INVALID_HANDLE_VALUE) fail(L"launcher NUL");
+  Attributes attributes(1);
+  STARTUPINFOEXW startup{};
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.lpAttributeList = attributes.value;
+  std::array<Handle, 3> stdio;
+  std::array<HANDLE, 4> inherited{lifetime.value, nullptr, nullptr, nullptr};
+  const DWORD sources[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+  HANDLE* outputs[] = {&startup.StartupInfo.hStdInput, &startup.StartupInfo.hStdOutput,
+                      &startup.StartupInfo.hStdError};
+  for (size_t i = 0; i < stdio.size(); ++i) {
+    HANDLE source = GetStdHandle(sources[i]);
+    if (!source || source == INVALID_HANDLE_VALUE) source = nul.value;
+    if (!DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(),
+                         &stdio[i].value, 0, TRUE, DUPLICATE_SAME_ACCESS))
+      fail(L"cleanup owner stdio");
+    *outputs[i] = inherited[i + 1] = stdio[i].value;
+  }
+  if (!UpdateProcThreadAttribute(attributes.value, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        inherited.data(), sizeof(inherited), nullptr, nullptr)) fail(L"cleanup owner handles");
+  PROCESS_INFORMATION created{};
+  if (!CreateProcessW(module, line.data(), nullptr, nullptr, TRUE,
+      EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, nullptr, nullptr,
+      &startup.StartupInfo, &created)) fail(L"create cleanup owner");
+  Handle process(created.hProcess), thread(created.hThread);
+  if (WaitForSingleObject(process.value, INFINITE) != WAIT_OBJECT_0) fail(L"wait cleanup owner");
+  DWORD code = 125;
+  if (!GetExitCodeProcess(process.value, &code)) fail(L"cleanup owner exit");
+  return static_cast<int>(code);
+}
+
+int wmain(int argc, wchar_t** argv) {
+  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+  try {
+    if (argc >= 3 && std::wcscmp(argv[1], L"--cleanup-owner") == 0) {
+      wchar_t* end = nullptr;
+      const auto raw = _wcstoui64(argv[2], &end, 10);
+      if (!raw || !end || *end) return 2;
+      Handle owner(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(raw)));
+      controller = owner.value;
+      check_controller();
+      if (argc < 7) return 2;
+      return run_boundary(argc - 2, argv + 2);
+    }
+    if (argc < 5) return 2;
+    return launch_owner(argc, argv);
+  } catch (const Error& error) {
+    std::fwprintf(stderr, L"%ls: %lu\n", error.api, error.code);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "Windows launcher: %s\n", error.what());
+  }
+  return 125;
 }
