@@ -721,6 +721,11 @@ restricted-token native runner and a test-only Rust adapter now live under
 `native/windows/boundary/` and `execution/windows_runtime.rs`. They are not
 selected by production detection. The [checkpoint and untested work](../native/windows/boundary/README.md)
 record the exact native evidence and remaining security/integration gates.
+The candidate launcher starts a trusted cleanup owner which holds the sandbox
+job, temporary ACL grants and AppContainer profile. The owner observes launcher
+termination through a synchronization-only process handle and drains the job
+before revoking grants. Killing the cleanup owner itself or crashing the
+machine still needs journal-based recovery; this is a production enablement gate.
 
 Fixed Git inspections and extension hosts share `fixed_command`; Linux quotes
 each argument and explicitly execs the program inside Bubblewrap. Windows fixed
