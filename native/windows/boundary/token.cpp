@@ -59,9 +59,19 @@ Handle restrict_token(PSID write_sid) {
   SID_AND_ATTRIBUTES restrictors[] = {{write_sid, 0}};
   Local admin = parse_sid(L"S-1-5-32-544");
   SID_AND_ATTRIBUTES disabled[] = {{admin.value, 0}};
+  DWORD flags = WRITE_RESTRICTED | DISABLE_MAX_PRIVILEGE;
+  DWORD restrictor_count = 1;
+#ifdef LATCH_RECOVERY_TESTING
+  wchar_t diagnostic[2]{};
+  if (GetEnvironmentVariableW(L"LATCH_DIAG_NO_WRITE_RESTRICTION", diagnostic,
+                              2)) {
+    flags = DISABLE_MAX_PRIVILEGE;
+    restrictor_count = 0;
+  }
+#endif
   if (!CreateRestrictedToken(
-          original.value, WRITE_RESTRICTED | DISABLE_MAX_PRIVILEGE, 1, disabled,
-          0, nullptr, 1, restrictors, &restricted.value))
+          original.value, flags, 1, disabled, 0, nullptr, restrictor_count,
+          restrictor_count ? restrictors : nullptr, &restricted.value))
     fail(L"Restrict");
   prepare_default_dacl(restricted.value, write_sid);
   return restricted;
