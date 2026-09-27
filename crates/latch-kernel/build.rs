@@ -35,7 +35,7 @@ mod windows {
             run(compiler
                 .to_command()
                 .current_dir(&out)
-                .args(["/nologo", "/MD", "/EHsc", "/std:c++17", "/c"])
+                .args(["/nologo", "/MT", "/EHsc", "/std:c++17", "/c"])
                 .arg(detours.join(format!("{name}.cpp")))
                 .arg(format!("/Fo{}", out.join(format!("{name}.obj")).display())));
         }
@@ -45,7 +45,7 @@ mod windows {
                 .current_dir(&out)
                 .args([
                     "/nologo",
-                    "/MD",
+                    "/MT",
                     "/EHsc",
                     "/std:c++20",
                     "/W4",
@@ -81,7 +81,7 @@ mod windows {
         compile("compat");
         let link = |object: &str, output: &Path, dll: bool| {
             let mut command = compiler.to_command();
-            command.current_dir(&out).arg("/nologo").arg("/MD");
+            command.current_dir(&out).arg("/nologo").arg("/MT");
             if dll {
                 command.arg("/LD");
             }

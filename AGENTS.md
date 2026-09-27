@@ -83,8 +83,9 @@ bash scripts/release-gate.sh
   the deterministic, credential-free integration checks. See
   `docs/DOGFOOD_DOCKER.md`.
 
-Runtime prerequisites are mandatory, not optional: system `bwrap` (all command
-execution is sandboxed; there is no unsandboxed fallback) and `rg` (the `search`
+Runtime prerequisites are mandatory, not optional: system `bwrap` on Linux or
+the embedded native AppContainer runner on Windows (all command execution is
+sandboxed; there is no unsandboxed fallback), and `rg` (the `search`
 tool; it must fail with an actionable message, never bare ENOENT). State lives in
 `~/.latch/` by default; legacy XDG installs stay in place until `latch migrate`
 copies them. Config example is `config.example.toml`. Docker (or a
@@ -140,17 +141,18 @@ artifact media resolver; provider adapters serialize durable `MediaRef`s to
 wire images.
 `execution/` owns the platform backend boundary used by command-starting tools
 and extension hosts. Linux delegates to the mandatory Bubblewrap runner in
-`sandbox.rs`; Windows must refuse execution until its capability boundary is
-implemented and verified. Production Windows fallback must not provision local
-accounts; temporary accounts are permitted only in explicitly authorized tests
-and must be removed with their network rules afterward.
-The experimental native candidate is `native/windows/boundary/`, built by
+`sandbox.rs`; Windows uses the embedded `native/windows/boundary/` runner,
+`cmd.exe`, a per-call AppContainer, a write-restricted token, durable ACL
+recovery, and a Job Object. It has no unsandboxed or local-account fallback.
+The native runner is built by
 `crates/latch-kernel/build.rs` on Windows (x64 MSVC C++ Build Tools + Windows
-SDK required). Its Rust adapter `execution/windows_runtime.rs` is test-only;
-production detection remains fail-closed. Focused check:
+SDK required). Its Rust adapter is `execution/windows_runtime.rs` and its
+read-only Python/Node staging is `execution/windows_runtime_tools.rs`. The
+Windows CI job runs native security fixtures before the Rust gate; its Rust
+tests run serially because ACL recovery has a per-user lock. Focused check:
 `cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked`.
 See `native/windows/boundary/README.md` for native fixture commands, verified
-results, known limitations and the outstanding security/release gates.
+results, and known limitations.
 The candidate helper has public-launcher and trusted-cleanup-owner roles;
 `lifecycle.ps1` verifies launcher cancellation, tree termination and temporary
 ACL/profile cleanup. `recovery.ps1` adds forced owner-kill and stale-state checks;

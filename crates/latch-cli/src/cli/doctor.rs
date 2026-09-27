@@ -285,8 +285,8 @@ pub fn execute(args: &Args, doctor: DoctorArgs) -> ExitCode {
 }
 
 fn check_sandbox(workspace: &Path) -> Check {
-    match latch_kernel::execution::ExecutionBackend::detect(workspace) {
-        Ok(backend) => Check::ok("sandbox", backend.status()),
+    match latch_kernel::execution::ExecutionBackend::inspect(workspace) {
+        Ok(status) => Check::ok("sandbox", status),
         Err(error) => Check::failed("sandbox", format!("{error:#}")),
     }
 }
@@ -309,6 +309,9 @@ fn check_git(workspace: &Path) -> Check {
                 .with_detail("Git-backed tools (git_status, git_diff) will fail");
         }
     };
+    #[cfg(windows)]
+    let inside = workspace.ancestors().any(|path| path.join(".git").exists());
+    #[cfg(not(windows))]
     let inside = std::process::Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(workspace)
@@ -324,8 +327,23 @@ fn check_git(workspace: &Path) -> Check {
     }
 }
 
-/// Runs `<binary> --version` and returns an `ok` check carrying the first line.
-/// The error string is the actionable "not found" message for a missing tool.
+/// Windows doctor remains read-only: it locates prerequisites without starting
+/// an unsandboxed process or installing native runtime assets.
+#[cfg(windows)]
+fn version_check(id: &'static str, binary: &str, _args: &[&str]) -> Result<Check, String> {
+    let name = format!("{binary}.exe");
+    let found = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|directory| directory.join(&name))
+        .find(|path| path.is_file() && !path.to_string_lossy().contains("WindowsApps"));
+    found
+        .map(|path| Check::ok(id, path.display().to_string()))
+        .ok_or_else(|| format!("`{name}` was not found on PATH"))
+}
+
+/// Runs `<binary> --version` on Linux and reports the first line.
+#[cfg(not(windows))]
 fn version_check(id: &'static str, binary: &str, args: &[&str]) -> Result<Check, String> {
     match std::process::Command::new(binary).args(args).output() {
         Ok(output) if output.status.success() => {

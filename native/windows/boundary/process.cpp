@@ -45,6 +45,13 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
   if (kstatus < 0) fail(L"ksec", static_cast<DWORD>(kstatus));
   swprintf_s(raw, L"%llx", reinterpret_cast<unsigned long long>(kh.value));
   SetEnvironmentVariableW(L"LATCH_KSEC_HANDLE", raw);
+  const auto scratch = recovery.scratch_path();
+  SetEnvironmentVariableW(L"TEMP", scratch.c_str());
+  SetEnvironmentVariableW(L"TMP", scratch.c_str());
+  if (std::wcscmp(argv[4], L"read") == 0) {
+    const auto target = scratch / L"latch-target";
+    SetEnvironmentVariableW(L"CARGO_TARGET_DIR", target.c_str());
+  }
   Job job(recovery.job_name());
   // Assign the child atomically at creation, before any possible runner
   // teardown. No suspended child can be stranded between create and assign.

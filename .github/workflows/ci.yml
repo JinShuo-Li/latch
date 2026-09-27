@@ -54,6 +54,9 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Native ACL recovery is intentionally serialized per Windows user.
+          # Keep process fixtures from timing out while queued for that lock.
+          $env:RUST_TEST_THREADS = '1'
           cargo test --workspace --locked
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo build --release --locked

@@ -474,6 +474,12 @@ impl ExtensionHost {
         params: Value,
         cancel: &CancellationToken,
     ) -> Result<Value> {
+        // A pre-cancelled request must not start writing a frame. Otherwise
+        // select! may poll the write first and leave an incomplete message in
+        // the pipe, making an otherwise healthy host unable to shut down.
+        if cancel.is_cancelled() {
+            bail!("extension {} {method} cancelled", self.name);
+        }
         let id = self.next_id;
         self.next_id += 1;
         let name = self.name.clone();
@@ -481,6 +487,8 @@ impl ExtensionHost {
         let exchange = request(id, method, params);
         let mut timed_out = false;
         let result = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(anyhow!("extension {name} {method} cancelled")),
             // An unresponsive extension must not pin a cancelled run, and a
             // resolved request must still complete inside its deadline.
             result = tokio::time::timeout(deadline, async {
@@ -503,7 +511,6 @@ impl ExtensionHost {
                     Ok(Value::Null)
                 }
             },
-            () = cancel.cancelled() => Err(anyhow!("extension {name} {method} cancelled")),
         };
         if timed_out {
             // A timeout means the extension stopped answering: kill and reap
@@ -986,6 +993,7 @@ mod tests {
 
     /// Host PIDs whose command line mentions `needle`. Processes in a child
     /// PID namespace are visible here under their initial-namespace PIDs.
+    #[cfg(unix)]
     fn matching_pids(needle: &str) -> Vec<u32> {
         let Ok(entries) = std::fs::read_dir("/proc") else {
             return Vec::new();
@@ -1007,6 +1015,30 @@ mod tests {
             }
         }
         pids
+    }
+
+    #[cfg(windows)]
+    fn matching_pids(needle: &str) -> Vec<u32> {
+        std::fs::read_to_string(needle)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+            .into_iter()
+            .collect()
+    }
+
+    #[cfg(windows)]
+    fn pid_alive(pid: u32) -> bool {
+        let output = std::process::Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH", "/FI", &format!("PID eq {pid}")])
+            .output()
+            .expect("query extension fixture PID");
+        assert!(output.status.success(), "tasklist failed");
+        String::from_utf8_lossy(&output.stdout).contains(&format!(",\"{pid}\","))
+    }
+
+    #[cfg(unix)]
+    fn pid_alive(pid: u32) -> bool {
+        PathBuf::from(format!("/proc/{pid}")).exists()
     }
 
     /// Records the sandbox and extension PIDs while a lifecycle operation
@@ -1053,11 +1085,7 @@ mod tests {
         assert!(!pids.is_empty(), "fake extension never ran");
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let alive: Vec<u32> = pids
-                .iter()
-                .copied()
-                .filter(|pid| PathBuf::from(format!("/proc/{pid}")).exists())
-                .collect();
+            let alive: Vec<u32> = pids.iter().copied().filter(|pid| pid_alive(*pid)).collect();
             if alive.is_empty() {
                 return;
             }

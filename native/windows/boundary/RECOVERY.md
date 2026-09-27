@@ -1,7 +1,7 @@
-# Experimental Windows recovery protocol
+# Windows native recovery protocol
 
-Scope: native candidate only, starting from `39111c8`. Production Windows
-execution remains disabled pending the wider security and integration gate.
+Production Windows execution uses this protocol. Test builds add isolated
+crash hooks; Cargo's embedded runner does not include them.
 
 ## Protocol and ownership
 
@@ -18,7 +18,7 @@ descendant generations, then starts an ordinary new runner.
 LocalAppData known folder (`LatchBoundaryRecovery-v1`). One transaction is
 active per user. It automatically recovers `pending` before accepting a new
 command. `--recover-only` exposes that same trusted startup path without
-starting a command. No Latch production startup integration is enabled.
+starting a command. Production launches use the same recovery path first.
 
 Before a host-persistent change, a bounded UTF-16 record is written with a
 version, length, sequence and CRC32. Records use CREATE_NEW, WRITE_THROUGH,
@@ -111,9 +111,10 @@ an unregistered directory or a mismatched mapping retains the journal.
 2. Physical reboot/power-loss has not been performed. The automated test
    removes every relevant process and handle; durability assumes NTFS and
    storage honoring flush/write-through requests.
-3. Existing-object deletion/rename during a command may make exact rollback
-   impossible; startup refuses rather than recreating names or following
-   aliases. There is no operator repair UI yet.
+3. Existing-object deletion/rename during a command uses the recorded NTFS ID;
+   absent objects are skipped only after an absence check. Replacement, access
+   denial, and unrelated ACL changes retain the journal. There is no operator
+   repair UI yet.
 4. Active unrelated ACL mutation, hostile same-user processes, cross-volume
    reservation staging, and all rename/reparse race interleavings need further
    review. The journal deliberately retains conflicts.

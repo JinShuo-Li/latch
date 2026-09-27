@@ -263,8 +263,8 @@ construction, attachments, and policy are identical everywhere.
 ## Preflight doctor
 
 `latch doctor` is a read-only preflight for the machine a run depends on. It
-probes the execution backend (mandatory Bubblewrap on Linux; Windows currently
-reports an actionable refusal until its security backend is available), the
+probes the execution backend (mandatory Bubblewrap on Linux; an embedded native
+AppContainer runner on Windows), the
 `rg` search runtime, Git, every resolved storage path and its
 source (`explicit`, `new`, or `legacy`), migration status, the resolved
 provider/model/effort, and that the provider credential
@@ -273,13 +273,11 @@ secret material: a credential is reported only by its symbolic reference
 (`env:NAME`, `file:NAME`).
 The JSON report uses schema version 2 for the added `paths` object.
 
-The unfinished native Windows implementation is tracked in the
-[Windows checkpoint](native/windows/boundary/README.md), including verified
-subprocess checks and work that has not been tested. It is not enabled in
-production; version 0.2.3 remains Linux-first.
-The native candidate's [recovery protocol](native/windows/boundary/RECOVERY.md)
-records owner-crash tests and the remaining unsealed-profile creation blocker;
-production Windows execution remains disabled.
+The [Windows boundary](native/windows/boundary/README.md) uses native `cmd.exe`
+under AppContainer, a write-restricted token, and a Job Object. Its
+[recovery protocol](native/windows/boundary/RECOVERY.md) journals call-scoped
+ACL changes and fails closed on unreconciled host changes. Git for Windows
+provides `git` and `rg` is required for search; Git Bash and WSL are not used.
 
 ```sh
 latch doctor
@@ -621,7 +619,7 @@ proposed operation
   -> Allow / Ask / Deny
   -> permission resolver for Ask
   -> single-use scoped capability grant
-  -> mandatory Bubblewrap sandbox
+  -> mandatory platform sandbox
   -> execution
 ```
 
@@ -632,7 +630,7 @@ All approved. Auto-approval records the normal `PermissionRequested` /
 disables the sandbox. Hard-denied operations (privileged, system-destructive)
 stay denied regardless of resolver.
 
-Latch is Linux-first and **requires the system `bwrap` (bubblewrap) binary**.
+On Linux, Latch **requires the system `bwrap` (bubblewrap) binary**.
 Every shell, `exec_start`, validation, and inspection command runs inside the
 sandbox; Latch refuses to execute commands unsandboxed rather than falling back.
 The sandbox binds the host root read-only, gives the workspace an explicit
@@ -640,7 +638,11 @@ read-only or writable mount (`.git` stays read-only unless Git metadata mutation
 was granted), provides private `/tmp` and scratch build output, masks `~/.ssh`,
 GPG/cloud/registry credentials, the resolved Latch state directory and any
 symlinked `secrets.toml` target, and `/run` sockets, and isolates user, PID,
-IPC, UTS, and network namespaces. `Approve for me` reviews shell commands with a
+IPC, UTS, and network namespaces. On Windows the embedded native runner grants
+only the requested NTFS roots to a per-call AppContainer, protects Git metadata
+and known credential paths, and restores exact ACLs after the job drains.
+Read-only commands use private scratch for temporary and Cargo build output.
+`Approve for me` reviews shell commands with a
 separate stateless model call that returns strict JSON (`low` approves;
 `medium`/`high`/`critical` reject with one actionable sentence); non-command
 asks fall back to human approval.

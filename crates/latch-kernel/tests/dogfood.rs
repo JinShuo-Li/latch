@@ -39,6 +39,22 @@ fn digest(text: &str) -> String {
     hex::encode(Sha256::digest(text.as_bytes()))
 }
 
+fn exact_content_command() -> &'static str {
+    if cfg!(windows) {
+        "python -c \"import pathlib,sys;sys.exit(pathlib.Path('app.txt').read_text() != 'good')\""
+    } else {
+        "test \"$(cat app.txt)\" = good"
+    }
+}
+
+fn denied_write_command() -> &'static str {
+    if cfg!(windows) {
+        "echo injected > injected"
+    } else {
+        "touch injected"
+    }
+}
+
 /// Provider that records every request so tests can inspect the exact
 /// serialized history the kernel would send to an OpenAI-compatible endpoint.
 struct RecordingProvider {
@@ -153,7 +169,7 @@ async fn scripted_long_session_dogfood() {
             vec![call(
                 "baseline",
                 "validate",
-                json!({"requirement":"fixture exact-content check","command":"test \"$(cat app.txt)\" = good"}),
+                json!({"requirement":"fixture exact-content check","command":exact_content_command()}),
             )],
         ),
         response(
@@ -175,7 +191,7 @@ async fn scripted_long_session_dogfood() {
             vec![call(
                 "fail-2",
                 "validate",
-                json!({"requirement":"fixture exact-content check","command":"test \"$(cat app.txt)\" = good"}),
+                json!({"requirement":"fixture exact-content check","command":exact_content_command()}),
             )],
         ),
         response(
@@ -187,7 +203,7 @@ async fn scripted_long_session_dogfood() {
             vec![call(
                 "fail-3",
                 "validate",
-                json!({"requirement":"fixture exact-content check","command":"test \"$(cat app.txt)\" = good"}),
+                json!({"requirement":"fixture exact-content check","command":exact_content_command()}),
             )],
         ),
         // Apply a different correction.
@@ -205,7 +221,7 @@ async fn scripted_long_session_dogfood() {
             vec![call(
                 "pass",
                 "validate",
-                json!({"requirement":"fixture exact-content check","command":"test \"$(cat app.txt)\" = good"}),
+                json!({"requirement":"fixture exact-content check","command":exact_content_command()}),
             )],
         ),
         response(
@@ -660,7 +676,7 @@ async fn trivial_one_file_fix_is_a_deterministic_four_request_fixture() {
             vec![call(
                 "check",
                 "validate",
-                json!({"requirement":"fixture exact-content check","command":"test \"$(cat app.txt)\" = good"}),
+                json!({"requirement":"fixture exact-content check","command":exact_content_command()}),
             )],
         ),
         response(
@@ -1083,7 +1099,11 @@ async fn denied_tool_call_preserves_complete_provider_transaction() {
         ModelResponse {
             text: "inspecting and mutating".into(),
             tool_calls: vec![
-                call("denied-shell", "shell", json!({"command":"touch injected"})),
+                call(
+                    "denied-shell",
+                    "shell",
+                    json!({"command":denied_write_command()}),
+                ),
                 call("read-ok", "read_file", json!({"path":"app.txt"})),
             ],
             stop_reason: "tool_calls".into(),
@@ -1207,9 +1227,14 @@ async fn denied_tool_call_preserves_complete_provider_transaction() {
     // parsing. Either way it is a structured terminal tool result.
     assert!(
         denied_tool.content.contains("Read-only file system")
-            || denied_tool.content.contains("cannot mutate"),
+            || denied_tool.content.contains("cannot mutate")
+            || (cfg!(windows) && denied_tool.content.contains("exit code 1")),
         "mutation comes back as a structured tool result: {}",
         denied_tool.content
+    );
+    assert!(
+        !workspace.join("injected").exists(),
+        "read-only workspace was mutated"
     );
 
     // 11: serialize and assert protocol validity for the thinking wire profile.
@@ -1360,7 +1385,7 @@ async fn single_denied_tool_call_gets_one_terminal_result() {
             tool_calls: vec![call(
                 "only-denied",
                 "shell",
-                json!({"command":"touch injected"}),
+                json!({"command":denied_write_command()}),
             )],
             stop_reason: "tool_calls".into(),
             usage: None,
