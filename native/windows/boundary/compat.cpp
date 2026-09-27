@@ -39,9 +39,10 @@ bool named(POBJECT_ATTRIBUTES attributes, const wchar_t* expected) {
       _wcsnicmp(name->Buffer, expected, length) == 0;
 }
 
-bool duplicate(HANDLE source, PHANDLE target, PIO_STATUS_BLOCK status) {
+bool duplicate(HANDLE source, PHANDLE target, PIO_STATUS_BLOCK status,
+               bool inherit = false) {
   if (!source || !DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(),
-                                  target, 0, FALSE, DUPLICATE_SAME_ACCESS)) return false;
+                                  target, 0, inherit, DUPLICATE_SAME_ACCESS)) return false;
   status->Status = 0;
   status->Information = FILE_OPENED;
   return true;
@@ -132,7 +133,9 @@ BOOL WINAPI attributes_ex(LPCWSTR path, GET_FILEEX_INFO_LEVELS level, LPVOID out
 NTSTATUS NTAPI create(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
     PIO_STATUS_BLOCK io, PLARGE_INTEGER size, ULONG flags, ULONG share,
     ULONG disposition, ULONG options, PVOID ea, ULONG length) {
-  if (named(attributes, L"\\??\\NUL") && duplicate(null_handle, handle, io)) return 0;
+  if (named(attributes, L"\\??\\NUL") &&
+      duplicate(null_handle, handle, io,
+                (attributes->Attributes & OBJ_INHERIT) != 0)) return 0;
   const NTSTATUS result = real_create(handle, access, attributes, io, size,
                                       flags, share, disposition, options, ea, length);
   if (result == static_cast<NTSTATUS>(0xc0000022u) &&
@@ -142,7 +145,9 @@ NTSTATUS NTAPI create(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES att
 
 NTSTATUS NTAPI open(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
     PIO_STATUS_BLOCK io, ULONG share, ULONG options) {
-  if (named(attributes, L"\\Device\\KsecDD") && duplicate(ksec_handle, handle, io)) return 0;
+  if (named(attributes, L"\\Device\\KsecDD") &&
+      duplicate(ksec_handle, handle, io,
+                (attributes->Attributes & OBJ_INHERIT) != 0)) return 0;
   return real_open(handle, access, attributes, io, share, options);
 }
 
@@ -267,12 +272,6 @@ BOOL init_failed(const char* stage) {
 
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (DetourIsHelperProcess() || reason != DLL_PROCESS_ATTACH) return TRUE;
-#ifdef LATCH_RECOVERY_TESTING
-  const char entered[] = "Latch compatibility entered\r\n";
-  DWORD entered_bytes = 0;
-  WriteFile(GetStdHandle(STD_ERROR_HANDLE), entered, sizeof(entered) - 1,
-            &entered_bytes, nullptr);
-#endif
 
   const DWORD length = GetModuleFileNameA(module, hook_path, MAX_PATH);
   if (!length || length >= MAX_PATH) return init_failed("module path");
