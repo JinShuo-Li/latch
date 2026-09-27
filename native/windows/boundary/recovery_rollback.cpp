@@ -234,12 +234,35 @@ void Recovery::recover_pending() {
       fail(L"recovery refuses unrelated ACL changes", ERROR_REVISION_MISMATCH);
     }
   }
+  std::set<std::wstring> absent_roots;
   for (const auto& [path, id] : roots) {
-    PinnedObject pin(path);
-    require(pin.state().identity == id, L"recovery grant root was replaced");
+    if (execution_started) {
+      PinnedObject pin(ObjectState{path, id, L""});
+      if (!pin.object.value) {
+        require(GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES &&
+                    (GetLastError() == ERROR_FILE_NOT_FOUND ||
+                     GetLastError() == ERROR_PATH_NOT_FOUND),
+                L"recovery grant root was replaced");
+        absent_roots.insert(path);
+        continue;
+      }
+      require(GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES,
+              L"recovery grant root was renamed");
+      require(PinnedObject(path).state().identity == id,
+              L"recovery grant root was replaced");
+    } else {
+      PinnedObject pin(path);
+      require(pin.state().identity == id, L"recovery grant root was replaced");
+    }
   }
   for (const auto& [path, parent] : reservation_intents) {
-    PinnedObject pin(std::filesystem::path(path).parent_path());
+    const auto directory = std::filesystem::path(path).parent_path();
+    if (execution_started && absent_roots.contains(directory.wstring())) {
+      require(GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES,
+              L"reservation appeared after its root disappeared");
+      continue;
+    }
+    PinnedObject pin(directory);
     require(pin.state().identity == parent, L"reservation parent was replaced");
     if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
       const auto match = std::find_if(
@@ -359,13 +382,14 @@ void Recovery::recover_pending() {
   ancestor_pins.clear();
   for (const auto& [path, id] : roots) {
     (void)id;
-    visit(visit, path);
+    if (!absent_roots.contains(path)) visit(visit, path);
   }
   if (!rollback_complete) record({L"rollback-complete"});
   pause(L"rollback-sealed");
   for (const auto& [path, id] : reservations) {
     if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-      require(GetLastError() == ERROR_FILE_NOT_FOUND,
+      require(GetLastError() == ERROR_FILE_NOT_FOUND ||
+                  GetLastError() == ERROR_PATH_NOT_FOUND,
               L"cannot inspect reservation cleanup");
       continue;
     }
