@@ -42,7 +42,7 @@ jobs:
         shell: pwsh
         run: |
           $binaries = Join-Path $PWD 'target/windows-native-ci/bin'
-          foreach ($suite in @('recovery', 'test', 'adversarial', 'lifecycle', 'developer', 'deleted_root')) {
+          foreach ($suite in @('test', 'recovery', 'adversarial', 'lifecycle', 'developer', 'deleted_root')) {
             & "native/windows/boundary/$suite.ps1" -Binaries $binaries -FixtureRoot (Join-Path $env:RUNNER_TEMP "latch-native-$suite")
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
