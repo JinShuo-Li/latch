@@ -20,8 +20,9 @@ the listed cases only; do not merge a red Windows gate into main.
   and restored exactly during normal or stale recovery. Per-package deny ACEs alone were insufficient against
   All Application Packages read grants, including on protected child DACLs.
   This behavior needs a production compatibility/security review.
-- A private desktop on WinSta0 permits USER32/GDI startup without granting a
-  broad restricting SID or creating a private window station.
+- A private desktop on the launcher's current window station permits USER32/GDI
+  startup without granting a broad restricting SID or creating a private
+  window station. The station name is queried rather than assumed to be WinSta0.
 - A small Detours compatibility DLL forwards only NUL/KsecDD device handles
   and injects compatibility support into descendants. These hooks are not
   the security boundary; restrictions and job membership are OS properties.

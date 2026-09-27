@@ -712,7 +712,7 @@ fabricating a bash judgment.
 ### Execution backend and mandatory platform sandbox
 
 `ToolExecutor` and extension hosts now request commands through
-`ExecutionBackend`. `SandboxProfile` remains the shared capability policy; the
+`ExecutionBackend`. `SandboxProfile` remains the shared capability policy;
 Linux delegates to `SandboxRunner`. Windows embeds its native runner and
 compatibility DLL, verifies installed bytes, and launches `cmd.exe` through an
 AppContainer token restricted again for writes and a kill-on-close Job Object.
@@ -735,6 +735,10 @@ each argument and explicitly execs the program inside Bubblewrap. Windows fixed
 commands quote arguments and run through the same native runner. Python and
 Node runtimes are staged as read-only assets; Python's standard library is one
 ZIP archive to avoid thousands of per-command ACL changes.
+CLI startup and session Git observations also use `fixed_command`. On Windows,
+the ripgrep prerequisite check inspects `PATH` without starting a host process;
+the search itself runs through the native boundary. Tool descriptions name the
+actual platform shell, Bash on Linux and `cmd.exe` on Windows.
 
 On Linux, the startup probe verifies
 `bwrap`, unprivileged user namespaces, bind mounts, and the required namespace
