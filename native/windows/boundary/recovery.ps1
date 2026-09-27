@@ -40,7 +40,7 @@ foreach($point in $points) {
   $launcher=[Diagnostics.Process]::Start($info);$owner=$null;$children=@()
   try {
     $deadline=[DateTime]::UtcNow.AddSeconds(20);$signal=Join-Path $journal 'pause.pid'
-    while(!(Test-Path -LiteralPath $signal)){if($launcher.HasExited -or [DateTime]::UtcNow -gt $deadline){throw ('Crash checkpoint not reached: '+$point)};Start-Sleep -Milliseconds 20}
+    while(!(Test-Path -LiteralPath $signal)){if($launcher.HasExited){$reported=$launcher.StandardError.ReadToEndAsync();$null=$reported.Wait(2000);throw ('Crash checkpoint not reached: '+$point+' exit='+$launcher.ExitCode+' stderr='+$(if($reported.IsCompleted){$reported.Result}else{'pending'}))};if([DateTime]::UtcNow -gt $deadline){throw ('Crash checkpoint timed out: '+$point)};Start-Sleep -Milliseconds 20}
     $ownerId=[BitConverter]::ToInt32([IO.File]::ReadAllBytes($signal),0);$owner=[Diagnostics.Process]::GetProcessById($ownerId);$header=Header $journal
     if($point -eq 'large-tree'){
       $records=@(Get-ChildItem -LiteralPath (Join-Path $journal 'pending') -Filter '*.rec').Count
