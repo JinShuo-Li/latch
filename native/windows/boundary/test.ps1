@@ -59,6 +59,13 @@ function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra =
           } finally {
             Remove-Item Env:LATCH_DIAG_DEFAULT_DESKTOP
           }
+          $env:LATCH_DIAG_NO_JOB = '1'
+          try {
+            & $runner $workspace $fixture "read-allow `"$path`"" $mode @base
+            Write-Output "Write-restricted diagnostic without nested job exited $LASTEXITCODE"
+          } finally {
+            Remove-Item Env:LATCH_DIAG_NO_JOB
+          }
         } finally {
           Remove-Item Env:LATCH_DIAG_NO_APPCONTAINER
         }

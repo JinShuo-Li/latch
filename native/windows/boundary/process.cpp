@@ -61,7 +61,14 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
   Job job(recovery.job_name());
   // Assign the child atomically at creation, before any possible runner
   // teardown. No suspended child can be stranded between create and assign.
-  if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+  bool job_boundary = true;
+#ifdef LATCH_RECOVERY_TESTING
+  wchar_t job_diagnostic[2]{};
+  job_boundary = GetEnvironmentVariableW(L"LATCH_DIAG_NO_JOB", job_diagnostic,
+                                          2) == 0;
+#endif
+  if (job_boundary &&
+      !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
                                  &job.handle.value, sizeof(job.handle.value),
                                  nullptr, nullptr))
     fail(L"job attribute");
