@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory=$true)][string]$Binaries,[Parameter(Mandatory=$true)][string]$FixtureRoot)
+param([Parameter(Mandatory=$true)][string]$Binaries,[Parameter(Mandatory=$true)][string]$FixtureRoot)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $cancelOnly=$env:LATCH_RECOVERY_CANCEL_ONLY -eq '1'
@@ -34,7 +34,7 @@ foreach($point in $points) {
   $pause=if($point -in @('host-acl-conflict','replaced-object','torn-intent','corrupt-record')){'all-grants'}elseif($point -in @('profile-mapping-conflict','profile-resealed')){'profile-unsealed'}elseif($point -eq 'profile-orphan-conflict'){'profile-intent'}elseif($point -eq 'profile-key-conflict'){'profile-api-key'}elseif($point -eq 'reboot-equivalent'){'descendants'}else{$point}
   if($point -eq 'large-tree'){$pause='cleanup'}
   $command=if($point -in @('descendants','reboot-equivalent')){'tree 3 '+$marker}else{'read-allow '+$ordinary}
-  $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$runner;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$q=[char]34
+  $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$runner;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardError=$true;$q=[char]34
   $info.Arguments=$q+$workspace+$q+' '+$q+$fixture+$q+' '+$q+$command+$q+' write --read-root '+$q+$runtime+$q+' --deny '+$q+$state+$q+' --protect-git '+$q+$workspace+$q
   $info.EnvironmentVariables['LATCH_RECOVERY_ROOT']=$journal;$info.EnvironmentVariables['LATCH_RECOVERY_PAUSE']=$pause
   $launcher=[Diagnostics.Process]::Start($info);$owner=$null;$children=@()
