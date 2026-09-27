@@ -7,7 +7,7 @@ evidence, controlled execution, and continuous long-session memory. V0.2.3 is a
 Linux-first Rust implementation with a native streamed tool loop, durable SQLite
 sessions, OpenAI-compatible and Anthropic providers, kernel-owned validation
 evidence, guarded coding tools, three orthogonal Mode/Safety/Permissions
-controls behind a mandatory Bubblewrap sandbox, a modern Ratatui interface with
+controls behind a mandatory platform sandbox, a modern Ratatui interface with
 a slash command palette and real input editing, and language-independent process
 extensions. The main agent can delegate bounded work to durable asynchronous
 child Latch sessions through a fixed generic tool surface.
@@ -19,14 +19,29 @@ are recorded under `references/`.
 
 ## Build and run
 
-Stable Rust and a C toolchain are required.
+Stable Rust and a C toolchain are required. Linux also requires system
+Bubblewrap and ripgrep. Building on Windows requires the x64 MSVC C++ Build
+Tools and Windows SDK; running requires NTFS, Git for Windows, and ripgrep.
+The Windows native runner is compiled and embedded by `cargo build` or
+`cargo install`; Git Bash and WSL are not required.
 
 ```sh
-cargo build --release
+cargo build --release --locked
 export OPENAI_API_KEY=...
 ./target/release/latch
 # Or install the executable:
-cargo install --path crates/latch-cli
+cargo install --path crates/latch-cli --locked
+```
+
+In PowerShell on Windows:
+
+```powershell
+cargo build --release --locked
+$env:OPENAI_API_KEY = '...'
+.\target\release\latch.exe doctor
+.\target\release\latch.exe
+# Or compile and install the same embedded native runtime:
+cargo install --path crates/latch-cli --locked
 ```
 
 Run `/setup` in the TUI to configure a provider: choose the provider, the
