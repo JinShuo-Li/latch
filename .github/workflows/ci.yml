@@ -34,7 +34,15 @@ jobs:
       - name: Build native boundary with strict MSVC warnings
         shell: pwsh
         run: |
-          cmake -S native/windows/boundary -B target/windows-native-ci -G "Visual Studio 17 2022" -A x64 -DLATCH_RECOVERY_TESTING=ON
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vsVersion = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+          $generator = switch -Regex ($vsVersion) {
+            '^18\.' { 'Visual Studio 18 2026'; break }
+            '^17\.' { 'Visual Studio 17 2022'; break }
+            default { throw "Unsupported Visual Studio installation: $vsVersion" }
+          }
+          Write-Output "Using $generator ($vsVersion)"
+          cmake -S native/windows/boundary -B target/windows-native-ci -G $generator -A x64 -DLATCH_RECOVERY_TESTING=ON
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build target/windows-native-ci --config Release --parallel
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

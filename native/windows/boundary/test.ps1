@@ -83,6 +83,15 @@ function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra =
         } finally {
           Remove-Item Env:LATCH_DIAG_DIRECT_LOWBOX_TOKEN
         }
+        foreach ($style in @('keep-admin','keep-privileges','write-only','clone','clone-no-dacl')) {
+          $env:LATCH_DIAG_TOKEN_STYLE = $style
+          try {
+            & $runner $workspace $fixture "read-allow `"$path`"" $mode @base
+            Write-Output "AppContainer token style $style exited $LASTEXITCODE"
+          } finally {
+            Remove-Item Env:LATCH_DIAG_TOKEN_STYLE
+          }
+        }
       } finally {
         Remove-Item Env:LATCH_DIAG_SKIP_INJECTION
         Remove-Item Env:LATCH_DIAG_WINDOW_STATION
