@@ -41,6 +41,13 @@ function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra =
         $cmdExe = Join-Path $env:SystemRoot 'System32/cmd.exe'
         & $runner $workspace $cmdExe '/d /c type read.txt' $mode @base
         Write-Output "Restricted cmd diagnostic without injection exited $LASTEXITCODE"
+        $env:LATCH_DIAG_NO_APPCONTAINER = '1'
+        try {
+          & $runner $workspace $fixture "read-allow `"$path`"" $mode @base
+          Write-Output "Write-restricted diagnostic without AppContainer exited $LASTEXITCODE"
+        } finally {
+          Remove-Item Env:LATCH_DIAG_NO_APPCONTAINER
+        }
       } finally {
         Remove-Item Env:LATCH_DIAG_SKIP_INJECTION
         Remove-Item Env:LATCH_DIAG_WINDOW_STATION

@@ -60,7 +60,14 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
         caps.CapabilityCount = 2;
       }
     }
-    if (!UpdateProcThreadAttribute(attrs, 0,
+    bool package_boundary = true;
+#ifdef LATCH_RECOVERY_TESTING
+    wchar_t diagnostic[2]{};
+    package_boundary = GetEnvironmentVariableW(L"LATCH_DIAG_NO_APPCONTAINER",
+                                                diagnostic, 2) == 0;
+#endif
+    if (package_boundary &&
+        !UpdateProcThreadAttribute(attrs, 0,
                                    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
                                    &caps, sizeof(caps), nullptr, nullptr))
       fail(L"Update attrs");
