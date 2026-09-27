@@ -76,6 +76,13 @@ function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra =
         } finally {
           Remove-Item Env:LATCH_DIAG_NO_WRITE_RESTRICTION
         }
+        $env:LATCH_DIAG_DIRECT_LOWBOX_TOKEN = '1'
+        try {
+          & $runner $workspace $fixture "read-allow `"$path`"" $mode @base
+          Write-Output "Direct AppContainer token diagnostic exited $LASTEXITCODE"
+        } finally {
+          Remove-Item Env:LATCH_DIAG_DIRECT_LOWBOX_TOKEN
+        }
       } finally {
         Remove-Item Env:LATCH_DIAG_SKIP_INJECTION
         Remove-Item Env:LATCH_DIAG_WINDOW_STATION
