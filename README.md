@@ -786,12 +786,13 @@ bash scripts/release-gate.sh
 ```
 
 It probes Bubblewrap and runs formatting, locked Clippy, kernel invariants,
-the full workspace test suite, and a locked release build. CI runs this same
-gate after installing Bubblewrap, ripgrep, and Python and enabling user
-namespaces on its ephemeral Ubuntu runner. Sandbox coverage fails
+the full workspace test suite, and a locked release build. Default CI runs a
+small Linux and Windows build/start and architecture smoke gate. The manually
+triggered `Full validation` workflow runs this Linux release gate plus the
+Windows native security and Rust runtime suites. Sandbox coverage fails
 clearly when Bubblewrap cannot create the required namespaces. Live-model,
 paid-provider, benchmark, and long-session stress tests remain separate and
-are not counted as passing deterministic CI.
+are not included in either CI gate.
 
 A separate opt-in harness calls the configured provider for real and is ignored
 by default:

@@ -157,7 +157,7 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
 
 ## Qualification and remaining limits
 
-- **CI:** GitHub Actions run 36371197946 passed the strict native build, all
+- **CI:** GitHub Actions run 36376680779 passed the strict native build, all
   six native fixture suites, the focused Windows Rust fmt/clippy/runtime/release
   gate, and the unchanged full Linux Bubblewrap release gate. The complete
   workspace Rust suite also passed locally on Windows with serial tests.
@@ -168,8 +168,10 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
 - **Developer tools:** the native fixture ran Git init/commit, a nested Git
   repository, a linked worktree, ripgrep, a `cmd.exe` pipeline, Node/npm,
   Python, and a dependency-free Cargo project inside the boundary.
-- **Scope:** Windows CI runs focused Rust integration tests; Linux CI runs the
-  full workspace suite. The dogfood used a deterministic mock provider, so
+- **Scope:** Default CI checks a real embedded Windows boundary command and
+  CLI startup; the manually triggered `Full validation` workflow runs the six
+  native fixture suites and focused Windows Rust tests alongside the complete
+  Linux release gate. The dogfood used a deterministic mock provider, so
   live-model behavior is not claimed.
 - **Startup:** profile creation and scoped ACL grants cost time on a large
   Windows installation. The runner does not cache grants across commands.
