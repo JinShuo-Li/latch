@@ -134,6 +134,11 @@ async fn loop_executes_registered_extension_tool() {
         retry_budget: 2,
     });
     let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
+    #[cfg(windows)]
+    agent.set_extension_lifecycle(crate::extension::ExtensionLifecycle {
+        initialize: std::time::Duration::from_secs(40),
+        ..crate::extension::ExtensionLifecycle::default()
+    });
     agent
         .load_extension(
             "fixture".into(),
