@@ -25,6 +25,7 @@ pub mod state;
 pub mod store;
 pub mod tokens;
 pub mod tools;
+mod workspace_path;
 
 pub use agent::{Agent, AgentEventSink, AgentRuntime};
 pub use agents::{AgentSnapshot, AgentSupervisor, ProviderBuild, ProviderFactory};

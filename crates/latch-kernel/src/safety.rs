@@ -265,7 +265,10 @@ fn classify_command(tool: &str, args: &Value, context: Context<'_>) -> Classific
         capabilities.insert(Capability::PrivilegedOperation);
         return Classification::deny(capabilities, operation, reason);
     }
-    if contains_unmodelled_windows_shell(&command) {
+    if command_tokens(&command)
+        .iter()
+        .any(|token| crate::execution::shell_executable_is_unmodelled(token))
+    {
         let mut capabilities = CapabilitySet::new();
         capabilities.insert(Capability::UnknownCapability);
         return Classification::deny(
@@ -797,29 +800,6 @@ pub fn hard_deny_command(command: &str) -> Option<String> {
             )
         });
     denied.then(|| "destructive or privileged shell command denied by policy".to_owned())
-}
-
-/// A Bash command can launch native Windows executables. Until the execution
-/// backend can model their effects, approval must not turn these surfaces into
-/// a general-purpose escape from the capability policy.
-fn contains_unmodelled_windows_shell(command: &str) -> bool {
-    command_tokens(command).iter().any(|token| {
-        matches!(
-            windows_executable_name(token),
-            "powershell.exe"
-                | "pwsh.exe"
-                | "cmd.exe"
-                | "reg.exe"
-                | "regedit.exe"
-                | "sc.exe"
-                | "net.exe"
-                | "netsh.exe"
-                | "schtasks.exe"
-                | "wmic.exe"
-                | "rundll32.exe"
-                | "mshta.exe"
-        )
-    })
 }
 
 fn windows_executable_name(token: &str) -> &str {

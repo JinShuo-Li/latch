@@ -17,7 +17,7 @@
 //! Because state is derived only from durable events, live supervision and
 //! replay after `--resume` agree exactly.
 
-use crate::tools::is_read_only_shell;
+use crate::execution::is_read_only_shell;
 use latch_protocol::{Event, EventPayload, ToolCall, ToolResult};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;

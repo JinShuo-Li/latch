@@ -216,7 +216,7 @@ impl ToolExecutor {
             .fixed_command(&self.sandbox_profile(call), "rg", &arguments)?
             .output()
             .await?;
-        let partial = cfg!(windows) && out.status.code() == Some(2) && !out.stdout.is_empty();
+        let partial = crate::execution::search_result_is_partial(&out.status, &out.stdout);
         if !out.status.success() && out.status.code() != Some(1) && !partial {
             bail!(
                 "search failed with {}: {}",

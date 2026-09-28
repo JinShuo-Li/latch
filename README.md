@@ -874,5 +874,9 @@ Latch v0.2.3 requires system `bwrap` on Linux. The Windows native runtime is
 available on the port branch. Default GitHub Actions runs Linux and Windows
 smoke checks; manually triggered `Full validation` runs native security,
 focused Windows Rust, and the full Linux workspace gate.
+The execution layer owns platform shell syntax, fixed-program discovery and
+sandbox command construction. Tool dispatch and managed process bookkeeping
+use that layer on both hosts; the Windows AppContainer and recovery boundary
+remains the same native implementation.
 It has no daemon, browser automation, remote execution, MCP, IDE integration,
 automatic commits, or automatic pushes.

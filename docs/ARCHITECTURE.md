@@ -713,6 +713,14 @@ fabricating a bash judgment.
 
 `ToolExecutor` and extension hosts now request commands through
 `ExecutionBackend`. `SandboxProfile` remains the shared capability policy;
+`execution/shell.rs` owns the model-facing shell guidance, tool descriptions,
+unmodelled executable list, and conservative read-only shell classifier.
+`execution` also owns search-tool discovery and platform-specific managed
+process cleanup and search exit interpretation. `tools/process.rs` owns durable
+process state and output, while `workspace_path.rs` shares alias-safe path
+resolution and NTFS hardlink checks with the shell classifier and native file
+tools. Adding a shell or toolchain adapter should change the execution
+layer and its tests without adding shell branches to tool dispatch.
 Linux delegates to `SandboxRunner`. Windows embeds its native runner and
 compatibility DLL, verifies installed bytes, and launches `cmd.exe` through an
 AppContainer token restricted again for writes and a kill-on-close Job Object.
@@ -732,13 +740,17 @@ recovery cannot be proven.
 
 Fixed Git inspections and extension hosts share `fixed_command`; Linux quotes
 each argument and explicitly execs the program inside Bubblewrap. Windows fixed
-commands quote arguments and run through the same native runner. Python,
+commands quote arguments and run through the same native runner. The Rust
+toolchain grant selection, fixed-program aliases, staged-tool PATH entries,
+and Python/Node/ripgrep read roots live in `execution/windows_runtime_tools.rs`,
+leaving `windows_runtime.rs` to assemble the capability request. Python,
 Node, and ripgrep runtimes are staged as read-only assets; a Chocolatey
 ripgrep shim is resolved to the package's standalone executable before staging.
 Python's standard library is one ZIP archive to avoid thousands of per-command
 ACL changes.
 CLI startup and session Git observations also use `fixed_command`. On Windows,
-the ripgrep prerequisite check inspects `PATH` without starting a host process;
+the ripgrep prerequisite check uses the same shim resolution as fixed-command
+staging without starting a host process;
 the search itself runs through the native boundary. Tool descriptions name the
 actual platform shell, Bash on Linux and `cmd.exe` on Windows.
 

@@ -152,14 +152,19 @@ recall share one invariant). `media.rs` owns image validation/ingestion and the
 artifact media resolver; provider adapters serialize durable `MediaRef`s to
 wire images.
 `execution/` owns the platform backend boundary used by command-starting tools
-and extension hosts. Linux delegates to the mandatory Bubblewrap runner in
+and extension hosts, plus shell guidance, conservative read-only command
+classification, search prerequisite discovery, and platform process cleanup.
+`workspace_path.rs` shares alias-safe resolution and platform file-alias
+checks between tools and execution.
+Linux delegates to the mandatory Bubblewrap runner in
 `sandbox.rs`; Windows uses the embedded `native/windows/boundary/` runner,
 `cmd.exe`, a per-call AppContainer, a write-restricted token, durable ACL
 recovery, and a Job Object. It has no unsandboxed or local-account fallback.
 The native runner is built by
 `crates/latch-kernel/build.rs` on Windows (x64 MSVC C++ Build Tools + Windows
-SDK required). Its Rust adapter is `execution/windows_runtime.rs` and its
-read-only Python/Node staging is `execution/windows_runtime_tools.rs`.
+SDK required). Its Rust adapter is `execution/windows_runtime.rs`; fixed
+program aliases, Rust toolchain grants, and read-only Python/Node/ripgrep
+staging belong to `execution/windows_runtime_tools.rs`.
 Default Windows CI runs one production embedded-boundary smoke test; the manual
 workflow runs all native security fixtures and a focused Rust runtime gate.
 The manual Linux job runs the full workspace suite. Windows runtime tests run
