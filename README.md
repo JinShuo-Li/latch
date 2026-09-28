@@ -300,6 +300,11 @@ ACL changes and fails closed on unreconciled host changes. Git for Windows
 provides `git` and `rg` is required for search; Git Bash and WSL are not used.
 Workspace reads include directory listing; parent directories receive no
 listing grant, and known credentials stay masked even under the workspace.
+Existing Windows workspace objects must let the current user change their
+ACLs for the temporary AppContainer grant. A readable object owned by another
+principal can therefore make the command fail closed. Use a focused checkout
+owned by the current user; when cloning locally, use `git clone --no-hardlinks`
+so repository objects do not alias files outside the workspace.
 
 ```sh
 latch doctor

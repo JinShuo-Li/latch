@@ -185,6 +185,10 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
   live-model behavior is not claimed.
 - **Startup:** profile creation and scoped ACL grants cost time on a large
   Windows installation. The runner does not cache grants across commands.
+- **Host ACLs:** existing workspace objects that the current user can read but
+  cannot open with `WRITE_DAC` cannot receive temporary AppContainer grants.
+  The command fails closed; a user-owned checkout without outside hardlinks is
+  the current workaround. See `CURRENT_STATE.md` for the `C:\project` case.
 - **Integration:** CLI host-side Git inspection is read-only preflight;
   command execution itself enters the boundary.
 - **Filesystem adversaries:** concurrent grants and revocations beyond the journal lock,
