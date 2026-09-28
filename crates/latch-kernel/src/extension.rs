@@ -1163,7 +1163,9 @@ mod tests {
     async fn silent_extension_is_reaped_when_initialize_times_out() {
         let Some(fake) = fake_extension() else { return };
         let lifecycle = ExtensionLifecycle {
-            initialize: Duration::from_secs(2),
+            // Windows AppContainer grant setup can take several seconds on a
+            // hosted runner before the Python fixture reaches its entrypoint.
+            initialize: Duration::from_secs(8),
             ..ExtensionLifecycle::default()
         };
         let watch = ProcessWatch::start(&fake);
@@ -1181,7 +1183,7 @@ mod tests {
         assert!(message.contains("initialize"), "{message}");
         assert!(message.contains("timed out"), "{message}");
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(12),
             "timeout took {:?}",
             started.elapsed()
         );
@@ -1316,28 +1318,38 @@ mod tests {
         let Some(fake) = fake_extension() else { return };
         let cancel = CancellationToken::new();
         let needle = fake.marker.to_string_lossy().into_owned();
+        let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel();
         let canceller = tokio::spawn({
             let cancel = cancel.clone();
             async move {
-                let deadline = Instant::now() + Duration::from_secs(5);
+                let deadline = Instant::now() + Duration::from_secs(30);
                 while matching_pids(&needle).is_empty() {
                     assert!(Instant::now() < deadline, "fake extension never started");
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
                 cancel.cancel();
+                let _ = cancelled_tx.send(Instant::now());
             }
         });
         let watch = ProcessWatch::start(&fake);
-        // Ten seconds of initialize budget: only the token can stop this.
-        let started = Instant::now();
+        // Allow slow hosted-runner process setup; only the token stops this
+        // fixture once the Python child has actually started.
         let error = match fake
-            .start("silent-initialize", ExtensionLifecycle::default(), &cancel)
+            .start(
+                "silent-initialize",
+                ExtensionLifecycle {
+                    initialize: Duration::from_secs(40),
+                    ..ExtensionLifecycle::default()
+                },
+                &cancel,
+            )
             .await
         {
             Ok(_) => panic!("startup must be cancelled"),
             Err(error) => error,
         };
         canceller.await.unwrap();
+        let cancelled_at = cancelled_rx.await.unwrap();
         let pids = watch.finish();
         let message = format!("{error:#}");
         assert!(message.contains("fake"), "{message}");
@@ -1349,9 +1361,9 @@ mod tests {
         );
         assert!(message.contains("cancelled"), "{message}");
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            cancelled_at.elapsed() < Duration::from_secs(5),
             "cancellation took {:?}",
-            started.elapsed()
+            cancelled_at.elapsed()
         );
         assert_gone(&pids).await;
     }
