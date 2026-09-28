@@ -27,10 +27,6 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
       - name: Install Windows test prerequisites
         shell: pwsh
         run: |
@@ -72,8 +68,29 @@ jobs:
               throw
             }
           }
+  windows-rust:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ripgrep for sandboxed search tests
+        shell: pwsh
+        run: |
+          choco install ripgrep --yes --no-progress --limit-output
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $rgPackage = Join-Path $env:ChocolateyInstall 'lib/ripgrep'
+          $rgBinary = Get-ChildItem -LiteralPath $rgPackage -Recurse -Filter rg.exe -File |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $rgBinary) { throw "Chocolatey ripgrep package has no standalone rg.exe under $rgPackage" }
+          $rgDirectory = Split-Path -Parent $rgBinary
+          $rgDirectory | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $env:PATH = "$rgDirectory;$env:PATH"
+          & $rgBinary --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Windows Rust release gate
-        if: success() || failure()
         shell: pwsh
         run: |
           cargo fmt --all -- --check
