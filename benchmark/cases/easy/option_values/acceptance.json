@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "empty_is_explicit", "code": "from options import parse_args\nassert parse_args(['--label',''])['label'] == ''"},
+    {"name": "end_marker", "code": "from options import parse_args\nassert parse_args(['--','--quiet','-x']) == {'label':None,'quiet':False,'files':['--quiet','-x']}"},
+    {"name": "missing_value_and_regular_options", "code": "from options import parse_args\nassert parse_args(['--quiet','a']) == {'label':None,'quiet':True,'files':['a']}\ntry: parse_args(['--label'])\nexcept ValueError: pass\nelse: raise AssertionError('missing value accepted')"}
+  ]
+}

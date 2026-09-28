@@ -1,0 +1,7 @@
+{
+  "id": "csv_chunks",
+  "tier": "easy",
+  "title": "CSV rows across network chunks",
+  "timeout_seconds": 300,
+  "prompt": "A data import worker receives CSV text in arbitrary chunks. Quoted fields can contain commas and newlines, but parse_chunks currently splits rows before CSV parsing. Repair the parser in importer.py, preserve parse_chunks(chunks), run visible tests and validate."
+}

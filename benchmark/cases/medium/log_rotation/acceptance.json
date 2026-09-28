@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "archive_order", "code": "from pathlib import Path\nfrom tempfile import TemporaryDirectory\nfrom logging_store import append_log\nwith TemporaryDirectory() as d:\n p=Path(d)/'app.log'\n for text in ['one','two','three']: append_log(p,text,5,2)\n assert p.read_text()=='three\\n' and (Path(d)/'app.log.1').read_text()=='two\\n' and (Path(d)/'app.log.2').read_text()=='one\\n'"},
+    {"name": "bounded_archive_count", "code": "from pathlib import Path\nfrom tempfile import TemporaryDirectory\nfrom logging_store import append_log\nwith TemporaryDirectory() as d:\n p=Path(d)/'x'\n for n in range(6): append_log(p,str(n),2,2)\n assert sorted(x.name for x in Path(d).iterdir())==['x','x.1','x.2'] and p.read_text()=='5\\n' and (Path(d)/'x.2').read_text()=='3\\n'"},
+    {"name": "empty_log_and_limits", "code": "from pathlib import Path\nfrom tempfile import TemporaryDirectory\nfrom logging_store import append_log\nwith TemporaryDirectory() as d:\n p=Path(d)/'x'; p.touch(); append_log(p,'long',2,2)\n assert not (Path(d)/'x.1').exists()\n for size,backups in [(0,1),(2,-1)]:\n  try: append_log(p,'x',size,backups)\n  except ValueError: pass\n  else: raise AssertionError((size,backups))"}
+  ]
+}

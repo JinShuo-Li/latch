@@ -1,0 +1,7 @@
+{
+  "id": "path_rules",
+  "tier": "easy",
+  "title": "Ordered ignore and reinclude rules",
+  "timeout_seconds": 300,
+  "prompt": "A file picker applies ordered ignore rules. A later !pattern should reinclude a path even after an earlier exclusion, but the current matcher permanently excludes it. Fix should_include(path, rules) in rules.py while keeping unmatched paths included. Run visible tests and validate."
+}

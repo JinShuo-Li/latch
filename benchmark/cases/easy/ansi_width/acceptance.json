@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "ansi_and_cjk", "code": "from width import display_width\nassert display_width('\\x1b[1;32m中\\x1b[0m') == 2"},
+    {"name": "combining_and_emoji", "code": "from width import display_width\nassert display_width('e\\u0301') == 1 and display_width('雪') == 2 and display_width('A') == 1"},
+    {"name": "control_sequences", "code": "from width import display_width\nassert display_width('\\x1b[38;5;42mOK\\x1b[0m') == 2"}
+  ]
+}

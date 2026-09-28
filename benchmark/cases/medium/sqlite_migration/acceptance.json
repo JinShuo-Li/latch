@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "preserves_rows", "code": "import sqlite3\nfrom migration import migrate\ndb=sqlite3.connect(':memory:'); db.execute('CREATE TABLE users(id INTEGER PRIMARY KEY,name TEXT NOT NULL)'); db.execute(\"INSERT INTO users VALUES(1,'Ada')\"); migrate(db)\nassert db.execute('SELECT id,name,email FROM users').fetchall()==[(1,'Ada',None)]"},
+    {"name": "idempotent", "code": "import sqlite3\nfrom migration import migrate\ndb=sqlite3.connect(':memory:'); migrate(db); db.execute(\"INSERT INTO users VALUES(1,'Ada','ada@example.test')\"); migrate(db)\nassert db.execute('SELECT * FROM users').fetchall()==[(1,'Ada','ada@example.test')] and db.execute('PRAGMA user_version').fetchone()==(2,)"},
+    {"name": "malformed_schema_rejected", "code": "import sqlite3\nfrom migration import migrate\ndb=sqlite3.connect(':memory:'); db.execute('CREATE TABLE users(wrong TEXT)'); db.execute(\"INSERT INTO users VALUES('keep')\")\ntry: migrate(db)\nexcept (ValueError,sqlite3.DatabaseError): pass\nelse: raise AssertionError('malformed schema replaced')\nassert db.execute('SELECT wrong FROM users').fetchall()==[('keep',)]"}
+  ]
+}

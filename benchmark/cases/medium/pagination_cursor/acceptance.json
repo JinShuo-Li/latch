@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "deletion_between_pages", "code": "from feed import page\nr=[{'timestamp':i,'id':str(i)} for i in range(5)]\na,c=page(r,None,2); b,_=page(r[1:],c,3)\nassert [x['id'] for x in a+b] == ['0','1','2','3','4']"},
+    {"name": "same_timestamp_and_insert", "code": "from feed import page\nr=[{'timestamp':1,'id':x} for x in 'abcd']\na,c=page(r,None,2); b,_=page(r+[{'timestamp':0,'id':'z'}],c,5)\nassert [x['id'] for x in a+b] == list('abcd')"},
+    {"name": "bad_cursor_and_limit", "code": "from feed import page\nfor cursor,limit in [('not-base64',2),(None,0)]:\n try: page([],cursor,limit)\n except ValueError: pass\n else: raise AssertionError((cursor,limit))"}
+  ]
+}

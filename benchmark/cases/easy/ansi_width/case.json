@@ -1,0 +1,7 @@
+{
+  "id": "ansi_width",
+  "tier": "easy",
+  "title": "Terminal cell width with color and Unicode",
+  "timeout_seconds": 300,
+  "prompt": "A terminal status table aligns columns using display_width(text). ANSI color codes, combining marks and East Asian wide characters currently count as ordinary characters, so columns drift. Fix width.py for these cases while keeping the public function. Run visible tests and validate."
+}

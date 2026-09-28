@@ -1,0 +1,7 @@
+{
+  "id": "pagination_cursor",
+  "tier": "medium",
+  "title": "Stable keyset pagination after deletions",
+  "timeout_seconds": 420,
+  "prompt": "An activity feed paginates records sorted by (timestamp, id). The current cursor is an array offset, so deleting an earlier row between pages skips a later row. Fix page(records, cursor, limit) in feed.py to use a stable opaque cursor based on the last returned key. Keep the return shape (items, next_cursor), reject malformed cursors and nonpositive limits, run tests and validate."
+}

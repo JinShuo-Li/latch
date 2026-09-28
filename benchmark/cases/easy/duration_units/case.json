@@ -1,0 +1,7 @@
+{
+  "id": "duration_units",
+  "tier": "easy",
+  "title": "Millisecond and second timeout parsing",
+  "timeout_seconds": 300,
+  "prompt": "A job scheduler accepts durations such as 250ms, 2s, 3m, and 1h and stores integer milliseconds. The parser matches the s suffix inside ms and accepts malformed trailing text. Fix parse_duration(value) in duration.py, rejecting negative or malformed values, then run visible tests and validate."
+}

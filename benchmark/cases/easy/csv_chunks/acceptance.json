@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "quoted_newline", "code": "from importer import parse_chunks\nassert parse_chunks(['name,note\\n\\\"Ada\\\",\\\"one\\n', 'two\\\"\\n']) == [['name','note'],['Ada','one\\ntwo']]"},
+    {"name": "every_split", "code": "from importer import parse_chunks\ns='a,b\\n\\\"x,y\\\",\\\"line 1\\nline 2\\\"\\n'\nexpected=[['a','b'],['x,y','line 1\\nline 2']]\nassert all(parse_chunks([s[:i],s[i:]]) == expected for i in range(len(s)+1))"},
+    {"name": "crlf_and_final_row", "code": "from importer import parse_chunks\nassert parse_chunks(['a,b\\r\\nc,d']) == [['a','b'],['c','d']]"}
+  ]
+}

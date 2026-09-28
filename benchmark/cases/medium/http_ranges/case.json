@@ -1,0 +1,7 @@
+{
+  "id": "http_ranges",
+  "tier": "medium",
+  "title": "HTTP byte ranges for downloads",
+  "timeout_seconds": 420,
+  "prompt": "A download endpoint implements single HTTP byte ranges. The current handler uses Python slicing incorrectly: inclusive ends lose one byte and suffix ranges are treated as absolute offsets. Fix serve_range(data, header) in ranges.py. Return (status, body, content_range), support missing headers, open-ended and suffix ranges, clamp oversized ends, return 416 for unsatisfiable ranges, and reject malformed or multiple ranges. Run tests and validate."
+}

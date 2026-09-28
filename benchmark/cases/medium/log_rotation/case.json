@@ -1,0 +1,7 @@
+{
+  "id": "log_rotation",
+  "tier": "medium",
+  "title": "Bounded log rotation without data loss",
+  "timeout_seconds": 420,
+  "prompt": "An on-call service rotates a text log before appending a new line. When max_bytes is exceeded, current rotation overwrites the newest archive and loses older lines. Fix append_log(path, line, max_bytes, backups) in logging_store.py. Archive .1 is newest, keep up to backups archives, do not rotate for an empty log, and reject invalid size/backup limits. Run visible tests and validate."
+}

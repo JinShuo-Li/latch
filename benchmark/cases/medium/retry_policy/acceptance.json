@@ -1,0 +1,8 @@
+{
+  "checks": [
+    {"name": "post_not_retried", "code": "from retry import request\ncalls=[]; delays=[]\nr=request('POST',lambda: calls.append(1) or {'status':503},delays.append)\nassert r['status']==503 and len(calls)==1 and delays==[]"},
+    {"name": "retry_after_and_backoff", "code": "from retry import request\nresponses=iter([{'status':429,'headers':{'Retry-After':'3'}},{'status':503},{'status':200}]); delays=[]\nassert request('GET',lambda: next(responses),delays.append,3)['status']==200 and delays==[3.0,2]"},
+    {"name": "last_attempt_no_sleep", "code": "from retry import request\nseen=[]; delays=[]\nassert request('HEAD',lambda: seen.append(1) or {'status':503},delays.append,2)['status']==503 and len(seen)==2 and delays==[1]"},
+    {"name": "invalid_budget", "code": "from retry import request\ntry: request('GET',lambda: {'status':200},lambda x: None,0)\nexcept ValueError: pass\nelse: raise AssertionError('zero attempts accepted')"}
+  ]
+}

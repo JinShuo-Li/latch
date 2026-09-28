@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "reinclude", "code": "from rules import should_include\nassert should_include('logs/keep.log',['logs/*','!logs/keep.log'])"},
+    {"name": "last_rule_wins", "code": "from rules import should_include\nassert not should_include('logs/keep.log',['logs/*','!logs/keep.log','logs/*.log'])"},
+    {"name": "unmatched_and_other_exclusions", "code": "from rules import should_include\nassert should_include('src/app.py',['*.log']) and not should_include('error.log',['*.log'])"}
+  ]
+}

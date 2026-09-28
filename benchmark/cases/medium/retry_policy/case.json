@@ -1,0 +1,7 @@
+{
+  "id": "retry_policy",
+  "tier": "medium",
+  "title": "Idempotent HTTP retries and Retry-After",
+  "timeout_seconds": 420,
+  "prompt": "A request client retries transient 429 and 503 responses. It currently retries POST, ignores numeric Retry-After, and sleeps after its final attempt. Fix request(method, send, sleep, max_attempts) in retry.py. Only GET/HEAD are retryable; honor nonnegative numeric Retry-After, otherwise use 1, 2, 4... seconds. Return the last response and reject max_attempts < 1. Run tests and validate."
+}

@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "units", "code": "from duration import parse_duration\nassert [parse_duration(x) for x in ['250ms','2s','3m','1h']] == [250,2000,180000,3600000]"},
+    {"name": "reject_malformed", "code": "from duration import parse_duration\nfor value in ['-1s','1sX','2','ms',' 1s']:\n try: parse_duration(value)\n except ValueError: pass\n else: raise AssertionError(value)"},
+    {"name": "zero_and_large", "code": "from duration import parse_duration\nassert parse_duration('0ms') == 0 and parse_duration('120m') == 7200000"}
+  ]
+}

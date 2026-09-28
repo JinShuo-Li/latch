@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "nested_file", "code": "from archive import extract_archive\nfrom pathlib import Path\nimport tempfile,zipfile\nwith tempfile.TemporaryDirectory() as d:\n p=Path(d); z=p/'a.zip'\n with zipfile.ZipFile(z,'w') as f: f.writestr('docs/a.txt','ok')\n assert extract_archive(z,p/'out')==['docs/a.txt'] and (p/'out/docs/a.txt').read_text()=='ok'"},
+    {"name": "traversal_preflight", "code": "from archive import extract_archive\nfrom pathlib import Path\nimport tempfile,zipfile\nwith tempfile.TemporaryDirectory() as d:\n p=Path(d); z=p/'a.zip'\n with zipfile.ZipFile(z,'w') as f:\n  f.writestr('good.txt','ok'); f.writestr('../escape.txt','bad')\n try: extract_archive(z,p/'out')\n except ValueError: pass\n else: raise AssertionError('traversal accepted')\n assert not (p/'out/good.txt').exists() and not (p/'escape.txt').exists()"},
+    {"name": "absolute_and_symlink", "code": "from archive import extract_archive\nfrom pathlib import Path\nimport tempfile,zipfile,stat\nwith tempfile.TemporaryDirectory() as d:\n p=Path(d)\n for name in ['/outside.txt','link']:\n  z=p/'a.zip'\n  with zipfile.ZipFile(z,'w') as f:\n   if name=='link':\n    item=zipfile.ZipInfo('link'); item.create_system=3; item.external_attr=(stat.S_IFLNK | 0o777)<<16; f.writestr(item,'target')\n   else: f.writestr(name,'bad')\n  try: extract_archive(z,p/'out')\n  except ValueError: pass\n  else: raise AssertionError(name)"}
+  ]
+}

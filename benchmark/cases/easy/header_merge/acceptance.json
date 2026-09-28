@@ -1,0 +1,7 @@
+{
+  "checks": [
+    {"name": "ordinary_case_insensitive", "code": "from headers import normalize_headers\nassert normalize_headers([('Accept','a'),('accept','b')]) == {'accept':'a, b'}"},
+    {"name": "set_cookie_separate", "code": "from headers import normalize_headers\nassert normalize_headers([('Set-Cookie','a=1'),('set-cookie','b=2')]) == {'set-cookie':['a=1','b=2']}"},
+    {"name": "order_and_single", "code": "from headers import normalize_headers\nassert normalize_headers([('X-ID','1'),('x-id','2'),('x-id','3')]) == {'x-id':'1, 2, 3'} and normalize_headers([]) == {}"}
+  ]
+}

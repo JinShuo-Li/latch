@@ -1,0 +1,7 @@
+{
+  "id": "archive_paths",
+  "tier": "medium",
+  "title": "Safe ZIP import before extraction",
+  "timeout_seconds": 420,
+  "prompt": "A document importer extracts user-supplied ZIP files. It currently writes entries whose names contain ../ and may partially extract a good entry before discovering a bad one. Fix extract_archive(archive, destination) in archive.py: reject absolute paths, traversal and symbolic links before writing any file, preserve ordinary nested files, and return the extracted relative paths. Run visible tests and validate."
+}

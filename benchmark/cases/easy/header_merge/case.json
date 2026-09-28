@@ -1,0 +1,7 @@
+{
+  "id": "header_merge",
+  "tier": "easy",
+  "title": "Case-insensitive HTTP header aggregation",
+  "timeout_seconds": 300,
+  "prompt": "An HTTP gateway receives headers as ordered name/value pairs. Header names are case-insensitive, ordinary duplicate fields should combine with ', ', and Set-Cookie must remain separate. normalize_headers currently loses duplicates and treats case variants separately. Fix headers.py, run visible tests and validate."
+}

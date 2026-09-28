@@ -1,0 +1,7 @@
+{
+  "id": "option_values",
+  "tier": "easy",
+  "title": "Explicit empty CLI option values",
+  "timeout_seconds": 300,
+  "prompt": "A deployment CLI accepts --label VALUE, --quiet, and -- to end option parsing. An explicitly empty label is treated as absent, and filenames after -- are parsed as flags. Fix parse_args(argv) in options.py. Preserve the returned dictionary shape, run visible tests and validate."
+}
