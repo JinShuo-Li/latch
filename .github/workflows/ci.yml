@@ -90,17 +90,27 @@ jobs:
           $env:PATH = "$rgDirectory;$env:PATH"
           & $rgBinary --version
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Windows Rust release gate
+      - name: Windows runtime smoke and release build
         shell: pwsh
         run: |
           cargo fmt --all -- --check
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          # Native ACL recovery is intentionally serialized per Windows user.
-          # Keep process fixtures from timing out while queued for that lock.
-          $env:RUST_TEST_THREADS = '1'
-          cargo test --workspace --locked
+          # Linux runs the complete workspace suite; this Windows lane checks
+          # platform wiring while the native job covers the full ACL matrix.
+          foreach ($test in @(
+            'windows_runtime',
+            'read_only_shell_classification_is_conservative',
+            'search_refuses_and_excludes_the_state_directory',
+            'managed_process_start_poll_and_terminate',
+            'host_registers_and_executes_external_tool',
+            'auto_approve_never_overrides_hard_deny'
+          )) {
+            cargo test -p latch-kernel --lib $test --locked -- --test-threads=1
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          cargo test -p latch-cli --test cli doctor_reports_profile_and_credential --locked
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo build --release --locked
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
