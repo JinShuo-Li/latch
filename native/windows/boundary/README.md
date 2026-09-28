@@ -4,8 +4,8 @@
 `ExecutionBackend`. Version remains 0.2.3. Native fixture results below
 establish the listed cases only; do not merge a red Windows gate into main.
 
-Current work-in-progress status and the unresolved local recovery journal are
-recorded in [CURRENT_STATE.md](CURRENT_STATE.md). Its incomplete checks take
+Current validation status and the large home-directory performance limit are
+recorded in [CURRENT_STATE.md](CURRENT_STATE.md). Its more recent checks take
 precedence over older validation results below.
 
 ## Implemented candidate
@@ -15,6 +15,8 @@ precedence over older validation results below.
 - Explicit NTFS workspace/external grants. Write grants exclude WRITE_DAC,
   WRITE_OWNER and FILE_DELETE_CHILD. Git denies contain mutation bits only:
   denying SYNCHRONIZE would accidentally deny ordinary reads.
+- Shared workspace, scratch and write roots grant the AppContainer and write
+  restrictor in one journaled ACL change per existing object.
 - Workspace grants cover directory listing, traversal, metadata and file reads.
   Ancestor compatibility handles expose metadata only, including for paths
   with a trailing separator; they do not enumerate a parent. A workspace that

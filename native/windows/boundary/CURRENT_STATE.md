@@ -66,10 +66,12 @@ The final follow-up commit changes only workflow triggering and documentation.
 
 ## Large-workspace design assessment
 
-The current per-command boundary traverses each write root to validate hardlink
+The per-command boundary traverses each write root to validate hardlink
 aliases, then grants and journals ACL changes on existing objects for both the
-AppContainer SID and the write-restrictor SID. Sensitive-path exclusions and
-rollback add more per-object work. A root-only inherited ACE is not a safe
+AppContainer SID and the write-restrictor SID. Shared grant roots now apply both
+SIDs in one ACL mutation and one durable intent per object, avoiding a second
+grant walk and flush. Sensitive-path exclusions and rollback still add per-object
+work. A root-only inherited ACE is not a safe
 drop-in optimization: Windows can propagate it to existing children, while
 protected or explicit child ACLs and sensitive exclusions still need individual
 handling. The current recovery journal must be able to undo every changed ACL
@@ -93,3 +95,9 @@ an ordered recovery intent before changing the object. Parallel ACL mutation
 would require a thread-safe, ordered journal and new crash/recovery proofs; it
 would also increase contention and in-flight host changes. Measure scan,
 journal, grant, and rollback time separately before considering that change.
+
+The paired-grant change passed the local MSVC `/W4 /WX` native build, all six
+native suites (including exact restoration of a protected workspace child ACL),
+Windows formatting, full workspace Clippy and tests, and a locked release build.
+It reduces grant walks and durable ACL intents on shared roots; no whole-home
+startup timing or whole-home success is claimed.

@@ -64,6 +64,17 @@ $unicode = Join-Path $workspace (([string][char]0x6D4B)+([string][char]0x8BD5)+'
 [IO.File]::WriteAllText($unicode,'unicode fixture')
 Check 'read-allow' $unicode
 Check 'write-allow' $unicode
+$protectedWorkspace = Join-Path $workspace 'protected-child.txt'
+[IO.File]::WriteAllText($protectedWorkspace,'fixture')
+$protectedAcl = Get-Acl -LiteralPath $protectedWorkspace
+$protectedAcl.SetAccessRuleProtection($true,$true)
+Set-Acl -LiteralPath $protectedWorkspace -AclObject $protectedAcl
+$protectedBefore = (Get-Acl -LiteralPath $protectedWorkspace).Sddl
+Check 'read-allow' $protectedWorkspace 'read'
+Check 'write-allow' $protectedWorkspace
+if ((Get-Acl -LiteralPath $protectedWorkspace).Sddl -ne $protectedBefore) {
+  throw 'Paired grant did not restore protected workspace ACL exactly'
+}
 Set-Content -LiteralPath $plain -Stream boundary -Value 'outside stream'
 Set-Content -LiteralPath $secret -Stream boundary -Value 'protected stream'
 Set-Content -LiteralPath $internal -Stream boundary -Value 'workspace stream'

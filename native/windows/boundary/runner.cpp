@@ -20,6 +20,8 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     PSID sid = container.sid;
     recovery.profile_created();
     Grants grants(sid, cancel, recovery);
+    Local write_sid = parse_sid(recovery.write_sid().c_str());
+    Grants write_grants(write_sid.value, cancel, recovery);
     // Remove AppContainer read grants on sensitive paths; package-specific
     // deny ACEs do not suppress the All Application Packages allow route.
     std::set<std::wstring> protected_paths;
@@ -42,8 +44,8 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     for (const auto& root : write_roots)
       validate_write_tree(root, write_roots, grant_locks, cancel, recovery);
     recovery.track_root(argv[1]);
-    grants.add(argv[1], GRANT_ACCESS,
-               read_rights | (writable ? write_rights : 0));
+    grants.add_pair(argv[1], write_sid.value,
+                    read_rights | (writable ? write_rights : 0));
     Attributes attributes(3);
     auto* attrs = attributes.value;
     Local internet = parse_sid(L"S-1-15-3-1");
@@ -71,17 +73,12 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
                                    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
                                    &caps, sizeof(caps), nullptr, nullptr))
       fail(L"Update attrs");
-    Local write_sid = parse_sid(recovery.write_sid().c_str());
-    Grants write_grants(write_sid.value, cancel, recovery);
     // Windows redirects GetTempPath inside an AppContainer to this private
     // per-call directory, regardless of TEMP/TMP. Grant only this scratch tree.
     const auto scratch = recovery.scratch_path();
     std::filesystem::create_directories(scratch);
-    grants.add(scratch.wstring(), GRANT_ACCESS, read_rights | write_rights);
-    write_grants.add(scratch.wstring(), GRANT_ACCESS,
-                     read_rights | write_rights);
-    write_grants.add(argv[1], GRANT_ACCESS,
-                     read_rights | (writable ? write_rights : 0));
+    grants.add_pair(scratch.wstring(), write_sid.value,
+                    read_rights | write_rights);
     for (int i = 5; i < argc; ++i) {
       const std::wstring option = argv[i++];
       if (i >= argc) fail(L"missing option path", ERROR_INVALID_PARAMETER);
@@ -102,8 +99,8 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
         git_reservation.create(argv[i], recovery);
       } else if (option == L"--write-root") {
         recovery.track_root(argv[i]);
-        grants.add(argv[i], GRANT_ACCESS, read_rights | write_rights);
-        write_grants.add(argv[i], GRANT_ACCESS, read_rights | write_rights);
+        grants.add_pair(argv[i], write_sid.value,
+                        read_rights | write_rights);
       } else if (option == L"--deny") {
         protect_sensitive_tree(argv[i], protected_paths, cancel, recovery);
         grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);

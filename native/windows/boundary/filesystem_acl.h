@@ -10,6 +10,7 @@ class Grants {
   Grants(PSID sid, const Cancellation& cancellation, Recovery& journal)
       : cancel(cancellation), sid_(sid), recovery(journal) {}
   void add(const std::wstring& path, ACCESS_MODE mode, DWORD rights);
+  void add_pair(const std::wstring& path, PSID other_sid, DWORD rights);
   void add_one(const std::wstring& path, ACCESS_MODE mode, DWORD rights);
 
  private:
