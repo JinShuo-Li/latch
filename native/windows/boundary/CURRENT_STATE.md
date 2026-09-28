@@ -63,3 +63,33 @@ The full validation run used a temporary push trigger to exercise this branch
 while the `workflow_dispatch` workflow was absent from the default branch.
 That trigger was removed after the green run; default push CI remains light.
 The final follow-up commit changes only workflow triggering and documentation.
+
+## Large-workspace design assessment
+
+The current per-command boundary traverses each write root to validate hardlink
+aliases, then grants and journals ACL changes on existing objects for both the
+AppContainer SID and the write-restrictor SID. Sensitive-path exclusions and
+rollback add more per-object work. A root-only inherited ACE is not a safe
+drop-in optimization: Windows can propagate it to existing children, while
+protected or explicit child ACLs and sensitive exclusions still need individual
+handling. The current recovery journal must be able to undo every changed ACL
+after a crash. The whole-home probe above demonstrates that this work can
+dominate startup and that a live, changing root can also block recovery.
+
+A scalable implementation needs a separately qualified workspace grant lease
+with a stable, narrowly scoped AppContainer identity: reuse verified grants
+across commands, keep write-root hardlink checks and
+sensitive exclusions, record object identities and ACL changes durably, and
+revoke or recover the lease on normal exit, cancellation, and crash. It also
+needs an explicit policy for host changes during the lease. Until those rules
+and adversarial fixtures exist, use focused, stable workspaces rather than an
+entire live home directory. This is a known scale limit, not a passed
+whole-home test.
+
+Multiple threads are not the first optimization. The hardlink preflight is
+read-only and could use bounded parallelism after profiling, but it currently
+pins every object until grants finish. Each ACL mutation then writes and flushes
+an ordered recovery intent before changing the object. Parallel ACL mutation
+would require a thread-safe, ordered journal and new crash/recovery proofs; it
+would also increase contention and in-flight host changes. Measure scan,
+journal, grant, and rollback time separately before considering that change.
