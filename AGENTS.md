@@ -78,6 +78,13 @@ bash scripts/release-gate.sh
   `LATCH_LIVE_TESTS=1 cargo test -p latch-kernel --test live_benchmark -- --ignored --nocapture`
   (`LATCH_BENCH_PROVIDER` / `LATCH_BENCH_MODEL` / `LATCH_BENCH_EFFORTS` filter;
   reports land in `target/live-benchmark/`).
+- Linux CLI benchmark pilot (opt-in, paid provider):
+  `python3 benchmark/run.py list` and
+  `python3 benchmark/run.py run --case stream_records --config <config.toml>`.
+  It requires Python 3.11+, a built `target/release/latch`, the usual Linux
+  sandbox prerequisites, and a DeepSeek v4.1 Flash credential. Isolated
+  workspaces and reports land in ignored `benchmark/runs/`; see
+  `benchmark/README.md`.
 - Snapshot updates: `LATCH_UPDATE_SNAPSHOTS=1 cargo test -p latch-tui --lib`.
   Exception: `crates/latch-tui/tests/snapshots/v31_sidebar.txt` is `include_str!`,
   so edit it by hand and keep `cargo test -p latch-tui --lib` green.
