@@ -263,6 +263,61 @@ mod tests {
     use super::*;
     use crate::sandbox::CapabilitySet;
 
+    #[tokio::test]
+    #[ignore = "diagnostic loader probe ladder"]
+    async fn restricted_loader_probe_ladder() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let (runner, guard, native) = prepare_native().unwrap();
+        let bin = PathBuf::from(env!("LATCH_WINDOWS_NATIVE_DIR"));
+        let mut failures = Vec::new();
+        for name in [
+            "loader-probe-minimal.exe",
+            "loader-probe-user32.exe",
+            "loader-probe-win32.exe",
+            "loader-probe-detours.exe",
+            "loader-probe-guard-tu.exe",
+            "loader-probe-guard-no-hook.exe",
+            "loader-probe-guard-no-inject.exe",
+            "loader-probe-load-hook.exe",
+            "msys-token-guard.exe",
+        ] {
+            let probe = if name == "msys-token-guard.exe" {
+                guard.clone()
+            } else {
+                let destination = native.join(name);
+                fs::copy(bin.join(name), &destination).unwrap();
+                destination
+            };
+            let target = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe");
+            let script = "printf PROBE";
+            let output = Command::new(&runner)
+                .env("LATCH_PRIVATE_DESKTOP_PROBE", "1")
+                .arg(probe)
+                .arg(target)
+                .arg(&workspace)
+                .arg("read")
+                .arg(script)
+                .arg("--read-root")
+                .arg(&native)
+                .output()
+                .await
+                .unwrap();
+            println!(
+                "{}: status={} stdout={} stderr={}",
+                name,
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if !output.status.success() {
+                failures.push(name);
+            }
+        }
+        assert!(failures.is_empty(), "failing loader probes: {failures:?}");
+    }
+
     #[test]
     fn only_git_for_windows_layout_is_accepted() {
         let dir = tempfile::tempdir().unwrap();
@@ -312,7 +367,9 @@ mod tests {
             .unwrap();
         assert!(
             output.status.success(),
-            "{}",
+            "status={} stdout={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(output.stdout, b"WINDOWS_BACKEND_READ");
@@ -439,37 +496,72 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "security regression: Users-readable files outside the workspace are currently exposed"]
-    async fn users_readable_private_file_outside_workspace_is_denied() {
+    async fn users_writable_file_outside_workspace_cannot_be_modified() {
         let directory = tempfile::tempdir().unwrap();
         let workspace = directory.path().join("workspace");
         fs::create_dir(&workspace).unwrap();
-        let private = directory.path().join("private.txt");
-        fs::write(&private, "USERS_READABLE_SECRET").unwrap();
+        let outside = directory.path().join("outside.txt");
+        fs::write(&outside, "ORIGINAL_OUTSIDE_CONTENT").unwrap();
         let acl = std::process::Command::new("icacls")
-            .arg(&private)
-            .args(["/grant", "*S-1-5-32-545:(R)"])
+            .arg(&outside)
+            .args(["/grant", "*S-1-5-32-545:(M)"])
             .status()
             .unwrap();
         assert!(acl.success());
         let backend = WindowsBackend::detect(&workspace).unwrap();
-        let read = SandboxProfile::new(
+        let write = SandboxProfile::new(
             workspace,
             directory.path().to_path_buf(),
             directory.path().join("state"),
-            CapabilitySet::from_iter([Capability::WorkspaceRead]),
-        );
-        let script = format!(
-            "powershell.exe -NoProfile -Command 'Get-Content -LiteralPath \"{}\"'",
-            private.display()
+            CapabilitySet::from_iter([Capability::WorkspaceSourceWrite]),
         );
         let output = backend
-            .command(&read, &script)
+            .command(&write, "printf WINDOWS_SANDBOX_READY")
             .unwrap()
             .output()
             .await
             .unwrap();
-        assert!(!output.status.success());
-        assert!(!String::from_utf8_lossy(&output.stdout).contains("USERS_READABLE_SECRET"));
+        assert!(
+            output.status.success(),
+            "sandbox startup failed: status={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"WINDOWS_SANDBOX_READY");
+        let read_script = format!(
+            "powershell.exe -NoProfile -Command 'Get-Content -LiteralPath \"{}\"'",
+            outside.display()
+        );
+        let output = backend
+            .command(&write, &read_script)
+            .unwrap()
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "ordinary outside read failed: status={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("ORIGINAL_OUTSIDE_CONTENT"),
+            "ordinary outside file was not readable"
+        );
+        let script = format!(
+            "powershell.exe -NoProfile -Command 'Set-Content -LiteralPath \"{}\" -Value MODIFIED'",
+            outside.display()
+        );
+        let output = backend
+            .command(&write, &script)
+            .unwrap()
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "outside write unexpectedly succeeded"
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"ORIGINAL_OUTSIDE_CONTENT");
     }
 }

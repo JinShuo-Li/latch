@@ -26,7 +26,7 @@ using RtlAddAccessAllowedAceFn = LONG(NTAPI*)(PACL acl, ULONG revision, ACCESS_M
 using NtSetInformationTokenFn = NTSTATUS(NTAPI*)(
     HANDLE token, TOKEN_INFORMATION_CLASS information_class, PVOID information, ULONG length);
 
-alignas(DWORD) std::array<BYTE, SECURITY_MAX_SID_SIZE> g_logon_sid{};
+alignas(DWORD) std::array<BYTE, SECURITY_MAX_SID_SIZE> g_restricting_sid{};
 alignas(DWORD) std::array<BYTE, SECURITY_MAX_SID_SIZE> g_admin_sid{};
 char g_hook_path[MAX_PATH]{};
 RtlAddAccessAllowedAceFn g_real_add_access_allowed_ace = nullptr;
@@ -106,33 +106,8 @@ bool capture_process_sids() noexcept {
   if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_token) == FALSE) return false;
   UniqueHandle token(raw_token);
 
-  alignas(void*) std::array<BYTE, 512> token_buffer{};
-  DWORD returned = 0;
-  if (GetTokenInformation(
-          token.get(),
-          TokenLogonSid,
-          token_buffer.data(),
-          static_cast<DWORD>(token_buffer.size()),
-          &returned) == FALSE ||
-      returned < sizeof(TOKEN_GROUPS)) {
-    return false;
-  }
-
-  const auto* logon_groups = reinterpret_cast<const TOKEN_GROUPS*>(token_buffer.data());
-  if (logon_groups->GroupCount != 1 || logon_groups->Groups[0].Sid == nullptr ||
-      IsValidSid(logon_groups->Groups[0].Sid) == FALSE) {
-    return false;
-  }
-  if (GetLengthSid(logon_groups->Groups[0].Sid) > g_logon_sid.size() ||
-      CopySid(
-          static_cast<DWORD>(g_logon_sid.size()),
-          g_logon_sid.data(),
-          logon_groups->Groups[0].Sid) == FALSE) {
-    return false;
-  }
-
   alignas(void*) std::array<BYTE, 4096> restricted_buffer{};
-  returned = 0;
+  DWORD returned = 0;
   if (GetTokenInformation(
           token.get(),
           TokenRestrictedSids,
@@ -143,16 +118,11 @@ bool capture_process_sids() noexcept {
     return false;
   }
   const auto* restricted = reinterpret_cast<const TOKEN_GROUPS*>(restricted_buffer.data());
-  bool logon_is_restricting = false;
-  for (DWORD index = 0; index < restricted->GroupCount; ++index) {
-    if (restricted->Groups[index].Sid != nullptr &&
-        IsValidSid(restricted->Groups[index].Sid) != FALSE &&
-        EqualSid(g_logon_sid.data(), restricted->Groups[index].Sid) != FALSE) {
-      logon_is_restricting = true;
-      break;
-    }
-  }
-  if (!logon_is_restricting) return false;
+  if (restricted->GroupCount != 1 || restricted->Groups[0].Sid == nullptr ||
+      IsValidSid(restricted->Groups[0].Sid) == FALSE ||
+      GetLengthSid(restricted->Groups[0].Sid) > g_restricting_sid.size() ||
+      CopySid(static_cast<DWORD>(g_restricting_sid.size()),
+              g_restricting_sid.data(), restricted->Groups[0].Sid) == FALSE) return false;
 
   DWORD admin_size = static_cast<DWORD>(g_admin_sid.size());
   return CreateWellKnownSid(
@@ -262,7 +232,7 @@ LONG NTAPI hooked_add_access_allowed_ace(
   if (sid != nullptr && mask == GENERIC_ALL && IsValidSid(sid) != FALSE &&
       EqualSid(sid, g_admin_sid.data()) != FALSE &&
       caller_is_msys_runtime(_ReturnAddress())) {
-    replacement = g_logon_sid.data();
+    replacement = g_restricting_sid.data();
   }
   return g_real_add_access_allowed_ace(acl, revision, mask, replacement);
 }

@@ -268,35 +268,16 @@ int normalize_server_default_dacl() {
   return ERROR_SUCCESS;
 }
 
-void grant_logon_sid_to_default_dacl(HANDLE process) {
+void grant_restricting_sid_to_default_dacl(HANDLE process) {
   UniqueHandle token = open_process_token(
       process,
       TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
       "OpenProcessToken(child default DACL)");
-  auto groups_buffer = token_information(token.get(), TokenGroups);
-  auto* groups = reinterpret_cast<TOKEN_GROUPS*>(groups_buffer.data());
-  PSID logon_sid = nullptr;
-  for (DWORD index = 0; index < groups->GroupCount; ++index) {
-    if ((groups->Groups[index].Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID) {
-      logon_sid = groups->Groups[index].Sid;
-      break;
-    }
-  }
-  if (logon_sid == nullptr || IsValidSid(logon_sid) == FALSE) {
-    fail_invariant("child token carries no valid logon SID");
-  }
-
   const auto restricted_buffer = token_information(token.get(), TokenRestrictedSids);
   const auto* restricted = reinterpret_cast<const TOKEN_GROUPS*>(restricted_buffer.data());
-  bool logon_is_restricting = false;
-  for (DWORD index = 0; index < restricted->GroupCount; ++index) {
-    if (EqualSid(logon_sid, restricted->Groups[index].Sid) != FALSE) {
-      logon_is_restricting = true;
-      break;
-    }
-  }
-  if (!logon_is_restricting) {
-    fail_invariant("child logon SID is not a restricting SID");
+  if (restricted->GroupCount != 1 || restricted->Groups[0].Sid == nullptr ||
+      IsValidSid(restricted->Groups[0].Sid) == FALSE) {
+    fail_invariant("child token must carry one valid restricting SID");
   }
 
   const auto dacl_buffer = token_information(token.get(), TokenDefaultDacl);
@@ -313,18 +294,18 @@ void grant_logon_sid_to_default_dacl(HANDLE process) {
   grant.Trustee.MultipleTrusteeOperation = NO_MULTIPLE_TRUSTEE;
   grant.Trustee.TrusteeForm = TRUSTEE_IS_SID;
   grant.Trustee.TrusteeType = TRUSTEE_IS_GROUP;
-  grant.Trustee.ptstrName = static_cast<LPWSTR>(logon_sid);
+  grant.Trustee.ptstrName = static_cast<LPWSTR>(restricted->Groups[0].Sid);
 
   PACL extended_dacl = nullptr;
   DWORD status = SetEntriesInAclW(1, &grant, current_info->DefaultDacl, &extended_dacl);
-  if (status != ERROR_SUCCESS) fail("SetEntriesInAclW(logon default DACL)", status);
+  if (status != ERROR_SUCCESS) fail("SetEntriesInAclW(restricting default DACL)", status);
   LocalAllocation extended_owner(extended_dacl);
 
   TOKEN_DEFAULT_DACL updated{};
   updated.DefaultDacl = extended_dacl;
   if (SetTokenInformation(
           token.get(), TokenDefaultDacl, &updated, sizeof(updated)) == FALSE) {
-    fail("SetTokenInformation(logon default DACL)");
+    fail("SetTokenInformation(restricting default DACL)");
   }
   verify_token_invariants(token.get());
 }
@@ -538,7 +519,9 @@ DWORD launch_guarded(int argc, wchar_t** argv) {
   auto guard_token = open_process_token(GetCurrentProcess(), TOKEN_QUERY, "OpenProcessToken(guard)");
   const auto expected_sids = restricted_sid_set(guard_token.get());
   verify_token_invariants(guard_token.get(), &expected_sids);
+#if !defined(LATCH_GUARD_NO_INJECT_PROBE)
   const std::string hook_path = hook_library_path();
+#endif
 
   std::wstring line = command_line(argc, argv, 2);
   std::vector<wchar_t> mutable_line(line.begin(), line.end());
@@ -548,6 +531,7 @@ DWORD launch_guarded(int argc, wchar_t** argv) {
     fail("SetEnvironmentVariableW(CYGWIN_TESTING)");
   }
 
+ #if !defined(LATCH_GUARD_NO_INJECT_PROBE)
   SECURITY_ATTRIBUTES event_security{};
   event_security.nLength = sizeof(event_security);
   event_security.bInheritHandle = TRUE;
@@ -566,15 +550,34 @@ DWORD launch_guarded(int argc, wchar_t** argv) {
   if (SetEnvironmentVariableW(kReadyHandleEnvironment, ready_handle) == FALSE) {
     fail("SetEnvironmentVariableW(hook readiness)");
   }
+ #endif
 
   STARTUPINFOW startup{};
+  STARTUPINFOW inherited_startup{};
+  GetStartupInfoW(&inherited_startup);
   startup.cb = sizeof(startup);
+  startup.lpDesktop = inherited_startup.lpDesktop;
+#if !defined(LATCH_GUARD_NO_INJECT_PROBE)
   startup.dwFlags = STARTF_USESTDHANDLES;
   startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
   startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
   startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+#endif
 
   PROCESS_INFORMATION process_info{};
+#if defined(LATCH_GUARD_NO_INJECT_PROBE)
+  const BOOL created = CreateProcessW(
+      argv[2],
+      mutable_line.data(),
+      nullptr,
+      nullptr,
+      FALSE,
+      CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+      nullptr,
+      nullptr,
+      &startup,
+      &process_info);
+#else
   const BOOL created = DetourCreateProcessWithDllExW(
       argv[2],
       mutable_line.data(),
@@ -588,11 +591,14 @@ DWORD launch_guarded(int argc, wchar_t** argv) {
       &process_info,
       hook_path.c_str(),
       CreateProcessW);
+#endif
   const DWORD create_error = created == FALSE ? GetLastError() : ERROR_SUCCESS;
+#if !defined(LATCH_GUARD_NO_INJECT_PROBE)
   if (SetEnvironmentVariableW(kReadyHandleEnvironment, nullptr) == FALSE) {
     if (created != FALSE) terminate_suspended_child(process_info.hProcess);
     fail("SetEnvironmentVariableW(clear hook readiness)");
   }
+#endif
   if (created == FALSE) {
     fail("DetourCreateProcessWithDllExW(target, suspended)", create_error);
   }
@@ -604,16 +610,20 @@ DWORD launch_guarded(int argc, wchar_t** argv) {
     auto child_token = open_process_token(
         child_process.get(), TOKEN_QUERY, "OpenProcessToken(child TOKEN_QUERY)");
     verify_token_invariants(child_token.get(), &expected_sids);
-    grant_logon_sid_to_default_dacl(child_process.get());
+    grant_restricting_sid_to_default_dacl(child_process.get());
+#if !defined(LATCH_GUARD_NO_INJECT_PROBE)
     deny_adjust_default(child_process.get(), child_token.get());
+#endif
 
     const DWORD previous_suspend_count = ResumeThread(child_thread.get());
     if (previous_suspend_count == static_cast<DWORD>(-1)) fail("ResumeThread(target)");
     if (previous_suspend_count != 1) fail_invariant("target primary thread had an unexpected suspend count");
     resumed = true;
     child_thread.reset();
+#if !defined(LATCH_GUARD_NO_INJECT_PROBE)
     await_hook_ready(hook_ready.get(), child_process.get());
     hook_ready.reset();
+#endif
 
     const DWORD wait = WaitForSingleObject(child_process.get(), INFINITE);
     if (wait != WAIT_OBJECT_0) {
@@ -635,28 +645,27 @@ DWORD launch_guarded(int argc, wchar_t** argv) {
   }
 }
 
-// DSH launches the guard as a console app from a process that usually has no
-// console of its own. In that case Windows allocates a brand-new console
-// window, which flashes on screen for every restricted bash call. Hide only a
-// console that belongs exclusively to this process; never hide a console we
-// share with the user's terminal.
-void hide_private_console_window() noexcept {
-  DWORD process_list[2]{};
-  const DWORD count = GetConsoleProcessList(process_list, 2);
-  if (count == 1) {
-    if (HWND console = GetConsoleWindow(); console != nullptr) {
-      ShowWindow(console, SW_HIDE);
-    }
-  }
-}
-
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+#if defined(LATCH_GUARD_NO_INJECT_PROBE)
+  std::fprintf(stderr, "guard-no-inject: entered wmain\n");
+#endif
+#if defined(LATCH_GUARD_ENTRY_PROBE)
+  (void)argc;
+  (void)argv;
+  return 0;
+#else
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
-  hide_private_console_window();
   try {
+#if defined(LATCH_GUARD_NO_HOOK_PROBE)
+    (void)argc;
+    wchar_t mode[] = L"--probe-current-token";
+    wchar_t* probe_args[] = {argv[0], mode};
+    return static_cast<int>(launch_guarded(2, probe_args));
+#else
     return static_cast<int>(launch_guarded(argc, argv));
+#endif
   } catch (const GuardFailure& error) {
     std::fprintf(
         stderr,
@@ -668,4 +677,5 @@ int wmain(int argc, wchar_t** argv) {
     std::fprintf(stderr, "msys-token-guard: unexpected failure: %s\n", error.what());
     return kGuardFailureExitCode;
   }
+#endif
 }

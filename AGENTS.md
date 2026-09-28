@@ -98,6 +98,10 @@ copies them. Config example is `config.example.toml`. Docker (or a
 compatible CLI via `DOCKER=…`) is required only for the optional dogfood harness,
 never by Latch itself.
 
+Linux's read-only host-root bind permits ordinary host-readable files outside
+the workspace. Windows parity requires denying unapproved outside writes and
+known sensitive reads, not arbitrary outside-workspace reads.
+
 ## Testing philosophy
 
 > Memory decides what the model needs to know. Cache decides how cheaply we can

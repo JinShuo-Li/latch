@@ -740,6 +740,11 @@ same backend. Extension hosts start through the same
 sandbox with a read-only workspace and network; their individual tool arguments
 remain a cooperative boundary, documented rather than overclaimed.
 
+The read-only host-root bind allows ordinary host-readable files outside the
+workspace to be read. Cross-platform parity requires containing unapproved
+outside writes and hiding known sensitive paths; arbitrary outside-workspace
+read denial is not a Linux sandbox invariant.
+
 Every command and extension profile carries the configured Latch state directory.
 The sandbox resolves its real path and masks the whole directory after workspace
 and external mounts. If `secrets.toml` is a symlink outside that directory, its

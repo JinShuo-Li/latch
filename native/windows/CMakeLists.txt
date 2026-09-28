@@ -5,7 +5,7 @@ add_subdirectory(msys-guard)
 
 add_executable(latch-windows-runner latch-windows-runner.cpp)
 target_compile_features(latch-windows-runner PRIVATE cxx_std_20)
-target_link_libraries(latch-windows-runner PRIVATE advapi32 rpcrt4)
+target_link_libraries(latch-windows-runner PRIVATE advapi32 rpcrt4 user32)
 set_target_properties(latch-windows-runner PROPERTIES
   MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"

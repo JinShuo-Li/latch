@@ -18,6 +18,60 @@ set_target_properties(detours PROPERTIES
 add_executable(msys-token-guard msys-token-guard.cpp)
 add_library(msys-token-guard-hook SHARED msys-token-guard-hook.cpp)
 
+foreach(probe IN ITEMS minimal win32 detours load-hook user32)
+  add_executable(loader-probe-${probe} loader-probe.cpp)
+  target_compile_features(loader-probe-${probe} PRIVATE cxx_std_20)
+  target_compile_definitions(loader-probe-${probe} PRIVATE UNICODE _UNICODE)
+  target_link_libraries(loader-probe-${probe} PRIVATE advapi32)
+  set_target_properties(loader-probe-${probe} PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin")
+  if(MSVC)
+    target_compile_options(loader-probe-${probe} PRIVATE
+      /W4 /WX /permissive- /EHsc /GS /guard:cf /sdl /utf-8
+      /Zc:__cplusplus /Zc:inline /Zc:preprocessor)
+    target_link_options(loader-probe-${probe} PRIVATE
+      /DYNAMICBASE /NXCOMPAT /guard:cf /CETCOMPAT /OPT:REF /OPT:ICF /Brepro
+      "/MANIFESTUAC:level='asInvoker' uiAccess='false'")
+  endif()
+endforeach()
+target_compile_definitions(loader-probe-win32 PRIVATE LATCH_PROBE_WIN32)
+target_compile_definitions(loader-probe-user32 PRIVATE LATCH_PROBE_USER32)
+target_link_libraries(loader-probe-user32 PRIVATE user32 gdi32)
+target_include_directories(loader-probe-detours PRIVATE "${DETOURS_DIR}")
+target_link_libraries(loader-probe-detours PRIVATE detours)
+target_compile_definitions(loader-probe-detours PRIVATE LATCH_PROBE_WIN32 LATCH_PROBE_DETOURS)
+target_compile_definitions(loader-probe-load-hook PRIVATE LATCH_PROBE_LOAD_HOOK)
+target_compile_definitions(loader-probe-load-hook PRIVATE LATCH_PROBE_WIN32 LATCH_PROBE_DETOURS)
+target_include_directories(loader-probe-load-hook PRIVATE "${DETOURS_DIR}")
+target_link_libraries(loader-probe-load-hook PRIVATE detours)
+if(MSVC)
+  target_link_options(loader-probe-detours PRIVATE "/WHOLEARCHIVE:detours")
+  target_link_options(loader-probe-load-hook PRIVATE "/WHOLEARCHIVE:detours")
+endif()
+
+foreach(guard_probe IN ITEMS guard-tu guard-no-hook guard-no-inject)
+  add_executable(loader-probe-${guard_probe} msys-token-guard.cpp)
+  target_compile_features(loader-probe-${guard_probe} PRIVATE cxx_std_20)
+  target_link_libraries(loader-probe-${guard_probe} PRIVATE detours advapi32)
+  set_target_properties(loader-probe-${guard_probe} PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin")
+  if(MSVC)
+    target_compile_options(loader-probe-${guard_probe} PRIVATE
+      /W4 /WX /permissive- /EHsc /GS /guard:cf /sdl /utf-8
+      /Zc:__cplusplus /Zc:inline /Zc:preprocessor)
+    target_link_options(loader-probe-${guard_probe} PRIVATE
+      /DYNAMICBASE /NXCOMPAT /guard:cf /CETCOMPAT /OPT:REF /OPT:ICF /Brepro
+      "/MANIFESTUAC:level='asInvoker' uiAccess='false'")
+  endif()
+endforeach()
+target_compile_definitions(loader-probe-guard-tu PRIVATE LATCH_GUARD_ENTRY_PROBE)
+target_compile_definitions(loader-probe-guard-no-hook PRIVATE LATCH_GUARD_NO_HOOK_PROBE)
+target_compile_definitions(loader-probe-guard-no-inject PRIVATE LATCH_GUARD_NO_INJECT_PROBE)
+
 foreach(target IN ITEMS msys-token-guard msys-token-guard-hook)
   target_compile_features(${target} PRIVATE cxx_std_20)
   target_compile_definitions(${target} PRIVATE UNICODE _UNICODE)
