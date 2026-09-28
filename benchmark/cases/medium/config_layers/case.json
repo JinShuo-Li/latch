@@ -1,0 +1,7 @@
+{
+  "id": "config_layers",
+  "tier": "medium",
+  "title": "Layered CLI configuration",
+  "timeout_seconds": 420,
+  "prompt": "Our command-line client resolves defaults, a project config, environment variables, and explicit flags in that order. Nested settings from the project file currently erase unrelated defaults, and an explicit empty string flag is ignored. Fix config_layers.py while preserving the public resolve_config signature. Do not mutate caller-owned inputs. Run the visible tests and validate the behavior. Only this copied project is your workspace."
+}

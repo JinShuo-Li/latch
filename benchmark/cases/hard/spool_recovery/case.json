@@ -1,0 +1,7 @@
+{
+  "id": "spool_recovery",
+  "tier": "hard",
+  "title": "Crash-safe append-only job spool",
+  "timeout_seconds": 600,
+  "prompt": "A small job runner reads an append-only UTF-8 JSONL spool and persists the byte offset of the last completed job. During a crash or a failed handler, a job can be skipped on restart; an incomplete trailing line can also be consumed too soon. Fix spool_recovery.py while preserving process_spool(spool_path, checkpoint_path, handler). Process only newline-terminated records, advance the checkpoint only after a successful handler call, keep the checkpoint valid across interrupted writes, and fail closed if a checkpoint points beyond the current spool. At-least-once delivery is acceptable if a crash occurs between the handler side effect and checkpoint commit. Run the visible tests and validate. Only this copied project is your workspace."
+}

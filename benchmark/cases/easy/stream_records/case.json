@@ -1,0 +1,7 @@
+{
+  "id": "stream_records",
+  "tier": "easy",
+  "title": "Incremental UTF-8 event records",
+  "timeout_seconds": 300,
+  "prompt": "A log collector receives UTF-8 NDJSON in arbitrary byte chunks. Its parser sometimes loses records when a chunk ends in the middle of a UTF-8 character or a line. Fix the parser in stream_records.py without changing its public function. Run the visible tests, add a focused regression test if useful, and validate the fix. Do not edit benchmark metadata; only this copied project is your workspace."
+}
