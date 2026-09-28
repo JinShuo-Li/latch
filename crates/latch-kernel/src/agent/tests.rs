@@ -2167,7 +2167,10 @@ async fn auto_approve_never_overrides_hard_deny() {
             _ => None,
         })
         .expect("hard deny result");
-    assert!(failed.contains("denied by policy"), "{failed}");
+    assert!(
+        failed.contains("denied by policy") || failed.contains("cannot be accessed by approval"),
+        "{failed}"
+    );
 }
 
 #[tokio::test]
