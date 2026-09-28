@@ -11,7 +11,9 @@ $runtime = Join-Path $root 'runtime'
 $state = Join-Path $root 'state'
 $external = Join-Path $root 'external'
 $git = Join-Path $workspace '.git'
-New-Item -ItemType Directory $workspace,$runtime,$state,$external,$git | Out-Null
+$nested = Join-Path $workspace 'nested'
+$sensitive = Join-Path $workspace '.ssh'
+New-Item -ItemType Directory $workspace,$runtime,$state,$external,$git,$nested,$sensitive | Out-Null
 Copy-Item -LiteralPath (Join-Path $Binaries 'latch-boundary-probe.exe') -Destination $runtime
 Copy-Item -LiteralPath (Join-Path $Binaries 'latch-boundary-compat.dll') -Destination $runtime
 Copy-Item -LiteralPath (Join-Path $Binaries 'latch-boundary-files.exe') -Destination $runtime
@@ -21,10 +23,13 @@ $readable = Join-Path $workspace 'read.txt'
 $secret = Join-Path $state 'secrets.toml'
 $gitFile = Join-Path $git 'config'
 $outside = Join-Path $root 'outside.txt'
-foreach ($path in @($readable,$secret,$gitFile,$outside)) { [IO.File]::WriteAllText($path,'fixture') }
+$parentFile = Join-Path $root 'parent.txt'
+$nestedFile = Join-Path $nested 'nested.txt'
+$workspaceSecret = Join-Path $sensitive 'id_ed25519'
+foreach ($path in @($readable,$secret,$gitFile,$outside,$parentFile,$nestedFile,$workspaceSecret)) { [IO.File]::WriteAllText($path,'fixture') }
 & icacls.exe $outside /grant '*S-1-15-2-1:(M)' '*S-1-5-32-545:(M)' | Out-Null
 if ($LASTEXITCODE) { throw 'Fixture ACL setup failed' }
-$base = @('--read-root',$runtime,'--deny',$state)
+$base = @('--read-root',$runtime,'--deny',$state,'--deny',$sensitive)
 function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra = @()) {
   $started = Get-Date
   & $runner $workspace $fixture "$operation `"$path`"" $mode @base @extra
@@ -101,6 +106,14 @@ function Check([string]$operation,[string]$path,[string]$mode,[string[]]$extra =
   }
 }
 Check 'read-allow' $readable 'read'
+Check 'read-allow' $nestedFile 'read'
+Check 'enumerate-allow' $workspace 'read'
+Check 'enumerate-allow' $nested 'read'
+Check 'ancestor-metadata' $root 'read'
+Check 'enumerate-deny' $root 'read'
+Check 'read-deny' $parentFile 'read'
+Check 'read-deny' $workspaceSecret 'read'
+Check 'enumerate-deny' $sensitive 'read'
 Check 'write-deny' $readable 'read'
 Check 'create-deny' (Join-Path $workspace 'read-only-new.txt') 'read'
 Check 'write-allow' $readable 'write'
@@ -118,6 +131,21 @@ Check 'read-allow' $gitFile 'write' @('--deny-write',$git)
 Check 'delete-deny' $git 'write' @('--deny-write',$git)
 Check 'acl-deny' $gitFile 'write' @('--deny-write',$git)
 Check 'write-allow' $gitFile 'write'
+
+# A user's home can be the workspace while the trusted recovery journal lies
+# inside it. The journal stays excluded from both grants and rollback scans.
+$journal = Join-Path $workspace 'journal'
+$env:LATCH_RECOVERY_ROOT = $journal
+try {
+  Check 'enumerate-allow' $workspace 'read'
+  $journalAcl = (Get-Acl -LiteralPath $journal).Sddl
+  Check 'read-deny' $journal 'read'
+  Check 'create-allow' (Join-Path $workspace 'journal-safe-new.txt') 'write'
+  if ((Get-Acl -LiteralPath $journal).Sddl -ne $journalAcl) { throw 'Protected journal ACL changed' }
+  if (Test-Path -LiteralPath (Join-Path $journal 'pending')) { throw 'Workspace journal was retained' }
+} finally {
+  Remove-Item Env:LATCH_RECOVERY_ROOT
+}
 
 # The runner owns the job; terminating it must kill four generations.
 $marker = Join-Path $workspace 'tree'

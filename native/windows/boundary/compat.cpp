@@ -98,7 +98,9 @@ bool metadata_ancestor(POBJECT_ATTRIBUTES attributes, ACCESS_MASK access,
   const auto* object = attributes->ObjectName;
   std::wstring native(object->Buffer, object->Length / sizeof(wchar_t));
   if (!native.starts_with(L"\\??\\")) return false;
-  const std::wstring requested = native.substr(4);
+  std::wstring requested = native.substr(4);
+  for (auto& ch : requested) if (ch == L'/') ch = L'\\';
+  while (requested.size() > 3 && requested.back() == L'\\') requested.pop_back();
   if (!cwd_ancestor(requested.c_str())) return false;
   std::wstring parent = initial_cwd;
   for (DWORD i = 0; i < ancestor_count; ++i) {

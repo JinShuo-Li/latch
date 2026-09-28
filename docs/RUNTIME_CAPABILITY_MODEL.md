@@ -356,6 +356,12 @@ disturb the other.
 | App protocol for remote clients (Feishu/Slack/Telegram) | deferred |
 | MCP integration | deferred |
 
+On Windows, `WorkspaceRead` includes listing and traversing workspace
+directories, reading their metadata, and reading files. Ancestors needed to
+resolve the workspace path expose metadata only through inherited handles;
+they are not directory-listing grants. Sensitive paths under a workspace and
+the protected recovery journal remain inaccessible to the sandbox.
+
 ## 9. Where the invariants are enforced in code
 
 | Invariant | Code |

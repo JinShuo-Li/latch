@@ -148,11 +148,18 @@ void Recovery::change(PinnedObject& pinned, const ObjectState& before, PACL acl,
 void Recovery::track_root(const std::filesystem::path& path) {
   PinnedObject pinned(path);
   const auto state = pinned.state();
-  // Recovery must never be included in an authorized grant tree.
-  auto relative = root_.lexically_relative(state.path);
-  if (!relative.empty() && *relative.begin() != L"..")
+  // A workspace may contain the protected journal (for example the user's
+  // home). Grant traversal and rollback both exclude that subtree.
+  if (protected_journal_path(state.path))
     fail(L"grant includes protected journal", ERROR_ACCESS_DENIED);
   record({L"root", state.path, state.identity});
+}
+bool Recovery::protected_journal_path(const std::filesystem::path& path) const {
+  const auto value = std::filesystem::absolute(path).lexically_normal().wstring();
+  const auto root = root_.lexically_normal().wstring();
+  return value.size() >= root.size() &&
+         _wcsnicmp(value.c_str(), root.c_str(), root.size()) == 0 &&
+         (value.size() == root.size() || value[root.size()] == L'\\');
 }
 Handle Recovery::reserve_git(const std::filesystem::path& path) {
   PinnedObject parent(path.parent_path());

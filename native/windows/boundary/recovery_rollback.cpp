@@ -216,6 +216,8 @@ void Recovery::recover_pending() {
     // recorded NTFS identity in both phases and verify absence by path below.
     pins.emplace_back(rollback.original);
     if (!pins.back().object.value) {
+      std::fwprintf(stderr, L"Recovery cannot reopen recorded object: %ls\n",
+                    rollback.original.path.c_str());
       if (!execution_started)
         require(GetFileAttributesW(rollback.original.path.c_str()) ==
                         INVALID_FILE_ATTRIBUTES &&
@@ -333,6 +335,7 @@ void Recovery::recover_pending() {
   std::set<std::wstring> scanned;
   const auto visit = [&](const auto& self,
                          const std::filesystem::path& path) -> void {
+    if (protected_journal_path(path)) return;
     const auto attrs = GetFileAttributesW(path.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) {
       const auto error = GetLastError();
@@ -350,34 +353,39 @@ void Recovery::recover_pending() {
       auto sd = descriptor(state.security);
       PACL acl = nullptr;
       BOOL present = FALSE, defaulted = FALSE;
-      if (!GetSecurityDescriptorDacl(sd.value, &present, &acl, &defaulted) ||
-          !acl)
+      if (!GetSecurityDescriptorDacl(sd.value, &present, &acl, &defaulted)) {
+        std::fwprintf(stderr, L"Recovery cannot inspect new ACL: %ls\n", path.c_str());
         fail(L"new object has unsupported ACL", ERROR_INVALID_ACL);
-      std::vector<BYTE> storage(acl->AclSize);
-      auto* clean = reinterpret_cast<PACL>(storage.data());
-      if (!InitializeAcl(clean, acl->AclSize, acl->AclRevision))
-        fail(L"new object cleanup ACL");
-      for (DWORD i = 0; i < acl->AceCount; ++i) {
-        void* ace = nullptr;
-        if (!GetAce(acl, i, &ace)) fail(L"read new object ACE");
-        const auto* header_ace = static_cast<ACE_HEADER*>(ace);
-        if (header_ace->AceType == ACCESS_ALLOWED_ACE_TYPE ||
-            header_ace->AceType == ACCESS_DENIED_ACE_TYPE) {
-          auto* entry = static_cast<ACCESS_ALLOWED_ACE*>(ace);
-          if (EqualSid(&entry->SidStart, package_sid.value) ||
-              EqualSid(&entry->SidStart, restrictor.value))
-            continue;
-        }
-        if (!AddAce(clean, acl->AclRevision, MAXDWORD, ace,
-                    header_ace->AceSize))
-          fail(L"preserve new object ACE");
       }
-      const auto after = changed_dacl(state.security, clean, false);
-      if (after != state.security) {
-        // Original means the post-command descriptor minus our ACEs. For a
-        // new file this is the only rollback that preserves its host edits.
-        record({L"acl", state.path, state.identity, after, state.security});
-        write_security(pinned.object.value, after);
+      // A new object with a NULL DACL has no ACE to revoke. Keep scanning
+      // children, but preserve that host-created descriptor unchanged.
+      if (present && acl) {
+        std::vector<BYTE> storage(acl->AclSize);
+        auto* clean = reinterpret_cast<PACL>(storage.data());
+        if (!InitializeAcl(clean, acl->AclSize, acl->AclRevision))
+          fail(L"new object cleanup ACL");
+        for (DWORD i = 0; i < acl->AceCount; ++i) {
+          void* ace = nullptr;
+          if (!GetAce(acl, i, &ace)) fail(L"read new object ACE");
+          const auto* header_ace = static_cast<ACE_HEADER*>(ace);
+          if (header_ace->AceType == ACCESS_ALLOWED_ACE_TYPE ||
+              header_ace->AceType == ACCESS_DENIED_ACE_TYPE) {
+            auto* entry = static_cast<ACCESS_ALLOWED_ACE*>(ace);
+            if (EqualSid(&entry->SidStart, package_sid.value) ||
+                EqualSid(&entry->SidStart, restrictor.value))
+              continue;
+          }
+          if (!AddAce(clean, acl->AclRevision, MAXDWORD, ace,
+                      header_ace->AceSize))
+            fail(L"preserve new object ACE");
+        }
+        const auto after = changed_dacl(state.security, clean, false);
+        if (after != state.security) {
+          // Original means the post-command descriptor minus our ACEs. For a
+          // new file this is the only rollback that preserves its host edits.
+          record({L"acl", state.path, state.identity, after, state.security});
+          write_security(pinned.object.value, after);
+        }
       }
     }
     if (attrs & FILE_ATTRIBUTE_DIRECTORY)

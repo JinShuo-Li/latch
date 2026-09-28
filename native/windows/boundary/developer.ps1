@@ -34,7 +34,10 @@ function Run([string]$program,[string]$arguments,[string[]]$extra=@()){
 [IO.File]::WriteAllText((Join-Path $workspace 'check.py'),'assert "native" in open("input.txt", encoding="utf-8").read(); open("python-output.txt", "w").write("python passed")')
 [IO.File]::WriteAllText((Join-Path $workspace 'package.json'),'{"name":"latch-native-fixture","version":"0.0.0","private":true,"scripts":{"test":"node check.js"}}')
 Run $node 'check.js'
+Run $shell '/d /c dir /a'
+Run $shell '/d /c dir /a /s'
 Run $shell '/d /c mkdir nested'
+[IO.File]::WriteAllText((Join-Path $workspace 'nested/search.txt'),'nested-only-marker')
 Run $shell '/d /c echo hello > nested\child.txt'
 Run $git 'init --quiet'
 Run $git 'symbolic-ref HEAD refs/heads/other'
@@ -50,6 +53,7 @@ Run $git '-C nested-worktree status --short'
 $stagedRg=Join-Path $runtime 'rg.exe'
 Copy-Item -LiteralPath $rg -Destination $stagedRg
 Run $stagedRg 'native input.txt'
+Run $stagedRg 'nested-only-marker .'
 Run $shell '/d /c type input.txt | findstr native > pipeline.txt && type pipeline.txt'
 # Stage user-owned tool runtimes; machine-owned Program Files/ProgramData ACLs
 # cannot be modified by an ordinary account. Only the staged files are granted.

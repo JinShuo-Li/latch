@@ -298,6 +298,8 @@ under AppContainer, a write-restricted token, and a Job Object. Its
 [recovery protocol](native/windows/boundary/RECOVERY.md) journals call-scoped
 ACL changes and fails closed on unreconciled host changes. Git for Windows
 provides `git` and `rg` is required for search; Git Bash and WSL are not used.
+Workspace reads include directory listing; parent directories receive no
+listing grant, and known credentials stay masked even under the workspace.
 
 ```sh
 latch doctor
@@ -864,7 +866,8 @@ cargo run -p latch-kernel --example extension_probe -- \
 ```
 
 Latch v0.2.3 requires system `bwrap` on Linux. The Windows native runtime is
-available on the port branch. GitHub Actions runs the native security fixtures
-and a focused Windows Rust runtime gate; the full workspace gate runs on Linux.
+available on the port branch. Default GitHub Actions runs Linux and Windows
+smoke checks; manually triggered `Full validation` runs native security,
+focused Windows Rust, and the full Linux workspace gate.
 It has no daemon, browser automation, remote execution, MCP, IDE integration,
 automatic commits, or automatic pushes.
