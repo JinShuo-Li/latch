@@ -450,6 +450,18 @@ pub(crate) fn is_read_only_shell(command: &str, workspace: &Path) -> bool {
     if command.contains(['%', '^']) {
         return false;
     }
+    #[cfg(windows)]
+    if command.match_indices('~').any(|(index, _)| {
+        let bytes = command.as_bytes();
+        !bytes
+            .get(index.wrapping_sub(1))
+            .is_some_and(u8::is_ascii_alphanumeric)
+            || !bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
+    }) {
+        // NTFS 8.3 names such as RUNNER~1 are literal cmd.exe paths. A bare
+        // tilde or other shell-looking spelling remains outside this grammar.
+        return false;
+    }
     if command.is_empty() || command.contains("||") {
         return false;
     }
@@ -476,9 +488,8 @@ pub(crate) fn is_read_only_shell(command: &str, workspace: &Path) -> bool {
                 | ']'
                 | '{'
                 | '}'
-                | '~'
                 | '!'
-        )
+        ) || (ch == '~' && !cfg!(windows))
     }) {
         return false;
     }
