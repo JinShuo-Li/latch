@@ -12,7 +12,7 @@ function Header([string]$journal){
     $fields=@(); for($i=0;$i -lt $count;$i++){ $length=$reader.ReadUInt32();$fields += [Text.Encoding]::Unicode.GetString($reader.ReadBytes($length*2)) }; return ,$fields
   } finally {$reader.Dispose()}
 }
-$points=@('after-journal','profile-intent','profile-api-key','profile-api-directory','profile-api-mapping','profile-orphan-conflict','profile-unsealed','profile-resealed','profile-key-conflict','profile-mapping-conflict','first-acl','all-grants','appcontainer','child-launch','descendants','cleanup','rollback-sealed','profile-removed','reboot-equivalent','torn-intent','corrupt-record','host-acl-conflict','replaced-object')
+$points=@('after-journal','profile-intent','profile-api-key','profile-api-directory','profile-api-mapping','profile-orphan-conflict','profile-unsealed','profile-resealed','profile-key-conflict','profile-mapping-conflict','first-acl','unrelated-denied','all-grants','appcontainer','child-launch','descendants','cleanup','rollback-sealed','profile-removed','reboot-equivalent','torn-intent','corrupt-record','host-acl-conflict','replaced-object')
 if($env:LATCH_RECOVERY_POINTS){$points=$env:LATCH_RECOVERY_POINTS.Split(',')}
 foreach($point in $points) {
   $case=Join-Path $root $point;$workspace=Join-Path $case 'workspace';$runtime=Join-Path $case 'runtime';$state=Join-Path $case 'state';$journal=Join-Path $case 'journal'
@@ -31,7 +31,7 @@ foreach($point in $points) {
   $before=@{}
   foreach($path in @($workspace,$ordinary,$runtime,$state,$secret)+(Get-ChildItem -LiteralPath $runtime -File | ForEach-Object FullName)){ $before[$path]=(Get-Acl -LiteralPath $path).Sddl }
   $runner=Join-Path $runtime 'latch-boundary-probe.exe';$fixture=Join-Path $runtime 'latch-boundary-files.exe';$marker=Join-Path $workspace 'tree'
-  $pause=if($point -in @('host-acl-conflict','replaced-object','torn-intent','corrupt-record')){'all-grants'}elseif($point -in @('profile-mapping-conflict','profile-resealed')){'profile-unsealed'}elseif($point -eq 'profile-orphan-conflict'){'profile-intent'}elseif($point -eq 'profile-key-conflict'){'profile-api-key'}elseif($point -eq 'reboot-equivalent'){'descendants'}else{$point}
+  $pause=if($point -in @('host-acl-conflict','replaced-object','torn-intent','corrupt-record')){'all-grants'}elseif($point -eq 'unrelated-denied'){'first-acl'}elseif($point -in @('profile-mapping-conflict','profile-resealed')){'profile-unsealed'}elseif($point -eq 'profile-orphan-conflict'){'profile-intent'}elseif($point -eq 'profile-key-conflict'){'profile-api-key'}elseif($point -eq 'reboot-equivalent'){'descendants'}else{$point}
   if($point -eq 'large-tree'){$pause='cleanup'}
   $command=if($point -in @('descendants','reboot-equivalent')){'tree 3 '+$marker}else{'read-allow '+$ordinary}
   $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$runner;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardError=$true;$q=[char]34
@@ -66,6 +66,19 @@ foreach($point in $points) {
     foreach($child in $children){if(!$child.WaitForExit(5000)){throw ('Descendant survived cleanup-owner death: '+$child.Id)}}
     if(!$cancelOnly -and !(Test-Path -LiteralPath (Join-Path $journal 'pending'))){throw 'Crash lost its durable journal'}
     if($cancelOnly -and (Test-Path -LiteralPath (Join-Path $journal 'pending'))){throw 'Cancellation left a pending transaction'}
+    if($point -eq 'unrelated-denied'){
+      if((Get-Acl -LiteralPath $workspace).Sddl -ne $before[$workspace]){throw 'Fixture workspace root was already granted'}
+      $unrelated=Join-Path $workspace 'unrelated'
+      New-Item -ItemType Directory -Path $unrelated | Out-Null
+      $blocked=Join-Path $unrelated 'host-protected.txt'
+      [IO.File]::WriteAllText($blocked,'host fixture')
+      $userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+      & icacls.exe $blocked /deny ('*'+$userSid+':(R)') | Out-Null
+      if($LASTEXITCODE){throw 'Could not prepare inaccessible host file'}
+      & $fixture read-deny $blocked
+      if($LASTEXITCODE){throw 'Host file was still readable'}
+      $blockedAcl=(Get-Acl -LiteralPath $blocked).Sddl
+    }
     if($point -eq 'host-acl-conflict'){
       $acl=Get-Acl -LiteralPath $ordinary
       $rule=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-7'),'Read','Allow')
@@ -139,6 +152,7 @@ foreach($point in $points) {
     if($LASTEXITCODE){throw ('Recovery failed: '+$point)}
     & $runner --recover-only;if($LASTEXITCODE){throw 'Second recovery failed'}
     foreach($path in $before.Keys){if((Get-Acl -LiteralPath $path).Sddl -ne $before[$path]){throw ('ACL was not restored exactly: '+$path)}}
+    if($point -eq 'unrelated-denied' -and (Get-Acl -LiteralPath $blocked).Sddl -ne $blockedAcl){throw 'Recovery changed unrelated host ACL'}
     if(Test-Path -LiteralPath (Join-Path $workspace '.git')){throw 'Git reservation survived recovery'}
     if(Test-Path -LiteralPath $header[7]){throw 'AppContainer package survived recovery'}
     $mapping='HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings\'+$header[4]
