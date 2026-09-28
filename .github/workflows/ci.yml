@@ -37,6 +37,11 @@ jobs:
           choco install ripgrep --yes --no-progress --limit-output
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Get-Command rg.exe -ErrorAction Stop | Select-Object -ExpandProperty Source
+          $rgPackage = Join-Path $env:ChocolateyInstall 'lib/ripgrep'
+          $rgBinary = Get-ChildItem -LiteralPath $rgPackage -Recurse -Filter rg.exe -File |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $rgBinary) { throw "Chocolatey ripgrep package has no standalone rg.exe under $rgPackage" }
+          "LATCH_TEST_RG_EXE=$rgBinary" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Build native boundary with strict MSVC warnings
         shell: pwsh
         run: |
