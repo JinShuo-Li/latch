@@ -1,7 +1,7 @@
 # Windows workspace-read status (2026-09-28)
 
 The workspace directory-enumeration regression is fixed for grantable NTFS
-trees on `codex/windows-native-port`. Full GitHub Actions validation passed
+trees on `windows-native-port`. Full GitHub Actions validation passed
 for commit `1d14805` (run `36409963890`): Windows native, Windows Rust, and
 Linux Bubblewrap release jobs all succeeded. The lightweight CI run
 `36409875345` also passed on Windows and Linux.
@@ -117,7 +117,7 @@ repository, so `git_status` cannot succeed with that workspace selection.
 The inaccessible old test fixture was preserved intact under
 `%LOCALAPPDATA%\LatchBoundaryFixtureQuarantine`, outside the workspace.
 
-A local clone of `codex/windows-native-port` made with `git clone --no-hardlinks`
+A local clone of `windows-native-port` made with `git clone --no-hardlinks`
 at `Desktop\work\latch-native-port` is owned by the current user. The same
 installed production runner completed directory listing, ripgrep and Git
 status there, then removed its recovery journal. This is an operational

@@ -1,6 +1,6 @@
 # Native Windows boundary — 2026-09-27
 
-`codex/windows-native-port` selects this runner from the production
+`windows-native-port` selects this runner from the production
 `ExecutionBackend`. Version remains 0.2.3. Native fixture results below
 establish the listed cases only; do not merge a red Windows gate into main.
 
