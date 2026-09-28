@@ -147,9 +147,10 @@ recovery, and a Job Object. It has no unsandboxed or local-account fallback.
 The native runner is built by
 `crates/latch-kernel/build.rs` on Windows (x64 MSVC C++ Build Tools + Windows
 SDK required). Its Rust adapter is `execution/windows_runtime.rs` and its
-read-only Python/Node staging is `execution/windows_runtime_tools.rs`. The
-Windows CI job runs native security fixtures before the Rust gate; its Rust
-tests run serially because ACL recovery has a per-user lock. Focused check:
+read-only Python/Node staging is `execution/windows_runtime_tools.rs`.
+Windows CI runs native security fixtures and a separate focused Rust runtime
+gate; the Linux job keeps the full workspace suite. Windows runtime tests run
+serially because ACL recovery has a per-user lock. Focused check:
 `cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked`.
 See `native/windows/boundary/README.md` for native fixture commands, verified
 results, and known limitations.

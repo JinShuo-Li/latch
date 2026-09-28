@@ -1,9 +1,8 @@
 # Native Windows boundary — 2026-09-27
 
 `codex/windows-native-port` selects this runner from the production
-`ExecutionBackend`. Version remains 0.2.3 while the full Windows CI gate and
-production NTFS dogfood are completed. Native fixture results below establish
-the listed cases only; do not merge a red Windows gate into main.
+`ExecutionBackend`. Version remains 0.2.3. Native fixture results below
+establish the listed cases only; do not merge a red Windows gate into main.
 
 ## Implemented candidate
 
@@ -156,24 +155,29 @@ SID. Recovery verifies the profile mapping before cleanup, including crashes
 on both sides of the creation API. Deleted grant roots are also recovered by
 recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
 
-## Not verified / not finished
+## Qualification and remaining limits
 
-- **Full Windows gates:** workspace fmt/clippy/test/release combination;
-  all Windows test failures, CLI/TUI suites, and installation/package behavior.
-- **Linux:** the local Bubblewrap release gate has not run on this Windows
-  host. The previous checkpoint (730dbdd) passed the full Ubuntu CI release
-  gate in GitHub Actions run 36257342807. Follow-up commits require their own
-  CI run; no Linux behavior or security relaxation is intended.
-- **CI:** the Windows workflow runs native fixtures and the Rust release gate;
-  confirm a green run before merging. Linux Bubblewrap CI remains separate.
-- **Real dogfood:** no native Latch NTFS coding task; no live/model agent proof
-  of inspection, editing, search, validation, Git and managed tools together.
-- **Integration:** production detection, `cmd.exe` model instructions, Git and
-  search tools, validation, Python extensions, and managed-process lifecycle
-  have local tests. CLI host-side Git inspection paths still need audit.
+- **CI:** GitHub Actions run 36371197946 passed the strict native build, all
+  six native fixture suites, the focused Windows Rust fmt/clippy/runtime/release
+  gate, and the unchanged full Linux Bubblewrap release gate. The complete
+  workspace Rust suite also passed locally on Windows with serial tests.
+- **Production dogfood:** the real release `latch.exe` completed an NTFS coding
+  task with inspection, search, edit, Git, validation, and managed process
+  start/poll/terminate followed by revalidation. `latch doctor` and an isolated
+  `cargo install --path crates/latch-cli --locked` smoke test passed.
+- **Developer tools:** the native fixture ran Git init/commit, a nested Git
+  repository, a linked worktree, ripgrep, a `cmd.exe` pipeline, Node/npm,
+  Python, and a dependency-free Cargo project inside the boundary.
+- **Scope:** Windows CI runs focused Rust integration tests; Linux CI runs the
+  full workspace suite. The dogfood used a deterministic mock provider, so
+  live-model behavior is not claimed.
+- **Startup:** profile creation and scoped ACL grants cost time on a large
+  Windows installation. The runner does not cache grants across commands.
+- **Integration:** CLI host-side Git inspection is read-only preflight;
+  command execution itself enters the boundary.
 - **Filesystem adversaries:** concurrent grants and revocations beyond the journal lock,
   remaining recovery intervals described in RECOVERY.md, hostile rename/reparse/hardlink races, all existing
-  open-handle races, nested Git repositories, worktree/common-dir cases,
+  open-handle races beyond the tested Git worktree/common-dir path,
   alternate streams, Unicode/long paths, ACL size limits, network filesystems,
   and conflicts with unrelated host programs.
 - **Credentials:** Windows Credential Manager/DPAPI and IPC routes; runtime
@@ -187,12 +191,11 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
   Public-launcher termination cleanup is covered by the follow-up tests.
 - **Network:** DNS, UDP, IPv6, private LAN, listening servers, proxies, named
   pipes and other IPC. TCP evidence is limited to the tested endpoint and host.
-- **Compatibility:** PowerShell, Python extensions, npm workflows, full
-  repository Cargo builds under the boundary, VS discovery without an
+- **Compatibility:** PowerShell, Python extensions, full repository Cargo
+  builds under the boundary, VS discovery without an
   explicit developer environment, non-English/Unicode runtime installation
   paths, and KsecDD handle exposure review.
-- **Release:** README installation instructions, doctor, security/runtime docs
-  for an enabled backend, Windows packaging, version bump and release build.
+- **Release:** a local ZIP package and installation smoke test exist. Version
+  remains 0.2.3; no tag or public release has been made.
 
-The kernel integration module is compiled for production Windows. Version
-remains 0.2.3 until CI, packaging, and real NTFS dogfood finish.
+The kernel integration module is compiled for production Windows.
