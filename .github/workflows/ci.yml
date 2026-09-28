@@ -31,6 +31,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install Windows test prerequisites
+        shell: pwsh
+        run: |
+          choco install ripgrep --yes --no-progress --limit-output
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Get-Command rg.exe -ErrorAction Stop | Select-Object -ExpandProperty Source
       - name: Build native boundary with strict MSVC warnings
         shell: pwsh
         run: |
