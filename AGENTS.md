@@ -171,9 +171,9 @@ The journal/identity protocol and remaining unsealed-profile blocker are in
 sequentially: test-only journal overrides do not share the production lock.
 Workspace grants include directory enumeration, traversal, metadata and file
 reads. Ancestor handles remain metadata-only; protected journal and credential
-subtrees remain inaccessible when a user's home is the workspace. The live
-home-directory recovery attempt is unresolved; see
-`native/windows/boundary/CURRENT_STATE.md` before more native testing.
+subtrees remain inaccessible when a user's home is the workspace. A whole
+live home directory is not yet qualified at scale; see
+`native/windows/boundary/CURRENT_STATE.md` before testing one.
 Native ownership is split into runner/token/AppContainer/ACL/recovery/desktop/
 job/process modules; Win32 complexity stays outside the safe Rust kernel.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,

@@ -37,6 +37,13 @@ does not propagate unrecorded changes. Sensitive-path sealing is temporary
 and is restored with the same mechanism. New developer-created objects
 have no pre-call ACL: recovery removes only the transaction's unique SID
 ACEs, retaining all unrelated entries, and journals those removals too.
+Before child execution, rollback scans only subtrees with a recorded ACL
+mutation or possible inheritance from one. After execution starts it scans
+every grant root, since a child may rename a granted directory. Unrecorded
+objects are opened with read-only metadata
+rights first; `WRITE_DAC` is requested only if this transaction's ACE is
+present, with identity and descriptor rechecked before writing. An unrelated
+inaccessible host object outside affected subtrees is never opened.
 When a workspace contains the trusted recovery directory (for example a home
 workspace), grant and rollback traversal exclude that directory and its
 descendants. Its protected user/SYSTEM DACL remains unchanged; requesting the

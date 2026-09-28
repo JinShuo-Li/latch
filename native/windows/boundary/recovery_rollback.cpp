@@ -333,9 +333,35 @@ void Recovery::recover_pending() {
   auto package_sid = parse_sid(package_sid_.c_str());
   auto restrictor = parse_sid(write_sid_.c_str());
   std::set<std::wstring> scanned;
+  const auto path_key = [](const std::filesystem::path& path) {
+    auto value = path.lexically_normal().wstring();
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](wchar_t ch) { return std::towlower(ch); });
+    return value;
+  };
+  std::set<std::wstring> touched_paths, affected_paths;
+  for (const auto& [id, rollback] : objects) {
+    (void)id;
+    auto path = std::filesystem::path(rollback.original.path);
+    touched_paths.insert(path_key(path));
+    for (;;) {
+      affected_paths.insert(path_key(path));
+      const auto parent = path.parent_path();
+      if (parent.empty() || parent == path) break;
+      path = parent;
+    }
+  }
   const auto visit = [&](const auto& self,
-                         const std::filesystem::path& path) -> void {
+                         const std::filesystem::path& path,
+                         bool inherited_grant) -> void {
     if (protected_journal_path(path)) return;
+    const auto key = path_key(path);
+    // Only a recorded ACL change, or inheritance from one, can leave this
+    // transaction's ACE on an unrecorded object. Unrelated host subtrees may
+    // contain intentionally inaccessible files and need no inspection.
+    if (!execution_started && !inherited_grant &&
+        !affected_paths.contains(key))
+      return;
     const auto attrs = GetFileAttributesW(path.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) {
       const auto error = GetLastError();
@@ -346,7 +372,7 @@ void Recovery::recover_pending() {
     }
     if (attrs & FILE_ATTRIBUTE_REPARSE_POINT)
       return;  // never follow a link out of a grant tree
-    PinnedObject pinned(path);
+    PinnedObject pinned(path, READ_CONTROL | FILE_READ_ATTRIBUTES);
     const auto state = pinned.state();
     if (!scanned.insert(state.identity).second) return;
     if (!objects.contains(state.identity)) {
@@ -383,14 +409,20 @@ void Recovery::recover_pending() {
         if (after != state.security) {
           // Original means the post-command descriptor minus our ACEs. For a
           // new file this is the only rollback that preserves its host edits.
+          PinnedObject writable(path);
+          const auto current = writable.state();
+          require(current.identity == state.identity &&
+                      current.security == state.security,
+                  L"new object changed during cleanup");
           record({L"acl", state.path, state.identity, after, state.security});
-          write_security(pinned.object.value, after);
+          write_security(writable.object.value, after);
         }
       }
     }
     if (attrs & FILE_ATTRIBUTE_DIRECTORY)
       for (const auto& child : std::filesystem::directory_iterator(path))
-        self(self, child.path());
+        self(self, child.path(),
+             inherited_grant || touched_paths.contains(key));
   };
 
   size_t index = 0;
@@ -420,7 +452,7 @@ void Recovery::recover_pending() {
     require(GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES &&
                 PinnedObject(path).state().identity == id,
             L"recovery grant root changed during cleanup");
-    visit(visit, path);
+    visit(visit, path, false);
   }
   if (!rollback_complete) record({L"rollback-complete"});
   pause(L"rollback-sealed");

@@ -1,61 +1,62 @@
-# Windows workspace-read checkpoint (2026-09-28)
+# Windows workspace-read status (2026-09-28)
 
-This is an **unfinished** checkpoint on `codex/windows-native-port`. The
-workspace directory-enumeration regression and its recovery edge cases are
-not yet qualified for release. The last fully green GitHub Actions run
-(`36376680779`) predates these changes.
+The workspace directory-enumeration regression is fixed and locally verified
+on `codex/windows-native-port`. Linux Bubblewrap and Windows GitHub Actions
+validation for this revision remain to be confirmed before release.
 
-## Code in this checkpoint
+## Boundary behavior verified locally
 
-- Workspace-read fixtures now cover exact file reads, workspace and nested
-  directory enumeration, recursive `dir`/ripgrep, Git status, parent read and
-  enumeration denial, and credential masking under the workspace.
-- The metadata-only ancestor compatibility hook normalizes a trailing path
-  separator. It does not grant directory listing to a workspace parent.
-- Grant and rollback traversal exclude the trusted recovery journal when it
-  lies inside a workspace. A newly created object with a NULL DACL has no ACE
-  to remove, so rollback preserves its descriptor and scans its children.
-- Diagnostics name the path when recovery cannot reopen a recorded object or
-  inspect a new object's ACL. No test-only reconciliation override remains in
-  source.
+- Workspace and nested directory enumeration, traversal, metadata and exact
+  file reads work. `dir /a /s`, recursive ripgrep, and Git status work.
+- A workspace parent remains metadata-only: directory enumeration and exact
+  file reads outside the workspace are denied. Sensitive files under the
+  workspace remain masked.
+- A trusted recovery journal nested under the workspace is excluded from
+  grants and rollback scans. NULL-DACL files retain their host descriptor.
+- Before child execution, recovery scans only subtrees with a recorded ACL
+  mutation or possible inheritance from one. After execution starts it scans
+  every grant root to catch renames. It opens an unrecorded object read-only first and
+  requests `WRITE_DAC` only when this transaction's ACE must be removed;
+  identity and descriptor are checked again before that write. A focused
+  crash fixture confirms an unrelated inaccessible host file is preserved.
 
-## Validation actually completed
+## Completed local checks
 
-- The native MSVC `/W4 /WX` build passed with the committed source, after
-  removal of the local diagnostic override. `cargo fmt --all -- --check` and
-  `git diff --check` also passed.
-- The revised baseline `test.ps1` passed once with a small disposable
-  workspace, including a recovery journal nested in that workspace.
-- The expanded Rust test compiled with `--no-run`; it has not been executed.
-  Full Rust Clippy passed before the final recovery edit and has not been
-  rerun.
-- The full native matrix, full Windows Rust gate, Linux Bubblewrap gate, and
-  production release dogfood have **not** been rerun for this checkpoint.
-  The earlier green CI run remains evidence for the preceding commit only.
+- Native MSVC `/W4 /WX` build and all six native fixture suites: baseline,
+  recovery, adversarial, lifecycle, deleted-root and developer tools. The
+  adversarial fixture used `C:\project\latch\target` as its NTFS root;
+  a separate attempt under `%LOCALAPPDATA%` failed its *host junction*
+  precheck before the sandbox assertion.
+- Windows `cargo fmt --all -- --check`, full workspace Clippy with
+  `-D warnings`, `cargo test --workspace --locked` (serial test threads),
+  and `cargo build --release --locked`.
+- The real release `latch.exe` completed a mock-provider coding task in a
+  disposable Git repository: read, search, write, Git status, validation,
+  managed-process start/poll/terminate, and revalidation; final task state
+  was `verified`.
+- The real release binary completed a read-only task in
+  `%USERPROFILE%\Desktop\work\school` (about 577 files): read, search and
+  shell listing all succeeded. Direct native tests also passed exact read,
+  recursive listing and `rg --files`, while parent enumeration was denied.
 
-## Local recovery blocker
+## Recovered local transaction and remaining limit
 
-An attempted real `%USERPROFILE%` read-only workspace contained about
-625,000 files. Grant setup produced about 166,000 durable records and was
-interrupted before child execution. The production recovery journal remains
-at `%LOCALAPPDATA%\LatchBoundaryRecovery-v1\pending` on this host. The journal
-is host state, not a repository artifact.
+An earlier whole-`%USERPROFILE%` probe encountered about 625,000 files and
+was interrupted after about 166,000 durable ACL records. Recovery initially
+refused changed identities of live Codex SQLite sidecars and state files. A
+**one-time local, test-only** reconciliation of direct regular files under
+`%USERPROFILE%\.codex` allowed identity-checked recovery to continue; that
+exception was removed from source before the current build and tests.
+Production recovery still fails closed on an unrecognized replacement.
 
-Recovery first refused changed identities of live Codex SQLite sidecars and
-global-state files. A **local, test-only** reconciliation for direct regular
-files under `%USERPROFILE%\.codex` let diagnostics continue; that bypass was
-removed from source and is not part of this checkpoint. Recovery then found a
-pre-existing NULL-DACL test file; the code now preserves that descriptor.
-The next retry stopped while pinning
-`%LOCALAPPDATA%\Microsoft\Windows\SFAP` with `ERROR_ACCESS_DENIED (5)`.
-The pending journal still exists. The current state has **not** been proven
-fully recovered. Do not delete or rename the journal: it records ACL changes
-that may still need reconciliation. Do not start another native boundary
-instance on this host until that recovery is resolved.
+The improved scanner preserved unrelated NULL-DACL and access-denied host
+files. Recovery exited successfully, removed the production `pending`
+journal, and a second check found no running owner or retained journal. No
+journal was manually deleted. The large live home directory remains a
+performance and churn limit for per-object grants; it is **not** counted as
+successful whole-home dogfood. Use a smaller stable workspace such as
+`Desktop\work\school` until that scale case is designed and qualified.
 
-The requested smaller workspace `%USERPROFILE%\Desktop\work\school` exists
-and contains about 577 files. It was inspected from the host, but **not**
-tested through Latch, because the pending recovery blocks a valid sandbox
-run. Resume with identity-checked recovery and a small, stable workspace;
-avoid scanning the entire live home directory. Then rerun all gates and real
-release-binary dogfood before calling the port ready.
+The last previously green full GitHub Actions run (`36376680779`) predates
+these changes. Do not call this revision fully qualified until the new full
+Windows native and Linux Bubblewrap CI run passes.
