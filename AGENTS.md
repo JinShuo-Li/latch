@@ -24,10 +24,16 @@ the `latch` TUI (`cargo install --path crates/latch-cli` installs it).
 
 ## Commands
 
-The deterministic 0.2.3 reliability gate is `bash scripts/release-gate.sh`.
-CI uses an ephemeral Ubuntu 24.04 runner, installs Bubblewrap, ripgrep, and
-Python, enables user namespaces there, probes the required sandbox namespaces
-and mounts, then runs:
+Default CI (`.github/workflows/ci.yml`) is a fast Linux and Windows smoke gate:
+formatting, kernel architectural invariants, a real Bubblewrap probe, an
+embedded Windows boundary command, and a CLI build/start on both hosts. The
+manual `Full validation` workflow runs the complete Linux release gate and
+Windows native security and Rust runtime suites.
+
+The deterministic Linux release gate remains `bash scripts/release-gate.sh`.
+The manual CI workflow installs Bubblewrap, ripgrep, and Python and enables
+user namespaces. The gate probes the required sandbox namespaces and mounts,
+then runs:
 
 ```sh
 cargo fmt --all -- --check
@@ -39,8 +45,8 @@ cargo build --release --locked
 
 `crates/latch-kernel/tests/invariants.rs` remains the fast architectural tier.
 The full workspace suite covers deterministic F1–F5 regressions and sandbox
-behavior; a failed Bubblewrap probe fails the gate rather than skipping security
-coverage. Live/paid/network-provider tests remain opt-in and ignored.
+behavior; a failed Bubblewrap probe fails either gate rather than skipping
+security coverage. Live/paid/network-provider tests remain opt-in and ignored.
 
 For significant changes, run the release gate plus relevant cache/long-session
 tests before committing:
@@ -97,22 +103,23 @@ never by Latch itself.
 > Memory decides what the model needs to know. Cache decides how cheaply we can
 > send it.
 
-> CI protects architecture and deterministic release reliability. Local stress
-> and live tests verify scale and real-provider behavior separately.
+> Default CI protects architecture and basic runtime execution. Manual full
+> validation protects deterministic release reliability. Local stress and live
+> tests verify scale and real-provider behavior separately.
 
 Three tiers:
 
-- **CI (architectural invariants plus workspace reliability):** durable history is the source of truth,
+- **Default CI (architectural invariants plus runtime smoke):** durable history is the source of truth,
   cache epochs are not memory boundaries, canonical state stays authoritative,
   no hidden destructive compaction, resume equivalence, kernel-owned
   validation/evidence, safety/sandbox rules, steering/tool protocol
   correctness, append-only cache-epoch behavior, deterministic serialization.
-- **Deterministic workspace suite (CI and local):** detailed correctness,
+- **Deterministic workspace suite (manual CI and local):** detailed correctness,
   providers, sandbox/command execution, snapshots, extensions, and release build.
 - **Stress (local, ignored/opt-in by convention):** long-session, large-history,
   scaling, and extreme behavior. Normally stays out of CI.
 
-Do not move tests between tiers merely to make CI green. Keep paid-provider,
+Keep the full tests and security assertions in the manual gate. Keep paid-provider,
 network-dependent, flaky, benchmark, and stress tests out of CI. Cache locality
 must never override long-horizon correctness.
 
@@ -148,8 +155,9 @@ The native runner is built by
 `crates/latch-kernel/build.rs` on Windows (x64 MSVC C++ Build Tools + Windows
 SDK required). Its Rust adapter is `execution/windows_runtime.rs` and its
 read-only Python/Node staging is `execution/windows_runtime_tools.rs`.
-Windows CI runs native security fixtures and a separate focused Rust runtime
-gate; the Linux job keeps the full workspace suite. Windows runtime tests run
+Default Windows CI runs one production embedded-boundary smoke test; the manual
+workflow runs all native security fixtures and a focused Rust runtime gate.
+The manual Linux job runs the full workspace suite. Windows runtime tests run
 serially because ACL recovery has a per-user lock. Focused check:
 `cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked`.
 See `native/windows/boundary/README.md` for native fixture commands, verified
