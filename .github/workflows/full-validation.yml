@@ -2,9 +2,6 @@ name: Full validation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - codex/windows-native-port
 
 env:
   CARGO_TERM_COLOR: always
