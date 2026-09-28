@@ -1939,7 +1939,9 @@ async fn managed_process_start_poll_and_terminate() {
         .expect("process id")
         .to_owned();
     let mut seen = String::new();
-    for _ in 0..50 {
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(if cfg!(windows) { 30 } else { 5 });
+    loop {
         let poll = e
             .execute(
                 &call("exec_poll", json!({"id": id})),
@@ -1949,6 +1951,9 @@ async fn managed_process_start_poll_and_terminate() {
         assert!(!poll.is_error, "{}", poll.output);
         seen.push_str(&poll.output);
         if seen.contains("two") && seen.contains("exited with code 0") {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
