@@ -41,7 +41,13 @@ Set-Acl -LiteralPath $secret -AclObject $acl
 Check 'read-deny' $secret
 $junction = Join-Path $workspace 'junction'
 New-Item -ItemType Junction -Path $junction -Target $outside | Out-Null
-Check 'write-deny' (Join-Path $junction 'ordinary.txt')
+$junctionAlias = Join-Path $junction 'ordinary.txt'
+if ([IO.File]::ReadAllText($junctionAlias) -ne 'fixture') { throw 'Host junction did not resolve to its target' }
+$junctionAcl = (Get-Acl -LiteralPath $plain).Sddl
+Check 'junction-write-deny' $junctionAlias
+if ([IO.File]::ReadAllText($plain) -ne 'fixture' -or (Get-Acl -LiteralPath $plain).Sddl -ne $junctionAcl) {
+  throw 'Denied junction write changed its outside target'
+}
 # Delete only the junction itself, never enumerate or remove its target.
 [IO.Directory]::Delete($junction)
 $alias = Join-Path $workspace 'hardlink.txt'

@@ -267,7 +267,8 @@ int wmain(int argc, wchar_t** argv) {
   DWORD access = 0;
   DWORD disposition = OPEN_EXISTING;
   if (operation == L"read-allow" || operation == L"read-deny") access = GENERIC_READ;
-  else if (operation == L"write-allow" || operation == L"write-deny") access = GENERIC_WRITE;
+  else if (operation == L"write-allow" || operation == L"write-deny" ||
+           operation == L"junction-write-deny") access = GENERIC_WRITE;
   else if (operation == L"acl-deny") access = WRITE_DAC | WRITE_OWNER;
   else if (operation == L"dacl-deny") access = WRITE_DAC;
   else if (operation == L"owner-deny") access = WRITE_OWNER;
@@ -282,7 +283,14 @@ int wmain(int argc, wchar_t** argv) {
   const DWORD error = GetLastError();
   const bool opened = file != INVALID_HANDLE_VALUE;
   if (opened) CloseHandle(file);
-  if (opened != expected || (!opened && error != ERROR_ACCESS_DENIED)) {
+  // AppContainer path traversal can report PATH_NOT_FOUND for a junction whose
+  // target is outside its namespace. The host fixture checks the target before
+  // and after this attempt; successful opening is always a security failure.
+  const bool junction_hidden = operation == L"junction-write-deny" &&
+                               (error == ERROR_PATH_NOT_FOUND ||
+                                error == ERROR_FILE_NOT_FOUND);
+  if (opened != expected || (!opened && error != ERROR_ACCESS_DENIED &&
+                             !junction_hidden)) {
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     if (GetNamedSecurityInfoW(argv[2], SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
         nullptr, nullptr, nullptr, nullptr, &descriptor) == ERROR_SUCCESS) {

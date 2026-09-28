@@ -52,10 +52,17 @@ jobs:
           $binaries = Join-Path $PWD 'target/windows-native-ci/bin'
           $fixtureBase = Join-Path $env:LOCALAPPDATA ('LatchBoundaryCI-' + $env:GITHUB_RUN_ID)
           foreach ($suite in @('test', 'recovery', 'adversarial', 'lifecycle', 'developer', 'deleted_root')) {
-            & "native/windows/boundary/$suite.ps1" -Binaries $binaries -FixtureRoot (Join-Path $fixtureBase "latch-native-$suite")
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            try {
+              & "native/windows/boundary/$suite.ps1" -Binaries $binaries -FixtureRoot (Join-Path $fixtureBase "latch-native-$suite")
+              if ($LASTEXITCODE) { throw "$suite exited $LASTEXITCODE" }
+            } catch {
+              $message = $_.Exception.Message -replace '[\r\n]+', ' '
+              Write-Output "::error file=native/windows/boundary/$suite.ps1,title=Windows native fixture::$message"
+              throw
+            }
           }
       - name: Windows Rust release gate
+        if: success() || failure()
         shell: pwsh
         run: |
           cargo fmt --all -- --check
