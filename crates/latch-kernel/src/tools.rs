@@ -39,7 +39,7 @@ use uuid::Uuid;
 /// silently running unsandboxed.
 #[derive(Clone)]
 enum SandboxState {
-    Ready(ExecutionBackend),
+    Ready(Box<ExecutionBackend>),
     Unavailable(String),
 }
 
@@ -155,12 +155,12 @@ impl ToolExecutor {
         std::fs::create_dir_all(&state_dir)?;
         std::fs::create_dir_all(&artifacts)?;
         let sandbox = match ExecutionBackend::detect(&workspace) {
-            Ok(runner) => SandboxState::Ready(runner),
+            Ok(runner) => SandboxState::Ready(Box::new(runner)),
             Err(error) => SandboxState::Unavailable(format!("{error:#}")),
         };
         let initial = match &sandbox {
             SandboxState::Ready(runner) => {
-                git_dirty_hashes(runner, &workspace, &state_dir).unwrap_or_default()
+                git_dirty_hashes(runner.as_ref(), &workspace, &state_dir).unwrap_or_default()
             }
             SandboxState::Unavailable(_) => HashMap::new(),
         };
@@ -258,7 +258,7 @@ impl ToolExecutor {
             .read()
             .map_err(|_| anyhow!("sandbox state poisoned"))?;
         match &*state {
-            SandboxState::Ready(runner) => Ok(runner.clone()),
+            SandboxState::Ready(runner) => Ok(runner.as_ref().clone()),
             SandboxState::Unavailable(message) => bail!("{message}"),
         }
     }

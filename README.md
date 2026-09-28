@@ -22,6 +22,8 @@ are recorded under `references/`.
 Stable Rust and a C toolchain are required. Linux also requires system
 Bubblewrap and ripgrep. Building on Windows requires the x64 MSVC C++ Build
 Tools and Windows SDK; running requires NTFS, Git for Windows, and ripgrep.
+Chocolatey installations of ripgrep are supported: Latch stages the package's
+standalone `rg.exe` before sandboxed searches.
 The Windows native runner is compiled and embedded by `cargo build` or
 `cargo install`; Git Bash and WSL are not required.
 

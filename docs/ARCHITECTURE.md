@@ -732,9 +732,11 @@ recovery cannot be proven.
 
 Fixed Git inspections and extension hosts share `fixed_command`; Linux quotes
 each argument and explicitly execs the program inside Bubblewrap. Windows fixed
-commands quote arguments and run through the same native runner. Python and
-Node runtimes are staged as read-only assets; Python's standard library is one
-ZIP archive to avoid thousands of per-command ACL changes.
+commands quote arguments and run through the same native runner. Python,
+Node, and ripgrep runtimes are staged as read-only assets; a Chocolatey
+ripgrep shim is resolved to the package's standalone executable before staging.
+Python's standard library is one ZIP archive to avoid thousands of per-command
+ACL changes.
 CLI startup and session Git observations also use `fixed_command`. On Windows,
 the ripgrep prerequisite check inspects `PATH` without starting a host process;
 the search itself runs through the native boundary. Tool descriptions name the
