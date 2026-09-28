@@ -261,7 +261,7 @@ pub(super) fn action_surface_lines(app: &App, width: usize, height: u16) -> Vec<
     if let Some(prompt) = &app.permission {
         approval_surface_lines(prompt, width)
     } else if let Some(capture) = &app.capture {
-        capture_surface_lines(capture, width)
+        capture_surface_lines(capture, width, height)
     } else if let Some(flow) = &app.known_setup {
         let review = if flow.phase() == crate::configuration_center::KnownPhase::Review {
             flow.review_lines()
@@ -271,7 +271,11 @@ pub(super) fn action_surface_lines(app: &App, width: usize, height: u16) -> Vec<
         choice_surface_lines(
             flow.title(),
             &flow.rows(),
-            "↑↓ select · enter choose · esc back",
+            if flow.phase() == crate::configuration_center::KnownPhase::Models {
+                "↑↓ select · space toggle · enter confirm · esc back"
+            } else {
+                "↑↓ select · enter choose · esc back"
+            },
             &review_with_storage(app, review),
             width,
             height,
@@ -428,7 +432,27 @@ fn review_with_storage(app: &App, mut review: Vec<(String, String)>) -> Vec<(Str
     review
 }
 
-fn capture_surface_lines(capture: &CaptureState, width: usize) -> Vec<Line<'static>> {
+fn capture_value_rows(capture: &CaptureState, width: usize, height: u16) -> (Vec<String>, usize) {
+    let shown = capture.display_value();
+    let text = if shown.is_empty() {
+        "(type a value)"
+    } else {
+        &shown
+    };
+    let mut rows = wrap_surface_text(text, width.saturating_sub(4).max(1), 2);
+    let visible = (height as usize / 2).saturating_sub(5).max(1);
+    if rows.len() > visible {
+        rows = rows.split_off(rows.len() - visible);
+    }
+    let cursor_col = if shown.is_empty() {
+        0
+    } else {
+        rows.last().map_or(0, |row| display_width(row))
+    };
+    (rows, cursor_col)
+}
+
+fn capture_surface_lines(capture: &CaptureState, width: usize, height: u16) -> Vec<Line<'static>> {
     let palette = crate::theme::palette();
     let mut lines = vec![surface_blank(width)];
     lines.push(surface_text(
@@ -438,18 +462,13 @@ fn capture_surface_lines(capture: &CaptureState, width: usize) -> Vec<Line<'stat
         2,
     ));
     lines.push(surface_blank(width));
-    let shown = capture.display_value();
-    let value_style = if shown.is_empty() {
+    let value_style = if capture.value.is_empty() {
         notice_style().add_modifier(Modifier::ITALIC)
     } else {
         Style::default()
     };
-    let shown = if shown.is_empty() {
-        "(type a value)".to_owned()
-    } else {
-        shown
-    };
-    for line in wrap_surface_text(&shown, width.saturating_sub(4).max(1), 2) {
+    let (rows, _) = capture_value_rows(capture, width, height);
+    for line in rows {
         lines.push(surface_text(line, value_style, width, 2));
     }
     lines.push(surface_blank(width));
@@ -1023,7 +1042,14 @@ pub(super) fn draw_composer(
         return;
     }
     let palette = crate::theme::palette();
-    let focused = app.permission.is_none() && app.diff_overlay.is_none();
+    let focused = app.permission.is_none()
+        && app.diff_overlay.is_none()
+        && app.capture.is_none()
+        && app.known_setup.is_none()
+        && app.custom_setup.is_none()
+        && app.setup_center.is_none()
+        && app.profile_selector.is_none()
+        && app.selector.is_none();
     let surface = palette.surface();
     let prompt_style = if focused {
         palette.accent()
@@ -1358,6 +1384,21 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         &chrome,
         sidebar_shown,
     );
+    if let Some(capture) = &app.capture
+        && action_area.height > 3
+        && action_area.width > 2
+    {
+        let (rows, col) = capture_value_rows(capture, area.width as usize, area.height);
+        let row = 3 + rows.len().saturating_sub(1);
+        if row < action_area.height as usize {
+            let position = (
+                action_area.x + (2 + col).min(action_area.width as usize - 1) as u16,
+                action_area.y + row as u16,
+            );
+            frame.set_cursor_position(position);
+            app.last_cursor = Some(position);
+        }
+    }
 }
 
 /// Five-row pixel letterforms for the startup wordmark. Every letter occupies

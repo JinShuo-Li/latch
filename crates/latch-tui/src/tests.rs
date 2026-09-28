@@ -908,6 +908,44 @@ fn setup_paste_edits_the_active_field_and_masks_secrets() {
 }
 
 #[test]
+fn setup_capture_places_cursor_on_the_active_input_surface() {
+    let mut app = App::default();
+    app.input.set_text("prompt remains separate");
+    app.capture = Some(CaptureState::new(CaptureSpec {
+        label: "API key".into(),
+        initial: String::new(),
+        masked: true,
+    }));
+    let empty = render_to_text(&mut app, 80, 24);
+    let row = empty
+        .lines()
+        .position(|line| line.contains("(type a value)"))
+        .unwrap() as u16;
+    assert_eq!(app.last_cursor, Some((2, row)));
+    for ch in "secret".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    let filled = render_to_text(&mut app, 80, 24);
+    assert!(!filled.contains("secret"));
+    let row = filled
+        .lines()
+        .position(|line| line.contains("••••••"))
+        .unwrap() as u16;
+    assert_eq!(app.last_cursor, Some((8, row)));
+    assert_eq!(app.input.text(), "prompt remains separate");
+
+    app.capture = Some(CaptureState::new(CaptureSpec {
+        label: "endpoint".into(),
+        initial: format!("{}END", "x".repeat(240)),
+        masked: false,
+    }));
+    let long = render_to_text(&mut app, 40, 20);
+    let row = long.lines().position(|line| line.contains("END")).unwrap() as u16;
+    assert_eq!(app.last_cursor.unwrap().1, row);
+    assert!(app.last_cursor.unwrap().0 > 2);
+}
+
+#[test]
 fn missing_provider_opens_guided_setup_immediately() {
     let mut app = App::default();
     app.output(Output::SetupCatalog(vec![SetupKind {
@@ -2913,9 +2951,8 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     );
     assert!(rendered.contains("••"), "masked capture renders bullets");
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    // Models -> Default model -> Save.
+    // Continue with the sole enabled model -> Save.
     app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
     let rendered = render_to_text(&mut app, 100, 30);
     assert!(
@@ -2946,6 +2983,60 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     assert!(app.input.text().is_empty());
     let visible = format!("{:?}", app.items);
     assert!(!visible.contains("sk-live-secret"), "{visible}");
+}
+
+#[test]
+fn opencode_go_setup_enter_on_model_reaches_save() {
+    let mut app = App::default();
+    app.output(Output::SetupCatalog(vec![SetupKind {
+        kind: "opencode-go".into(),
+        label: "OpenCode Go".into(),
+        default_base_url: "https://opencode.ai/zen/go/v1".into(),
+        requires_base_url: false,
+        credential_label: "env:OPENCODE_API_KEY".into(),
+        default_model: "deepseek-v4-flash".into(),
+        models: ["deepseek-v4-flash", "deepseek-v4-pro"]
+            .into_iter()
+            .map(|id| CatalogModel {
+                id: id.into(),
+                display_name: id.into(),
+                efforts: vec![],
+                default_effort: latch_protocol::ReasoningEffort::ProviderDefault,
+                input_modalities: vec![],
+            })
+            .collect(),
+    }]));
+    app.input.set_text("/setup");
+    assert!(app.submit_action().is_none());
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // Add provider
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // OpenCode Go
+    app.on_key(key(KeyCode::Down, KeyModifiers::NONE)); // secure key
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.capture.is_some());
+    for ch in "sk-local".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // key submitted
+    assert_eq!(
+        app.known_setup.as_ref().map(|flow| flow.phase()),
+        Some(crate::configuration_center::KnownPhase::Models)
+    );
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // highlighted model
+    assert_eq!(
+        app.known_setup.as_ref().map(|flow| flow.phase()),
+        Some(crate::configuration_center::KnownPhase::Review)
+    );
+    let action = app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(
+        action,
+        Some(Action::SetupApply(SetupPlan::Apply {
+            provider_kind,
+            model,
+            credential: SetupCredential::Secret(secret),
+            ..
+        })) if provider_kind == "opencode-go" && model == "deepseek-v4-flash" && secret == "sk-local"
+    ));
+    assert!(app.known_setup.is_none());
 }
 
 #[test]
@@ -3048,8 +3139,7 @@ fn snapshot_setup_review_surface_masks_the_credential() {
     }
     app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // secret submitted
     app.on_key(key(KeyCode::Down, KeyModifiers::NONE)); // Continue
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // models
-    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // default
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // review
     let text = render_to_text(&mut app, 120, 34);
     assert!(!text.contains("sk-hidden"), "{text}");
     assert_snapshot("v6_setup_review.txt", &text);

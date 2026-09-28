@@ -1121,7 +1121,15 @@ impl App {
                     flow.down();
                     SetupStepOutcome::None
                 }
-                KeyCode::Enter | KeyCode::Char(' ') => flow.confirm(),
+                KeyCode::Enter => flow.confirm(),
+                KeyCode::Char(' ') => {
+                    if flow.phase() == configuration_center::KnownPhase::Models {
+                        flow.toggle_current_model();
+                        SetupStepOutcome::None
+                    } else {
+                        flow.confirm()
+                    }
+                }
                 _ => SetupStepOutcome::None,
             };
             match outcome {
