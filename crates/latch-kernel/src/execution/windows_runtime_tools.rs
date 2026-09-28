@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 pub(super) struct StagedTools {
     pub python: Option<PathBuf>,
     pub node: Option<PathBuf>,
+    pub rg: Option<PathBuf>,
     python_source: Option<PathBuf>,
     node_source: Option<PathBuf>,
+    rg_source: Option<PathBuf>,
 }
 
 static STAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -16,6 +18,7 @@ impl StagedTools {
     pub fn discover(root: &Path) -> Self {
         let python_source = on_path("python.exe");
         let node_source = on_path("node.exe");
+        let rg_source = on_path("rg.exe").and_then(|path| standalone_ripgrep(&path));
         Self {
             python: python_source
                 .as_ref()
@@ -23,9 +26,22 @@ impl StagedTools {
             node: node_source
                 .as_ref()
                 .map(|_| root.join("tool-node/node.exe")),
+            rg: rg_source.as_ref().map(|_| root.join("tool-rg/rg.exe")),
             python_source,
             node_source,
+            rg_source,
         }
+    }
+
+    pub fn ensure_rg(&self) -> Result<()> {
+        let Some(source) = &self.rg_source else {
+            return Ok(());
+        };
+        let target = self.rg.as_ref().context("ripgrep target")?;
+        let _lock = STAGE_LOCK
+            .lock()
+            .map_err(|_| anyhow::anyhow!("tool staging lock poisoned"))?;
+        stage_file(source, target)
     }
 
     pub fn ensure_python(&self) -> Result<()> {
@@ -121,6 +137,41 @@ fn on_path(name: &str) -> Option<PathBuf> {
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .map(|directory| directory.join(name))
         .find(|path| path.is_file() && !path.to_string_lossy().contains("WindowsApps"))
+}
+
+// Chocolatey exposes a launcher shim on PATH. A restricted AppContainer cannot
+// rely on that shim starting the package executable from machine-owned storage.
+// Stage the standalone executable itself into Latch's user-owned runtime.
+fn standalone_ripgrep(path: &Path) -> Option<PathBuf> {
+    let bin = path.parent()?;
+    let package = bin.parent()?.join("lib/ripgrep");
+    if bin.file_name()?.eq_ignore_ascii_case("bin") && package.is_dir() {
+        return find_rg(&package, 3);
+    }
+    Some(path.to_path_buf())
+}
+
+fn find_rg(directory: &Path, depth: usize) -> Option<PathBuf> {
+    if depth == 0 {
+        return None;
+    }
+    let mut entries = std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        if entry.file_name().eq_ignore_ascii_case("rg.exe") && path.is_file() {
+            return Some(path);
+        }
+        if path.is_dir()
+            && let Some(found) = find_rg(&path, depth - 1)
+        {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn stage_file(source: &Path, target: &Path) -> Result<()> {
@@ -280,4 +331,23 @@ fn crc32(bytes: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::standalone_ripgrep;
+
+    #[test]
+    fn chocolatey_shim_resolves_to_standalone_ripgrep() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        let tools = root.path().join("lib/ripgrep/tools/ripgrep-package");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&tools).unwrap();
+        let shim = bin.join("rg.exe");
+        let actual = tools.join("rg.exe");
+        std::fs::write(&shim, b"shim").unwrap();
+        std::fs::write(&actual, b"actual").unwrap();
+        assert_eq!(standalone_ripgrep(&shim), Some(actual));
+    }
 }

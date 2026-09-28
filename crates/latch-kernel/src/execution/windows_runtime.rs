@@ -59,6 +59,11 @@ impl NativeRuntime {
                 .clone()
                 .context("Python is not installed")?,
             "node" | "node.exe" => self.tools.node.clone().context("Node is not installed")?,
+            "rg" | "rg.exe" => self
+                .tools
+                .rg
+                .clone()
+                .context("ripgrep is not installed or its package lacks a standalone rg.exe")?,
             _ => executable(program)?,
         };
         let mut reads = Vec::new();
@@ -176,6 +181,9 @@ impl NativeRuntime {
         if let Some(python) = &self.tools.python {
             paths.push(python.parent().context("Python runtime")?.to_path_buf());
         }
+        if let Some(rg) = &self.tools.rg {
+            paths.push(rg.parent().context("ripgrep runtime")?.to_path_buf());
+        }
         paths.extend(std::env::split_paths(&original_path));
         process.env("PATH", std::env::join_paths(paths)?);
         process.env("npm_config_cache", workspace.join(".npm-cache"));
@@ -278,6 +286,20 @@ impl NativeRuntime {
         {
             self.tools.ensure_node()?;
             let root = node.parent().context("Node runtime")?;
+            process
+                .arg("--read-root")
+                .arg(root)
+                .arg("--deny-write")
+                .arg(root);
+        }
+        if let Some(rg) = &self.tools.rg
+            && (program == rg
+                || invocation
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|word| word == "rg"))
+        {
+            self.tools.ensure_rg()?;
+            let root = rg.parent().context("ripgrep runtime")?;
             process
                 .arg("--read-root")
                 .arg(root)
