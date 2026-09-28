@@ -883,13 +883,23 @@ mod tests {
                 .collect::<CapabilitySet>(),
         );
         let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
+        // AppContainer profile setup and Python staging can exceed the
+        // production default on a busy hosted runner.
+        let lifecycle = if cfg!(windows) {
+            ExtensionLifecycle {
+                initialize: Duration::from_secs(40),
+                ..ExtensionLifecycle::default()
+            }
+        } else {
+            ExtensionLifecycle::default()
+        };
         let mut host = ExtensionHost::start(
             "fixture".into(),
             "python3",
             &[fixture],
             &dir.path().to_string_lossy(),
             (&runner, &profile),
-            &ExtensionLifecycle::default(),
+            &lifecycle,
             &CancellationToken::new(),
         )
         .await
