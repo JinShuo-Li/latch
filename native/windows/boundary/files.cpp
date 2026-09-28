@@ -50,6 +50,58 @@ int wmain(int argc, wchar_t** argv) {
     std::puts("PASS root ancestor handle has metadata rights, no ACL read");
     return 0;
   }
+  if (operation == L"ancestor-metadata") {
+    if (argc != 3) return 2;
+    const std::wstring trailing = std::wstring(argv[2]) + L"\\";
+    HANDLE directory = CreateFileW(trailing.c_str(),
+        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (directory == INVALID_HANDLE_VALUE) {
+      std::fwprintf(stderr, L"FAIL ancestor metadata open %ls error=%lu\n",
+                    trailing.c_str(), GetLastError());
+      return 3;
+    }
+    FILE_ID_INFO id{};
+    const bool metadata = GetFileInformationByHandleEx(directory, FileIdInfo,
+                                                        &id, sizeof(id)) != FALSE;
+    alignas(FILE_ID_BOTH_DIR_INFO) BYTE listing[4096]{};
+    const bool enumerated = GetFileInformationByHandleEx(directory, FileIdBothDirectoryInfo,
+                                                          listing, sizeof(listing)) != FALSE;
+    const DWORD list_error = GetLastError();
+    CloseHandle(directory);
+    if (!metadata || enumerated || list_error != ERROR_ACCESS_DENIED) {
+      std::fwprintf(stderr, L"FAIL ancestor metadata=%d enumerate=%d/%lu\n",
+                    metadata, enumerated, list_error);
+      return 4;
+    }
+    std::puts("PASS ancestor has metadata only, even with trailing separator");
+    return 0;
+  }
+  if (operation == L"enumerate-allow" || operation == L"enumerate-deny") {
+    if (argc != 3) return 2;
+    HANDLE directory = CreateFileW(argv[2], FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    const DWORD open_error = GetLastError();
+    if (directory != INVALID_HANDLE_VALUE) CloseHandle(directory);
+    const std::wstring pattern = std::wstring(argv[2]) + L"\\*";
+    WIN32_FIND_DATAW entry{};
+    HANDLE listing = FindFirstFileW(pattern.c_str(), &entry);
+    const DWORD list_error = GetLastError();
+    if (listing != INVALID_HANDLE_VALUE) FindClose(listing);
+    const bool expected = operation == L"enumerate-allow";
+    const bool opened = directory != INVALID_HANDLE_VALUE;
+    const bool listed = listing != INVALID_HANDLE_VALUE;
+    if ((expected && !opened) || listed != expected ||
+        (!expected && list_error != ERROR_ACCESS_DENIED)) {
+      std::fwprintf(stderr, L"FAIL %ls %ls open=%d/%lu list=%d/%lu\n",
+                    argv[1], argv[2], opened, open_error, listed, list_error);
+      return 1;
+    }
+    std::fwprintf(stdout, L"PASS %ls\n", argv[1]);
+    return 0;
+  }
   if (operation == L"cwd-probe") {
     wchar_t cwd[32768]{};
     if (!GetCurrentDirectoryW(32768, cwd)) return 3;

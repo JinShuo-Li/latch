@@ -67,6 +67,7 @@ void validate_write_tree(const std::filesystem::path& path,
                          std::vector<Handle>& locks, const Cancellation& cancel,
                          Recovery& recovery) {
   cancel.check();
+  if (recovery.protected_journal_path(path)) return;
   Handle object(CreateFileW(
       path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
       nullptr, OPEN_EXISTING,
@@ -118,6 +119,8 @@ void protect_sensitive_tree(const std::filesystem::path& input,
                             const Cancellation& cancel, Recovery& recovery) {
   cancel.check();
   const auto path = std::filesystem::canonical(input).wstring();
+  if (recovery.protected_journal_path(path))
+    fail(L"sensitive path aliases protected journal", ERROR_ACCESS_DENIED);
   if (!visited.insert(path).second) return;
   PACL acl = nullptr;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
@@ -161,10 +164,13 @@ void protect_sensitive_tree(const std::filesystem::path& input,
 }
 
 void Grants::add(const std::wstring& path, ACCESS_MODE mode, DWORD rights) {
+  if (recovery.protected_journal_path(path)) return;
   if (mode == DENY_ACCESS) {
     // Inheritance alone never protects a child with SE_DACL_PROTECTED.
     // Apply the deny to each existing object, including protected children.
     const auto resolved = std::filesystem::canonical(path).wstring();
+    if (recovery.protected_journal_path(resolved))
+      fail(L"deny path aliases protected journal", ERROR_ACCESS_DENIED);
     if (!denied_.insert(resolved).second) return;
     const DWORD attributes = GetFileAttributesW(resolved.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES) fail(L"deny attributes");

@@ -492,6 +492,9 @@ mod tests {
         }
         std::fs::write(state.join("secrets.toml"), "fixture secret").unwrap();
         std::fs::write(workspace.join("ordinary.txt"), "workspace contents").unwrap();
+        std::fs::write(root.path().join("parent.txt"), "parent private").unwrap();
+        std::fs::create_dir(workspace.join("nested")).unwrap();
+        std::fs::write(workspace.join("nested").join("match.txt"), "nested match").unwrap();
         let runtime = NativeRuntime::install(&root.path().join("runtime")).unwrap();
         let profile = SandboxProfile::new(
             workspace.clone(),
@@ -513,7 +516,7 @@ mod tests {
             workspace.display()
         );
         assert_eq!(output.stdout, b"workspace contents");
-        for script in ["dir /b ordinary.txt", "dir /b"] {
+        for script in ["dir /b ordinary.txt", "dir /b", "dir /a", "dir /a /s"] {
             let listed = runtime
                 .command(&profile, script)
                 .unwrap()
@@ -526,6 +529,22 @@ mod tests {
                 listed.status,
                 String::from_utf8_lossy(&listed.stdout),
                 String::from_utf8_lossy(&listed.stderr)
+            );
+            if script == "dir /a /s" {
+                assert!(String::from_utf8_lossy(&listed.stdout).contains("match.txt"));
+            }
+        }
+        for script in ["dir /a ..", "type ..\\parent.txt"] {
+            let denied = runtime
+                .command(&profile, script)
+                .unwrap()
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                !denied.status.success(),
+                "{script} unexpectedly read the workspace parent: {}",
+                String::from_utf8_lossy(&denied.stdout)
             );
         }
         let output = runtime
@@ -565,6 +584,51 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(String::from_utf8_lossy(&output.stdout).starts_with("git version "));
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&workspace)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        let status = runtime
+            .fixed_command(&profile, "git", &["status", "--short"])
+            .unwrap()
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            status.status.success(),
+            "git status: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+        assert!(String::from_utf8_lossy(&status.stdout).contains("ordinary.txt"));
+        std::fs::create_dir(workspace.join(".ssh")).unwrap();
+        std::fs::write(workspace.join(".ssh").join("id_ed25519"), "fixture private").unwrap();
+        let masked = SandboxProfile::new(
+            workspace.clone(),
+            workspace.clone(),
+            state.clone(),
+            CapabilitySet::new(),
+        );
+        let denied = runtime
+            .command(&masked, "type .ssh\\id_ed25519")
+            .unwrap()
+            .output()
+            .await
+            .unwrap();
+        assert!(!denied.status.success());
+        assert!(!String::from_utf8_lossy(&denied.stdout).contains("fixture private"));
+        let listed = runtime
+            .command(&masked, "dir /a")
+            .unwrap()
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            listed.status.success(),
+            "masked workspace listing: {}",
+            String::from_utf8_lossy(&listed.stderr)
+        );
         if runtime.tools.python.is_some() {
             let output = runtime
                 .fixed_command(&profile, "python3", &["-c", "print('python-ready')"])

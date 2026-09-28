@@ -18,6 +18,7 @@ class Recovery {
   void change(PinnedObject& pinned, const ObjectState& before, PACL acl,
               bool protect = false);
   void track_root(const std::filesystem::path& path);
+  bool protected_journal_path(const std::filesystem::path& path) const;
   Handle reserve_git(const std::filesystem::path& path);
 
   void prepare_profile();

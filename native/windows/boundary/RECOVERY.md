@@ -37,6 +37,10 @@ does not propagate unrecorded changes. Sensitive-path sealing is temporary
 and is restored with the same mechanism. New developer-created objects
 have no pre-call ACL: recovery removes only the transaction's unique SID
 ACEs, retaining all unrelated entries, and journals those removals too.
+When a workspace contains the trusted recovery directory (for example a home
+workspace), grant and rollback traversal exclude that directory and its
+descendants. Its protected user/SYSTEM DACL remains unchanged; requesting the
+journal itself as a grant root is still refused.
 
 A missing `.git` is created privately as a delete-on-close reservation. Its
 file identity and destination parent identity are durable before a handle
