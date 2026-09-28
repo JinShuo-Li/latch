@@ -1,24 +1,59 @@
-# Latch Linux benchmark pilot
+# Latch Linux benchmark candidate suite
 
-This directory contains three **self-contained pilot cases**, not verified
-reproductions of upstream issues. They exercise the benchmark runner and a
-difficulty ladder before a larger real-project suite is selected. The cases
-use Python's standard library so Latch can focus on debugging rather than
-downloading dependencies.
+This directory contains **25 self-contained candidate cases** across three
+difficulty tiers: 7 easy, 7 medium, and 11 hard. They model real operational
+workflows but are independently constructed, **not verified reproductions of
+specific upstream issues**. They use Python's standard library so Latch can
+focus on debugging rather than downloading dependencies. Difficulty labels
+describe the intended reasoning and state surface; they have not yet been
+calibrated by repeated model runs.
 
 | Tier | Case | User situation | Independent acceptance |
 | --- | --- | --- | --- |
 | Easy | `stream_records` | A log collector receives UTF-8 JSON lines in arbitrary network byte chunks. | Every byte boundary, multiple records, final line and empty reads. |
+| Easy | `csv_chunks` | A CSV importer receives quoted rows across network reads. | Embedded commas/newlines and all split positions. |
+| Easy | `path_rules` | A file picker applies ordered ignore and reinclude rules. | Last matching rule wins. |
+| Easy | `ansi_width` | A terminal table aligns colored Unicode cells. | ANSI controls, combining marks and wide glyphs. |
+| Easy | `option_values` | A deployment CLI handles explicit empty values and `--`. | Value presence, positional parsing and errors. |
+| Easy | `header_merge` | An HTTP gateway aggregates repeated headers. | Case-insensitive names and separate cookies. |
+| Easy | `duration_units` | A scheduler parses millisecond and larger time units. | Units, zero and malformed inputs. |
 | Medium | `config_layers` | A CLI combines defaults, a project file, environment and flags. | Nested precedence, empty and false values, caller input ownership. |
+| Medium | `pagination_cursor` | An activity feed paginates while earlier records may be deleted. | Stable keyset cursor and invalid input. |
+| Medium | `http_ranges` | A download endpoint serves byte ranges. | Inclusive, suffix, open-ended and invalid ranges. |
+| Medium | `retry_policy` | An HTTP client retries transient responses. | Method safety, Retry-After and retry budget. |
+| Medium | `archive_paths` | A document importer extracts user ZIP files. | Traversal/symlink preflight and normal extraction. |
+| Medium | `sqlite_migration` | An address book upgrades its SQLite schema. | Preserved rows, idempotence and malformed schemas. |
+| Medium | `log_rotation` | An operations daemon rotates bounded log archives. | Archive order, retention and invalid limits. |
 | Hard | `spool_recovery` | A job runner resumes an append-only spool after failure or interruption. | Retry, incomplete line, UTF-8 byte offset and stale checkpoint. |
+| Hard | `lease_queue` | Workers reclaim expired jobs. | Stale acknowledgements, attempts and concurrent claims. |
+| Hard | `webhook_dedupe` | A receiver stores durable event claims. | Handler failure rollback and duplicate delivery. |
+| Hard | `dag_scheduler` | A build scheduler executes dependent tasks. | Ordering, shared dependencies, cycles and failures. |
+| Hard | `atomic_config` | A daemon writes JSON settings and a backup. | Invalid writes, recovery and corrupt copies. |
+| Hard | `incremental_sync` | A backup tool mirrors a source directory. | Content hashes, deletion, unchanged files and links. |
+| Hard | `stream_framing` | An RPC server decodes length-prefixed messages. | Arbitrary chunks, multiple frames and size limits. |
+| Hard | `cache_stampede` | Concurrent callers share slow cache loads. | Single flight, retry after failure and key independence. |
+| Hard | `append_index` | An event log rebuilds byte offsets after partial writes. | UTF-8 offsets, hidden tails and append refusal. |
+| Hard | `rate_window` | A gateway limits requests per tenant. | Rolling boundaries, isolation and denied requests. |
+| Hard | `transaction_outbox` | An order service persists rows and outgoing events. | Atomic rollback, duplicates and event order. |
 
-Each `workspace/` contains the buggy project and visible tests. The sibling
-`check.py` stays outside Latch's copied workspace and runs before and after the
-agent in a networkless Bubblewrap sandbox. That sandbox exposes the case and
-workspace read-only, hides the host home directory, and gives checks private
-scratch space. The runner requires at least one failing baseline check and
-never modifies the case template. An isolated Git repository and Latch state
-directory are created for every attempt.
+Each `workspace/` contains the buggy project and visible tests. Acceptance
+checks stay outside the copied workspace in `acceptance.json` or `check.py`.
+The shared checker runs before and after the agent in a networkless Bubblewrap
+sandbox. That sandbox exposes only the selected case and workspace read-only,
+hides the host home directory, and gives checks private scratch space. The
+runner requires at least one failing baseline check and never modifies the
+case template. Every case has a `reference/` repair for author verification;
+the runner never copies it into Latch's workspace. An isolated Git repository
+and Latch state directory are created for every attempt.
+
+Validate the complete case set without a model call:
+
+```sh
+python3 benchmark/verify_cases.py
+```
+
+This checks that each baseline fails at least one independent check and that
+the reference repair passes all independent checks and visible tests.
 
 ## Run
 
@@ -66,6 +101,7 @@ in USD. Example:
 
 Replace those placeholders with rates valid for the run. Reports record the
 exact rates used. Timing currently measures end-to-end CLI wall time, including
-model and tool waits; it does not attribute individual phases. This pilot is
-for validating the harness and understanding case quality. It is too small
-and synthetic to claim a general coding-agent score.
+model and tool waits; it does not attribute individual phases. Only the
+original `stream_records` and `config_layers` cases have been smoke tested
+with a real model. The full 25-case set needs repeated runs and difficulty
+calibration before it can support a comparative coding-agent score.

@@ -49,7 +49,7 @@ On Windows, use a focused checkout owned by your account. Existing files whose A
 ## For contributors
 
 Run `cargo fmt --all -- --check` and the platform tests before sending changes. The [architecture](docs/ARCHITECTURE.md), [runtime capability model](docs/RUNTIME_CAPABILITY_MODEL.md), [continuity design](docs/CONTINUITY.md), and [repository instructions](AGENTS.md) contain implementation details. Linux release checks are in `scripts/release-gate.sh`; Windows native fixtures and recovery notes are in `native/windows/boundary/`.
-The [Linux benchmark pilot](benchmark/README.md) runs isolated CLI coding tasks
+The [Linux benchmark candidate suite](benchmark/README.md) runs isolated CLI coding tasks
 against DeepSeek v4.1 Flash and records independent checks, tokens, cache reads,
 and wall time. It is opt-in and uses a real provider credential.
 

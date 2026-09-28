@@ -31,7 +31,9 @@ def discover():
             if data["id"] in cases or data["tier"] != tier:
                 raise ValueError(f"invalid or duplicate case: {manifest}")
             case_dir = manifest.parent
-            if not (case_dir / "workspace").is_dir() or not (case_dir / "check.py").is_file():
+            if not (case_dir / "workspace").is_dir() or not any(
+                (case_dir / name).is_file() for name in ("check.py", "acceptance.json")
+            ):
                 raise ValueError(f"case is incomplete: {case_dir}")
             cases[data["id"]] = (data, case_dir)
     return cases
@@ -88,18 +90,22 @@ def check(case_dir, workspace):
     bwrap = shutil.which("bwrap")
     if bwrap is None:
         raise RuntimeError("bwrap is required to isolate acceptance checks")
+    data_driven = (case_dir / "acceptance.json").is_file()
+    checker = "/tmp/check_case.py" if data_driven else "/tmp/case/check.py"
+    checker_args = ["/tmp/case", "/tmp/workspace"] if data_driven else ["/tmp/workspace"]
     command = [
         bwrap, "--die-with-parent", "--new-session", "--unshare-user",
         "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try",
         "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev",
         "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", "/run",
         "--tmpfs", "/home", "--ro-bind", str(case_dir), "/tmp/case",
+        "--ro-bind", str(ROOT / "check_case.py"), "/tmp/check_case.py",
         "--ro-bind", str(workspace), "/tmp/workspace",
         "--clearenv", "--setenv", "HOME", "/tmp",
         "--setenv", "PATH", "/usr/bin:/bin",
         "--setenv", "PYTHONDONTWRITEBYTECODE", "1",
         "--chdir", "/tmp/workspace", "--", "/usr/bin/python3",
-        "/tmp/case/check.py", "/tmp/workspace",
+        checker, *checker_args,
     ]
     outcome = run_process(command, cwd=ROOT, timeout=30)
     if outcome["exit_code"] != 0 or outcome["timed_out"]:

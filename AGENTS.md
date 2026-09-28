@@ -84,7 +84,8 @@ bash scripts/release-gate.sh
   It requires Python 3.11+, a built `target/release/latch`, the usual Linux
   sandbox prerequisites, and a DeepSeek v4.1 Flash credential. Isolated
   workspaces and reports land in ignored `benchmark/runs/`; see
-  `benchmark/README.md`.
+  `benchmark/README.md`. The 25 candidate cases can be checked without a
+  model call using `python3 benchmark/verify_cases.py` (requires Bubblewrap).
 - Snapshot updates: `LATCH_UPDATE_SNAPSHOTS=1 cargo test -p latch-tui --lib`.
   Exception: `crates/latch-tui/tests/snapshots/v31_sidebar.txt` is `include_str!`,
   so edit it by hand and keep `cargo test -p latch-tui --lib` green.
