@@ -37,6 +37,8 @@ does not propagate unrecorded changes. Sensitive-path sealing is temporary
 and is restored with the same mechanism. New developer-created objects
 have no pre-call ACL: recovery removes only the transaction's unique SID
 ACEs, retaining all unrelated entries, and journals those removals too.
+On roots shared by the AppContainer and write-restrictor identities, both
+allow ACEs are applied in one ACL mutation and one intent per existing object.
 Before child execution, rollback scans only subtrees with a recorded ACL
 mutation or possible inheritance from one. After execution starts it scans
 every grant root, since a child may rename a granted directory. Unrecorded

@@ -59,6 +59,39 @@ DWORD update_acl(const std::wstring& path, PSID sid, ACCESS_MODE mode,
   return ERROR_SUCCESS;
 }
 
+DWORD update_acl_pair(const std::wstring& path, PSID first_sid,
+                      PSID second_sid, DWORD rights, DWORD inheritance,
+                      const Cancellation& cancel, Recovery& recovery) {
+  // Shared roots need both identities. Apply them in one journaled mutation so
+  // a crash can restore the exact original descriptor with one record.
+  cancel.check();
+  PACL old_acl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  PinnedObject pinned(path);
+  const auto before = pinned.state();
+  DWORD code = GetSecurityInfo(pinned.object.value, SE_FILE_OBJECT,
+                               DACL_SECURITY_INFORMATION, nullptr, nullptr,
+                               &old_acl, nullptr, &descriptor);
+  Local descriptor_owner(descriptor);
+  if (code != ERROR_SUCCESS) return code;
+  EXPLICIT_ACCESSW entries[2]{};
+  PSID sids[2] = {first_sid, second_sid};
+  for (size_t i = 0; i < 2; ++i) {
+    entries[i].grfAccessPermissions = rights;
+    entries[i].grfAccessMode = GRANT_ACCESS;
+    entries[i].grfInheritance = inheritance;
+    entries[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entries[i].Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+    entries[i].Trustee.ptstrName = static_cast<LPWSTR>(sids[i]);
+  }
+  PACL new_acl = nullptr;
+  code = SetEntriesInAclW(2, entries, old_acl, &new_acl);
+  Local new_acl_owner(new_acl);
+  if (code != ERROR_SUCCESS) return code;
+  recovery.change(pinned, before, new_acl);
+  return ERROR_SUCCESS;
+}
+
 // A write grant changes an NTFS object's ACL, which is shared by all hardlinks.
 // Validate every link before granting a root; a name outside the approved roots
 // must never obtain a write grant through an alias in the workspace.
@@ -190,6 +223,22 @@ void Grants::add(const std::wstring& path, ACCESS_MODE mode, DWORD rights) {
       add(child.path().wstring(), mode, rights);
   }
   add_one(path, mode, rights);
+}
+void Grants::add_pair(const std::wstring& path, PSID other_sid, DWORD rights) {
+  if (recovery.protected_journal_path(path)) return;
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES) fail(L"paired grant attributes");
+  if (attributes & FILE_ATTRIBUTE_REPARSE_POINT) return;
+  if (attributes & FILE_ATTRIBUTE_DIRECTORY) {
+    for (const auto& child : std::filesystem::directory_iterator(path))
+      add_pair(child.path().wstring(), other_sid, rights);
+  }
+  const DWORD inheritance = (attributes & FILE_ATTRIBUTE_DIRECTORY)
+                                ? SUB_CONTAINERS_AND_OBJECTS_INHERIT
+                                : NO_INHERITANCE;
+  const DWORD code = update_acl_pair(path, sid_, other_sid, rights, inheritance,
+                                     cancel, recovery);
+  if (code != ERROR_SUCCESS) fail(L"paired grant ACL", code);
 }
 void Grants::add_one(const std::wstring& path, ACCESS_MODE mode, DWORD rights) {
   const DWORD attributes = GetFileAttributesW(path.c_str());
