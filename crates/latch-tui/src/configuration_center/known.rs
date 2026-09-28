@@ -26,6 +26,7 @@ pub struct KnownProviderFlow {
     secret: String,
     enabled: BTreeSet<String>,
     default_model: String,
+    review_from_models: bool,
 }
 
 impl std::fmt::Debug for KnownProviderFlow {
@@ -62,6 +63,7 @@ impl KnownProviderFlow {
             secret: String::new(),
             enabled,
             default_model,
+            review_from_models: false,
         }
     }
 
@@ -188,6 +190,7 @@ impl KnownProviderFlow {
             KnownPhase::EnvName | KnownPhase::Secret => KnownPhase::Credential,
             KnownPhase::Models => KnownPhase::Credential,
             KnownPhase::DefaultModel => KnownPhase::Models,
+            KnownPhase::Review if self.review_from_models => KnownPhase::Models,
             KnownPhase::Review => KnownPhase::DefaultModel,
         };
         self.selected = 0;
@@ -207,6 +210,21 @@ impl KnownProviderFlow {
             _ => {}
         }
         self.selected = 0;
+    }
+
+    /// Space changes the enabled set without leaving the model list.
+    pub fn toggle_current_model(&mut self) {
+        if self.phase != KnownPhase::Models {
+            return;
+        }
+        if let Some(model) = self.kind.models.get(self.selected) {
+            if !self.enabled.remove(&model.id) {
+                self.enabled.insert(model.id.clone());
+            }
+            if !self.enabled.contains(&self.default_model) {
+                self.default_model = self.enabled.iter().next().cloned().unwrap_or_default();
+            }
+        }
     }
 
     pub fn confirm(&mut self) -> SetupStepOutcome {
@@ -233,17 +251,20 @@ impl KnownProviderFlow {
             KnownPhase::Models => {
                 if self.selected >= self.kind.models.len() {
                     if !self.enabled.is_empty() {
-                        self.phase = KnownPhase::DefaultModel;
+                        self.phase = if self.enabled.len() == 1 {
+                            KnownPhase::Review
+                        } else {
+                            KnownPhase::DefaultModel
+                        };
+                        self.review_from_models = self.phase == KnownPhase::Review;
                         self.selected = 0;
                     }
                 } else if let Some(model) = self.kind.models.get(self.selected) {
-                    if !self.enabled.remove(&model.id) {
-                        self.enabled.insert(model.id.clone());
-                    }
-                    if !self.enabled.contains(&self.default_model) {
-                        self.default_model =
-                            self.enabled.iter().next().cloned().unwrap_or_default();
-                    }
+                    self.enabled.insert(model.id.clone());
+                    self.default_model = model.id.clone();
+                    self.phase = KnownPhase::Review;
+                    self.review_from_models = true;
+                    self.selected = 0;
                 }
                 SetupStepOutcome::None
             }
@@ -258,6 +279,7 @@ impl KnownProviderFlow {
                 if let Some(model) = available.get(self.selected) {
                     self.default_model = (*model).to_owned();
                     self.phase = KnownPhase::Review;
+                    self.review_from_models = false;
                     self.selected = 0;
                 }
                 SetupStepOutcome::None
@@ -321,13 +343,17 @@ mod tests {
         flow.submit_capture("DEEPSEEK_API_KEY".into());
         assert_eq!(flow.phase(), KnownPhase::Models);
         flow.down();
-        flow.confirm(); // enable the second model
+        flow.toggle_current_model(); // enable the second model
         flow.down();
         flow.confirm(); // continue
         assert_eq!(flow.phase(), KnownPhase::DefaultModel);
         flow.down();
         flow.confirm();
         assert_eq!(flow.phase(), KnownPhase::Review);
+        assert!(flow.back());
+        assert_eq!(flow.phase(), KnownPhase::DefaultModel);
+        flow.down();
+        flow.confirm();
         let SetupStepOutcome::Apply(SetupPlan::Apply {
             model,
             enabled_models,
@@ -340,6 +366,29 @@ mod tests {
         assert_eq!(model, "deepseek-v4-pro");
         assert_eq!(enabled_models.unwrap().len(), 2);
         assert!(base_url.is_none());
+    }
+
+    #[test]
+    fn enter_on_preselected_model_keeps_it_enabled_and_advances() {
+        let mut flow = KnownProviderFlow::new(kind());
+        flow.confirm();
+        flow.submit_capture("DEEPSEEK_API_KEY".into());
+        assert_eq!(flow.phase(), KnownPhase::Models);
+        flow.confirm();
+        assert_eq!(flow.phase(), KnownPhase::Review);
+        assert!(flow.back());
+        assert_eq!(flow.phase(), KnownPhase::Models);
+        flow.confirm();
+        let SetupStepOutcome::Apply(SetupPlan::Apply {
+            model,
+            enabled_models,
+            ..
+        }) = flow.confirm()
+        else {
+            panic!("expected save");
+        };
+        assert_eq!(model, "deepseek-flash");
+        assert_eq!(enabled_models.unwrap(), vec!["deepseek-flash"]);
     }
 
     #[test]

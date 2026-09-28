@@ -50,7 +50,10 @@ Run `/setup` in the TUI to configure a provider: choose the provider, the
 credential source (environment variable or a securely entered key stored
 `0600`), the models to enable, and its default model, then Save. That is the
 whole normal path; known endpoints and model capabilities come from Latch's
-catalog. `/setup` is a configuration center: it opens on the provider list,
+catalog. In the known-provider model list, Space toggles additional models;
+Enter confirms the highlighted model and opens the save review. The Continue
+row opens a default-model choice when several models are enabled. `/setup` is
+a configuration center: it opens on the provider list,
 shows each provider's status (`ready`, `missing credential`, `unresolved
 models`), and navigates to Credential, Models, Default model, Advanced, and
 Remove for each provider. Advanced edits base URL, provider name, transport,
