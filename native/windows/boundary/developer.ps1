@@ -22,6 +22,8 @@ $git=(Get-Command git.exe -ErrorAction Stop).Source
 $node=(Get-Command node.exe -ErrorAction Stop).Source
 $python=(Get-Command python.exe -ErrorAction Stop).Source
 $rg=(Get-Command rg.exe -ErrorAction Stop).Source
+if ($env:LATCH_TEST_RG_EXE) { $rg=$env:LATCH_TEST_RG_EXE }
+if (-not (Test-Path -LiteralPath $rg -PathType Leaf)) { throw "ripgrep executable is missing: $rg" }
 function Run([string]$program,[string]$arguments,[string[]]$extra=@()){
   & $runner $workspace $program $arguments write --read-root $runtime --timeout-ms 20000 @extra
   if($LASTEXITCODE){throw ('Sandboxed developer command failed: '+$program+' '+$arguments+' ('+$LASTEXITCODE+')')}
@@ -37,7 +39,11 @@ Run $shell '/d /c echo hello > nested\child.txt'
 Run $git 'init --quiet'
 Run $git 'symbolic-ref HEAD refs/heads/other'
 Run $git 'status --short' @('--deny-write',(Join-Path $workspace '.git'))
-Run $rg 'native input.txt' @('--read-root',$rg)
+# The Chocolatey PATH entry is a launcher shim. Run the actual standalone
+# executable from user-owned fixture storage, as production staging does.
+$stagedRg=Join-Path $runtime 'rg.exe'
+Copy-Item -LiteralPath $rg -Destination $stagedRg
+Run $stagedRg 'native input.txt'
 Run $shell '/d /c type input.txt | findstr native > pipeline.txt && type pipeline.txt'
 # Stage user-owned tool runtimes; machine-owned Program Files/ProgramData ACLs
 # cannot be modified by an ordinary account. Only the staged files are granted.
