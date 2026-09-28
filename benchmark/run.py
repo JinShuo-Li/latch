@@ -85,11 +85,23 @@ def run_process(command, *, cwd, timeout, env=None):
 
 
 def check(case_dir, workspace):
-    outcome = run_process(
-        [sys.executable, str(case_dir / "check.py"), str(workspace)],
-        cwd=ROOT, timeout=30,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
+    bwrap = shutil.which("bwrap")
+    if bwrap is None:
+        raise RuntimeError("bwrap is required to isolate acceptance checks")
+    command = [
+        bwrap, "--die-with-parent", "--new-session", "--unshare-user",
+        "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try",
+        "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev",
+        "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", "/run",
+        "--tmpfs", "/home", "--ro-bind", str(case_dir), "/tmp/case",
+        "--ro-bind", str(workspace), "/tmp/workspace",
+        "--clearenv", "--setenv", "HOME", "/tmp",
+        "--setenv", "PATH", "/usr/bin:/bin",
+        "--setenv", "PYTHONDONTWRITEBYTECODE", "1",
+        "--chdir", "/tmp/workspace", "--", "/usr/bin/python3",
+        "/tmp/case/check.py", "/tmp/workspace",
+    ]
+    outcome = run_process(command, cwd=ROOT, timeout=30)
     if outcome["exit_code"] != 0 or outcome["timed_out"]:
         raise RuntimeError(f"evaluator failed: {outcome['stderr'][-1000:]}")
     data = json.loads(outcome["stdout"])
@@ -169,6 +181,28 @@ def event_counts(state_dir, session_id):
     return counts
 
 
+def workspace_patch(workspace, baseline_commit):
+    tracked = subprocess.run(
+        ["git", "diff", "--binary", baseline_commit], cwd=workspace,
+        text=True, capture_output=True, check=True,
+    ).stdout
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        cwd=workspace, capture_output=True, check=True,
+    ).stdout
+    parts = [tracked]
+    for raw_path in filter(None, untracked.split(b"\0")):
+        path = raw_path.decode("utf-8", errors="surrogateescape")
+        diff = subprocess.run(
+            ["git", "diff", "--no-index", "--binary", "--", "/dev/null", path],
+            cwd=workspace, text=True, capture_output=True, check=False,
+        )
+        if diff.returncode != 1:
+            raise RuntimeError(f"cannot capture untracked file {path}: {diff.stderr}")
+        parts.append(diff.stdout)
+    return "".join(parts)
+
+
 def execute_case(data, case_dir, run_root, latch, source_config, pricing):
     case_root = run_root / data["id"]
     case_root.mkdir(mode=0o700)
@@ -194,11 +228,11 @@ def execute_case(data, case_dir, run_root, latch, source_config, pricing):
     except json.JSONDecodeError:
         cli_result = None
     after = check(case_dir, workspace)
-    git_diff = subprocess.run(["git", "diff", "--binary", baseline_commit], cwd=workspace,
-                              text=True, capture_output=True, check=True)
     git_status = subprocess.run(["git", "status", "--short"], cwd=workspace,
                                 text=True, capture_output=True, check=True).stdout.splitlines()
-    (case_root / "change.patch").write_text(git_diff.stdout, encoding="utf-8")
+    (case_root / "change.patch").write_text(
+        workspace_patch(workspace, baseline_commit), encoding="utf-8"
+    )
     profile = (cli_result or {}).get("profile", {})
     passed = (
         outcome["exit_code"] == 0 and not outcome["timed_out"]
@@ -247,7 +281,7 @@ def main():
             print(f"{data['tier']:6} {data['id']:18} {data['title']}")
         return 0
     selected = list(cases) if args.case == ["all"] else args.case
-    if not selected or any(case not in cases for case in selected):
+    if not selected or any(case not in cases for case in selected) or len(set(selected)) != len(selected):
         parser.error(f"unknown case; available: {', '.join(cases)}")
     latch = args.latch.resolve()
     config = args.config.resolve()

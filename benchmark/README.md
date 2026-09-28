@@ -13,10 +13,12 @@ downloading dependencies.
 | Hard | `spool_recovery` | A job runner resumes an append-only spool after failure or interruption. | Retry, incomplete line, UTF-8 byte offset and stale checkpoint. |
 
 Each `workspace/` contains the buggy project and visible tests. The sibling
-`check.py` stays outside Latch's copied workspace and runs after the agent
-exits. The runner checks that at least one acceptance check fails before each
-run; it never modifies the case template. An isolated Git repository and
-Latch state directory are created for every attempt.
+`check.py` stays outside Latch's copied workspace and runs before and after the
+agent in a networkless Bubblewrap sandbox. That sandbox exposes the case and
+workspace read-only, hides the host home directory, and gives checks private
+scratch space. The runner requires at least one failing baseline check and
+never modifies the case template. An isolated Git repository and Latch state
+directory are created for every attempt.
 
 ## Run
 
@@ -41,7 +43,7 @@ the CLI invocation to provider `opencode-go`, model `deepseek-v4.1-flash`, and
 Each case has a wall-clock timeout; a timeout terminates the CLI process group.
 
 Reports go to ignored `benchmark/runs/<timestamp>-<pid>/`. Each case contains
-`result.json`, CLI stdout/stderr, a Git patch, an isolated state directory,
+`result.json`, CLI stdout/stderr, a Git patch including new files, an isolated state directory,
 and the final workspace. `summary.json` aggregates case results. Correctness
 requires every independent check to pass, a successful CLI exit, and the
 requested provider/model. `completion` is recorded separately, since a passed
