@@ -1,8 +1,10 @@
 # Windows workspace-read status (2026-09-28)
 
-The workspace directory-enumeration regression is fixed and locally verified
-on `codex/windows-native-port`. Linux Bubblewrap and Windows GitHub Actions
-validation for this revision remain to be confirmed before release.
+The workspace directory-enumeration regression is fixed and verified on
+`codex/windows-native-port`. Full GitHub Actions validation passed for the
+product code in commit `62311fd` (run `36388691811`): Windows native,
+Windows Rust, and Linux Bubblewrap release jobs all succeeded. The lightweight
+CI run `36388691847` also passed on Windows and Linux.
 
 ## Boundary behavior verified locally
 
@@ -57,6 +59,7 @@ performance and churn limit for per-object grants; it is **not** counted as
 successful whole-home dogfood. Use a smaller stable workspace such as
 `Desktop\work\school` until that scale case is designed and qualified.
 
-The last previously green full GitHub Actions run (`36376680779`) predates
-these changes. Do not call this revision fully qualified until the new full
-Windows native and Linux Bubblewrap CI run passes.
+The full validation run used a temporary push trigger to exercise this branch
+while the `workflow_dispatch` workflow was absent from the default branch.
+That trigger was removed after the green run; default push CI remains light.
+The final follow-up commit changes only workflow triggering and documentation.

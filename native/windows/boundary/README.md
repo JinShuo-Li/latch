@@ -165,7 +165,7 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
 
 ## Qualification and remaining limits
 
-- **CI:** GitHub Actions run 36376680779 passed the strict native build, all
+- **CI:** GitHub Actions run 36388691811 passed the strict native build, all
   six native fixture suites, the focused Windows Rust fmt/clippy/runtime/release
   gate, and the unchanged full Linux Bubblewrap release gate. The complete
   workspace Rust suite also passed locally on Windows with serial tests.
