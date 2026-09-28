@@ -55,13 +55,23 @@ Copy-Item -LiteralPath (Join-Path (Split-Path $npm) 'node_modules/npm') -Destina
 $env:Path=$runtime+';'+$env:Path
 $env:npm_config_cache=Join-Path $workspace '.npm-cache'
 Run $shell '/d /s /c npm.cmd test --offline'
-foreach($name in @('python.exe','python3.dll','python314.dll')){Copy-Item -LiteralPath (Join-Path (Split-Path $python) $name) -Destination $runtime}
+$pythonHome=Split-Path $python
+$versionDll=Get-ChildItem -LiteralPath $pythonHome -Filter 'python3*.dll' -File |
+  Where-Object { $_.Name -match '^python3\d+\.dll$' } | Select-Object -First 1
+if(-not $versionDll){throw "Python version DLL is missing beside $python"}
+Copy-Item -LiteralPath $python -Destination $runtime
+foreach($name in @('python3.dll','zlib.dll','ucrtbase.dll')){
+  $source=Join-Path $pythonHome $name
+  if(Test-Path -LiteralPath $source -PathType Leaf){Copy-Item -LiteralPath $source -Destination $runtime}
+}
+Copy-Item -LiteralPath $versionDll.FullName -Destination $runtime
+Get-ChildItem -LiteralPath $pythonHome -Filter 'vcruntime140*.dll' -File |
+  ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $runtime }
 New-Item -ItemType Directory (Join-Path $runtime 'Lib') | Out-Null
-Copy-Item -LiteralPath (Join-Path (Split-Path $python) 'Lib/encodings') -Destination (Join-Path $runtime 'Lib') -Recurse
-# The isolated Conda Python loader needs its adjacent CRT/zlib and core stdlib.
-foreach($name in @('vcruntime140.dll','zlib.dll')){Copy-Item -LiteralPath (Join-Path (Split-Path $python) $name) -Destination $runtime}
-Copy-Item -Path (Join-Path (Split-Path $python) 'Lib/*.py') -Destination (Join-Path $runtime 'Lib')
-[IO.File]::WriteAllText((Join-Path $runtime 'python314._pth'),"Lib`r`n.`r`n")
+Copy-Item -LiteralPath (Join-Path $pythonHome 'Lib/encodings') -Destination (Join-Path $runtime 'Lib') -Recurse
+Copy-Item -Path (Join-Path $pythonHome 'Lib/*.py') -Destination (Join-Path $runtime 'Lib')
+$pthName=[IO.Path]::ChangeExtension($versionDll.Name,'._pth')
+[IO.File]::WriteAllText((Join-Path $runtime $pthName),"Lib`r`n.`r`n")
 Run (Join-Path $runtime 'python.exe') '-I -S check.py'
 foreach($name in @('pipeline.txt','node-output.txt','python-output.txt')){
   if(!(Test-Path -LiteralPath (Join-Path $workspace $name))){throw ('Developer output missing: '+$name)}
