@@ -37,6 +37,8 @@ latch -p "Explain this repository"
 ```
 
 Resume a session with `latch --resume`. For scripts, use `latch run --workspace ./project --prompt "Fix the failing test" --output json`; `latch sessions list` shows saved sessions. Run `latch --help` for all options.
+Latch asks the model to include its final summary when it marks a task complete;
+the recorded validation determines whether that task is verified.
 
 ## Working safely
 

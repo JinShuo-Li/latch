@@ -104,13 +104,13 @@ impl PromptCompiler {
                 "core.communication",
                 90,
                 true,
-                "Open with one sentence on what you will do; then stay quiet until a load-bearing finding, a direction change, or a blocker. Do not narrate each step, announce tool calls, or repeat tool output; the transcript already shows them. Never restate the plan or your reasoning. End with a concise summary: what changed, what was verified, and any limitation; cite paths, not diffs.",
+                "Open with one action sentence; then stay quiet until a finding or blocker. Do not narrate each step, announce tool calls, or repeat tool output. Never restate the plan. Include a nonempty summary with complete in the same assistant message; the run may end immediately. State what changed or was found, what passed, and any limitation. Cite paths, not diffs.",
             ),
             fragment(
                 "latch.kernel_truth",
                 110,
                 true,
-                "Validation intent is yours; validation truth is the kernel's. validate takes a requirement and the proving command: the kernel runs it, records evidence, and derives completion; a failed requirement that now passes is superseded. record_evidence accepts only pending or unavailable; passed and failed are kernel-owned. Without passing validation, completion stays IMPLEMENTED, NOT VERIFIED.",
+                "Validation intent is yours; validation truth is the kernel's. validate runs a proving command, records evidence, and derives completion; a failed requirement that now passes is superseded. record_evidence accepts only pending or unavailable; passed and failed are kernel-owned. Without passing validation, completion stays IMPLEMENTED, NOT VERIFIED. After validation, call complete with implementation_done=true.",
             ),
             fragment(
                 "latch.context_and_staleness",
@@ -476,6 +476,14 @@ mod tests {
                 && communication.contains("announce tool calls")
                 && communication.contains("repeat tool output"),
             "narration discipline must be explicit"
+        );
+        assert!(
+            communication.contains("nonempty summary with complete in the same assistant message")
+                && p.fragment("latch.kernel_truth")
+                    .unwrap()
+                    .content
+                    .contains("call complete with implementation_done=true"),
+            "terminal completion must include a summary and an explicit claim"
         );
         // Validation claims require a recorded pass, never reasoning alone.
         let validation = p.fragment("core.validation").unwrap().content.clone();

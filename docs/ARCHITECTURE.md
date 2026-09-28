@@ -217,6 +217,10 @@ semantics follow: `latch.kernel_truth`, `latch.context_and_staleness`,
 `latch.permissions`, and `latch.subagents`. Mode text (`mode.ask`,
 `mode.plan`, `mode.work`) and per-session context (`environment.workspace`,
 `environment.instructions.*`) come last.
+The prompt asks the model to call `complete` after validation and include its
+final summary in that same assistant message, because a verified claim can end
+the run immediately. This instruction improves model behavior but the kernel
+still determines completion from durable evidence.
 
 Effort is proportional. Simple, local work inspects only what it touches, makes
 the smallest coherent change, runs the narrowest meaningful check, and stops
