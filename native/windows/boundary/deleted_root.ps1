@@ -34,7 +34,19 @@ try{
   if(!$launcher.WaitForExit(5000)){throw 'Launcher survived'}
   $expected=[IO.Path]::GetFullPath((Join-Path $root 'workspace'))
   if($workspace -cne $expected -or [IO.Path]::GetDirectoryName($workspace) -cne $root){throw 'Unsafe fixture deletion path'}
-  Remove-Item -LiteralPath $workspace -Recurse -Force
+  # The job closes on owner death, but Windows can keep a terminating child
+  # handle open briefly. The root must still become deletable before recovery.
+  $deleteDeadline=[DateTime]::UtcNow.AddSeconds(10)
+  while($true){
+    try{
+      Remove-Item -LiteralPath $workspace -Recurse -Force
+      if(!(Test-Path -LiteralPath $workspace)){break}
+    }catch{
+      if([DateTime]::UtcNow -ge $deleteDeadline){throw}
+    }
+    if([DateTime]::UtcNow -ge $deleteDeadline){throw 'Sandbox descendants still hold the deleted-root fixture'}
+    Start-Sleep -Milliseconds 50
+  }
   $env:LATCH_RECOVERY_ROOT=$journal
   & $runner --recover-only
   if($LASTEXITCODE){throw ('Deleted-root recovery failed: '+$LASTEXITCODE)}
