@@ -1,5 +1,5 @@
-//! Managed processes, sandboxed command execution, and the read-only shell
-//! classifier. Process status/cursor transitions stay in this one module.
+//! Managed processes and sandboxed command execution. Process status/cursor
+//! transitions stay here; platform cleanup and shell syntax live in execution.
 
 use super::*;
 
@@ -9,31 +9,6 @@ use super::*;
 /// inherited stdout/stderr write ends; a bounded drain keeps `exec_terminate`
 /// and `exec_poll` honest instead of hanging on that orphan.
 const PROCESS_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Best-effort SIGKILL for a sandbox leader's direct children. The namespace
-/// init is a direct child; signalling it before killing the leader prevents a
-/// mid-setup init from surviving as an orphan that holds the output pipes.
-/// Uses the system `kill` utility so no unsafe signal call is needed; if the
-/// utility is unavailable the bounded drain still bounds teardown.
-fn kill_direct_children(pid: Option<u32>) {
-    let Some(pid) = pid else { return };
-    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
-        return;
-    };
-    for task in tasks.flatten() {
-        let Ok(children) = std::fs::read_to_string(task.path().join("children")) else {
-            continue;
-        };
-        for child in children.split_whitespace() {
-            let _ = std::process::Command::new("kill")
-                .args(["-9", child])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-        }
-    }
-}
 
 /// Waits for the output readers with a bound, aborting a reader that can never
 /// reach EOF because an orphaned sandbox process still holds the pipe.
@@ -174,7 +149,7 @@ impl ToolExecutor {
         };
         if process.status == ProcessStatus::Running {
             if let Some(child) = process.child.as_mut() {
-                kill_direct_children(child.id());
+                crate::execution::kill_sandbox_children(child.id());
                 child.kill().await.ok();
                 let _ = child.wait().await;
             }
@@ -432,192 +407,4 @@ pub(super) fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(
             }
         }
     })
-}
-
-/// Conservatively classifies a shell command as read-only.
-///
-/// Only simple inspection commands and compound commands built exclusively
-/// from them are accepted. Any shell feature that could expand, substitute,
-/// redirect, background, or nest is rejected, as is `||`. A `cd` into a
-/// workspace-local subdirectory is accepted for compound read-only inspection,
-/// but the target is resolved and normalized against the workspace root and
-/// may never escape through `..`, an absolute path, or a symlink. This
-/// deliberately keeps read-only classification stricter than the shell's
-/// actual grammar so ASK/PLAN can never be used to mutate the workspace.
-pub(crate) fn is_read_only_shell(command: &str, workspace: &Path) -> bool {
-    let command = command.trim();
-    #[cfg(windows)]
-    if command.contains(['%', '^']) {
-        return false;
-    }
-    #[cfg(windows)]
-    if command.match_indices('~').any(|(index, _)| {
-        let bytes = command.as_bytes();
-        !bytes
-            .get(index.wrapping_sub(1))
-            .is_some_and(u8::is_ascii_alphanumeric)
-            || !bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
-    }) {
-        // NTFS 8.3 names such as RUNNER~1 are literal cmd.exe paths. A bare
-        // tilde or other shell-looking spelling remains outside this grammar.
-        return false;
-    }
-    if command.is_empty() || command.contains("||") {
-        return false;
-    }
-    // `&&` is the only context where `&` is permitted; reject it everywhere
-    // else (background jobs) along with expansion and redirection operators.
-    let without_and = command.replace("&&", " ");
-    if without_and.chars().any(|ch| {
-        matches!(
-            ch,
-            '$' | '`'
-                | '<'
-                | '>'
-                | '&'
-                | '('
-                | ')'
-                | '\\'
-                | '\n'
-                | '\r'
-                | '"'
-                | '\''
-                | '*'
-                | '?'
-                | '['
-                | ']'
-                | '{'
-                | '}'
-                | '!'
-        ) || (ch == '~' && !cfg!(windows))
-    }) {
-        return false;
-    }
-    let Some(segments) = split_simple_commands(command) else {
-        return false;
-    };
-    if !segments
-        .iter()
-        .any(|segment| segment.split_whitespace().next() == Some("cd"))
-    {
-        // No `cd`: workspace is irrelevant, keep the fast conservative path.
-        return segments.iter().all(|segment| is_read_only_command(segment));
-    }
-    // Workspace-aware: thread a virtual cwd through the chain starting at the
-    // workspace root. Every `cd` target must resolve to a path that stays
-    // inside the workspace, both lexically and canonically.
-    let Some(root) = workspace.canonicalize().ok() else {
-        return false;
-    };
-    let mut cwd = root.clone();
-    for segment in segments {
-        let mut words = segment.split_whitespace();
-        let Some(first) = words.next() else {
-            return false;
-        };
-        if first == "cd" {
-            let args = words.collect::<Vec<_>>();
-            if args.len() != 1 {
-                return false;
-            }
-            let target = cwd.join(args[0]);
-            let Ok(resolved) = resolve_workspace_path(&root, &target.to_string_lossy()) else {
-                return false;
-            };
-            cwd = resolved;
-        } else if !is_read_only_command(segment) {
-            return false;
-        }
-    }
-    true
-}
-
-pub(super) fn split_simple_commands(command: &str) -> Option<Vec<&str>> {
-    let mut segments = Vec::new();
-    let mut start = 0;
-    let bytes = command.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        let separator = match bytes[index] {
-            b'&' if bytes.get(index + 1) == Some(&b'&') => 2,
-            b'|' | b';' => 1,
-            _ => {
-                index += 1;
-                continue;
-            }
-        };
-        let segment = command[start..index].trim();
-        if segment.is_empty() {
-            return None;
-        }
-        segments.push(segment);
-        index += separator;
-        start = index;
-    }
-    let segment = command[start..].trim();
-    if segment.is_empty() {
-        return None;
-    }
-    segments.push(segment);
-    Some(segments)
-}
-
-pub(super) fn is_read_only_command(command: &str) -> bool {
-    let mut words = command.split_whitespace();
-    let Some(first) = words.next() else {
-        return false;
-    };
-    let args = words.collect::<Vec<_>>();
-    match first {
-        "rg" => !args.iter().any(|arg| arg.starts_with("--pre")),
-        "grep" | "ls" | "pwd" | "head" | "tail" | "wc" | "cat" => true,
-        #[cfg(windows)]
-        "dir" | "type" | "where" | "ver" => true,
-        "find" => !args.iter().any(|arg| {
-            matches!(
-                *arg,
-                "-delete"
-                    | "-exec"
-                    | "-execdir"
-                    | "-ok"
-                    | "-okdir"
-                    | "-fls"
-                    | "-fprint"
-                    | "-fprint0"
-                    | "-fprintf"
-            )
-        }),
-        "git" => {
-            if args
-                .iter()
-                .any(|arg| *arg == "--output" || arg.starts_with("--output="))
-            {
-                return false;
-            }
-            match args.first().copied() {
-                Some(
-                    "status" | "diff" | "log" | "show" | "rev-parse" | "ls-files" | "describe"
-                    | "blame" | "shortlog",
-                ) => true,
-                Some("branch") => args[1..].iter().all(|arg| {
-                    matches!(
-                        *arg,
-                        "--list"
-                            | "--all"
-                            | "--remotes"
-                            | "-a"
-                            | "-r"
-                            | "-v"
-                            | "-vv"
-                            | "--show-current"
-                    )
-                }),
-                Some("remote") => args[1..]
-                    .iter()
-                    .all(|arg| matches!(*arg, "-v" | "--verbose" | "show")),
-                _ => false,
-            }
-        }
-        _ => false,
-    }
 }

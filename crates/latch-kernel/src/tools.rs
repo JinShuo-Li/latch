@@ -5,10 +5,11 @@ mod policy;
 mod process;
 mod write;
 
+use crate::execution::is_read_only_shell;
+use crate::workspace_path::{lexical_normalize, resolve_real_path, resolve_workspace_path};
 use ownership::{ChangeLedger, git_dirty_hashes};
 pub use policy::{CapabilityGrant, PolicyDecision, PolicyEngine};
 use process::ManagedProcess;
-pub(crate) use process::is_read_only_shell;
 
 use crate::config::PermissionConfig;
 use crate::execution::ExecutionBackend;
@@ -68,40 +69,6 @@ pub struct ToolExecutor {
     /// of a bare `No such file or directory`.
     search_runtime: Arc<std::sync::RwLock<Option<String>>>,
 }
-/// Probes the optional `rg` runtime dependency once at startup. Returns the
-/// actionable refusal message when ripgrep is missing or unusable.
-#[cfg(windows)]
-fn probe_search_runtime() -> Option<String> {
-    let found = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-        .map(|directory| directory.join("rg.exe"))
-        .any(|path| path.is_file() && !path.to_string_lossy().contains("WindowsApps"));
-    (!found).then(|| {
-        "ripgrep (`rg.exe`) is required by the search tool but was not found on PATH; install ripgrep and restart Latch".to_owned()
-    })
-}
-
-#[cfg(not(windows))]
-fn probe_search_runtime() -> Option<String> {
-    match std::process::Command::new("rg")
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(status) if status.success() => None,
-        Ok(status) => Some(format!(
-            "ripgrep (`rg`) is required by the search tool, but `rg --version` failed with {status}"
-        )),
-        Err(error) => Some(format!(
-            "ripgrep (`rg`) is required by the search tool but was not found on PATH ({error}); \
-             install ripgrep and restart Latch"
-        )),
-    }
-}
-
 /// Outcome of one bounded shell execution.
 #[derive(Debug)]
 pub struct ProcessOutput {
@@ -164,7 +131,7 @@ impl ToolExecutor {
             }
             SandboxState::Unavailable(_) => HashMap::new(),
         };
-        let search_runtime = probe_search_runtime();
+        let search_runtime = crate::execution::search_runtime_error();
         if let Some(message) = &search_runtime {
             tracing::warn!("{message}");
         }
@@ -400,16 +367,8 @@ impl ToolExecutor {
 
     #[must_use]
     pub fn definitions() -> Vec<latch_protocol::ToolDefinition> {
-        let process_description = if cfg!(windows) {
-            "Start a persistent development process (server, watcher, long build) in the workspace with cmd.exe. Returns a process id for exec_poll and exec_terminate. WORK mode only; policy and dangerous-command checks apply."
-        } else {
-            "Start a persistent development process (server, watcher, long build) in the workspace with Bash. Returns a process id for exec_poll and exec_terminate. WORK mode only; policy and dangerous-command checks apply."
-        };
-        let shell_description = if cfg!(windows) {
-            "Run a bounded Windows cmd.exe developer command in the workspace. Use cmd syntax for pipelines, redirection, and command chaining. ASK/PLAN allow only conservative read-only commands and deny test/build execution."
-        } else {
-            "Run a bounded Bash developer command. Commands execute with the workspace as the working directory, so `cd <workspace> &&` is redundant — prefer plain `git log --oneline -20`. A `cd` into a subdirectory is allowed for read-only inspection (for example `cd src && rg normalize_username .`), but never `cd` out of the workspace. ASK/PLAN allow only conservative read-only commands and deny test/build execution."
-        };
+        let process_description = crate::execution::process_description();
+        let shell_description = crate::execution::shell_description();
         vec![
             def(
                 "read_file",
@@ -601,15 +560,8 @@ impl ToolExecutor {
     /// on the deepest existing ancestor are resolved first, so an alias into
     /// the state directory is protected even when the leaf does not exist yet.
     pub(super) fn is_protected_path(&self, path: &Path) -> bool {
-        #[cfg(windows)]
-        {
-            // NTFS hardlinks have no canonical "original" path. Conservatively
-            // refuse any multiply-linked file, including an alias of secrets.
-            if std::fs::metadata(path)
-                .is_ok_and(|metadata| metadata.is_file() && windows_has_multiple_links(path))
-            {
-                return true;
-            }
+        if crate::workspace_path::file_alias_may_escape(path) {
+            return true;
         }
         resolve_real_path(path).is_some_and(|real| real.starts_with(self.protected_state_dir()))
     }
@@ -649,56 +601,6 @@ impl ToolExecutor {
             "!**/{}/**",
             escape_glob(&relative.replace('\\', "/"))
         ))
-    }
-}
-
-#[cfg(windows)]
-fn windows_has_multiple_links(path: &Path) -> bool {
-    use winsafe::{HFILE, co};
-
-    let Some(path) = path.to_str() else {
-        return true;
-    };
-    let Ok((file, _)) = HFILE::CreateFile(
-        path,
-        co::GENERIC::READ,
-        Some(co::FILE_SHARE::READ | co::FILE_SHARE::WRITE | co::FILE_SHARE::DELETE),
-        None,
-        co::DISPOSITION::OPEN_EXISTING,
-        co::FILE_ATTRIBUTE::NORMAL,
-        None,
-        None,
-        None,
-    ) else {
-        return true;
-    };
-    file.GetFileInformationByHandle()
-        .map_or(true, |information| information.nNumberOfLinks > 1)
-}
-
-/// Resolves `path` to its real location, following symlinks on the deepest
-/// existing ancestor and appending a nonexistent tail unchanged. Used by the
-/// protected-path check so aliases and not-yet-created leaves resolve to the
-/// same real path.
-fn resolve_real_path(path: &Path) -> Option<PathBuf> {
-    let mut ancestor = path.to_path_buf();
-    let mut tail = Vec::new();
-    loop {
-        if let Ok(mut real) = ancestor.canonicalize() {
-            for component in tail.iter().rev() {
-                real.push(component);
-            }
-            return Some(real);
-        }
-        // An existing but unresolvable alias (for example a dangling symlink)
-        // must not be treated as a missing leaf inside an approved directory.
-        if std::fs::symlink_metadata(&ancestor).is_ok() {
-            return None;
-        }
-        tail.push(ancestor.file_name()?.to_os_string());
-        if !ancestor.pop() {
-            return None;
-        }
     }
 }
 
@@ -753,33 +655,6 @@ fn str_arg<'a>(call: &'a ToolCall, name: &str) -> Result<&'a str> {
         .get(name)
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing string argument {name}"))
-}
-fn resolve_workspace_path(workspace: &Path, path: &str) -> Result<PathBuf> {
-    let root = workspace.canonicalize()?;
-    let candidate = if Path::new(path).is_absolute() {
-        lexical_normalize(Path::new(path))
-    } else {
-        lexical_normalize(&root.join(path))
-    };
-    let resolved = resolve_real_path(&candidate).ok_or_else(|| anyhow!("invalid path"))?;
-    if !resolved.starts_with(&root) {
-        bail!("path escapes workspace through a symbolic link or parent traversal");
-    }
-    Ok(resolved)
-}
-fn lexical_normalize(path: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
 }
 fn relative(root: &Path, path: &Path) -> Result<String> {
     let root = root.canonicalize()?;

@@ -1,6 +1,8 @@
 use super::windows_runtime::materialize;
+use crate::sandbox::SandboxProfile;
 use anyhow::{Context, Result, ensure};
 use std::path::{Path, PathBuf};
+use tokio::process::Command;
 
 #[derive(Debug, Clone)]
 pub(super) struct StagedTools {
@@ -31,6 +33,142 @@ impl StagedTools {
             node_source,
             rg_source,
         }
+    }
+
+    pub fn fixed_program(&self, program: &str) -> Result<Option<PathBuf>> {
+        match program.to_ascii_lowercase().as_str() {
+            "python" | "python3" | "python.exe" | "python3.exe" => Ok(Some(
+                self.python.clone().context("Python is not installed")?,
+            )),
+            "node" | "node.exe" => Ok(Some(self.node.clone().context("Node is not installed")?)),
+            "rg" | "rg.exe" => Ok(Some(self.rg.clone().context(
+                "ripgrep is not installed or its package lacks a standalone rg.exe",
+            )?)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn path_entries(&self) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        if let Some(node) = &self.node {
+            paths.push(node.parent().context("Node runtime")?.to_path_buf());
+        }
+        if let Some(python) = &self.python {
+            paths.push(python.parent().context("Python runtime")?.to_path_buf());
+        }
+        if let Some(rg) = &self.rg {
+            paths.push(rg.parent().context("ripgrep runtime")?.to_path_buf());
+        }
+        Ok(paths)
+    }
+
+    pub fn grant_rust_roots(
+        &self,
+        process: &mut Command,
+        profile: &SandboxProfile,
+        program: &Path,
+        args: &str,
+    ) -> Result<()> {
+        // A user toolchain home can contain hundreds of thousands of files
+        // and credentials. Never grant or journal the entire home for an
+        // unrelated shell/Git invocation. Tool-specific roots are added below.
+        let rust_tool = ["cargo", "rustc", "rustup", "rustdoc"].iter().any(|name| {
+            program
+                .file_stem()
+                .is_some_and(|stem| stem.eq_ignore_ascii_case(name))
+                || args
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .any(|word| word.eq_ignore_ascii_case(name))
+        });
+        if rust_tool {
+            let rustup = std::env::var_os("RUSTUP_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| profile.home.join(".rustup"));
+            let cargo = std::env::var_os("CARGO_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| profile.home.join(".cargo"));
+            for root in [cargo.join("bin"), rustup.join("settings.toml")] {
+                if root.exists() {
+                    process.arg("--read-root").arg(root);
+                }
+            }
+            let toolchains = rustup.join("toolchains");
+            if toolchains.is_dir() {
+                for entry in std::fs::read_dir(toolchains)? {
+                    let path = entry?.path();
+                    if path.is_dir() {
+                        for component in ["bin", "lib"] {
+                            let root = path.join(component);
+                            if root.is_dir() {
+                                process.arg("--read-root").arg(root);
+                            }
+                        }
+                    }
+                }
+            }
+            if profile.workspace.join("Cargo.toml").is_file()
+                && !args.contains("--version")
+                && !args.contains("-V")
+            {
+                let registry = cargo.join("registry");
+                if registry.is_dir() {
+                    process.arg("--read-root").arg(registry);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn grant_staged_roots(
+        &self,
+        process: &mut Command,
+        program: &Path,
+        args: &str,
+    ) -> Result<()> {
+        let invocation = format!("{} {}", program.display(), args).to_ascii_lowercase();
+        if let Some(python) = &self.python
+            && (program == python
+                || invocation
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|word| word == "python" || word == "python3"))
+        {
+            self.ensure_python()?;
+            let root = python.parent().context("Python runtime")?;
+            process
+                .arg("--read-root")
+                .arg(root)
+                .arg("--deny-write")
+                .arg(root);
+        }
+        if let Some(node) = &self.node
+            && (program == node
+                || invocation
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|word| word == "node" || word == "npm"))
+        {
+            self.ensure_node()?;
+            let root = node.parent().context("Node runtime")?;
+            process
+                .arg("--read-root")
+                .arg(root)
+                .arg("--deny-write")
+                .arg(root);
+        }
+        if let Some(rg) = &self.rg
+            && (program == rg
+                || invocation
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|word| word == "rg"))
+        {
+            self.ensure_rg()?;
+            let root = rg.parent().context("ripgrep runtime")?;
+            process
+                .arg("--read-root")
+                .arg(root)
+                .arg("--deny-write")
+                .arg(root);
+        }
+        Ok(())
     }
 
     pub fn ensure_rg(&self) -> Result<()> {
@@ -130,6 +268,12 @@ impl StagedTools {
         }
         materialize(target, ".complete", b"node core runtime v1")
     }
+}
+
+pub(super) fn has_ripgrep() -> bool {
+    on_path("rg.exe")
+        .and_then(|path| standalone_ripgrep(&path))
+        .is_some()
 }
 fn on_path(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH")

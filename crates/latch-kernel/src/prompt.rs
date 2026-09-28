@@ -165,11 +165,7 @@ impl PromptCompiler {
             &format!(
                 "Workspace: {}{}",
                 workspace.display(),
-                if cfg!(windows) {
-                    "\nThe model-facing shell is native cmd.exe. Use Windows paths, `dir`/`type`, `&&` and `|`; use `>` for redirection. Use `rg`, `git`, `cargo`, `rustc`, `node`, `npm`, and `python` when installed. Bash syntax and PowerShell are not supported by this shell."
-                } else {
-                    ""
-                }
+                crate::execution::shell_guidance()
             ),
         ));
         for (index, (name, content)) in load_repository_instructions(workspace)?

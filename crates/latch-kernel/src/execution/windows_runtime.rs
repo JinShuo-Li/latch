@@ -52,19 +52,9 @@ impl NativeRuntime {
         program: &str,
         args: &[&str],
     ) -> Result<Command> {
-        let program = match program.to_ascii_lowercase().as_str() {
-            "python" | "python3" | "python.exe" | "python3.exe" => self
-                .tools
-                .python
-                .clone()
-                .context("Python is not installed")?,
-            "node" | "node.exe" => self.tools.node.clone().context("Node is not installed")?,
-            "rg" | "rg.exe" => self
-                .tools
-                .rg
-                .clone()
-                .context("ripgrep is not installed or its package lacks a standalone rg.exe")?,
-            _ => executable(program)?,
+        let program = match self.tools.fixed_program(program)? {
+            Some(path) => path,
+            None => executable(program)?,
         };
         let mut reads = Vec::new();
         for arg in args {
@@ -173,18 +163,10 @@ impl NativeRuntime {
                 process.env(key, value);
             }
         }
-        let original_path = std::env::var_os("PATH").unwrap_or_default();
-        let mut paths = Vec::new();
-        if let Some(node) = &self.tools.node {
-            paths.push(node.parent().context("Node runtime")?.to_path_buf());
-        }
-        if let Some(python) = &self.tools.python {
-            paths.push(python.parent().context("Python runtime")?.to_path_buf());
-        }
-        if let Some(rg) = &self.tools.rg {
-            paths.push(rg.parent().context("ripgrep runtime")?.to_path_buf());
-        }
-        paths.extend(std::env::split_paths(&original_path));
+        let mut paths = self.tools.path_entries()?;
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
         process.env("PATH", std::env::join_paths(paths)?);
         process.env("npm_config_cache", workspace.join(".npm-cache"));
         process
@@ -192,53 +174,8 @@ impl NativeRuntime {
             .env("LATCH_SANDBOX", "1")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_OPTIONAL_LOCKS", "0");
-        // A user toolchain home can contain hundreds of thousands of files
-        // and credentials. Never grant or journal the entire home for an
-        // unrelated shell/Git invocation. Tool-specific roots are added below.
-        let rust_tool = ["cargo", "rustc", "rustup", "rustdoc"].iter().any(|name| {
-            program
-                .file_stem()
-                .is_some_and(|stem| stem.eq_ignore_ascii_case(name))
-                || args
-                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                    .any(|word| word.eq_ignore_ascii_case(name))
-        });
-        if rust_tool {
-            let rustup = std::env::var_os("RUSTUP_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| profile.home.join(".rustup"));
-            let cargo = std::env::var_os("CARGO_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| profile.home.join(".cargo"));
-            for root in [cargo.join("bin"), rustup.join("settings.toml")] {
-                if root.exists() {
-                    process.arg("--read-root").arg(root);
-                }
-            }
-            let toolchains = rustup.join("toolchains");
-            if toolchains.is_dir() {
-                for entry in std::fs::read_dir(toolchains)? {
-                    let path = entry?.path();
-                    if path.is_dir() {
-                        for component in ["bin", "lib"] {
-                            let root = path.join(component);
-                            if root.is_dir() {
-                                process.arg("--read-root").arg(root);
-                            }
-                        }
-                    }
-                }
-            }
-            if profile.workspace.join("Cargo.toml").is_file()
-                && !args.contains("--version")
-                && !args.contains("-V")
-            {
-                let registry = cargo.join("registry");
-                if registry.is_dir() {
-                    process.arg("--read-root").arg(registry);
-                }
-            }
-        }
+        self.tools
+            .grant_rust_roots(&mut process, profile, program, args)?;
         for path in reads {
             process.arg("--read-root").arg(path);
         }
@@ -263,49 +200,7 @@ impl NativeRuntime {
             // Grant only the selected user-owned binary, never its parent tree.
             process.arg("--read-root").arg(native_path(program)?);
         }
-        let invocation = format!("{} {}", program.display(), args).to_ascii_lowercase();
-        if let Some(python) = &self.tools.python
-            && (program == python
-                || invocation
-                    .split(|ch: char| !ch.is_ascii_alphanumeric())
-                    .any(|word| word == "python" || word == "python3"))
-        {
-            self.tools.ensure_python()?;
-            let root = python.parent().context("Python runtime")?;
-            process
-                .arg("--read-root")
-                .arg(root)
-                .arg("--deny-write")
-                .arg(root);
-        }
-        if let Some(node) = &self.tools.node
-            && (program == node
-                || invocation
-                    .split(|ch: char| !ch.is_ascii_alphanumeric())
-                    .any(|word| word == "node" || word == "npm"))
-        {
-            self.tools.ensure_node()?;
-            let root = node.parent().context("Node runtime")?;
-            process
-                .arg("--read-root")
-                .arg(root)
-                .arg("--deny-write")
-                .arg(root);
-        }
-        if let Some(rg) = &self.tools.rg
-            && (program == rg
-                || invocation
-                    .split(|ch: char| !ch.is_ascii_alphanumeric())
-                    .any(|word| word == "rg"))
-        {
-            self.tools.ensure_rg()?;
-            let root = rg.parent().context("ripgrep runtime")?;
-            process
-                .arg("--read-root")
-                .arg(root)
-                .arg("--deny-write")
-                .arg(root);
-        }
+        self.tools.grant_staged_roots(&mut process, program, args)?;
         process.arg("--deny-write").arg(&self.runtime);
         let mut secrets = super::windows_secret_paths(&profile.home);
         if profile.state_dir.exists() {
