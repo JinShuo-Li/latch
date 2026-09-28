@@ -39,6 +39,12 @@ Run $shell '/d /c echo hello > nested\child.txt'
 Run $git 'init --quiet'
 Run $git 'symbolic-ref HEAD refs/heads/other'
 Run $git 'status --short' @('--deny-write',(Join-Path $workspace '.git'))
+Run $git '-C nested init --quiet'
+Run $git '-C nested status --short'
+Run $git 'add -- input.txt'
+Run $git '-c user.name=Native -c user.email=native@example.invalid commit --quiet -m fixture'
+Run $git 'worktree add --detach nested-worktree'
+Run $git '-C nested-worktree status --short'
 # The Chocolatey PATH entry is a launcher shim. Run the actual standalone
 # executable from user-owned fixture storage, as production staging does.
 $stagedRg=Join-Path $runtime 'rg.exe'
@@ -79,5 +85,5 @@ foreach($name in @('pipeline.txt','node-output.txt','python-output.txt')){
 foreach($path in $ancestors){
   if((Get-Acl -LiteralPath $path).Sddl -ne $ancestorAcls[$path]){throw ('Ancestor ACL changed: '+$path)}
 }
-Write-Output 'PASS native Git, ripgrep, cmd pipeline/redirect, Node/npm and Python workflows'
+Write-Output 'PASS native Git/nested repo/worktree, ripgrep, cmd pipeline/redirect, Node/npm and Python workflows'
 $global:LASTEXITCODE=0

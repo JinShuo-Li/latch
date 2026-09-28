@@ -860,6 +860,7 @@ cargo run -p latch-kernel --example extension_probe -- \
 ```
 
 Latch v0.2.3 requires system `bwrap` on Linux. The Windows native runtime is
-available on the port branch while its hosted CI qualification is in progress.
+available on the port branch. GitHub Actions runs the native security fixtures
+and a focused Windows Rust runtime gate; the full workspace gate runs on Linux.
 It has no daemon, browser automation, remote execution, MCP, IDE integration,
 automatic commits, or automatic pushes.
