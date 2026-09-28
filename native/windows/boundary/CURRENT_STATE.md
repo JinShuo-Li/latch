@@ -1,10 +1,10 @@
 # Windows workspace-read status (2026-09-28)
 
-The workspace directory-enumeration regression is fixed and verified on
-`codex/windows-native-port`. Full GitHub Actions validation passed for the
-product code in commit `62311fd` (run `36388691811`): Windows native,
-Windows Rust, and Linux Bubblewrap release jobs all succeeded. The lightweight
-CI run `36388691847` also passed on Windows and Linux.
+The workspace directory-enumeration regression is fixed for grantable NTFS
+trees on `codex/windows-native-port`. Full GitHub Actions validation passed
+for commit `1d14805` (run `36409963890`): Windows native, Windows Rust, and
+Linux Bubblewrap release jobs all succeeded. The lightweight CI run
+`36409875345` also passed on Windows and Linux.
 
 ## Boundary behavior verified locally
 
@@ -101,3 +101,30 @@ native suites (including exact restoration of a protected workspace child ACL),
 Windows formatting, full workspace Clippy and tests, and a locked release build.
 It reduces grant walks and durable ACL intents on shared roots; no whole-home
 startup timing or whole-home success is claimed.
+
+## Existing-workspace ACL blocker (2026-09-28)
+
+The installed production runner still refuses `C:\project` even after its old
+`target` trees were cleaned (about 190,800 files removed). The remaining tree
+has about 630 files and no host-inaccessible directory. A read-mode `dir /a`
+fails closed with `pin recovery object: 5` at
+`C:\project\latch\.worktrees\windows-native\.latch`; its owner is
+`CodexSandboxOffline`, while the current user has Modify but not `WRITE_DAC`.
+Many source files have that foreign owner. The runner cannot add its unique
+AppContainer and write-restrictor ACEs to those objects. No production recovery
+journal remained after the refusal. `C:\project` itself is also not a Git
+repository, so `git_status` cannot succeed with that workspace selection.
+The inaccessible old test fixture was preserved intact under
+`%LOCALAPPDATA%\LatchBoundaryFixtureQuarantine`, outside the workspace.
+
+A local clone of `codex/windows-native-port` made with `git clone --no-hardlinks`
+at `Desktop\work\latch-native-port` is owned by the current user. The same
+installed production runner completed directory listing, ripgrep and Git
+status there, then removed its recovery journal. This is an operational
+workaround, not support for foreign-owned files in the original workspace.
+An end-to-end run of the installed `latch.exe` against a local mock provider
+also returned `ok` for its `shell`, `search`, and `git_status` tools in that
+clone; no real provider or credential was used.
+Supporting arbitrary host-readable but ACL-unmodifiable objects needs a
+separately verified read broker or other Windows boundary design; changing
+their owners or granting broad host ACLs is not an acceptable automatic fix.

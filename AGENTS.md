@@ -98,6 +98,11 @@ copies them. Config example is `config.example.toml`. Docker (or a
 compatible CLI via `DOCKER=…`) is required only for the optional dogfood harness,
 never by Latch itself.
 
+On Windows, existing workspace objects must permit the current user to change
+their ACLs for temporary AppContainer grants; a readable foreign-owned object
+without `WRITE_DAC` makes execution fail closed. Prefer a focused user-owned
+checkout and avoid local-clone hardlinks to outside roots.
+
 ## Testing philosophy
 
 > Memory decides what the model needs to know. Cache decides how cheaply we can
