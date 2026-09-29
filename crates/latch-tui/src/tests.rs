@@ -2614,11 +2614,34 @@ fn working_and_interrupted_states_are_visible_above_the_composer() {
     let mut working = app_with_header("deepseek-flash", "/tmp/latch-ui");
     working.busy = true;
     let text = render_to_text(&mut working, 100, 20);
-    assert!(text.contains("• Working"), "{text}");
+    assert!(text.contains("⠋ Working"), "{text}");
     let mut interrupted = app_with_header("deepseek-flash", "/tmp/latch-ui");
     interrupted.interrupted = true;
     let text = render_to_text(&mut interrupted, 100, 20);
     assert!(text.contains("Interrupted"), "{text}");
+}
+
+#[test]
+fn running_tool_is_transient_in_compact_view_and_visible_in_raw_view() {
+    let running = Cell::Command {
+        call_id: "t1".into(),
+        command: "cargo test -p latch-tui".into(),
+        status: CellStatus::Running,
+        summary: String::new(),
+        output: String::new(),
+        raw: "requested".into(),
+    };
+    assert!(transcript_lines(&[running.clone()], None, false, 80, true).is_empty());
+    assert!(!transcript_lines(&[running.clone()], None, true, 80, true).is_empty());
+    let completed = Cell::Command {
+        call_id: "t1".into(),
+        command: "cargo test -p latch-tui".into(),
+        status: CellStatus::Passed,
+        summary: "84 passed".into(),
+        output: String::new(),
+        raw: "84 passed".into(),
+    };
+    assert!(!transcript_lines(&[completed], None, false, 80, true).is_empty());
 }
 
 #[test]
@@ -2660,7 +2683,7 @@ fn child_agent_activity_reaches_the_status_row_and_sidebar() {
         },
     ))));
     let text = render_to_text(&mut app, 100, 20);
-    assert!(text.contains("Spawned `audit-locks`"), "{text}");
+    assert!(text.contains("Waiting for child agents"), "{text}");
     assert!(text.contains("child `audit-locks` starting"), "{text}");
 
     app.output(Output::Event(Box::new(presentation_event(

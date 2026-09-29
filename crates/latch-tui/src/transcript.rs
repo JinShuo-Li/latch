@@ -23,6 +23,9 @@ pub(super) fn transcript_lines(
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for cell in cells {
+        if !detail && running_cell(cell) {
+            continue;
+        }
         for line in cell_lines(cell, detail, width, band) {
             out.push(line);
         }
@@ -38,6 +41,22 @@ pub(super) fn transcript_lines(
         out.pop();
     }
     out
+}
+
+/// Running cells are shown by the live activity row. Raw mode still renders
+/// their full durable request and any output recorded so far.
+pub(super) fn running_cell(cell: &Cell) -> bool {
+    match cell {
+        Cell::Exploration { operations } => {
+            operations.iter().any(|op| op.status == CellStatus::Running)
+        }
+        Cell::Patch { files } => files.iter().any(|file| file.status == CellStatus::Running),
+        Cell::Command { status, .. }
+        | Cell::Validation { status, .. }
+        | Cell::Diff { status, .. }
+        | Cell::AgentTask { status, .. } => *status == CellStatus::Running,
+        _ => false,
+    }
 }
 
 pub(super) fn cell_lines(

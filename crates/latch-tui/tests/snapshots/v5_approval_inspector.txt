@@ -25,6 +25,6 @@
                                                                                                     
   enter confirm · y approve · n deny · ctrl+o full request · esc deny                               
                                                                                                     
-  • Waiting for approval                                                                            
+  ! Waiting for approval                                                                            
 › Ask Latch…                                                                                        
   WORK · deepseek-flash/low · main · std · ask                                                      

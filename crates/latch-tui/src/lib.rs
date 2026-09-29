@@ -385,6 +385,8 @@ struct App {
     input: Composer,
     palette: Palette,
     presentation: PresentationModel,
+    /// Ephemeral animation frame; never written to durable history.
+    activity_frame: usize,
     items: Vec<TranscriptItem>,
     streaming: Option<String>,
     mode: Mode,
@@ -530,6 +532,7 @@ impl Default for App {
             input: Composer::new(),
             palette: Palette::new(),
             presentation: PresentationModel::default(),
+            activity_frame: 0,
             items: Vec::new(),
             streaming: None,
             mode: Mode::default(),

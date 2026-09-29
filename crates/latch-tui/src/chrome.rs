@@ -1,7 +1,7 @@
 //! Frame composition: transcript viewport, composer, overlays, palette,
 //! and the welcome/footer chrome.
 
-use super::transcript::{notice_style, semantic_visual_height, transcript_lines};
+use super::transcript::{notice_style, running_cell, semantic_visual_height, transcript_lines};
 use super::*;
 
 /// The editor grows with input while leaving the transcript room to breathe.
@@ -57,7 +57,7 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
         .cells()
         .iter()
         .rev()
-        .find(|cell| cell_is_running(cell))
+        .find(|cell| running_cell(cell))
     {
         let (text, subject) = running_cell_status(cell);
         label = Some(text);
@@ -103,9 +103,15 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
             Style::default().add_modifier(Modifier::BOLD),
         )
     };
+    const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let marker = if attention {
+        "!"
+    } else {
+        SPINNER[app.activity_frame % SPINNER.len()]
+    };
     let mut spans = vec![
         Span::raw("  "),
-        Span::styled("• ", marker_style),
+        Span::styled(format!("{marker} "), marker_style),
         Span::styled(label, label_style),
     ];
     if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
@@ -113,24 +119,6 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
         spans.push(Span::styled(detail, notice_style()));
     }
     Some(Line::from(spans))
-}
-
-fn cell_is_running(cell: &Cell) -> bool {
-    match cell {
-        Cell::Exploration { operations } => operations
-            .iter()
-            .any(|operation| operation.status == CellStatus::Running),
-        Cell::Command { status, .. }
-        | Cell::Validation { status, .. }
-        | Cell::Diff { status, .. }
-        | Cell::AgentTask { status, .. } => *status == CellStatus::Running,
-        Cell::Patch { files } => files.iter().any(|file| file.status == CellStatus::Running),
-        Cell::User { .. }
-        | Cell::Assistant { .. }
-        | Cell::AgentReport { .. }
-        | Cell::Notice { .. }
-        | Cell::Error { .. } => false,
-    }
 }
 
 fn running_cell_status(cell: &Cell) -> (String, Option<String>) {

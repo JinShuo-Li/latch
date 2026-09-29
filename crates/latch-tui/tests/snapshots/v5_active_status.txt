@@ -1,4 +1,3 @@
-• Running cargo test --workspace                                                                    
                                                                                                     
                                                                                                     
                                                                                                     
@@ -15,6 +14,7 @@
                                                                                                     
                                                                                                     
                                                                                                     
-  • Running tests · cargo test --workspace                                                          
+                                                                                                    
+  ⠋ Running tests · cargo test --workspace                                                          
 › Ask Latch…                                                                                        
   WORK · deepseek-flash/low · main · std · ask                                                      
