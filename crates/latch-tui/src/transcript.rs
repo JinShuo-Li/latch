@@ -368,29 +368,33 @@ pub(super) fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line
         CellStatus::Passed
     };
     let (marker, style) = if status == CellStatus::Passed {
-        ("•", crate::theme::palette().accent())
+        ("•", notice_style())
     } else {
         status_marker(status)
     };
-    let title = if running { "Exploring" } else { "Explored" };
+    let title = if running { "Inspecting" } else { "Inspected" };
     let mut labels = Vec::new();
     let mut reads = Vec::new();
     for operation in operations {
         if operation.status != CellStatus::Failed
             && let Some(path) = operation.label.strip_prefix("Read ")
         {
-            reads.push(path);
-        } else {
+            if !reads.contains(&path) {
+                reads.push(path);
+            }
+        } else if !labels.contains(&operation.label) {
             labels.push(operation.label.clone());
         }
     }
     if !reads.is_empty() {
-        let mut read_label = format!(
-            "Read {}",
-            reads.iter().take(8).copied().collect::<Vec<_>>().join(", ")
-        );
-        if reads.len() > 8 {
-            read_label.push_str(&format!(", … {} more", reads.len() - 8));
+        let mut read_label = reads
+            .iter()
+            .take(4)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if reads.len() > 4 {
+            read_label.push_str(&format!(" · +{} more", reads.len() - 4));
         }
         labels.insert(0, read_label);
     }
@@ -398,7 +402,7 @@ pub(super) fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line
         Span::styled(format!("{marker} "), style),
         Span::styled(title, Style::default().bold()),
     ])];
-    const MAX_VISIBLE_OPERATIONS: usize = 8;
+    const MAX_VISIBLE_OPERATIONS: usize = 4;
     for (index, label) in labels.iter().take(MAX_VISIBLE_OPERATIONS).enumerate() {
         let prefix = if index == 0 { "  └ " } else { "    " };
         lines.push(Line::from(vec![
@@ -490,17 +494,13 @@ pub(super) fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
     } else {
         CellStatus::Passed
     };
-    let (marker, style) = if status == CellStatus::Passed {
-        ("•", crate::theme::palette().accent())
-    } else {
-        status_marker(status)
-    };
+    let (marker, style) = status_marker(status);
     let title = if running {
         "Editing"
     } else if failed {
         "Edit failed"
     } else {
-        "Edited"
+        "Updated"
     };
     let mut lines = Vec::new();
     let mut remaining = MAX_PATCH_PREVIEW_LINES;

@@ -1738,7 +1738,7 @@ fn inline_preview_colors_real_removed_and_added_source_lines() {
     let text = lines_text(&lines);
     assert!(text.contains("-    base + a + b"), "{text}");
     assert!(text.contains("+    base + a - b"), "{text}");
-    assert!(text.contains("Edited src/calc.rs  +1 −1"), "{text}");
+    assert!(text.contains("Updated src/calc.rs  +1 −1"), "{text}");
 }
 
 #[test]
@@ -1794,7 +1794,7 @@ fn inline_preview_handles_deleted_files_and_unicode_content() {
         Some(Color::Red)
     );
     let text = lines_text(&lines);
-    assert!(text.contains("Edited 旧.rs  +0 −2"), "{text}");
+    assert!(text.contains("Updated 旧.rs  +0 −2"), "{text}");
     assert!(!text.contains("\n+"), "{text}");
 }
 

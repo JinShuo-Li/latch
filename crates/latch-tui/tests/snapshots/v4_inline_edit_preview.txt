@@ -1,6 +1,6 @@
 › Fix the calculation.                                                                              
                                                                                                     
-• Edited 2 files                                                                                    
+✓ Updated 2 files                                                                                   
   └ M src/calc.rs  +1 −1                                                                            
     @@ -1,4 +1,4 @@                                                                                 
      pub fn add(a: i32, b: i32) -> i32 {                                                            
