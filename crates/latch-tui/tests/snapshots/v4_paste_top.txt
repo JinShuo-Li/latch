@@ -23,8 +23,8 @@
   pasted line 5                                                                                     
   pasted line 6                                                                                     
   pasted line 7                                                                                     
-                                                                                                    
+  pasted line 8                                                                                     
+  pasted line 9                                                                                     
+  pasted line 10                                                                                    
+  pasted line 11                                                                                    
   WORK · deepseek-flash/low · main · std · ask                                                 ready
-                                                                                                    
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.2.3

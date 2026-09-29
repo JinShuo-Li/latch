@@ -1,5 +1,8 @@
                                                                                                                         
                                                                                                                         
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
                                            ███     ████  ██████  █████ ██  ██                                           
                                            ███    ██  ██   ██   ██     ██  ██                                           
                                            ███    ██████   ██   ██     ██████                                           
@@ -12,19 +15,16 @@
                                                                                                                         
                                                                                                                         
                                                                                                                         
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
   Inference profile · OpenCode Go                                                                                       
                                                                                                                         
   › DeepSeek V4.1 Flash  (current)  deepseek-v4.1-flash                                                                 
     Change provider…                                                                                                    
                                                                                                                         
   ↑↓ select · enter choose · backspace back · esc cancel                                                                
-                                                                                                                        
-                                                                                                                        
 › Ask Latch…                                                                                                            
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
   WORK · deepseek-v4.1-flash/low · main · std · ask                                                                ready
-                                                                                                                        
-enter send  ctrl+j newline  ctrl+p commands                                                               ctrl+b sidebar
-/tmp/latch                                                                                                  latch v0.2.3

@@ -1,4 +1,7 @@
                                                                                                                                                                 
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
                                                                ███     ████  ██████  █████ ██  ██                                                               
                                                                ███    ██  ██   ██   ██     ██  ██                                                               
                                                                ███    ██████   ██   ██     ██████                                                               
@@ -10,11 +13,8 @@
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
 › check the long metadata handling                                                                                                                              
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
   WORK · a-very-long-model-name-that-keeps-going-and-going-flash/low · main · std · ask                                                                    ready
-                                                                                                                                                                
-enter send  ctrl+j newline  ctrl+p commands                                                                                                       ctrl+b sidebar
-/home/someone/very/deeply/nested/workspace/path/that/is/long                                                                                        latch v0.2.3

@@ -1067,11 +1067,11 @@ fn composer_is_a_neutral_band_with_a_prompt_gutter() {
             assert_eq!(cell.style().bg, surface, "composer band is continuous");
         }
     }
-    let body_row = rows[area.y as usize + 1];
+    let body_row = rows[area.y as usize];
     assert!(body_row.starts_with("› "), "{body_row:?}");
     // The empty composer leaves the cursor on the first text cell, directly
     // before the placeholder — never one column inside it.
-    assert_eq!(app.last_cursor, Some((area.x + 2, area.y + 1)));
+    assert_eq!(app.last_cursor, Some((area.x + 2, area.y)));
 }
 
 #[test]
@@ -2187,11 +2187,12 @@ fn welcome_wordmark_uses_five_distinct_muted_letter_colors() {
 }
 
 #[test]
-fn idle_composer_body_is_roomier_but_stays_bounded() {
-    assert_eq!(ComposerChrome::responsive(30, 1).body, 3);
-    assert_eq!(ComposerChrome::responsive(24, 1).body, 3);
-    assert_eq!(ComposerChrome::responsive(30, 20).body, 8);
+fn idle_composer_is_compact_and_multiline_stays_bounded() {
+    assert_eq!(ComposerChrome::responsive(30, 1).body, 1);
+    assert_eq!(ComposerChrome::responsive(24, 1).body, 1);
+    assert_eq!(ComposerChrome::responsive(30, 20).body, 12);
     assert_eq!(ComposerChrome::responsive(12, 1).body, 1);
+    assert_eq!(ComposerChrome::responsive(24, 3).body, 3);
 }
 
 fn markdown_table_fixture(app: &mut App, text: &str) {

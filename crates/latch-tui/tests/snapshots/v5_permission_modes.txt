@@ -1,4 +1,7 @@
                                                                                                     
+                                                                                                    
+                                                                                                    
+                                                                                                    
                                  ███     ████  ██████  █████ ██  ██                                 
                                  ███    ██  ██   ██   ██     ██  ██                                 
                                  ███    ██████   ██   ██     ██████                                 
@@ -10,6 +13,11 @@
                                                                                                     
                                                                                                     
                                                                                                     
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
   Permissions                                                                                       
                                                                                                     
   › Ask for approval (current)  Latch asks before operations that require approval.                 
@@ -18,13 +26,5 @@
                                                                                                     
   ↑↓ select · enter apply · esc cancel                                                              
                                                                                                     
-                                                                                                    
-                                                                                                    
 › Ask Latch…                                                                                        
-                                                                                                    
-                                                                                                    
-                                                                                                    
   WORK · deepseek-flash/low · main · std · ask                                                 ready
-                                                                                                    
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.2.3

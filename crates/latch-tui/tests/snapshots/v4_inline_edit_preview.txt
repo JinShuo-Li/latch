@@ -1,4 +1,6 @@
                                                                                                     
+› Fix the calculation.                                                                              
+                                                                                                    
                                                                                                     
 • Edited 2 files                                                                                    
   └ M src/calc.rs  +1 −1                                                                            
@@ -14,11 +16,9 @@
     +fn subtracts() {}                                                                              
                                                                                                     
                                                                                                     
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
 › Ask Latch…                                                                                        
-                                                                                                    
-                                                                                                    
-                                                                                                    
   WORK · deepseek-flash/low · main · std · ask                                                 ready
-                                                                                                    
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.2.3

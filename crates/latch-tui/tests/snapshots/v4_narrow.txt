@@ -1,4 +1,5 @@
                                                 
+                                                
        ███     ████  ██████  █████ ██  ██       
        ███    ██  ██   ██   ██     ██  ██       
        ███    ██████   ██   ██     ██████       
@@ -6,11 +7,10 @@
        ██████ ██  ██   ██    █████ ██  ██       
           a quiet terminal coding agent         
                                                 
+  Ask Latch to inspect, change, or verify code. 
+              /help lists commands.             
+                                                
+                                                
                                                 
 › a narrow but usable composer                  
-                                                
-                                                
   WORK · deepseek-flash/low · main · std   ready
-                                                
-ctrl+p commands                                 
-/tmp/latch-ui                       latch v0.2.3

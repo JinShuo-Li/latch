@@ -1,5 +1,8 @@
                                                                                                     
                                                                                                     
+                                                                                                    
+                                                                                                    
+                                                                                                    
                                  ███     ████  ██████  █████ ██  ██                                 
                                  ███    ██  ██   ██   ██     ██  ██                                 
                                  ███    ██████   ██   ██     ██████                                 
@@ -14,11 +17,8 @@
                                                                                                     
                                                                                                     
                                                                                                     
+                                                                                                    
+                                                                                                    
+                                                                                                    
 › fix the failing test                                                                              
-                                                                                                    
-                                                                                                    
-                                                                                                    
   WORK · deepseek-flash/low · main · std · ask                                                 ready
-                                                                                                    
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.2.3
