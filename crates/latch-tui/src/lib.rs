@@ -435,7 +435,7 @@ struct App {
     viewport_rows: usize,
     /// Authoritative observability state derived from durable events.
     sidebar: SidebarModel,
-    /// Explicit user override for sidebar visibility; `None` follows width.
+    /// Explicit user override for sidebar visibility; hidden until toggled.
     sidebar_override: Option<bool>,
     /// Last rendered terminal width, so key handling can toggle responsively.
     last_width: u16,
@@ -1840,14 +1840,13 @@ impl App {
     }
 }
 
-/// Below this width the sidebar auto-collapses; narrower terminals stay clean
-/// unless the user explicitly toggles it.
+/// Width used to decide when the compact composer offers a sidebar hint.
 pub const SIDEBAR_MIN_AUTO_WIDTH: u16 = 110;
 
-/// Whether the sidebar should be shown, honoring an explicit user override.
+/// Whether the sidebar inspector has been explicitly opened.
 #[must_use]
-pub fn sidebar_visible(width: u16, override_state: Option<bool>) -> bool {
-    override_state.unwrap_or(width >= SIDEBAR_MIN_AUTO_WIDTH)
+pub fn sidebar_visible(_width: u16, override_state: Option<bool>) -> bool {
+    override_state.unwrap_or(false)
 }
 
 /// Responsive sidebar width in columns. Never a fixed third of the terminal:

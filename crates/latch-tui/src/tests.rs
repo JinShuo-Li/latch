@@ -1179,8 +1179,8 @@ fn render_to_text(app: &mut App, width: u16, height: u16) -> String {
 fn responsive_sidebar_rules_are_clamped_and_not_a_fixed_third() {
     assert!(!sidebar_visible(80, None));
     assert!(!sidebar_visible(100, None));
-    assert!(sidebar_visible(110, None));
-    assert!(sidebar_visible(200, None));
+    assert!(!sidebar_visible(110, None));
+    assert!(!sidebar_visible(200, None));
     // Explicit override wins at any width.
     assert!(sidebar_visible(80, Some(true)));
     assert!(!sidebar_visible(200, Some(false)));
@@ -1201,12 +1201,12 @@ fn ctrl_b_and_slash_sidebar_toggle_agree() {
         last_width: 200,
         ..App::default()
     };
-    assert!(app.sidebar_visible_now());
-    app.on_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
-    assert_eq!(app.sidebar_override, Some(false));
     assert!(!app.sidebar_visible_now());
     app.on_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    assert_eq!(app.sidebar_override, Some(true));
     assert!(app.sidebar_visible_now());
+    app.on_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    assert!(!app.sidebar_visible_now());
     // The slash command goes through the same toggle and never submits.
     for ch in "/sidebar".chars() {
         app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
@@ -1215,7 +1215,7 @@ fn ctrl_b_and_slash_sidebar_toggle_agree() {
         app.on_key(key(KeyCode::Enter, KeyModifiers::NONE))
             .is_none()
     );
-    assert_eq!(app.sidebar_override, Some(false));
+    assert_eq!(app.sidebar_override, Some(true));
     assert!(app.presentation.cells().is_empty());
 }
 
@@ -1297,6 +1297,7 @@ fn draw_never_panics_across_responsive_sizes_and_cjk_goal() {
 #[test]
 fn wide_terminal_shows_sidebar_and_narrow_hides_it() {
     let mut wide = App::default();
+    wide.sidebar_override = Some(true);
     wide.sidebar.apply_event(&latch_protocol::Event {
         id: uuid::Uuid::new_v4(),
         session_id: uuid::Uuid::nil(),
@@ -1320,14 +1321,15 @@ fn wide_terminal_shows_sidebar_and_narrow_hides_it() {
     let mut narrow = App::default();
     let text = render_to_text(&mut narrow, 80, 40);
     assert!(!text.contains("Working set"));
-    // Resizing across the threshold recomputes visibility without panics.
+    // An explicit inspector toggle survives resizing.
     let mut resizing = App {
         last_width: 200,
+        sidebar_override: Some(true),
         ..App::default()
     };
     assert!(resizing.sidebar_visible_now());
     let _ = render_to_text(&mut resizing, 80, 24);
-    assert!(!resizing.sidebar_visible_now());
+    assert!(resizing.sidebar_visible_now());
     let _ = render_to_text(&mut resizing, 200, 24);
     assert!(resizing.sidebar_visible_now());
 }
@@ -2375,6 +2377,7 @@ fn snapshot_active_running_status() {
 #[test]
 fn snapshot_subagent_status_and_sidebar() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.sidebar_override = Some(true);
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::ToolRequested {
             call: latch_protocol::ToolCall {
@@ -2487,6 +2490,7 @@ fn snapshot_narrow_terminal() {
 #[test]
 fn snapshot_wide_terminal_with_sidebar() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.sidebar_override = Some(true);
     app.sidebar.apply_event(&latch_protocol::Event {
         id: uuid::Uuid::new_v4(),
         session_id: uuid::Uuid::nil(),
@@ -2667,6 +2671,7 @@ fn active_status_row_reports_semantic_running_state() {
 #[test]
 fn child_agent_activity_reaches_the_status_row_and_sidebar() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.sidebar_override = Some(true);
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::ToolRequested {
             call: latch_protocol::ToolCall {

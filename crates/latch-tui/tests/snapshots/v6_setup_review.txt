@@ -1,15 +1,15 @@
-                                                                                            │                           
-                                                                                            │WORK · 0 turns             
-                             ███     ████  ██████  █████ ██  ██                             │                           
-                             ███    ██  ██   ██   ██     ██  ██                             │TASK                       
-                             ███    ██████   ██   ██     ██████                             │InProgress                 
-                             ███    ██  ██   ██   ██     ██  ██                             │Implementation unchanged   
-                             ██████ ██  ██   ██    █████ ██  ██                             │Validation pending         
-                                a quiet terminal coding agent                               │                           
-                                                                                            │CONTEXT                    
-             Ask Latch to inspect, change, or verify code. /help lists commands.            │                           
-                                                                                            │                           
-                                                                                            │                           
+                                                                                                                        
+                                                                                                                        
+                                           ███     ████  ██████  █████ ██  ██                                           
+                                           ███    ██  ██   ██   ██     ██  ██                                           
+                                           ███    ██████   ██   ██     ██████                                           
+                                           ███    ██  ██   ██   ██     ██  ██                                           
+                                           ██████ ██  ██   ██    █████ ██  ██                                           
+                                              a quiet terminal coding agent                                             
+                                                                                                                        
+                           Ask Latch to inspect, change, or verify code. /help lists commands.                          
+                                                                                                                        
+                                                                                                                        
                                                                                                                         
   Setup · OpenAI · Save                                                                                                 
                                                                                                                         
@@ -30,5 +30,5 @@
                                                                                                                         
   WORK · std · ask                                                                                                 ready
                                                                                                                         
-enter send  ctrl+j newline  ctrl+p commands                                                                             
+enter send  ctrl+j newline  ctrl+p commands                                                               ctrl+b sidebar
 .                                                                                                           latch v0.2.3
