@@ -702,45 +702,21 @@ pub(super) fn draw_palette(
     frame.render_widget(Paragraph::new(rows), area);
 }
 
-pub(super) fn wordmark_lines() -> Vec<Line<'static>> {
-    (0..5)
-        .map(|row| {
-            let mut spans = Vec::new();
-            for (index, (_, glyph)) in WORDMARK.iter().enumerate() {
-                if index > 0 {
-                    spans.push(Span::raw(" "));
-                }
-                spans.push(Span::styled(
-                    glyph[row].to_owned(),
-                    Style::default().fg(WORDMARK_COLORS[index]),
-                ));
-            }
-            Line::from(spans)
-        })
-        .collect()
-}
-
 pub(super) fn draw_welcome(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
-    lines.extend(wordmark_lines());
-    lines.push(Line::styled("a quiet terminal coding agent", muted_style()));
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        "Ask Latch to inspect, change, or verify code. /help lists commands.",
-        notice_style(),
-    ));
-    let top = area.height.saturating_sub(lines.len() as u16) / 3;
-    let mut text = vec![Line::from(""); top as usize];
-    text.append(&mut lines);
-    frame.render_widget(
-        Paragraph::new(text)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true }),
-        area,
-    );
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Latch", Style::default().add_modifier(Modifier::BOLD)),
+        ]),
+        Line::styled("  a quiet terminal coding agent", muted_style()),
+        Line::from(""),
+        Line::styled("  Type a request · /help for commands", notice_style()),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
 /// Metadata row inside the composer: mode, model, branch on the left; status
@@ -1207,24 +1183,3 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         }
     }
 }
-
-/// Five-row pixel letterforms for the startup wordmark. Every letter occupies
-/// the same six columns so the rows align without per-letter padding; the
-/// extra width keeps the glyphs from looking narrow against terminal cells,
-/// which are roughly twice as tall as they are wide.
-pub(super) const WORDMARK: [(&str, [&str; 5]); 5] = [
-    ("L", ["███   ", "███   ", "███   ", "███   ", "██████"]),
-    ("A", [" ████ ", "██  ██", "██████", "██  ██", "██  ██"]),
-    ("T", ["██████", "  ██  ", "  ██  ", "  ██  ", "  ██  "]),
-    ("C", [" █████", "██    ", "██    ", "██    ", " █████"]),
-    ("H", ["██  ██", "██  ██", "██████", "██  ██", "██  ██"]),
-];
-
-/// One muted tone per letter; all distinct, none neon.
-pub(super) const WORDMARK_COLORS: [Color; 5] = [
-    Color::Rgb(186, 142, 120),
-    Color::Rgb(158, 176, 134),
-    Color::Rgb(134, 160, 190),
-    Color::Rgb(184, 164, 126),
-    Color::Rgb(172, 146, 178),
-];

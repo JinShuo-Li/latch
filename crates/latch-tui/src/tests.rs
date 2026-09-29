@@ -2135,32 +2135,12 @@ fn snapshot_inline_edit_preview() {
 }
 
 #[test]
-fn welcome_wordmark_uses_five_distinct_muted_letter_colors() {
-    let lines = wordmark_lines();
-    assert_eq!(lines.len(), 5);
-    let mut colors = Vec::new();
-    for line in &lines {
-        let letters: Vec<&Span<'static>> = line
-            .spans
-            .iter()
-            .filter(|span| span.content.contains('█'))
-            .collect();
-        assert_eq!(letters.len(), 5, "each row shows five letter regions");
-        for span in letters {
-            colors.push(span.style.fg.expect("letter color"));
-        }
-    }
-    let distinct: std::collections::BTreeSet<String> =
-        colors.iter().map(|color| format!("{color:?}")).collect();
-    assert_eq!(distinct.len(), 5, "all five letters use different colors");
-    for color in &colors {
-        let Color::Rgb(red, green, blue) = color else {
-            panic!("expected rgb wordmark color, got {color:?}");
-        };
-        let max = *red.max(green).max(blue) as i32;
-        let min = *red.min(green).min(blue) as i32;
-        assert!(max - min <= 90, "muted tone expected: {color:?}");
-    }
+fn welcome_is_small_and_terminal_native() {
+    let mut app = App::default();
+    let text = render_to_text(&mut app, 100, 24);
+    assert!(text.contains("Latch"));
+    assert!(text.contains("a quiet terminal coding agent"));
+    assert!(!text.contains('█'));
 }
 
 #[test]
