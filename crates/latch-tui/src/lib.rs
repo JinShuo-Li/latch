@@ -1843,9 +1843,6 @@ impl App {
     }
 }
 
-/// Width used to decide when the compact composer offers a sidebar hint.
-pub const SIDEBAR_MIN_AUTO_WIDTH: u16 = 110;
-
 /// Whether the sidebar inspector has been explicitly opened.
 #[must_use]
 pub fn sidebar_visible(_width: u16, override_state: Option<bool>) -> bool {

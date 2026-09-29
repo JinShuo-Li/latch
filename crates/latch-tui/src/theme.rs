@@ -101,13 +101,6 @@ impl Palette {
         Style::default().bg(self.blended(rgb, Color::Reset))
     }
 
-    /// User-authored message band. Same neutral surface as other action
-    /// surfaces so the whole UI reads as one material.
-    #[must_use]
-    pub fn user_message(self) -> Style {
-        self.surface()
-    }
-
     /// Active/selected accent: cyan on dark terminals, a darker blue on light.
     #[must_use]
     pub fn accent(self) -> Style {
@@ -400,7 +393,6 @@ mod tests {
     fn ansi16_drops_backgrounds_but_keeps_semantic_foregrounds() {
         let palette = Palette::new(ThemeKind::Dark, ColorLevel::Ansi16);
         assert_eq!(palette.surface().bg, None);
-        assert_eq!(palette.user_message().bg, None);
         assert_eq!(palette.diff_add().fg, Some(Color::Green));
         assert_eq!(palette.diff_add().bg, None);
         assert_eq!(palette.diff_del().fg, Some(Color::Red));

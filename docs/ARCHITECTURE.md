@@ -889,9 +889,9 @@ cannot accept, and `/model` annotates image-capable models with `vision`.
 Images are priced as estimated visual tokens in context accounting (never as
 base64 text length).
 
-## TUI state surfaces (V3.1)
+## TUI state surfaces
 
-The transcript explains activity; a responsive right sidebar explains state.
+The transcript explains activity; an opt-in right inspector explains state.
 The sidebar reducer (`latch-tui::sidebar`) consumes the same durable events as
 the semantic transcript, so live and resumed sessions agree: `ContextStats`
 for the bounded working set, `TaskStateUpdated`/`EvidenceCreated` for
@@ -904,7 +904,7 @@ components stay unavailable. The kernel forwards tool-appended durable events
 to the live sink so live and replay observe identical event order.
 The current-request label follows the latest durable `RunStarted.prompt` or
 `UserMessage`; canonical `TaskState.goal` stays separate. Run outcome does not
-imply task verification. The default sidebar shows task, implementation,
+imply task verification. The inspector shows task, implementation,
 validation, run, context utilization, usage, cost, and relevant changes;
 `/context` presents low-level cache and budget accounting.
 
@@ -913,14 +913,18 @@ the complete buffer is wrapped into grapheme-safe visual rows, an independent
 viewport offset tracks the visible window, and the terminal cursor is placed
 only while its visual row is visible. PageUp/PageDown move through an
 overflowing prompt and fall back to transcript scrolling when it fits; the
-wheel routes by pointer position. Layout chrome (footer, spacer, hints, gap,
-metadata) drops before the editor body shrinks, so the prompt stays usable on
-narrow or short terminals. The palette (`latch-tui::theme`) centralizes every
+wheel routes by pointer position when mouse capture is explicitly enabled with
+`LATCH_MOUSE_CAPTURE=1`. Native terminal text selection remains available by
+default; alternate-screen, paste, and optional mouse modes are left symmetrically.
+The idle composer uses an input row and a metadata row; multiline input grows
+within a bounded viewport. The palette (`latch-tui::theme`) centralizes every
 surface, status, and diff decision and degrades to semantic foregrounds without
-backgrounds on ANSI-16. The composer, user messages, and bottom action surfaces
-share one neutral band; approvals and `/safety`//`/permissions` selection render
-above the composer, and a compact active-status row reports running work
-derived from authoritative state. Child sessions surface through
+backgrounds on ANSI-16. User messages use the terminal background and a small
+gutter; the composer and action surfaces retain a neutral band. Approvals and
+`/safety`/`/permissions` selection render above the composer. A single animated
+status row reports running work; its animation is ephemeral and running cells
+stay available in raw mode. Completed cells come from durable events.
+Child sessions surface through
 `latch-tui::agents`: compact delegation/report cells in the root transcript, an
 active child summary in the status row, and a bounded `CHILDREN` sidebar
 section. Child transcripts never cross into the root.
@@ -930,8 +934,8 @@ Diffs are first-class: `git_diff` completions become a typed
 colors. Red/green semantics only ever apply inside a parsed unified diff;
 unparsed input falls back to raw, uncolored lines. `/diff` opens a full-width
 inspector with independent scrolling, temporary sidebar collapse, and a raw
-toggle. A sidebar is shown at ≥110 columns (roughly 24–32%, clamped 28–44),
-toggles with Ctrl+B or `/sidebar`, and collapses cleanly on narrow terminals.
+toggle. The inspector starts hidden and toggles with Ctrl+B or `/sidebar` at
+any width. Its width remains responsive when opened.
 
 ## Resume
 

@@ -1296,8 +1296,10 @@ fn draw_never_panics_across_responsive_sizes_and_cjk_goal() {
 
 #[test]
 fn wide_terminal_shows_sidebar_and_narrow_hides_it() {
-    let mut wide = App::default();
-    wide.sidebar_override = Some(true);
+    let mut wide = App {
+        sidebar_override: Some(true),
+        ..App::default()
+    };
     wide.sidebar.apply_event(&latch_protocol::Event {
         id: uuid::Uuid::new_v4(),
         session_id: uuid::Uuid::nil(),
@@ -2611,8 +2613,8 @@ fn running_tool_is_transient_in_compact_view_and_visible_in_raw_view() {
         output: String::new(),
         raw: "requested".into(),
     };
-    assert!(transcript_lines(&[running.clone()], None, false, 80, true).is_empty());
-    assert!(!transcript_lines(&[running.clone()], None, true, 80, true).is_empty());
+    assert!(transcript_lines(std::slice::from_ref(&running), None, false, 80, true).is_empty());
+    assert!(!transcript_lines(std::slice::from_ref(&running), None, true, 80, true).is_empty());
     let completed = Cell::Command {
         call_id: "t1".into(),
         command: "cargo test -p latch-tui".into(),

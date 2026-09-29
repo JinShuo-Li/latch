@@ -1322,8 +1322,9 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                  safety: /safety strict|standard|autonomous (ASK/PLAN remain read-only)\n\
                  permissions: /permissions auto|human|ai (how an Ask is resolved)\n\
                  composer: Enter send · Ctrl+J or Alt+Enter newline · Home/End line · Ctrl+Home/End buffer\n\
-                 composer scroll: PgUp/PgDn or mouse wheel when the prompt overflows\n\
-                 transcript: Shift+PgUp/PgDn · Shift+Home/End · mouse wheel\n\
+                 composer scroll: PgUp/PgDn when the prompt overflows\n\
+                 transcript: Shift+PgUp/PgDn · Shift+Home/End\n\
+                 mouse wheel: set LATCH_MOUSE_CAPTURE=1 to enable (disables native mouse text selection)\n\
                  input: Ctrl+A/E line start/end · Ctrl+W delete word · Ctrl+U/K delete to line edges\n\
                  history: Up/Down at the first/last composer line recalls previous prompts\n\
                  interrupt: Ctrl+C cancels a running turn, or quits when idle\n\

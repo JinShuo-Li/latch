@@ -44,6 +44,8 @@ the recorded validation determines whether that task is verified.
 
 `/mode` selects Ask, Plan, or Work. `/safety` controls which operations need approval; `/permissions` controls how approval requests are handled. Every command still runs inside the platform sandbox. `/help` lists TUI controls and commands.
 
+The transcript is a compact work log. Ctrl+B opens or closes the session inspector. Mouse dragging selects text through your terminal by default; set `LATCH_MOUSE_CAPTURE=1` before starting Latch to route the mouse wheel to the composer and transcript instead. PageUp/PageDown and Shift+PageUp/Down remain available for scrolling.
+
 On Windows, use a focused checkout owned by your account. Existing files whose ACLs you cannot edit may prevent temporary sandbox access even when you can read them. Very large or actively changing workspaces, especially your whole home directory, can start slowly or fail closed. For a local clone, `git clone --no-hardlinks` avoids links to files outside the workspace. See the [Windows boundary status](native/windows/boundary/CURRENT_STATE.md) and [open issues](https://github.com/JinShuo-Li/latch/issues) for current limits.
 
 ## For contributors
