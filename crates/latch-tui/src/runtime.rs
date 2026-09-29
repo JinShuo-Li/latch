@@ -5,23 +5,29 @@ use super::*;
 
 pub(super) struct Guard {
     pub(super) terminal: Terminal<CrosstermBackend<Stdout>>,
+    mouse_capture: bool,
 }
 
 impl Guard {
     pub(super) fn enter() -> Result<Self> {
+        let mouse_capture =
+            std::env::var_os("LATCH_MOUSE_CAPTURE").is_some_and(|value| value == "1");
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        if let Err(error) = enter_screen(&mut stdout) {
-            leave_screen(&mut stdout).ok();
+        if let Err(error) = enter_screen(&mut stdout, mouse_capture) {
+            leave_screen(&mut stdout, mouse_capture).ok();
             disable_raw_mode().ok();
             return Err(error.into());
         }
         match Terminal::new(CrosstermBackend::new(stdout)) {
-            Ok(terminal) => Ok(Self { terminal }),
+            Ok(terminal) => Ok(Self {
+                terminal,
+                mouse_capture,
+            }),
             Err(error) => {
                 disable_raw_mode().ok();
                 let mut stdout = io::stdout();
-                leave_screen(&mut stdout).ok();
+                leave_screen(&mut stdout, mouse_capture).ok();
                 Err(error.into())
             }
         }
@@ -30,28 +36,30 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        leave_screen(self.terminal.backend_mut()).ok();
+        leave_screen(self.terminal.backend_mut(), self.mouse_capture).ok();
         disable_raw_mode().ok();
         self.terminal.show_cursor().ok();
     }
 }
 
-pub(super) fn enter_screen(writer: &mut impl Write) -> io::Result<()> {
-    execute!(
-        writer,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        EnableBracketedPaste
-    )
+pub(super) fn enter_screen(writer: &mut impl Write, mouse_capture: bool) -> io::Result<()> {
+    execute!(writer, EnterAlternateScreen, EnableBracketedPaste)?;
+    if mouse_capture {
+        execute!(writer, EnableMouseCapture)?;
+    }
+    Ok(())
 }
 
-pub(super) fn leave_screen(writer: &mut impl Write) -> io::Result<()> {
-    execute!(
-        writer,
-        DisableBracketedPaste,
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )
+pub(super) fn leave_screen(writer: &mut impl Write, mouse_capture: bool) -> io::Result<()> {
+    // Attempt every cleanup step even if an earlier terminal command fails.
+    let paste = execute!(writer, DisableBracketedPaste);
+    let mouse = if mouse_capture {
+        execute!(writer, DisableMouseCapture)
+    } else {
+        Ok(())
+    };
+    let screen = execute!(writer, LeaveAlternateScreen);
+    paste.and(mouse).and(screen)
 }
 
 pub async fn run(

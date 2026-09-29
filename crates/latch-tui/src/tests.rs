@@ -2703,14 +2703,26 @@ fn child_agent_activity_reaches_the_status_row_and_sidebar() {
 fn terminal_screen_commands_toggle_bracketed_paste_symmetrically() {
     let mut entered = Vec::new();
     let mut left = Vec::new();
-    enter_screen(&mut entered).unwrap();
-    leave_screen(&mut left).unwrap();
+    enter_screen(&mut entered, false).unwrap();
+    leave_screen(&mut left, false).unwrap();
     let entered = String::from_utf8(entered).unwrap();
     let left = String::from_utf8(left).unwrap();
     assert_eq!(entered.matches("\u{1b}[?2004h").count(), 1);
     assert_eq!(left.matches("\u{1b}[?2004l").count(), 1);
     assert!(!entered.contains("\u{1b}[?2004l"));
     assert!(!left.contains("\u{1b}[?2004h"));
+    assert!(!entered.contains("\u{1b}[?1000h"));
+    assert!(!left.contains("\u{1b}[?1000l"));
+    let mut entered = Vec::new();
+    let mut left = Vec::new();
+    enter_screen(&mut entered, true).unwrap();
+    leave_screen(&mut left, true).unwrap();
+    assert!(
+        String::from_utf8(entered)
+            .unwrap()
+            .contains("\u{1b}[?1000h")
+    );
+    assert!(String::from_utf8(left).unwrap().contains("\u{1b}[?1000l"));
 }
 
 fn profile_catalog() -> InferenceCatalog {
