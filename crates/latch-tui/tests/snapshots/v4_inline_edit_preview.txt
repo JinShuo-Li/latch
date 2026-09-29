@@ -1,6 +1,4 @@
-                                                                                                    
 › Fix the calculation.                                                                              
-                                                                                                    
                                                                                                     
 • Edited 2 files                                                                                    
   └ M src/calc.rs  +1 −1                                                                            
@@ -14,6 +12,8 @@
     @@ -0,0 +1,2 @@                                                                                 
     +#[test]                                                                                        
     +fn subtracts() {}                                                                              
+                                                                                                    
+                                                                                                    
                                                                                                     
                                                                                                     
                                                                                                     

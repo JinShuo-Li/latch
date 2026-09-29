@@ -1,11 +1,8 @@
 //! Transcript cell rendering: assistant text, tool activity, validation,
 //! exploration, diffs, and patch previews.
 //!
-//! Two visual families share the transcript. User-authored messages sit on a
-//! neutral full-width band with a `› ` gutter, so they are recognizable at a
-//! glance and while scrolling. Model output stays on the terminal's own
-//! background with a faint `• ` gutter and clean Markdown. Tool lifecycle rows
-//! remain ambient: markers and structure carry meaning, color stays semantic.
+//! User and assistant messages use a small gutter on the terminal background.
+//! Tool lifecycle rows use semantic markers and restrained color.
 
 use super::markdown::{MARKDOWN_DEFAULT_WIDTH, render_markdown_at};
 use super::*;
@@ -16,8 +13,7 @@ const MESSAGE_GUTTER: usize = 2;
 
 /// Builds the transcript as Ratatui lines with the item's own styling,
 /// splitting embedded newlines so the wrapper and the scroll calculation agree
-/// on the visual row layout. `band` controls user-message surface padding; the
-/// plain export path disables it so copied text stays clean.
+/// on the visual row layout.
 pub(super) fn transcript_lines(
     cells: &[Cell],
     streaming: Option<&str>,
@@ -169,39 +165,23 @@ pub(super) fn activity_lines(
     lines
 }
 
-/// Wraps one user-authored message into a full-width neutral band. Every
-/// visual row keeps the surface, including soft-wrapped continuations, because
-/// the rows are wrapped and padded here rather than left to the paragraph
-/// wrapper. `band = false` emits the same gutter and text with no padding for
-/// copy-friendly export. Attached images render as compact metadata lines
-/// after the text; their bytes are never rendered.
+/// Wraps one user-authored message with a compact gutter. Attached images
+/// render as metadata after the text; their bytes are never rendered.
 pub(super) fn user_lines(
     text: &str,
     media: &[latch_protocol::MediaRef],
     width: usize,
-    band: bool,
+    _band: bool,
 ) -> Vec<Line<'static>> {
-    let palette = crate::theme::palette();
-    let style = palette.user_message();
     let content_width = width.saturating_sub(MESSAGE_GUTTER).max(1);
     let mut rows: Vec<Line<'static>> = Vec::new();
-    if band {
-        rows.push(Line::styled(" ".repeat(width.max(1)), style));
-    }
     let mut first = true;
     let push_row = |visual: String, first: &mut bool, rows: &mut Vec<Line<'static>>| {
         let gutter = if *first { "› " } else { "  " };
         *first = false;
-        let mut spans = vec![Span::styled(
-            gutter.to_owned(),
-            notice_style().add_modifier(Modifier::BOLD),
-        )];
+        let mut spans = vec![Span::styled(gutter.to_owned(), focused_user_gutter())];
         spans.push(Span::styled(visual, Style::default()));
-        let used: usize = spans.iter().map(|span| display_width(&span.content)).sum();
-        if band && used < width {
-            spans.push(Span::raw(" ".repeat(width - used)));
-        }
-        rows.push(Line::from(spans).style(style));
+        rows.push(Line::from(spans));
     };
     for logical in text.split('\n') {
         for visual in wrap_message_row(logical, content_width) {
@@ -211,15 +191,17 @@ pub(super) fn user_lines(
     for media_ref in media {
         push_row(media_ref.compact_label(), &mut first, &mut rows);
     }
-    if band {
-        rows.push(Line::styled(" ".repeat(width.max(1)), style));
-    }
     rows
 }
 
+fn focused_user_gutter() -> Style {
+    crate::theme::palette()
+        .accent()
+        .add_modifier(Modifier::BOLD)
+}
+
 /// One logical line split into display-width-bounded visual rows, preserving
-/// every character. Whitespace-only tails are kept because the band must cover
-/// the full width anyway.
+/// every character, including whitespace-only tails.
 fn wrap_message_row(line: &str, width: usize) -> Vec<String> {
     if line.is_empty() {
         return vec![String::new()];

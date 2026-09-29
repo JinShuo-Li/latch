@@ -1871,8 +1871,7 @@ fn header_pricing_reaches_the_sidebar() {
 // ---- V4 composer and layout redesign ----
 
 #[test]
-fn user_messages_render_on_a_neutral_band_with_a_gutter() {
-    let palette = crate::theme::palette();
+fn user_messages_use_a_gutter_without_a_background_band() {
     let lines = cell_lines(
         &Cell::User {
             text: "fix the parser".into(),
@@ -1882,63 +1881,41 @@ fn user_messages_render_on_a_neutral_band_with_a_gutter() {
         40,
         true,
     );
-    // Top pad, one content row, bottom pad.
-    assert_eq!(lines.len(), 3);
-    let band = palette.user_message().bg;
-    assert!(band.is_some(), "user band is painted on rich terminals");
-    for line in &lines {
-        assert_eq!(line.style.bg, band, "every user row keeps the band");
-    }
-    let first: String = lines[1]
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].style.bg, None);
+    let text: String = lines[0]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert!(first.starts_with("› "), "{first:?}");
-    assert!(first.contains("fix the parser"));
-    // The band reaches the full transcript width.
-    let width: usize = lines[1]
-        .spans
-        .iter()
-        .map(|span| display_width(&span.content))
-        .sum();
-    assert_eq!(width, 40, "band padding covers the row");
+    assert_eq!(text, "› fix the parser");
 }
 
 #[test]
-fn wrapped_user_messages_keep_the_band_on_every_visual_row() {
-    let text = "word ".repeat(30);
+fn wrapped_user_messages_keep_the_gutter_without_padding() {
     let lines = cell_lines(
         &Cell::User {
-            text,
+            text: "word ".repeat(30),
             media: Vec::new(),
         },
         false,
         24,
         true,
     );
-    let band = crate::theme::palette().user_message().bg;
-    assert!(lines.len() > 4, "long text wraps into several rows");
+    assert!(lines.len() > 2);
+    assert_eq!(lines[0].spans[0].content, "› ");
+    for line in &lines[1..] {
+        assert_eq!(line.spans[0].content, "  ");
+    }
     for line in &lines {
-        assert_eq!(line.style.bg, band);
+        assert_eq!(line.style.bg, None);
         let width: usize = line
             .spans
             .iter()
             .map(|span| display_width(&span.content))
             .sum();
         assert!(width <= 24, "row fits the viewport: {width}");
-        if line.spans.len() > 1 {
-            assert_eq!(width, 24, "content rows are padded to the full width");
-        }
     }
-    // Only the first content row carries the `›` gutter.
-    let text_rows = &lines[1..lines.len() - 1];
-    assert!(text_rows[0].spans[0].content == "› ");
-    assert!(
-        text_rows[1..]
-            .iter()
-            .all(|line| line.spans[0].content == "  ")
-    );
 }
 
 #[test]
@@ -2311,7 +2288,7 @@ fn snapshot_user_and_assistant_message_hierarchy() {
 }
 
 #[test]
-fn snapshot_narrow_user_message_keeps_the_band() {
+fn snapshot_narrow_user_message_wraps_cleanly() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::UserMessage {

@@ -1,14 +1,14 @@
-                                                                                                                                                            │deepseek-flash                             
-› Fix the failing test.                                                                                                                                     │WORK · 0 turns · 0s                        
-                                                                                                                                                            │on main                                    
-                                                                                                                                                            │                                           
-✗ Ran cargo test                                                                                                                                            │CURRENT REQUEST                            
-  └ exit code 1                                                                                                                                             │Fix the failing test.                      
-                                                                                                                                                            │                                           
-    exit code 1                                                                                                                                             │TASK                                       
-    assertion failed                                                                                                                                        │InProgress                                 
+› Fix the failing test.                                                                                                                                     │deepseek-flash                             
+                                                                                                                                                            │WORK · 0 turns · 0s                        
+✗ Ran cargo test                                                                                                                                            │on main                                    
+  └ exit code 1                                                                                                                                             │                                           
+                                                                                                                                                            │CURRENT REQUEST                            
+    exit code 1                                                                                                                                             │Fix the failing test.                      
+    assertion failed                                                                                                                                        │                                           
+                                                                                                                                                            │TASK                                       
+• The addend is wrong; fixing it now.                                                                                                                       │InProgress                                 
                                                                                                                                                             │Implementation unchanged                   
-• The addend is wrong; fixing it now.                                                                                                                       │Validation pending                         
+                                                                                                                                                            │Validation pending                         
                                                                                                                                                             │                                           
                                                                                                                                                             │CONTEXT                                    
                                                                                                                                                             │Working set  ≈48.1k / 256k tok             
