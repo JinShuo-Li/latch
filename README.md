@@ -58,15 +58,26 @@ On Windows, use a focused checkout owned by your account. Existing files whose A
 
 ## Benchmark results
 
-The following tables report the 6 October 2026 local comparison of Latch and
+The following charts report the 6 October 2026 local comparison of Latch and
 OpenCode v2.0.22 on 25 candidate coding tasks each, using the same DeepSeek
 V4.1 Flash model, credential, prompts, timeouts and independent acceptance checks.
 Each task has one attempt per agent, with at most three attempts running globally.
 This is an exploratory comparison; it does not establish statistical significance.
 
-![Table 1. Task quality and execution efficiency: Latch passed 23 of 25 tasks versus OpenCode's 22, with mean wall times of 34.78 and 49.92 seconds.](benchmark/figures/2026-10-06/performance-table.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/figures/2026-10-06/task-time-dark.svg">
+  <img alt="Per-task execution time in seconds: blue bars represent Latch and orange bars represent OpenCode; hatched bars mark failed tasks." src="benchmark/figures/2026-10-06/task-time-light.svg">
+</picture>
 
-![Table 2. Estimated direct DeepSeek API expenditure: mean off-peak cost per task is CNY 0.026200 for Latch and CNY 0.030119 for OpenCode.](benchmark/figures/2026-10-06/cost-table.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/figures/2026-10-06/task-tokens-dark.svg">
+  <img alt="Per-task total input and output token usage: blue bars represent Latch and orange bars represent OpenCode; hatched bars mark failed tasks." src="benchmark/figures/2026-10-06/task-tokens-light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/figures/2026-10-06/task-cost-dark.svg">
+  <img alt="Per-task estimated off-peak direct DeepSeek API cost in CNY: blue bars represent Latch and orange bars represent OpenCode; hatched bars mark failed tasks." src="benchmark/figures/2026-10-06/task-cost-light.svg">
+</picture>
 
 Input includes cache-hit tokens; output includes reasoning tokens. All-attempt
 averages include failed tasks. Cost estimates apply the dated
@@ -74,9 +85,15 @@ averages include failed tasks. Cost estimates apply the dated
 to observed token usage and are not actual OpenCode Go invoices. CPU and memory
 are omitted because whole-agent resource accounting was not comparable.
 
-The tables use Times New Roman, rendered as SVG outlines for consistent display.
-Download the [performance PDF](benchmark/figures/2026-10-06/performance-table.pdf)
-or [cost PDF](benchmark/figures/2026-10-06/cost-table.pdf) for print.
+The charts have transparent backgrounds and use Times New Roman outlines.
+GitHub selects light or dark text to match your theme. Blue is Latch; orange is
+OpenCode. Each task has two bars; hatching marks a failed external acceptance
+check. Tasks are grouped by difficulty and ordered by name within each group.
+Download the [time PDF](benchmark/figures/2026-10-06/task-time-light.pdf),
+[token PDF](benchmark/figures/2026-10-06/task-tokens-light.pdf), or
+[cost PDF](benchmark/figures/2026-10-06/task-cost-light.pdf) for print.
+The detailed [performance table](benchmark/figures/2026-10-06/performance-table.pdf)
+and [cost table](benchmark/figures/2026-10-06/cost-table.pdf) remain available.
 The [full report](benchmark/reports/2026-10-06-full-comparison/README.md)
 contains failure explanations and methodology;
 [per-attempt CSV](benchmark/reports/2026-10-06-full-comparison/per-attempt.csv)

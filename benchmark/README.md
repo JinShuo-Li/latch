@@ -176,4 +176,13 @@ The font directory must contain actual Times New Roman `times.ttf` and
 `timesbd.ttf`; on WSL the default is `/mnt/c/Windows/Fonts`. Fonts are not
 distributed in this repository. Outputs in `benchmark/figures/2026-10-06/`
 include SVG with outlined text for GitHub display, PDF with embedded font
-subsets for print, and 240-dpi PNG. The root README embeds the SVG tables.
+subsets for print, and 240-dpi PNG. The original tables remain available as downloads.
+
+`python benchmark/render_charts.py --font-dir /path/to/Times-New-Roman-fonts`
+uses the same optional dependencies to render the per-task time, total-token
+and estimated off-peak-cost grouped bar charts from the committed
+`per-attempt.csv`. It checks the 25 task pairs and token/time/pass aggregates
+against `metrics.json`. All SVG, PDF and PNG charts have transparent backgrounds;
+light/dark variants change text and grid colors. The root README uses a
+`picture` element to choose SVG text colors for the viewer's theme. Hatched bars
+identify failed external acceptance checks, and all attempts are included.

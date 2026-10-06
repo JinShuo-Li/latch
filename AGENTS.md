@@ -96,7 +96,8 @@ bash scripts/release-gate.sh
   both agents. `benchmark/report_comparison.py` exports performance and dated
   DeepSeek price scenarios without configs, credentials or databases.
 - Publication tables: `python3 benchmark/render_tables.py --font-dir <fonts>`
-  renders the recorded comparison without model calls; requires optional
+  renders tables; `benchmark/render_charts.py` renders transparent per-task
+  charts. Both use recorded results without model calls and require optional
   Matplotlib and actual Times New Roman `times.ttf` / `timesbd.ttf` fonts.
 - Snapshot updates: `LATCH_UPDATE_SNAPSHOTS=1 cargo test -p latch-tui --lib`.
   Exception: `crates/latch-tui/tests/snapshots/v31_sidebar.txt` is `include_str!`,
