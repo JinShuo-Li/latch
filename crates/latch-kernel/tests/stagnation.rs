@@ -339,6 +339,14 @@ async fn reread_after_guarded_mutation_is_allowed() {
             vec![call("r2", "read_file", json!({"path":"a.txt"}))],
         )),
         step(response("done", vec![])),
+        step(response(
+            "Acknowledging the completion correction.",
+            vec![call(
+                "complete-1",
+                "complete",
+                json!({"implementation_done":true}),
+            )],
+        )),
     ]);
     let (mut agent, store, session) = fresh_agent(
         &dir,
@@ -564,6 +572,14 @@ async fn reground_breaks_the_loop() {
             )],
         )),
         step(response("done", vec![])),
+        step(response(
+            "Acknowledging the completion correction.",
+            vec![call(
+                "complete-1",
+                "complete",
+                json!({"implementation_done":true}),
+            )],
+        )),
     ]);
     let (mut agent, store, session) = fresh_agent(
         &dir,
