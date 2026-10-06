@@ -93,6 +93,11 @@ impl ProcessOutput {
     }
 }
 impl ToolExecutor {
+    /// Configured default shared by shell and validation command execution.
+    pub(super) fn shell_timeout_seconds(&self) -> u64 {
+        self.policy.config.shell_timeout_seconds
+    }
+
     pub fn new(
         workspace: PathBuf,
         artifacts: PathBuf,

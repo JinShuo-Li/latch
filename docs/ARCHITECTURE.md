@@ -406,6 +406,8 @@ derives completion. The model never supplies or sees an internal event id,
 call id, or ledger id. `record_evidence` remains for non-command claims but
 accepts only `pending` and `unavailable`; `passed`/`failed` statuses are
 kernel-owned, so a model cannot self-certify.
+Validation uses the configured `permissions.shell_timeout_seconds` default,
+just like shell execution; an explicit `timeout_seconds` overrides it.
 
 Evidence is a current-state ledger: the newest entry per claim is the current
 evidence; earlier entries stay in durable history. A validation that failed and

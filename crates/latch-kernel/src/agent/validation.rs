@@ -58,11 +58,8 @@ impl Agent {
                 }
             }
         }
-        let timeout = call
-            .arguments
-            .get("timeout_seconds")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(600);
+        let timeout =
+            validation_timeout_seconds(&call.arguments, self.tools.shell_timeout_seconds());
         self.refresh_workspace_generation()?;
         let starting_generation = self.evidence.workspace_generation();
         let starting_watermark = self.workspace_generation_watermark;
@@ -213,5 +210,43 @@ impl Agent {
         };
         self.emit(payload, sink)?;
         Ok(result)
+    }
+}
+
+fn validation_timeout_seconds(arguments: &serde_json::Value, default: u64) -> u64 {
+    arguments
+        .get("timeout_seconds")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validation_timeout_seconds;
+    use serde_json::json;
+
+    #[test]
+    fn validation_timeout_uses_shell_default_for_missing_or_invalid_values() {
+        assert_eq!(validation_timeout_seconds(&json!({}), 120), 120);
+        assert_eq!(
+            validation_timeout_seconds(&json!({"timeout_seconds": -1}), 120),
+            120
+        );
+        assert_eq!(
+            validation_timeout_seconds(&json!({"timeout_seconds": "30"}), 120),
+            120
+        );
+    }
+
+    #[test]
+    fn validation_timeout_preserves_explicit_unsigned_values_including_zero() {
+        assert_eq!(
+            validation_timeout_seconds(&json!({"timeout_seconds": 30}), 120),
+            30
+        );
+        assert_eq!(
+            validation_timeout_seconds(&json!({"timeout_seconds": 0}), 120),
+            0
+        );
     }
 }

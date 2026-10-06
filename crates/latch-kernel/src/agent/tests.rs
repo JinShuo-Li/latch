@@ -446,6 +446,56 @@ fn freshness_agent(dir: &tempfile::TempDir) -> (EventStore, Uuid, Agent) {
     policy_agent(dir, PermissionConfig::default(), vec![])
 }
 
+#[tokio::test]
+async fn validation_execution_obeys_configured_timeout_and_explicit_override() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &dir,
+        PermissionConfig {
+            shell_timeout_seconds: 1,
+            ..Default::default()
+        },
+        vec![],
+    );
+    let command = if cfg!(windows) {
+        "python -c \"import time; time.sleep(2)\""
+    } else {
+        "python3 -c \"import time; time.sleep(2)\""
+    };
+    let result = agent
+        .run_validation("default timeout", command, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(result.is_error, "{}", result.output);
+    assert!(result.output.contains("timed out"), "{}", result.output);
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let result = agent
+        .execute_validate(
+            &ToolCall {
+                id: "explicit-timeout".into(),
+                name: "validate".into(),
+                arguments: json!({"requirement":"explicit timeout","command":command,"timeout_seconds":3}),
+            },
+            CancellationToken::new(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", result.output);
+    assert_eq!(
+        store
+            .events(sid)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(
+                event.payload,
+                EventPayload::ValidationResult { passed: true, .. }
+            ))
+            .count(),
+        1
+    );
+}
+
 async fn freshness_validate(agent: &mut Agent) {
     let result = agent
         .run_validation(
