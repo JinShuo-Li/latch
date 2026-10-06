@@ -1,0 +1,83 @@
+{
+  "case_id": "lease_queue",
+  "tier": "hard",
+  "title": "Queue lease expiry and stale acknowledgements",
+  "case_sha256": "65033941e56ada0b358e68246a5df09e287b38ff5578443caa243f46b8f49972",
+  "baseline_commit": "bfcd04a9aff73f89ad36ed5bc2dadbef7183ba1d",
+  "passed": false,
+  "baseline_checks": [
+    {
+      "name": "stale_ack_after_reclaim",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "no_duplicate_live_claim",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "attempts_and_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_lease",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "stale_ack_after_reclaim",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_duplicate_live_claim",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "attempts_and_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_lease",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 40.508,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "834b31da-2854-4e52-9e71-a946b754da29",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 86302,
+    "output_tokens": 3795,
+    "cache_read_tokens": 65792,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.7623,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 10,
+    "tool_calls": 13,
+    "validation_passes": 4,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M queue.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/lease_queue/workspace"
+}

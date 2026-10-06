@@ -1,0 +1,83 @@
+{
+  "case_id": "dag_scheduler",
+  "tier": "hard",
+  "title": "Dependency-aware task scheduler",
+  "case_sha256": "3e922357d00da8c5ec9e536e8ffa826151c289a55b5c00058f0903b7beb29b0a",
+  "baseline_commit": "9d325a1260ee4eebb087d8c5f3b29c4aa8de76ce",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "shared_dependency_once",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "cycle_before_side_effect",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: cycle\n"
+    },
+    {
+      "name": "unknown_before_side_effect",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: unknown\n"
+    },
+    {
+      "name": "runner_failure_stops_dependents",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 9, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "shared_dependency_once",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "cycle_before_side_effect",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unknown_before_side_effect",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "runner_failure_stops_dependents",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 19.598,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "b8cff27d-b0bf-4341-b220-aadbf4325abe",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 38204,
+    "output_tokens": 1888,
+    "cache_read_tokens": 31360,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8209,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 6,
+    "tool_calls": 8,
+    "validation_passes": 2,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M scheduler.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/dag_scheduler/workspace"
+}

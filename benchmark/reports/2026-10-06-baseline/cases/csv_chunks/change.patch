@@ -1,0 +1,36 @@
+diff --git a/importer.py b/importer.py
+index 30d6586..b25e2b5 100644
+--- a/importer.py
++++ b/importer.py
+@@ -3,10 +3,27 @@
+ import csv
+ 
+ 
++def _iter_lines(chunks):
++    """Yield physical lines from chunks, keeping the trailing newline.
++
++    A chunk may end anywhere, including in the middle of a row, a field, or a
++    quoted field. Yielding whole lines lets csv.reader stitch quoted fields
++    back together across chunk boundaries.
++    """
++    pending = ""
++    for chunk in chunks:
++        pending += chunk
++        lines = pending.split("\n")
++        pending = lines.pop()
++        for line in lines:
++            yield line + "\n"
++    if pending:
++        yield pending
++
++
+ def parse_chunks(chunks):
+     rows = []
+-    for chunk in chunks:
+-        for line in chunk.splitlines():
+-            if line:
+-                rows.extend(csv.reader([line]))
++    for row in csv.reader(_iter_lines(chunks)):
++        if row:
++            rows.append(row)
+     return rows

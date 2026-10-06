@@ -1,0 +1,37 @@
+diff --git a/config_layers.py b/config_layers.py
+index 2e809db..d1f47f6 100644
+--- a/config_layers.py
++++ b/config_layers.py
+@@ -3,6 +3,15 @@
+ from copy import deepcopy
+ 
+ 
++def _merge(base, override):
++    """Recursively merge ``override`` into ``base`` without aliasing inputs."""
++    for key, value in override.items():
++        if isinstance(value, dict) and isinstance(base.get(key), dict):
++            _merge(base[key], value)
++        else:
++            base[key] = deepcopy(value)
++
++
+ def resolve_config(defaults, project, environ, flags):
+     """Return merged settings; later sources take precedence.
+ 
+@@ -10,14 +19,14 @@ def resolve_config(defaults, project, environ, flags):
+     APP_ENDPOINT and APP_TIMEOUT override the corresponding nested settings.
+     """
+     result = deepcopy(defaults)
+-    result.update(project)
++    _merge(result, project)
+     service = result.setdefault("service", {})
+     if "APP_ENDPOINT" in environ:
+         service["endpoint"] = environ["APP_ENDPOINT"]
+     if "APP_TIMEOUT" in environ:
+         service["timeout"] = int(environ["APP_TIMEOUT"])
+     for key, value in flags.items():
+-        if value:
++        if value is not None:
+             if key in ("endpoint", "timeout"):
+                 service[key] = value
+             else:

@@ -1,0 +1,73 @@
+{
+  "case_id": "duration_units",
+  "tier": "easy",
+  "title": "Millisecond and second timeout parsing",
+  "case_sha256": "276dc7d8fe60bbb844ca58499376cd646c07077527b27d4f6049488b3b6e0857",
+  "baseline_commit": "7e24a41825fdefcac8a701ae00150f6aae13a5b6",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "units",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '250m'\n"
+    },
+    {
+      "name": "reject_malformed",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: -1s\n"
+    },
+    {
+      "name": "zero_and_large",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '0m'\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "units",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "reject_malformed",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "zero_and_large",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 154.983,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "f99f25c8-828d-4fef-9897-1e80c0cbda9e",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 237582,
+    "output_tokens": 19791,
+    "cache_read_tokens": 193792,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8157,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 22,
+    "tool_calls": 29,
+    "validation_passes": 12,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M duration.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/duration_units/workspace"
+}

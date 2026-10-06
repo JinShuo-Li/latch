@@ -1,0 +1,28 @@
+diff --git a/headers.py b/headers.py
+index a3962f6..3b85da0 100644
+--- a/headers.py
++++ b/headers.py
+@@ -1,8 +1,22 @@
+ """Normalize incoming gateway headers."""
+ 
++SET_COOKIE = "set-cookie"
++
+ 
+ def normalize_headers(pairs):
++    """Collapse ordered (name, value) pairs into a case-insensitive mapping.
++
++    Keys are lowercased, ordinary duplicate fields are combined with ", "
++    in the order received, and Set-Cookie values are kept as a list so they
++    never merge into one field.
++    """
+     result = {}
+     for name, value in pairs:
+-        result[name] = value
++        key = name.lower()
++        if key == SET_COOKIE:
++            result.setdefault(key, []).append(value)
++        elif key in result:
++            result[key] = "%s, %s" % (result[key], value)
++        else:
++            result[key] = value
+     return result

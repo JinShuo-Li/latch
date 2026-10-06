@@ -1,0 +1,70 @@
+diff --git a/logging_store.py b/logging_store.py
+index 73422dd..e95a72c 100644
+--- a/logging_store.py
++++ b/logging_store.py
+@@ -4,11 +4,24 @@ from pathlib import Path
+ 
+ 
+ def append_log(path, line, max_bytes, backups=2):
++    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
++        raise ValueError("max_bytes must be a positive integer")
++    if not isinstance(backups, int) or isinstance(backups, bool) or backups < 1:
++        raise ValueError("backups must be a positive integer")
++
+     path = Path(path)
+     path.parent.mkdir(parents=True, exist_ok=True)
+     encoded = (line + "\n").encode("utf-8")
+-    if path.exists() and path.stat().st_size + len(encoded) > max_bytes:
+-        archived = path.with_name(path.name + ".1")
+-        path.replace(archived)
++
++    if path.exists() and path.stat().st_size > 0 and path.stat().st_size + len(encoded) > max_bytes:
++        # Shift older archives out of the way so the newest is never overwritten.
++        for index in range(backups, 0, -1):
++            older = path.with_name("%s.%d" % (path.name, index - 1)) if index > 1 else path
++            newer = path.with_name("%s.%d" % (path.name, index))
++            if older.exists():
++                if newer.exists():
++                    newer.unlink()
++                older.replace(newer)
++
+     with path.open("ab") as stream:
+         stream.write(encoded)
+diff --git a/test_logging_store.py b/test_logging_store.py
+index 74b9d43..7d1a97e 100644
+--- a/test_logging_store.py
++++ b/test_logging_store.py
+@@ -21,6 +21,33 @@ class RotationTest(unittest.TestCase):
+             self.assertEqual((Path(directory) / "app.log.1").read_text(), "two\n")
+             self.assertEqual((Path(directory) / "app.log.2").read_text(), "one\n")
+ 
++    def test_cascade_keeps_newest_archives_within_limit(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "app.log"
++            for text in ("one", "two", "three", "four"):
++                append_log(path, text, 5, backups=2)
++            self.assertEqual(path.read_text(), "four\n")
++            self.assertEqual((Path(directory) / "app.log.1").read_text(), "three\n")
++            self.assertEqual((Path(directory) / "app.log.2").read_text(), "two\n")
++            self.assertFalse((Path(directory) / "app.log.3").exists())
++
++    def test_empty_log_is_not_rotated(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "app.log"
++            path.touch()
++            append_log(path, "x" * 20, 5, backups=2)
++            self.assertEqual(path.read_text(), "x" * 20 + "\n")
++            self.assertEqual(sorted(p.name for p in Path(directory).iterdir()), ["app.log"])
++
++    def test_invalid_limits_are_rejected(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "app.log"
++            for kwargs in ({"max_bytes": 0}, {"max_bytes": -1},
++                           {"max_bytes": 10, "backups": 0},
++                           {"max_bytes": 10, "backups": -1}):
++                with self.assertRaises(ValueError):
++                    append_log(path, "one", **kwargs)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

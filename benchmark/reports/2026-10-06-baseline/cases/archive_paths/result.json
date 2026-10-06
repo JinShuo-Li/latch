@@ -1,0 +1,73 @@
+{
+  "case_id": "archive_paths",
+  "tier": "medium",
+  "title": "Safe ZIP import before extraction",
+  "case_sha256": "ed400cad189a9930733893bcaf5c85cc51d7a7eea4e29145c43dc85ea5b0fc14",
+  "baseline_commit": "edb486ec8254d29af9a1402d9586d7f04402b8e4",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "nested_file",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "traversal_preflight",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError: traversal accepted\n"
+    },
+    {
+      "name": "absolute_and_symlink",
+      "passed": false,
+      "detail": "e>\n  File \"/tmp/workspace/archive.py\", line 16, in extract_archive\n    target.write_bytes(source.read(member))\n  File \"/usr/lib/python3.12/pathlib.py\", line 1038, in write_bytes\n    with self.open(mode='wb') as f:\n         ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/outside.txt'\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "nested_file",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "traversal_preflight",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "absolute_and_symlink",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 24.804,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "7052a427-b61f-4884-a6e7-e3c9df2518bc",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 41776,
+    "output_tokens": 3053,
+    "cache_read_tokens": 35328,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8457,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 6,
+    "tool_calls": 8,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M archive.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/archive_paths/workspace"
+}

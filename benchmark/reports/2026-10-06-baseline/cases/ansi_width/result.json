@@ -1,0 +1,74 @@
+{
+  "case_id": "ansi_width",
+  "tier": "easy",
+  "title": "Terminal cell width with color and Unicode",
+  "case_sha256": "016925ca9835ffb5cd11dce9a2ec6f5501b9c34aa91947d716e691e5e954be29",
+  "baseline_commit": "f491a6450e8dfe6eceb07fb99bfa23d4ac65226e",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "ansi_and_cjk",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "combining_and_emoji",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "control_sequences",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "ansi_and_cjk",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "combining_and_emoji",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "control_sequences",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 167.714,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "9c8d7c24-536d-4c50-93c5-0b65b5541406",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 236304,
+    "output_tokens": 22338,
+    "cache_read_tokens": 182912,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.7741,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 21,
+    "tool_calls": 28,
+    "validation_passes": 11,
+    "validation_failures": 2
+  },
+  "git_status": [
+    " M test_width.py",
+    " M width.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/ansi_width/workspace"
+}

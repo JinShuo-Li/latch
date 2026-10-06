@@ -1,0 +1,109 @@
+diff --git a/sync.py b/sync.py
+index 0ba34d1..3181ebb 100644
+--- a/sync.py
++++ b/sync.py
+@@ -1,23 +1,92 @@
+ """Incremental directory mirror."""
+ 
++import hashlib
+ import json
+ import shutil
+ from pathlib import Path
+ 
++CHUNK_SIZE = 1 << 20
++MANIFEST_NAME = ".manifest.json"
++
++
++def _digest(path):
++    """Return the SHA-256 hex digest of a file's contents."""
++    digest = hashlib.sha256()
++    with path.open("rb") as handle:
++        for chunk in iter(lambda: handle.read(CHUNK_SIZE), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _read_manifest(path):
++    """Return the previous manifest mapping, or an empty one if unusable."""
++    if not path.is_file():
++        return {}
++    try:
++        previous = json.loads(path.read_text())
++    except (OSError, ValueError):
++        return {}
++    return previous if isinstance(previous, dict) else {}
++
++
++def _remove(path):
++    """Remove a destination entry, whatever kind of entry it is."""
++    if path.is_symlink() or path.is_file():
++        path.unlink(missing_ok=True)
++    elif path.is_dir():
++        shutil.rmtree(path)
++
+ 
+ def sync_tree(source, destination):
+     source, destination = Path(source), Path(destination)
+-    destination.mkdir(parents=True, exist_ok=True)
+-    manifest = destination / ".manifest.json"
+-    previous = json.loads(manifest.read_text()) if manifest.exists() else {}
++    manifest = destination / MANIFEST_NAME
++    previous = _read_manifest(manifest)
++
++    # Plan the whole sync before touching the destination so that a rejected
++    # source tree leaves the destination and its manifest unmodified.
+     current = {}
+-    for path in source.rglob("*"):
+-        if path.is_file():
+-            relative = path.relative_to(source).as_posix()
+-            current[relative] = str(path.stat().st_size)
+-            target = destination / relative
+-            if relative not in previous:
+-                target.parent.mkdir(parents=True, exist_ok=True)
+-                shutil.copy2(path, target)
+-    manifest.write_text(json.dumps(current))
++    current_dirs = set()
++    copies = []
++    for path in sorted(source.rglob("*")):
++        if path.is_symlink():
++            raise ValueError(f"symlink in source is not supported: {path}")
++        relative = path.relative_to(source).as_posix()
++        if path.is_dir():
++            current_dirs.add(relative)
++            continue
++        if not path.is_file():
++            continue
++        digest = _digest(path)
++        current[relative] = digest
++        target = destination / relative
++        if previous.get(relative) != digest or target.is_symlink() or not target.is_file():
++            copies.append((path, target))
++
++    stale = []
++    stale_dirs = []
++    for path in sorted(destination.rglob("*")):
++        if path.parent == destination and path.name == MANIFEST_NAME:
++            continue
++        relative = path.relative_to(destination).as_posix()
++        if path.is_dir() and not path.is_symlink():
++            if relative not in current_dirs:
++                stale_dirs.append(path)
++        elif relative not in current:
++            stale.append(path)
++
++    destination.mkdir(parents=True, exist_ok=True)
++    for path, target in copies:
++        target.parent.mkdir(parents=True, exist_ok=True)
++        if target.is_symlink() or target.is_dir():
++            _remove(target)
++        shutil.copy2(path, target)
++    for path in stale:
++        _remove(path)
++    for path in sorted(stale_dirs, key=lambda path: len(path.parts), reverse=True):
++        if path.exists():
++            try:
++                path.rmdir()
++            except OSError:
++                pass
++    manifest.write_text(json.dumps(current, sort_keys=True))
+     return current

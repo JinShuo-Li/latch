@@ -1,0 +1,64 @@
+diff --git a/scheduler.py b/scheduler.py
+index 3ba649e..adb2f2f 100644
+--- a/scheduler.py
++++ b/scheduler.py
+@@ -1,13 +1,52 @@
+ """Task graph execution; tasks maps names to dependency lists."""
+ 
+ 
+-def schedule(tasks, runner):
+-    completed = []
++def _validate(tasks):
++    """Reject unknown dependencies and cycles before anything runs."""
+     for name, dependencies in tasks.items():
+-        runner(name)
+-        completed.append(name)
+         for dependency in dependencies:
+-            if dependency not in completed:
+-                runner(dependency)
+-                completed.append(dependency)
++            if dependency not in tasks:
++                raise ValueError(
++                    "task %r depends on unknown task %r" % (name, dependency)
++                )
++
++    state = {}  # name -> "visiting" while on the current path, "done" once cleared
++    for name in tasks:
++        if state.get(name) == "done":
++            continue
++        path = [name]
++        stack = [(name, iter(tasks[name]))]
++        state[name] = "visiting"
++        while stack:
++            current, remaining = stack[-1]
++            for dependency in remaining:
++                if state.get(dependency) == "visiting":
++                    raise ValueError(
++                        "dependency cycle: %s" % " -> ".join(path + [dependency])
++                    )
++                if state.get(dependency) != "done":
++                    state[dependency] = "visiting"
++                    path.append(dependency)
++                    stack.append((dependency, iter(tasks[dependency])))
++                    break
++            else:
++                state[current] = "done"
++                stack.pop()
++                path.pop()
++
++
++def schedule(tasks, runner):
++    _validate(tasks)
++
++    completed = []
++    done = set()
++    for _ in tasks:
++        for name, dependencies in tasks.items():
++            if name in done:
++                continue
++            if all(dependency in done for dependency in dependencies):
++                runner(name)
++                done.add(name)
++                completed.append(name)
++                break
+     return completed

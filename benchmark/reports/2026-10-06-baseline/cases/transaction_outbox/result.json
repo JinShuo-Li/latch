@@ -1,0 +1,73 @@
+{
+  "case_id": "transaction_outbox",
+  "tier": "hard",
+  "title": "Transactional order and outbox event",
+  "case_sha256": "3e74af9962dc6e4558dc5fbbab958d87df90547f51ea0ec412fdde7ea56c692c",
+  "baseline_commit": "536a14705430558be95f322f094bd595a11fea46",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "event_failure_rolls_back_order",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "duplicate_has_no_extra_event",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "insertion_order_and_valid_amount",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError: zero amount\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "event_failure_rolls_back_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "duplicate_has_no_extra_event",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "insertion_order_and_valid_amount",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 26.48,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "8f5aea6e-5c86-4082-b418-d2e67cd87105",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 60817,
+    "output_tokens": 2928,
+    "cache_read_tokens": 51072,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8398,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 8,
+    "tool_calls": 11,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M outbox.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/transaction_outbox/workspace"
+}

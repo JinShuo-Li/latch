@@ -1,0 +1,74 @@
+{
+  "case_id": "webhook_dedupe",
+  "tier": "hard",
+  "title": "Idempotent webhook delivery with durable claims",
+  "case_sha256": "2940ba8691d0f0ef57f5ffcfb396ae31d93092891743c86b496c83a37b6a2a32",
+  "baseline_commit": "aea5a5b22b3d91dfe14d8d8a58d9beb3732c8184",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "handler_failure_retry",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "duplicate_only_once",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "durable_across_connection",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "handler_failure_retry",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "duplicate_only_once",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "durable_across_connection",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 40.5,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "7ba3b43a-0bd4-4d16-827d-b167a2eb1364",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 47272,
+    "output_tokens": 5282,
+    "cache_read_tokens": 39552,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8367,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 6,
+    "tool_calls": 7,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M test_webhook.py",
+    " M webhook.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/webhook_dedupe/workspace"
+}

@@ -1,0 +1,194 @@
+diff --git a/config_store.py b/config_store.py
+index 0ceac0c..4c53356 100644
+--- a/config_store.py
++++ b/config_store.py
+@@ -1,16 +1,101 @@
+ """Daemon JSON configuration with backup."""
+ 
+ import json
++import os
++import tempfile
++from collections.abc import Mapping
+ from pathlib import Path
+ 
+ 
++class ConfigError(ValueError):
++    """Raised when neither the live file nor the backup holds valid settings."""
++
++
++def _backup_path(path):
++    return path.with_name(path.name + ".bak")
++
++
++def _atomic_write(path, content):
++    """Replace path with content, never leaving a partially written file."""
++    try:
++        mode = os.stat(path).st_mode & 0o777
++    except OSError:
++        mask = os.umask(0)
++        os.umask(mask)
++        mode = 0o666 & ~mask
++    fd, tmp_name = tempfile.mkstemp(
++        dir=path.parent, prefix=path.name + ".", suffix=".tmp"
++    )
++    tmp = Path(tmp_name)
++    try:
++        with os.fdopen(fd, "wb") as handle:
++            handle.write(content)
++            handle.flush()
++            os.fsync(handle.fileno())
++        os.chmod(tmp, mode)
++        os.replace(tmp, path)
++    except BaseException:
++        tmp.unlink(missing_ok=True)
++        raise
++
++
++def _parse(text, source):
++    try:
++        data = json.loads(text)
++    except ValueError as exc:
++        raise ValueError(f"{source} is not valid JSON: {exc}") from exc
++    if not isinstance(data, Mapping):
++        raise ValueError(f"{source} does not contain a JSON object")
++    return data
++
++
+ def write_config(path, data):
+     path = Path(path)
++    if not isinstance(data, Mapping):
++        raise TypeError("config data must be a mapping")
++    try:
++        text = json.dumps(data)
++    except TypeError as exc:
++        raise TypeError(f"config data is not JSON-serializable: {exc}") from exc
++
+     path.parent.mkdir(parents=True, exist_ok=True)
+-    if path.exists():
+-        path.with_name(path.name + ".bak").write_bytes(path.read_bytes())
+-    path.write_text(json.dumps(data), encoding="utf-8")
++
++    try:
++        live = path.read_bytes()
++    except OSError:
++        live = None
++    if live is not None:
++        try:
++            _parse(live.decode("utf-8"), path)
++        except (UnicodeDecodeError, ValueError):
++            pass  # unusable live copy: keep the last known good backup
++        else:
++            _atomic_write(_backup_path(path), live)
++
++    _atomic_write(path, text.encode("utf-8"))
+ 
+ 
+ def read_config(path):
+-    return json.loads(Path(path).read_text(encoding="utf-8"))
++    path = Path(path)
++    backup = _backup_path(path)
++
++    live_error = None
++    try:
++        return _parse(path.read_text(encoding="utf-8"), path)
++    except (OSError, UnicodeDecodeError, ValueError) as exc:
++        live_error = exc
++
++    try:
++        backup_bytes = backup.read_bytes()
++        data = _parse(backup_bytes.decode("utf-8"), backup)
++    except (OSError, UnicodeDecodeError, ValueError) as backup_error:
++        raise ConfigError(
++            f"no valid configuration at {path} "
++            f"(live: {live_error}; backup: {backup_error})"
++        ) from backup_error
++
++    try:
++        _atomic_write(path, backup_bytes)
++    except OSError:
++        pass  # recovered settings matter more than repairing the live copy
++    return data
+diff --git a/check_config_store.py b/check_config_store.py
+new file mode 100644
+index 0000000..5520831
+--- /dev/null
++++ b/check_config_store.py
+@@ -0,0 +1,78 @@
++"""Ad-hoc behavioural check for config_store (not part of the visible suite)."""
++
++import json
++import os
++import tempfile
++from pathlib import Path
++
++from config_store import ConfigError, read_config, write_config
++
++with tempfile.TemporaryDirectory() as d:
++    path = Path(d) / "settings.json"
++    bak = path.with_name(path.name + ".bak")
++
++    # first write: no live file, no backup, live created atomically (no temp litter)
++    write_config(path, {"port": 8080})
++    assert json.loads(path.read_text()) == {"port": 8080}
++    assert not bak.exists()
++    assert [p.name for p in Path(d).iterdir()] == ["settings.json"]
++    mask = os.umask(0)
++    os.umask(mask)
++    assert oct(path.stat().st_mode & 0o777)[-3:] == oct(0o666 & ~mask)[-3:]  # no chmod surprise
++
++    # second write: previous valid config preserved as .bak
++    write_config(path, {"port": 9090, "host": "x"})
++    assert json.loads(path.read_text()) == {"port": 9090, "host": "x"}
++    assert json.loads(bak.read_text()) == {"port": 8080}
++
++    # invalid input: TypeError, no file touched, backup intact
++    for bad in [{"bad": {1}}, object(), [1, 2], "text"]:
++        try:
++            write_config(path, bad)
++        except TypeError:
++            pass
++        else:
++            raise AssertionError(f"expected TypeError for {bad!r}")
++    assert json.loads(path.read_text()) == {"port": 9090, "host": "x"}
++    assert json.loads(bak.read_text()) == {"port": 8080}
++    assert sorted(p.name for p in Path(d).iterdir()) == ["settings.json", "settings.json.bak"]
++
++    # corrupt live file, valid backup -> read recovers and repairs live
++    path.write_text("{not json")
++    assert read_config(path) == {"port": 8080}
++    assert json.loads(path.read_text()) == {"port": 8080}
++
++    # corrupt live + valid backup on a fresh pair, live not a JSON object
++    path.write_text('["list"]')
++    assert read_config(path) == {"port": 8080}
++
++    # corrupt live + no usable backup -> ConfigError
++    bak.unlink()
++    path.write_text("{nope")
++    try:
++        read_config(path)
++    except ConfigError:
++        pass
++    else:
++        raise AssertionError("expected ConfigError with both copies bad")
++
++    # missing live + valid backup -> recovered
++    path.unlink()
++    write_config(path, {"a": 1})
++    write_config(path, {"a": 2})          # bak := {"a": 1}
++    path.unlink()
++    assert read_config(path) == {"a": 1}
++
++    # corrupt live must not clobber a good backup on the next write
++    write_config(path, {"a": 3})          # live {"a":3}, bak {"a":1}
++    backup_before = bak.read_bytes()
++    path.write_text("{broken")
++    write_config(path, {"a": 4})
++    assert bak.read_bytes() == backup_before, "good backup was overwritten"
++    assert read_config(path) == {"a": 4}
++
++    # non-mapping JSON in live is rejected, backup is the fallback
++    path.write_text("42")
++    assert read_config(path) == {"a": 1}
++
++print("all behavioural checks passed")

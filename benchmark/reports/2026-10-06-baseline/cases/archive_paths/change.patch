@@ -1,0 +1,52 @@
+diff --git a/archive.py b/archive.py
+index 8a3fd01..792a8d4 100644
+--- a/archive.py
++++ b/archive.py
+@@ -1,18 +1,44 @@
+ """ZIP document import."""
+ 
++import re
++import stat
+ import zipfile
+ from pathlib import Path
+ 
++_DRIVE = re.compile(r"^[A-Za-z]:")
++
++
++def _safe_parts(name):
++    """Split an archive member name into safe relative parts.
++
++    Raises ValueError for absolute paths, traversal, or names that cannot be
++    treated as a plain relative path.
++    """
++    if not name or name.startswith("/") or "\\" in name or _DRIVE.match(name):
++        raise ValueError(f"unsafe archive member: {name!r}")
++    parts = [part for part in name.split("/") if part not in ("", ".")]
++    if not parts or any(part == ".." for part in parts):
++        raise ValueError(f"unsafe archive member: {name!r}")
++    return parts
++
+ 
+ def extract_archive(archive, destination):
+     destination = Path(destination)
+-    extracted = []
+     with zipfile.ZipFile(archive) as source:
++        # Validate every member before writing anything, so a rejected entry
++        # never leaves a partially extracted archive behind.
++        members = []
+         for member in source.infolist():
+             if member.is_dir():
+                 continue
+-            target = destination / member.filename
++            if stat.S_ISLNK(member.external_attr >> 16):
++                raise ValueError(f"symbolic link archive member: {member.filename!r}")
++            members.append((member, _safe_parts(member.filename)))
++
++        extracted = []
++        for member, parts in members:
++            target = destination.joinpath(*parts)
+             target.parent.mkdir(parents=True, exist_ok=True)
+             target.write_bytes(source.read(member))
+             extracted.append(member.filename)
+-    return extracted
++        return extracted

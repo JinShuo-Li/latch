@@ -1,0 +1,72 @@
+diff --git a/spool_recovery.py b/spool_recovery.py
+index 256a6b1..fbc76a6 100644
+--- a/spool_recovery.py
++++ b/spool_recovery.py
+@@ -1,25 +1,63 @@
+ """Process JSONL jobs from an append-only spool with a durable byte checkpoint."""
+ 
+ import json
++import os
++import tempfile
+ from pathlib import Path
+ 
+ 
+ def _save_offset(path, offset):
+-    Path(path).write_text(str(offset), encoding="ascii")
++    """Persist offset atomically so an interrupted write keeps the old value."""
++    path = Path(path)
++    fd, temp_name = tempfile.mkstemp(
++        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
++    )
++    try:
++        with os.fdopen(fd, "w", encoding="ascii") as stream:
++            stream.write(str(offset))
++            stream.flush()
++            os.fsync(stream.fileno())
++        os.replace(temp_name, path)
++    except BaseException:
++        try:
++            os.unlink(temp_name)
++        except OSError:
++            pass
++        raise
++
++
++def _load_offset(checkpoint_path):
++    """Return the saved offset, or 0 when no checkpoint has been committed yet."""
++    try:
++        text = checkpoint_path.read_text(encoding="ascii")
++    except FileNotFoundError:
++        return 0
++    return int(text.strip())
+ 
+ 
+ def process_spool(spool_path, checkpoint_path, handler):
+     """Call handler for each complete unprocessed record; return job count."""
+     spool_path = Path(spool_path)
+     checkpoint_path = Path(checkpoint_path)
+-    offset = int(checkpoint_path.read_text(encoding="ascii")) if checkpoint_path.exists() else 0
++    offset = _load_offset(checkpoint_path)
++
++    spool_size = spool_path.stat().st_size
++    if offset < 0 or offset > spool_size:
++        raise ValueError(
++            f"checkpoint offset {offset} is outside spool {spool_path} "
++            f"of size {spool_size}"
++        )
++
+     count = 0
+     with spool_path.open("rb") as spool:
+         spool.seek(offset)
+         for raw_line in spool:
++            if not raw_line.endswith(b"\n"):
++                # A partially written trailing record: leave it for the next run.
++                break
+             job = json.loads(raw_line.decode("utf-8"))
+-            offset = spool.tell()
+-            _save_offset(checkpoint_path, offset)
+             handler(job)
++            offset += len(raw_line)
++            _save_offset(checkpoint_path, offset)
+             count += 1
+     return count

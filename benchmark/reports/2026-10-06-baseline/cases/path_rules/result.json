@@ -1,0 +1,73 @@
+{
+  "case_id": "path_rules",
+  "tier": "easy",
+  "title": "Ordered ignore and reinclude rules",
+  "case_sha256": "a1705a5755c50b5f9b7f07c6a26b79d1b0d707a9afaf8e39b3fd8d93c690be1e",
+  "baseline_commit": "04152401d5852a3ec9a97e86c7f78307d73b4ee5",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "reinclude",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "last_rule_wins",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unmatched_and_other_exclusions",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "reinclude",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "last_rule_wins",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unmatched_and_other_exclusions",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 11.424,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "5941f9bf-649a-4bc0-ab9e-45df73c0a187",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 26649,
+    "output_tokens": 659,
+    "cache_read_tokens": 24192,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.9078,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 5,
+    "tool_calls": 6,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M rules.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/path_rules/workspace"
+}

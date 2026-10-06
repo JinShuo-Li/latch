@@ -1,0 +1,73 @@
+{
+  "case_id": "option_values",
+  "tier": "easy",
+  "title": "Explicit empty CLI option values",
+  "case_sha256": "c4771401772c7a03316eca9ad88c7c082e93a7f07337dd94e977a9b8fadfae19",
+  "baseline_commit": "e8a510b5613df00e081a261d086230854c1ac702",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "empty_is_explicit",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "end_marker",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/options.py\", line 18, in parse_args\n    raise ValueError(f\"unknown option: {arg}\")\nValueError: unknown option: --\n"
+    },
+    {
+      "name": "missing_value_and_regular_options",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "empty_is_explicit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "end_marker",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "missing_value_and_regular_options",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 58.913,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "ab95fd8c-38b0-4878-95c7-4e99edcdeab2",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 147470,
+    "output_tokens": 6389,
+    "cache_read_tokens": 132992,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.9018,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 14,
+    "tool_calls": 14,
+    "validation_passes": 5,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M options.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/option_values/workspace"
+}

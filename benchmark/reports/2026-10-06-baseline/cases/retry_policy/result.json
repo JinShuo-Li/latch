@@ -1,0 +1,83 @@
+{
+  "case_id": "retry_policy",
+  "tier": "medium",
+  "title": "Idempotent HTTP retries and Retry-After",
+  "case_sha256": "3f68e7ae89dae07bbec8ece327af5b102a2c31bea6a927e81b12e7573ac9df8f",
+  "baseline_commit": "568072f31900af524aec6697bd2a159be9c68e50",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "post_not_retried",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "retry_after_and_backoff",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "last_attempt_no_sleep",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "invalid_budget",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError: zero attempts accepted\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "post_not_retried",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "retry_after_and_backoff",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "last_attempt_no_sleep",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_budget",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 79.877,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "24136b8c-73e3-4604-a774-c95440c08f0f",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 113926,
+    "output_tokens": 9962,
+    "cache_read_tokens": 98816,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8674,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 15,
+    "validation_passes": 7,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M retry.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/retry_policy/workspace"
+}

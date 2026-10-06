@@ -1,0 +1,85 @@
+diff --git a/framing.py b/framing.py
+index 35b0500..35a8ad1 100644
+--- a/framing.py
++++ b/framing.py
+@@ -1,16 +1,27 @@
+ """Incremental binary frame decoder."""
+ 
++HEADER_SIZE = 4
++
+ 
+ class FrameDecoder:
++    """Assembles 4-byte big-endian length-prefixed frames from arbitrary chunks."""
++
+     def __init__(self, max_size=1024):
+         self.max_size = max_size
++        self._buffer = bytearray()
+ 
+     def feed(self, chunk):
++        self._buffer.extend(chunk)
+         frames = []
+-        while len(chunk) >= 4:
+-            length = int.from_bytes(chunk[:4], "big")
+-            if len(chunk) < length + 4:
++        while len(self._buffer) >= HEADER_SIZE:
++            length = int.from_bytes(self._buffer[:HEADER_SIZE], "big")
++            if length > self.max_size:
++                raise ValueError(
++                    "frame length %d exceeds max_size %d" % (length, self.max_size)
++                )
++            end = HEADER_SIZE + length
++            if len(self._buffer) < end:
+                 break
+-            frames.append(chunk[4:length + 4])
+-            chunk = chunk[length + 4:]
++            frames.append(bytes(self._buffer[HEADER_SIZE:end]))
++            del self._buffer[:end]
+         return frames
+diff --git a/test_framing.py b/test_framing.py
+index 0c6af8e..72e7b57 100644
+--- a/test_framing.py
++++ b/test_framing.py
+@@ -18,5 +18,43 @@ class FramingTest(unittest.TestCase):
+             self.assertEqual(decoder.feed(wire[:split]) + decoder.feed(wire[split:]),
+                              [b"hello", b"world"])
+ 
++    def test_several_frames_in_one_chunk(self):
++        wire = frame(b"a") + frame(b"") + frame(b"ccc")
++        self.assertEqual(FrameDecoder().feed(wire), [b"a", b"", b"ccc"])
++
++    def test_partial_prefix_is_kept(self):
++        decoder = FrameDecoder()
++        self.assertEqual(decoder.feed(b"\x00\x00"), [])
++        self.assertEqual(decoder.feed(frame(b"hi")[2:]), [b"hi"])
++
++    def test_partial_body_is_kept(self):
++        wire = frame(b"hello")
++        decoder = FrameDecoder()
++        self.assertEqual(decoder.feed(wire[:6]), [])
++        self.assertEqual(decoder.feed(wire[6:]), [b"hello"])
++
++    def test_byte_at_a_time(self):
++        wire = frame(b"hello") + frame(b"world!")
++        decoder = FrameDecoder()
++        frames = []
++        for byte in wire:
++            frames += decoder.feed(bytes([byte]))
++        self.assertEqual(frames, [b"hello", b"world!"])
++
++    def test_continues_after_complete_frame(self):
++        decoder = FrameDecoder()
++        self.assertEqual(decoder.feed(frame(b"one") + frame(b"two")), [b"one", b"two"])
++        self.assertEqual(decoder.feed(frame(b"three")), [b"three"])
++
++    def test_rejects_oversized_length_before_body(self):
++        decoder = FrameDecoder(max_size=4)
++        prefix = (5).to_bytes(4, "big")
++        with self.assertRaises(ValueError):
++            decoder.feed(prefix)
++
++    def test_accepts_frame_at_max_size(self):
++        body = b"x" * 4
++        self.assertEqual(FrameDecoder(max_size=4).feed(frame(body)), [body])
++
+ 
+ if __name__ == "__main__": unittest.main()

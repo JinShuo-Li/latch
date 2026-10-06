@@ -1,0 +1,13 @@
+diff --git a/rules.py b/rules.py
+index 2fe3123..0ef8145 100644
+--- a/rules.py
++++ b/rules.py
+@@ -8,6 +8,6 @@ def should_include(path, rules):
+     for rule in rules:
+         reinclude = rule.startswith("!")
+         pattern = rule[1:] if reinclude else rule
+-        if fnmatchcase(path, pattern) and not reinclude:
+-            included = False
++        if fnmatchcase(path, pattern):
++            included = reinclude
+     return included

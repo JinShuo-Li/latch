@@ -1,0 +1,74 @@
+{
+  "case_id": "http_ranges",
+  "tier": "medium",
+  "title": "HTTP byte ranges for downloads",
+  "case_sha256": "0229834c0c751e3d871b04f1ffc51f8265fa9b945de26eba2a7a0165c8c3f3f6",
+  "baseline_commit": "4c2ae0b347f09991ec72a7afea62762176e171bc",
+  "passed": false,
+  "baseline_checks": [
+    {
+      "name": "inclusive_and_open_end",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "suffix_and_clamp",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "unsatisfiable_and_invalid",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "inclusive_and_open_end",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "suffix_and_clamp",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unsatisfiable_and_invalid",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 25.612,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "7221a423-f78b-459e-9ebb-eeeebf19bd5c",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 46183,
+    "output_tokens": 2890,
+    "cache_read_tokens": 40448,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8758,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 7,
+    "tool_calls": 8,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M ranges.py",
+    " M test_ranges.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/http_ranges/workspace"
+}

@@ -1,0 +1,1973 @@
+{
+  "started_at_utc": "20261006T044158Z",
+  "max_concurrency": 3,
+  "benchmark_commit": "10c7b124767d74e3809db197e5b753ea945af145",
+  "latch_sha256": "465ef37972aaa543874ac274a75a07b9bd23cb7db4c44ebc83cfe25954fd9ec1",
+  "case_batches": [
+    [
+      "ansi_width",
+      "header_merge",
+      "stream_records",
+      "http_ranges",
+      "retry_policy",
+      "atomic_config",
+      "incremental_sync",
+      "spool_recovery",
+      "webhook_dedupe"
+    ],
+    [
+      "csv_chunks",
+      "option_values",
+      "archive_paths",
+      "log_rotation",
+      "sqlite_migration",
+      "cache_stampede",
+      "lease_queue",
+      "stream_framing"
+    ],
+    [
+      "duration_units",
+      "path_rules",
+      "config_layers",
+      "pagination_cursor",
+      "append_index",
+      "dag_scheduler",
+      "rate_window",
+      "transaction_outbox"
+    ]
+  ],
+  "finished_at_utc": "2026-10-06T05:00:03.952958+00:00",
+  "worker_exit_codes": [
+    1,
+    1,
+    1
+  ],
+  "provider": "opencode-go",
+  "model": "deepseek-v4.1-flash",
+  "cases": [
+    {
+      "case_id": "ansi_width",
+      "tier": "easy",
+      "title": "Terminal cell width with color and Unicode",
+      "case_sha256": "016925ca9835ffb5cd11dce9a2ec6f5501b9c34aa91947d716e691e5e954be29",
+      "baseline_commit": "f491a6450e8dfe6eceb07fb99bfa23d4ac65226e",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "ansi_and_cjk",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "combining_and_emoji",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "control_sequences",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "ansi_and_cjk",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "combining_and_emoji",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "control_sequences",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 167.714,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "9c8d7c24-536d-4c50-93c5-0b65b5541406",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 236304,
+        "output_tokens": 22338,
+        "cache_read_tokens": 182912,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.7741,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 21,
+        "tool_calls": 28,
+        "validation_passes": 11,
+        "validation_failures": 2
+      },
+      "git_status": [
+        " M test_width.py",
+        " M width.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/ansi_width/workspace"
+    },
+    {
+      "case_id": "header_merge",
+      "tier": "easy",
+      "title": "Case-insensitive HTTP header aggregation",
+      "case_sha256": "c5e44a403445969e877c4562f3e7ad95a89b812cc928c208fb720e5feaa3f88e",
+      "baseline_commit": "424f2ba0089f9070712d43164d7beeb16c02cc52",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "ordinary_case_insensitive",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "set_cookie_separate",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "order_and_single",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "ordinary_case_insensitive",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "set_cookie_separate",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "order_and_single",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 43.353,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "6c8f6d40-ed6c-4af7-90c1-1bdb3060f611",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 108377,
+        "output_tokens": 4150,
+        "cache_read_tokens": 96256,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8882,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 12,
+        "tool_calls": 15,
+        "validation_passes": 8,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M headers.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/header_merge/workspace"
+    },
+    {
+      "case_id": "stream_records",
+      "tier": "easy",
+      "title": "Incremental UTF-8 event records",
+      "case_sha256": "40fd67ff61c84f4b783b2c9d1fc2791ac7047d521c13730bdfb148b20c94070c",
+      "baseline_commit": "99383c61c1f9684c59810a0d7b77aec9e7a61e97",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "single_utf8_split",
+          "passed": false,
+          "detail": "[{'name': ''}]"
+        },
+        {
+          "name": "every_utf8_boundary",
+          "passed": false,
+          "detail": "[{'name': ''}]"
+        },
+        {
+          "name": "several_records_and_final_line",
+          "passed": true,
+          "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+        },
+        {
+          "name": "empty_chunks",
+          "passed": true,
+          "detail": "[{'id': 4}]"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "single_utf8_split",
+          "passed": true,
+          "detail": "[{'name': '中'}]"
+        },
+        {
+          "name": "every_utf8_boundary",
+          "passed": true,
+          "detail": "[{'name': '雪'}]"
+        },
+        {
+          "name": "several_records_and_final_line",
+          "passed": true,
+          "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+        },
+        {
+          "name": "empty_chunks",
+          "passed": true,
+          "detail": "[{'id': 4}]"
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 31.682,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "afd573ba-c61f-488b-af8d-22cf4bc2f0b1",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 63147,
+        "output_tokens": 3402,
+        "cache_read_tokens": 55552,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8797,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 10,
+        "validation_passes": 2,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M stream_records.py",
+        " M test_stream_records.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/stream_records/workspace"
+    },
+    {
+      "case_id": "http_ranges",
+      "tier": "medium",
+      "title": "HTTP byte ranges for downloads",
+      "case_sha256": "0229834c0c751e3d871b04f1ffc51f8265fa9b945de26eba2a7a0165c8c3f3f6",
+      "baseline_commit": "4c2ae0b347f09991ec72a7afea62762176e171bc",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "inclusive_and_open_end",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "suffix_and_clamp",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "unsatisfiable_and_invalid",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "inclusive_and_open_end",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "suffix_and_clamp",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unsatisfiable_and_invalid",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "checks_passed": 2,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 25.612,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "7221a423-f78b-459e-9ebb-eeeebf19bd5c",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 46183,
+        "output_tokens": 2890,
+        "cache_read_tokens": 40448,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8758,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 8,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M ranges.py",
+        " M test_ranges.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/http_ranges/workspace"
+    },
+    {
+      "case_id": "retry_policy",
+      "tier": "medium",
+      "title": "Idempotent HTTP retries and Retry-After",
+      "case_sha256": "3f68e7ae89dae07bbec8ece327af5b102a2c31bea6a927e81b12e7573ac9df8f",
+      "baseline_commit": "568072f31900af524aec6697bd2a159be9c68e50",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "post_not_retried",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "retry_after_and_backoff",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "last_attempt_no_sleep",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "invalid_budget",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError: zero attempts accepted\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "post_not_retried",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "retry_after_and_backoff",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "last_attempt_no_sleep",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_budget",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 79.877,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "24136b8c-73e3-4604-a774-c95440c08f0f",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 113926,
+        "output_tokens": 9962,
+        "cache_read_tokens": 98816,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8674,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 11,
+        "tool_calls": 15,
+        "validation_passes": 7,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M retry.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/retry_policy/workspace"
+    },
+    {
+      "case_id": "atomic_config",
+      "tier": "hard",
+      "title": "Atomic config writes and backup recovery",
+      "case_sha256": "290b2139c6d95a0819b93cc95ecd939fb72e27a44e58dd04269238946fa8ae37",
+      "baseline_commit": "776772bff198b99a96741ee70c7108832dede847",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "invalid_input_keeps_live",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "backup_previous_and_recovery",
+          "passed": false,
+          "detail": "  return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n"
+        },
+        {
+          "name": "both_corrupt_fail",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "invalid_input_keeps_live",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "backup_previous_and_recovery",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "both_corrupt_fail",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 181.059,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "9579f341-a66e-4af1-9ba2-4f0e900272b6",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 324685,
+        "output_tokens": 17380,
+        "cache_read_tokens": 279680,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8614,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 27,
+        "tool_calls": 33,
+        "validation_passes": 13,
+        "validation_failures": 1
+      },
+      "git_status": [
+        " M config_store.py",
+        "?? check_config_store.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/atomic_config/workspace"
+    },
+    {
+      "case_id": "incremental_sync",
+      "tier": "hard",
+      "title": "Incremental mirror with content hashes",
+      "case_sha256": "fcb9c149a70a19e8336f31643a9b00cdc4afad48682512163781400f4decbee5",
+      "baseline_commit": "4f4dd28621cda6828cbfab2d0e5c0314c14e45fd",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "changed_same_size",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "deleted_and_nested",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "unchanged_keeps_mtime",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "symlink_rejected_without_manifest_change",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: link accepted\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "changed_same_size",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "deleted_and_nested",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unchanged_keeps_mtime",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "symlink_rejected_without_manifest_change",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 77.452,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "4f509528-6afc-4b5f-a74c-b78d11d2ae68",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 128032,
+        "output_tokens": 11715,
+        "cache_read_tokens": 102528,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8008,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 13,
+        "tool_calls": 16,
+        "validation_passes": 2,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M sync.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/incremental_sync/workspace"
+    },
+    {
+      "case_id": "spool_recovery",
+      "tier": "hard",
+      "title": "Crash-safe append-only job spool",
+      "case_sha256": "f8c9e3249c64c31b02ece94cd8044175ce64109a6b00adc45849e9564190e5d3",
+      "baseline_commit": "6f87b0fae0b324cca8563f042869a37adcaea0a1",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "handler_failure_retries_same_job",
+          "passed": false,
+          "detail": "False"
+        },
+        {
+          "name": "partial_line_survives_restart",
+          "passed": false,
+          "detail": "/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 355, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 7 (char 6)\n"
+        },
+        {
+          "name": "multibyte_offsets_and_append",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "stale_checkpoint_fails_closed",
+          "passed": false,
+          "detail": "False"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "handler_failure_retries_same_job",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "partial_line_survives_restart",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "multibyte_offsets_and_append",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "stale_checkpoint_fails_closed",
+          "passed": true,
+          "detail": "True"
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 3,
+      "timed_out": false,
+      "wall_seconds": 124.31,
+      "status": "permission_denied",
+      "completion": "implemented_not_verified",
+      "session_id": "dfaf22df-7ba0-4a97-a759-59a480f8dc18",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 190250,
+        "output_tokens": 17087,
+        "cache_read_tokens": 146048,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.7677,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 17,
+        "tool_calls": 25,
+        "validation_passes": 12,
+        "validation_failures": 1
+      },
+      "git_status": [
+        " M spool_recovery.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/spool_recovery/workspace"
+    },
+    {
+      "case_id": "webhook_dedupe",
+      "tier": "hard",
+      "title": "Idempotent webhook delivery with durable claims",
+      "case_sha256": "2940ba8691d0f0ef57f5ffcfb396ae31d93092891743c86b496c83a37b6a2a32",
+      "baseline_commit": "aea5a5b22b3d91dfe14d8d8a58d9beb3732c8184",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "handler_failure_retry",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "duplicate_only_once",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "durable_across_connection",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "handler_failure_retry",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "duplicate_only_once",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "durable_across_connection",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 40.5,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "7ba3b43a-0bd4-4d16-827d-b167a2eb1364",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 47272,
+        "output_tokens": 5282,
+        "cache_read_tokens": 39552,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8367,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 6,
+        "tool_calls": 7,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M test_webhook.py",
+        " M webhook.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/webhook_dedupe/workspace"
+    },
+    {
+      "case_id": "csv_chunks",
+      "tier": "easy",
+      "title": "CSV rows across network chunks",
+      "case_sha256": "0c51a65082c9134acda968d1e464fbe530077654a1127aea2ee1c1715e64ebdd",
+      "baseline_commit": "958c1e5d8e790436fa766512a6815dfd6bb3a876",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "quoted_newline",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "every_split",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "crlf_and_final_row",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "quoted_newline",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "every_split",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "crlf_and_final_row",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 95.926,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "d890594b-6ba6-473b-be3b-a6a5ba559615",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 157773,
+        "output_tokens": 11364,
+        "cache_read_tokens": 127104,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8056,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 15,
+        "tool_calls": 19,
+        "validation_passes": 8,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M importer.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/csv_chunks/workspace"
+    },
+    {
+      "case_id": "option_values",
+      "tier": "easy",
+      "title": "Explicit empty CLI option values",
+      "case_sha256": "c4771401772c7a03316eca9ad88c7c082e93a7f07337dd94e977a9b8fadfae19",
+      "baseline_commit": "e8a510b5613df00e081a261d086230854c1ac702",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "empty_is_explicit",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "end_marker",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/options.py\", line 18, in parse_args\n    raise ValueError(f\"unknown option: {arg}\")\nValueError: unknown option: --\n"
+        },
+        {
+          "name": "missing_value_and_regular_options",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "empty_is_explicit",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "end_marker",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "missing_value_and_regular_options",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 58.913,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "ab95fd8c-38b0-4878-95c7-4e99edcdeab2",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 147470,
+        "output_tokens": 6389,
+        "cache_read_tokens": 132992,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.9018,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 14,
+        "tool_calls": 14,
+        "validation_passes": 5,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M options.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/option_values/workspace"
+    },
+    {
+      "case_id": "archive_paths",
+      "tier": "medium",
+      "title": "Safe ZIP import before extraction",
+      "case_sha256": "ed400cad189a9930733893bcaf5c85cc51d7a7eea4e29145c43dc85ea5b0fc14",
+      "baseline_commit": "edb486ec8254d29af9a1402d9586d7f04402b8e4",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "nested_file",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "traversal_preflight",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError: traversal accepted\n"
+        },
+        {
+          "name": "absolute_and_symlink",
+          "passed": false,
+          "detail": "e>\n  File \"/tmp/workspace/archive.py\", line 16, in extract_archive\n    target.write_bytes(source.read(member))\n  File \"/usr/lib/python3.12/pathlib.py\", line 1038, in write_bytes\n    with self.open(mode='wb') as f:\n         ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/outside.txt'\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "nested_file",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "traversal_preflight",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "absolute_and_symlink",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 24.804,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "7052a427-b61f-4884-a6e7-e3c9df2518bc",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 41776,
+        "output_tokens": 3053,
+        "cache_read_tokens": 35328,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8457,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 6,
+        "tool_calls": 8,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M archive.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/archive_paths/workspace"
+    },
+    {
+      "case_id": "log_rotation",
+      "tier": "medium",
+      "title": "Bounded log rotation without data loss",
+      "case_sha256": "7ef03334a9909054a71fbf85033cfaf756997f50cd62302f1c9eb10533aefb4b",
+      "baseline_commit": "d5d787e288cdaf7a31e8179d15d528d44cb12d10",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "archive_order",
+          "passed": false,
+          "detail": "line 7, in <module>\n  File \"/usr/lib/python3.12/pathlib.py\", line 1029, in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmptimbn586/app.log.2'\n"
+        },
+        {
+          "name": "bounded_archive_count",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "empty_log_and_limits",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "archive_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "bounded_archive_count",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "empty_log_and_limits",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 131.407,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "42b3faad-2063-4af7-9346-f14efc51344c",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 225973,
+        "output_tokens": 16088,
+        "cache_read_tokens": 184704,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8174,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 21,
+        "tool_calls": 29,
+        "validation_passes": 13,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M logging_store.py",
+        " M test_logging_store.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/log_rotation/workspace"
+    },
+    {
+      "case_id": "sqlite_migration",
+      "tier": "medium",
+      "title": "Idempotent SQLite schema migration",
+      "case_sha256": "b3630a792dc9e32efe880a988102da05bc947fa1fa2cd0c9d3b1f0d6a3a3ceb0",
+      "baseline_commit": "4dd6c5ee395b93673d1652d0218e57272b01d12c",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "preserves_rows",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "idempotent",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "malformed_schema_rejected",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError: malformed schema replaced\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "preserves_rows",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "idempotent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "malformed_schema_rejected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 51.458,
+      "status": "completed",
+      "completion": "in_progress",
+      "session_id": "6c2dcf45-964d-4ad2-84ef-d6cc4f3bde92",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 98503,
+        "output_tokens": 6823,
+        "cache_read_tokens": 86272,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8758,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 10,
+        "tool_calls": 13,
+        "validation_passes": 5,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M migration.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/sqlite_migration/workspace"
+    },
+    {
+      "case_id": "cache_stampede",
+      "tier": "hard",
+      "title": "Single-flight concurrent cache loads",
+      "case_sha256": "fd9bed5fcbb5304aad93ac07d5ada30f0d5bc0a16f9f6b1c6dab763d86b88195",
+      "baseline_commit": "8f3d763b32fdbf8bb26510f80ed3bf1427803785",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "single_flight",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "failure_retries",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "other_key_progress",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "single_flight",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "failure_retries",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "other_key_progress",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 4,
+      "timed_out": true,
+      "wall_seconds": 600.149,
+      "status": "cancelled",
+      "completion": "in_progress",
+      "session_id": "ff1a4005-29a0-4711-83de-c7bee606127d",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 37769,
+        "output_tokens": 2044,
+        "cache_read_tokens": 28544,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.7558,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 8,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M cache.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/cache_stampede/workspace"
+    },
+    {
+      "case_id": "lease_queue",
+      "tier": "hard",
+      "title": "Queue lease expiry and stale acknowledgements",
+      "case_sha256": "65033941e56ada0b358e68246a5df09e287b38ff5578443caa243f46b8f49972",
+      "baseline_commit": "bfcd04a9aff73f89ad36ed5bc2dadbef7183ba1d",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "stale_ack_after_reclaim",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "no_duplicate_live_claim",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "attempts_and_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_lease",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "stale_ack_after_reclaim",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "no_duplicate_live_claim",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "attempts_and_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_lease",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 40.508,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "834b31da-2854-4e52-9e71-a946b754da29",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 86302,
+        "output_tokens": 3795,
+        "cache_read_tokens": 65792,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.7623,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 10,
+        "tool_calls": 13,
+        "validation_passes": 4,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M queue.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/lease_queue/workspace"
+    },
+    {
+      "case_id": "stream_framing",
+      "tier": "hard",
+      "title": "Length-prefixed frame decoder under arbitrary chunks",
+      "case_sha256": "61f5cfe8235723d9e7b5c1fd21673c2cbf10d183257f0a700aaa69b3ae0b3653",
+      "baseline_commit": "f461fcc8844ab504c120ae5a03b9998d2422eecf",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "all_split_points",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "one_byte_chunks",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "oversize_prefix",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: oversize accepted\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "all_split_points",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "one_byte_chunks",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "oversize_prefix",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 20.663,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "be09a5fc-b8a8-48be-9cfa-47f60b922f69",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 45712,
+        "output_tokens": 1932,
+        "cache_read_tokens": 38656,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8456,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 9,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M framing.py",
+        " M test_framing.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/stream_framing/workspace"
+    },
+    {
+      "case_id": "duration_units",
+      "tier": "easy",
+      "title": "Millisecond and second timeout parsing",
+      "case_sha256": "276dc7d8fe60bbb844ca58499376cd646c07077527b27d4f6049488b3b6e0857",
+      "baseline_commit": "7e24a41825fdefcac8a701ae00150f6aae13a5b6",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "units",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '250m'\n"
+        },
+        {
+          "name": "reject_malformed",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: -1s\n"
+        },
+        {
+          "name": "zero_and_large",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '0m'\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "units",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "reject_malformed",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "zero_and_large",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 154.983,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "f99f25c8-828d-4fef-9897-1e80c0cbda9e",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 237582,
+        "output_tokens": 19791,
+        "cache_read_tokens": 193792,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8157,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 22,
+        "tool_calls": 29,
+        "validation_passes": 12,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M duration.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/duration_units/workspace"
+    },
+    {
+      "case_id": "path_rules",
+      "tier": "easy",
+      "title": "Ordered ignore and reinclude rules",
+      "case_sha256": "a1705a5755c50b5f9b7f07c6a26b79d1b0d707a9afaf8e39b3fd8d93c690be1e",
+      "baseline_commit": "04152401d5852a3ec9a97e86c7f78307d73b4ee5",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "reinclude",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "last_rule_wins",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unmatched_and_other_exclusions",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "reinclude",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "last_rule_wins",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unmatched_and_other_exclusions",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 11.424,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "5941f9bf-649a-4bc0-ab9e-45df73c0a187",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 26649,
+        "output_tokens": 659,
+        "cache_read_tokens": 24192,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.9078,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 5,
+        "tool_calls": 6,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M rules.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/path_rules/workspace"
+    },
+    {
+      "case_id": "config_layers",
+      "tier": "medium",
+      "title": "Layered CLI configuration",
+      "case_sha256": "8197ad3a5b56a4ad24eb93b55ee4fd6217ffa345f54a03a0cb09281fe0490c11",
+      "baseline_commit": "fceb98f65cd44b45a15dade2aa5d58f48949d9c4",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "nested_merge",
+          "passed": false,
+          "detail": "{'output': {'format': 'json'}, 'service': {'timeout': 12}}"
+        },
+        {
+          "name": "explicit_empty_after_environment",
+          "passed": false,
+          "detail": "'env'"
+        },
+        {
+          "name": "zero_and_false_are_explicit",
+          "passed": false,
+          "detail": "{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}"
+        },
+        {
+          "name": "inputs_unchanged",
+          "passed": false,
+          "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'endpoint': 'flag', 'timeout': 7}}]"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "nested_merge",
+          "passed": true,
+          "detail": "{'output': {'color': True, 'format': 'json'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 12}}"
+        },
+        {
+          "name": "explicit_empty_after_environment",
+          "passed": true,
+          "detail": "''"
+        },
+        {
+          "name": "zero_and_false_are_explicit",
+          "passed": true,
+          "detail": "{'output': {'color': True, 'format': 'text'}, 'quiet': False, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 0}}"
+        },
+        {
+          "name": "inputs_unchanged",
+          "passed": true,
+          "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'timeout': 9}}]"
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 50.652,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "05a2900b-20cf-4e4c-b819-3caeb1dd2bd0",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 123546,
+        "output_tokens": 5029,
+        "cache_read_tokens": 110720,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8962,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 13,
+        "tool_calls": 13,
+        "validation_passes": 6,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M config_layers.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/config_layers/workspace"
+    },
+    {
+      "case_id": "pagination_cursor",
+      "tier": "medium",
+      "title": "Stable keyset pagination after deletions",
+      "case_sha256": "162d9eb4d737cfe4c9b47caecfdf7c263feff8f254d84df017ff5586b070141b",
+      "baseline_commit": "1fc380b716a9851fd13512524c6394f44cfbfc93",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "deletion_between_pages",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "same_timestamp_and_insert",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "bad_cursor_and_limit",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (None, 0)\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "deletion_between_pages",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "same_timestamp_and_insert",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "bad_cursor_and_limit",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 28.066,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "f26d5f1f-1974-46d8-ac51-44f04a266c05",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 50797,
+        "output_tokens": 3014,
+        "cache_read_tokens": 44416,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8744,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 9,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M feed.py",
+        " M test_feed.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/pagination_cursor/workspace"
+    },
+    {
+      "case_id": "append_index",
+      "tier": "hard",
+      "title": "Append-only event index after partial writes",
+      "case_sha256": "4e36dcf6d370cc8abaa19c4a780207d33e3f35a69a7c51aa913eb4297fc8ddf6",
+      "baseline_commit": "4f0db5673c55126fb3dc7c69feaa870348e75e41",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "utf8_offsets",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "partial_tail_hidden",
+          "passed": false,
+          "detail": "py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting ',' delimiter: line 1 column 8 (char 7)\n"
+        },
+        {
+          "name": "append_rejects_partial_tail",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "utf8_offsets",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "partial_tail_hidden",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "append_rejects_partial_tail",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+        }
+      ],
+      "checks_passed": 2,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 167.07,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "928aacd7-f313-4f79-a9f4-af4574e213f8",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 150814,
+        "output_tokens": 17276,
+        "cache_read_tokens": 104320,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.6917,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 15,
+        "tool_calls": 24,
+        "validation_passes": 11,
+        "validation_failures": 1
+      },
+      "git_status": [
+        " M event_log.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/append_index/workspace"
+    },
+    {
+      "case_id": "dag_scheduler",
+      "tier": "hard",
+      "title": "Dependency-aware task scheduler",
+      "case_sha256": "3e922357d00da8c5ec9e536e8ffa826151c289a55b5c00058f0903b7beb29b0a",
+      "baseline_commit": "9d325a1260ee4eebb087d8c5f3b29c4aa8de76ce",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "shared_dependency_once",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "cycle_before_side_effect",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: cycle\n"
+        },
+        {
+          "name": "unknown_before_side_effect",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: unknown\n"
+        },
+        {
+          "name": "runner_failure_stops_dependents",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 9, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "shared_dependency_once",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "cycle_before_side_effect",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unknown_before_side_effect",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "runner_failure_stops_dependents",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 19.598,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "b8cff27d-b0bf-4341-b220-aadbf4325abe",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 38204,
+        "output_tokens": 1888,
+        "cache_read_tokens": 31360,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8209,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 6,
+        "tool_calls": 8,
+        "validation_passes": 2,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M scheduler.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/dag_scheduler/workspace"
+    },
+    {
+      "case_id": "rate_window",
+      "tier": "hard",
+      "title": "Rolling-window limit across tenants",
+      "case_sha256": "a37c6e1028cd71cd159cd6ec32ec3de71bd6a35a72826ca56d764d9687597702",
+      "baseline_commit": "f2fdbf8cd5903b9b96b55cf84f48a01b92478d85",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "independent_tenants",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "exact_boundary",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "denial_does_not_consume",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "invalid_parameters",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (0, 10)\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "independent_tenants",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "exact_boundary",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "denial_does_not_consume",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_parameters",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 55.335,
+      "status": "completed",
+      "completion": "implemented_not_verified",
+      "session_id": "d45abd94-1307-4575-b371-0fd630ed1a69",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 90898,
+        "output_tokens": 6046,
+        "cache_read_tokens": 77440,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8519,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 10,
+        "tool_calls": 12,
+        "validation_passes": 5,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M limiter.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/rate_window/workspace"
+    },
+    {
+      "case_id": "transaction_outbox",
+      "tier": "hard",
+      "title": "Transactional order and outbox event",
+      "case_sha256": "3e74af9962dc6e4558dc5fbbab958d87df90547f51ea0ec412fdde7ea56c692c",
+      "baseline_commit": "536a14705430558be95f322f094bd595a11fea46",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "event_failure_rolls_back_order",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "duplicate_has_no_extra_event",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "insertion_order_and_valid_amount",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError: zero amount\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "event_failure_rolls_back_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "duplicate_has_no_extra_event",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "insertion_order_and_valid_amount",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 26.48,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "8f5aea6e-5c86-4082-b418-d2e67cd87105",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 60817,
+        "output_tokens": 2928,
+        "cache_read_tokens": 51072,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8398,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 11,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M outbox.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/transaction_outbox/workspace"
+    }
+  ],
+  "passed": 20,
+  "total": 25,
+  "expected_total": 25,
+  "checks_passed": 80,
+  "checks_total": 83,
+  "total_case_wall_seconds": 2308.995,
+  "worker_summaries": [
+    "worker-1/20261006T044158Z-7091/summary.json",
+    "worker-2/20261006T044158Z-7092/summary.json",
+    "worker-3/20261006T044158Z-7094/summary.json"
+  ]
+}

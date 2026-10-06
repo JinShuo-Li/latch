@@ -1,0 +1,73 @@
+{
+  "case_id": "csv_chunks",
+  "tier": "easy",
+  "title": "CSV rows across network chunks",
+  "case_sha256": "0c51a65082c9134acda968d1e464fbe530077654a1127aea2ee1c1715e64ebdd",
+  "baseline_commit": "958c1e5d8e790436fa766512a6815dfd6bb3a876",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "quoted_newline",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "every_split",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "crlf_and_final_row",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "quoted_newline",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "every_split",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "crlf_and_final_row",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 95.926,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "d890594b-6ba6-473b-be3b-a6a5ba559615",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 157773,
+    "output_tokens": 11364,
+    "cache_read_tokens": 127104,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8056,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 15,
+    "tool_calls": 19,
+    "validation_passes": 8,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M importer.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/csv_chunks/workspace"
+}

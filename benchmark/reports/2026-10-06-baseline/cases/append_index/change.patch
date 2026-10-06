@@ -1,0 +1,43 @@
+diff --git a/event_log.py b/event_log.py
+index 877e180..853f5c4 100644
+--- a/event_log.py
++++ b/event_log.py
+@@ -10,13 +10,34 @@ class EventLog:
+ 
+     def append(self, event):
+         self.path.parent.mkdir(parents=True, exist_ok=True)
+-        offset = self.path.stat().st_size if self.path.exists() else 0
++        data = self.path.read_bytes() if self.path.exists() else b""
++        # Only newline-terminated records are complete; drop an interrupted
++        # trailing record before appending so it never becomes visible.
++        offset = data.rfind(b"\n") + 1
++        if len(data) > offset:
++            with self.path.open("r+b") as stream:
++                stream.truncate(offset)
++        record = (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+         with self.path.open("ab") as stream:
+-            stream.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
++            stream.write(record)
+         return offset
+ 
+     def read_all(self):
+-        return [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines()]
++        return [event for _, event in self._complete_records()]
+ 
+     def rebuild_index(self):
+-        return list(range(len(self.read_all())))
++        return [offset for offset, _ in self._complete_records()]
++
++    def _complete_records(self):
++        """Return (byte_offset, event) pairs for every newline-terminated record."""
++        if not self.path.exists():
++            return []
++        data = self.path.read_bytes()
++        boundary = data.rfind(b"\n") + 1
++        records = []
++        offset = 0
++        for line in data[:boundary].split(b"\n")[:-1]:
++            if line:
++                records.append((offset, json.loads(line)))
++            offset += len(line) + 1
++        return records

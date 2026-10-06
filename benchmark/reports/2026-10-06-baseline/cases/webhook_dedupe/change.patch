@@ -1,0 +1,120 @@
+diff --git a/test_webhook.py b/test_webhook.py
+index 535bf53..ef2447f 100644
+--- a/test_webhook.py
++++ b/test_webhook.py
+@@ -1,4 +1,8 @@
++import os
+ import sqlite3
++import tempfile
++import threading
++import time
+ import unittest
+ 
+ from webhook import process_event
+@@ -17,5 +21,50 @@ class WebhookTest(unittest.TestCase):
+             process_event(db, "id", 1, lambda _: (_ for _ in ()).throw(RuntimeError()))
+         self.assertTrue(process_event(db, "id", 1, lambda _: None))
+ 
++    def test_completed_result_survives_new_connections(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            path = os.path.join(tmp, "events.db")
++            first = sqlite3.connect(path); seen = []
++            self.assertTrue(process_event(first, "id", 1, seen.append))
++            first.close()
++            second = sqlite3.connect(path)
++            self.assertFalse(process_event(second, "id", 1, seen.append))
++            self.assertEqual(seen, [1])
++
++    def test_sequential_duplicates_run_handler_once(self):
++        db = sqlite3.connect(":memory:"); seen = []
++        results = [process_event(db, "id", n, seen.append) for n in range(3)]
++        self.assertEqual(results, [True, False, False])
++        self.assertEqual(seen, [0])
++
++    def test_concurrent_deliveries_run_handler_once(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            path = os.path.join(tmp, "events.db")
++            sqlite3.connect(path).close()
++            seen = []
++            lock = threading.Lock()
++
++            def handler(payload):
++                with lock:
++                    seen.append(payload)
++                time.sleep(0.05)
++
++            results, start = [], threading.Barrier(2)
++
++            def deliver():
++                conn = sqlite3.connect(path)
++                start.wait()
++                results.append(process_event(conn, "id", 1, handler))
++                conn.close()
++
++            threads = [threading.Thread(target=deliver) for _ in range(2)]
++            for t in threads:
++                t.start()
++            for t in threads:
++                t.join()
++
++            self.assertEqual(seen, [1])
++            self.assertEqual(sorted(results), [False, True])
++
+ 
+ if __name__ == "__main__": unittest.main()
+diff --git a/webhook.py b/webhook.py
+index 328e0af..499340e 100644
+--- a/webhook.py
++++ b/webhook.py
+@@ -1,12 +1,46 @@
+ """Webhook idempotency backed by SQLite."""
+ 
++import sqlite3
++
++_SCHEMA = "CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, done INTEGER NOT NULL DEFAULT 0)"
++
+ 
+ def process_event(db, event_id, payload, handler):
+-    db.execute("CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, done INTEGER)")
+-    existing = db.execute("SELECT done FROM events WHERE id=?", (event_id,)).fetchone()
+-    if existing:
++    """Handle event_id at most once and report whether this call handled it.
++
++    Returns True only when this call ran the handler, False when the event was
++    already completed by an earlier delivery.
++    """
++    db.execute(_SCHEMA)
++    db.commit()
++    if not _claim(db, event_id):
+         return False
+-    db.execute("INSERT INTO events VALUES(?,1)", (event_id,))
++    try:
++        handler(payload)
++    except BaseException:
++        _release_claim(db, event_id)
++        raise
++    db.execute("UPDATE events SET done=1 WHERE id=?", (event_id,))
+     db.commit()
+-    handler(payload)
+     return True
++
++
++def _claim(db, event_id):
++    """Atomically claim event_id, committing the claim so other connections see it.
++
++    The primary key makes the insert the serialization point, so exactly one
++    delivery can own an event. A completed or in-flight event is not claimable.
++    """
++    try:
++        db.execute("INSERT INTO events(id, done) VALUES(?, 0)", (event_id,))
++        db.commit()
++    except sqlite3.IntegrityError:
++        db.rollback()
++        return False
++    return True
++
++
++def _release_claim(db, event_id):
++    """Drop an unfinished claim so a later delivery can retry the event."""
++    db.execute("DELETE FROM events WHERE id=? AND done=0", (event_id,))
++    db.commit()

@@ -1,0 +1,73 @@
+{
+  "case_id": "append_index",
+  "tier": "hard",
+  "title": "Append-only event index after partial writes",
+  "case_sha256": "4e36dcf6d370cc8abaa19c4a780207d33e3f35a69a7c51aa913eb4297fc8ddf6",
+  "baseline_commit": "4f0db5673c55126fb3dc7c69feaa870348e75e41",
+  "passed": false,
+  "baseline_checks": [
+    {
+      "name": "utf8_offsets",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "partial_tail_hidden",
+      "passed": false,
+      "detail": "py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting ',' delimiter: line 1 column 8 (char 7)\n"
+    },
+    {
+      "name": "append_rejects_partial_tail",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "utf8_offsets",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "partial_tail_hidden",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "append_rejects_partial_tail",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 167.07,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "928aacd7-f313-4f79-a9f4-af4574e213f8",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 150814,
+    "output_tokens": 17276,
+    "cache_read_tokens": 104320,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.6917,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 15,
+    "tool_calls": 24,
+    "validation_passes": 11,
+    "validation_failures": 1
+  },
+  "git_status": [
+    " M event_log.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/append_index/workspace"
+}

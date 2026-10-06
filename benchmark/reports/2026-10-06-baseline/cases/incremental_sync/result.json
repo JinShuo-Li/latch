@@ -1,0 +1,83 @@
+{
+  "case_id": "incremental_sync",
+  "tier": "hard",
+  "title": "Incremental mirror with content hashes",
+  "case_sha256": "fcb9c149a70a19e8336f31643a9b00cdc4afad48682512163781400f4decbee5",
+  "baseline_commit": "4f4dd28621cda6828cbfab2d0e5c0314c14e45fd",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "changed_same_size",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "deleted_and_nested",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "unchanged_keeps_mtime",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "symlink_rejected_without_manifest_change",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: link accepted\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "changed_same_size",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "deleted_and_nested",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unchanged_keeps_mtime",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "symlink_rejected_without_manifest_change",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 77.452,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "4f509528-6afc-4b5f-a74c-b78d11d2ae68",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 128032,
+    "output_tokens": 11715,
+    "cache_read_tokens": 102528,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8008,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 13,
+    "tool_calls": 16,
+    "validation_passes": 2,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M sync.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/incremental_sync/workspace"
+}

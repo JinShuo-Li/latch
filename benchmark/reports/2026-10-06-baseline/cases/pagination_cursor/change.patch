@@ -1,0 +1,100 @@
+diff --git a/feed.py b/feed.py
+index 475f654..3753515 100644
+--- a/feed.py
++++ b/feed.py
+@@ -1,13 +1,48 @@
+ """Ascending activity feed pagination."""
+ 
+ import base64
++import binascii
++import bisect
++import json
++
++
++def _encode_cursor(key):
++    payload = json.dumps([key[0], key[1]], separators=(",", ":")).encode("utf-8")
++    return base64.urlsafe_b64encode(payload).decode("ascii")
++
++
++def _decode_cursor(cursor):
++    if cursor is None:
++        return None
++    if not isinstance(cursor, str) or not cursor:
++        raise ValueError("malformed cursor")
++    try:
++        payload = base64.b64decode(cursor.encode("ascii"), altchars=b"-_", validate=True)
++        key = json.loads(payload.decode("utf-8"))
++    except (UnicodeError, ValueError, binascii.Error) as exc:
++        raise ValueError("malformed cursor") from exc
++    if not isinstance(key, list) or len(key) != 2:
++        raise ValueError("malformed cursor")
++    timestamp, record_id = key
++    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
++        raise ValueError("malformed cursor")
++    if not isinstance(record_id, str):
++        raise ValueError("malformed cursor")
++    return timestamp, record_id
+ 
+ 
+ def page(records, cursor, limit):
++    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
++        raise ValueError("limit must be a positive integer")
++
++    after = _decode_cursor(cursor)
++
+     ordered = sorted(records, key=lambda row: (row["timestamp"], row["id"]))
+-    start = int(base64.urlsafe_b64decode(cursor.encode()).decode()) if cursor else 0
++    keys = [(row["timestamp"], row["id"]) for row in ordered]
++    start = 0 if after is None else bisect.bisect_right(keys, after)
++
+     items = ordered[start:start + limit]
+     next_cursor = None
+-    if start + limit < len(ordered):
+-        next_cursor = base64.urlsafe_b64encode(str(start + limit).encode()).decode()
++    if items and start + len(items) < len(ordered):
++        next_cursor = _encode_cursor((items[-1]["timestamp"], items[-1]["id"]))
+     return items, next_cursor
+diff --git a/test_feed.py b/test_feed.py
+index 7068ab1..72d5668 100644
+--- a/test_feed.py
++++ b/test_feed.py
+@@ -19,6 +19,39 @@ class FeedTest(unittest.TestCase):
+         second, _ = page(ROWS[1:], cursor, 2)
+         self.assertEqual([row["id"] for row in first + second], ["a", "b", "c", "d"])
+ 
++    def test_delete_cursor_record(self):
++        first, cursor = page(ROWS, None, 2)
++        second, _ = page(ROWS[2:], cursor, 2)
++        self.assertEqual([row["id"] for row in first + second], ["a", "b", "c", "d"])
++
++    def test_cursor_is_opaque_key(self):
++        _, cursor = page(ROWS, None, 1)
++        self.assertNotEqual(cursor, "1")
++        with self.assertRaises(ValueError):
++            page(ROWS, "1", 1)
++
++    def test_unsorted_input(self):
++        shuffled = [ROWS[3], ROWS[1], ROWS[2], ROWS[0]]
++        first, cursor = page(shuffled, None, 3)
++        second, end = page(shuffled, cursor, 3)
++        self.assertEqual(first + second, ROWS)
++        self.assertIsNone(end)
++
++    def test_malformed_cursors(self):
++        for cursor in ["", "!!!not base64!!!", "YWJj", "bnVsbA==", "WzFd"]:
++            with self.assertRaises(ValueError):
++                page(ROWS, cursor, 2)
++
++    def test_nonpositive_limits(self):
++        for limit in [0, -1]:
++            with self.assertRaises(ValueError):
++                page(ROWS, None, limit)
++
++    def test_empty_page_has_no_cursor(self):
++        items, cursor = page(ROWS, None, 10)
++        self.assertEqual(items, ROWS)
++        self.assertIsNone(cursor)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

@@ -1,0 +1,73 @@
+{
+  "case_id": "sqlite_migration",
+  "tier": "medium",
+  "title": "Idempotent SQLite schema migration",
+  "case_sha256": "b3630a792dc9e32efe880a988102da05bc947fa1fa2cd0c9d3b1f0d6a3a3ceb0",
+  "baseline_commit": "4dd6c5ee395b93673d1652d0218e57272b01d12c",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "preserves_rows",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "idempotent",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "malformed_schema_rejected",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError: malformed schema replaced\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "preserves_rows",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "idempotent",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "malformed_schema_rejected",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 51.458,
+  "status": "completed",
+  "completion": "in_progress",
+  "session_id": "6c2dcf45-964d-4ad2-84ef-d6cc4f3bde92",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 98503,
+    "output_tokens": 6823,
+    "cache_read_tokens": 86272,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8758,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 10,
+    "tool_calls": 13,
+    "validation_passes": 5,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M migration.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/sqlite_migration/workspace"
+}

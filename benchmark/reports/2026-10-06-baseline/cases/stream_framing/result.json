@@ -1,0 +1,74 @@
+{
+  "case_id": "stream_framing",
+  "tier": "hard",
+  "title": "Length-prefixed frame decoder under arbitrary chunks",
+  "case_sha256": "61f5cfe8235723d9e7b5c1fd21673c2cbf10d183257f0a700aaa69b3ae0b3653",
+  "baseline_commit": "f461fcc8844ab504c120ae5a03b9998d2422eecf",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "all_split_points",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "one_byte_chunks",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "oversize_prefix",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: oversize accepted\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "all_split_points",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "one_byte_chunks",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "oversize_prefix",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 20.663,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "be09a5fc-b8a8-48be-9cfa-47f60b922f69",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 45712,
+    "output_tokens": 1932,
+    "cache_read_tokens": 38656,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8456,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 7,
+    "tool_calls": 9,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M framing.py",
+    " M test_framing.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/stream_framing/workspace"
+}

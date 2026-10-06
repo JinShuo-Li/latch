@@ -1,0 +1,60 @@
+diff --git a/test_width.py b/test_width.py
+index b567eec..7dd18ca 100644
+--- a/test_width.py
++++ b/test_width.py
+@@ -10,6 +10,14 @@ class WidthTest(unittest.TestCase):
+     def test_color_and_wide(self):
+         self.assertEqual(display_width("\x1b[32m中\x1b[0m"), 2)
+ 
++    def test_combining_marks_take_no_width(self):
++        self.assertEqual(display_width("e\u0301"), 1)
++        self.assertEqual(display_width("a\u0301\u0302"), 1)
++
++    def test_cells_of_different_kinds_align(self):
++        cells = ["\x1b[32mOK\x1b[0m", "e\u0301e\u0301", "中"]
++        self.assertEqual([display_width(cell) for cell in cells], [2, 2, 2])
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/width.py b/width.py
+index 3ab7556..40255f7 100644
+--- a/width.py
++++ b/width.py
+@@ -1,5 +1,35 @@
+ """Terminal display width for short status cells."""
+ 
++import re
++import unicodedata
++
++_ANSI_ESCAPE = re.compile(
++    r"""
++    \x1b
++    (?:
++        \[[0-?]*[ -/]*[@-~]              # CSI sequence (colors, cursor moves)
++      | \][^\x07\x1b]*(?:\x07|\x1b\\)    # OSC sequence (hyperlinks, titles)
++      | [@-Z\\-_]                        # two-character escape
++    )
++    """,
++    re.VERBOSE,
++)
++
++# Categories that occupy no columns: combining marks and format characters.
++_ZERO_WIDTH_CATEGORIES = frozenset(("Mn", "Me", "Cf"))
++# East Asian width classes that occupy two columns.
++_WIDE_WIDTH_CLASSES = frozenset(("W", "F"))
++
+ 
+ def display_width(text):
+-    return len(text)
++    """Return the number of terminal columns needed to print *text*.
++
++    ANSI escape sequences take no columns, combining marks attach to the
++    preceding character, and East Asian wide/fullwidth characters occupy two.
++    """
++    width = 0
++    for char in _ANSI_ESCAPE.sub("", text):
++        if unicodedata.combining(char) or unicodedata.category(char) in _ZERO_WIDTH_CATEGORIES:
++            continue
++        width += 2 if unicodedata.east_asian_width(char) in _WIDE_WIDTH_CLASSES else 1
++    return width

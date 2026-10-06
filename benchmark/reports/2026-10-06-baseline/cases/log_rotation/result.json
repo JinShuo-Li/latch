@@ -1,0 +1,74 @@
+{
+  "case_id": "log_rotation",
+  "tier": "medium",
+  "title": "Bounded log rotation without data loss",
+  "case_sha256": "7ef03334a9909054a71fbf85033cfaf756997f50cd62302f1c9eb10533aefb4b",
+  "baseline_commit": "d5d787e288cdaf7a31e8179d15d528d44cb12d10",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "archive_order",
+      "passed": false,
+      "detail": "line 7, in <module>\n  File \"/usr/lib/python3.12/pathlib.py\", line 1029, in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmptimbn586/app.log.2'\n"
+    },
+    {
+      "name": "bounded_archive_count",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "empty_log_and_limits",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "archive_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "bounded_archive_count",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "empty_log_and_limits",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 131.407,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "42b3faad-2063-4af7-9346-f14efc51344c",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 225973,
+    "output_tokens": 16088,
+    "cache_read_tokens": 184704,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8174,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 21,
+    "tool_calls": 29,
+    "validation_passes": 13,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M logging_store.py",
+    " M test_logging_store.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-2/20261006T044158Z-7092/log_rotation/workspace"
+}

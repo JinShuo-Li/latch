@@ -1,0 +1,83 @@
+{
+  "case_id": "config_layers",
+  "tier": "medium",
+  "title": "Layered CLI configuration",
+  "case_sha256": "8197ad3a5b56a4ad24eb93b55ee4fd6217ffa345f54a03a0cb09281fe0490c11",
+  "baseline_commit": "fceb98f65cd44b45a15dade2aa5d58f48949d9c4",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "nested_merge",
+      "passed": false,
+      "detail": "{'output': {'format': 'json'}, 'service': {'timeout': 12}}"
+    },
+    {
+      "name": "explicit_empty_after_environment",
+      "passed": false,
+      "detail": "'env'"
+    },
+    {
+      "name": "zero_and_false_are_explicit",
+      "passed": false,
+      "detail": "{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}"
+    },
+    {
+      "name": "inputs_unchanged",
+      "passed": false,
+      "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'endpoint': 'flag', 'timeout': 7}}]"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "nested_merge",
+      "passed": true,
+      "detail": "{'output': {'color': True, 'format': 'json'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 12}}"
+    },
+    {
+      "name": "explicit_empty_after_environment",
+      "passed": true,
+      "detail": "''"
+    },
+    {
+      "name": "zero_and_false_are_explicit",
+      "passed": true,
+      "detail": "{'output': {'color': True, 'format': 'text'}, 'quiet': False, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 0}}"
+    },
+    {
+      "name": "inputs_unchanged",
+      "passed": true,
+      "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'timeout': 9}}]"
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 50.652,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "05a2900b-20cf-4e4c-b819-3caeb1dd2bd0",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 123546,
+    "output_tokens": 5029,
+    "cache_read_tokens": 110720,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8962,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 13,
+    "tool_calls": 13,
+    "validation_passes": 6,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M config_layers.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/config_layers/workspace"
+}

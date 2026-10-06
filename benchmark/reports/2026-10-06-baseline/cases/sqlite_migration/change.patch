@@ -1,0 +1,48 @@
+diff --git a/migration.py b/migration.py
+index 3ce3b85..ef59793 100644
+--- a/migration.py
++++ b/migration.py
+@@ -1,8 +1,40 @@
+ """Address-book schema upgrade."""
+ 
++import sqlite3
++
++SCHEMA_VERSION = 2
++
++
++class MigrationError(sqlite3.DatabaseError, RuntimeError):
++    """The existing database cannot be upgraded in place."""
++
+ 
+ def migrate(connection):
+-    connection.execute("DROP TABLE IF EXISTS users")
+-    connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT)")
+-    connection.execute("PRAGMA user_version = 2")
++    """Upgrade the users table in place by adding a nullable email column.
++
++    Existing rows are kept and end up with email = NULL, and running the
++    migration again is a no-op.  Anything that is not the expected users
++    table (or the users(id, name) table it grew from) is reported instead of
++    being dropped.  The caller's connection is left open.
++    """
++    existing = connection.execute(
++        "SELECT type FROM sqlite_master WHERE name = 'users'"
++    ).fetchone()
++
++    if existing is None:
++        connection.execute(
++            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT)"
++        )
++    elif existing[0] != "table":
++        raise MigrationError("users exists but is not a table")
++    else:
++        columns = [row[1] for row in connection.execute("PRAGMA table_info(users)")]
++        if "email" not in columns:
++            if "id" not in columns or "name" not in columns:
++                raise MigrationError(
++                    "users has unexpected columns %s and cannot be migrated" % (columns,)
++                )
++            connection.execute("ALTER TABLE users ADD COLUMN email TEXT")
++
++    connection.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
+     connection.commit()

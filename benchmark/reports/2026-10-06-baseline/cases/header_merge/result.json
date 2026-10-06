@@ -1,0 +1,73 @@
+{
+  "case_id": "header_merge",
+  "tier": "easy",
+  "title": "Case-insensitive HTTP header aggregation",
+  "case_sha256": "c5e44a403445969e877c4562f3e7ad95a89b812cc928c208fb720e5feaa3f88e",
+  "baseline_commit": "424f2ba0089f9070712d43164d7beeb16c02cc52",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "ordinary_case_insensitive",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "set_cookie_separate",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "order_and_single",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "ordinary_case_insensitive",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "set_cookie_separate",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "order_and_single",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 43.353,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "6c8f6d40-ed6c-4af7-90c1-1bdb3060f611",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 108377,
+    "output_tokens": 4150,
+    "cache_read_tokens": 96256,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8882,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 12,
+    "tool_calls": 15,
+    "validation_passes": 8,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M headers.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-1/20261006T044158Z-7091/header_merge/workspace"
+}

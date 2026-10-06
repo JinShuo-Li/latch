@@ -1,0 +1,83 @@
+{
+  "case_id": "rate_window",
+  "tier": "hard",
+  "title": "Rolling-window limit across tenants",
+  "case_sha256": "a37c6e1028cd71cd159cd6ec32ec3de71bd6a35a72826ca56d764d9687597702",
+  "baseline_commit": "f2fdbf8cd5903b9b96b55cf84f48a01b92478d85",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "independent_tenants",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "exact_boundary",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "denial_does_not_consume",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "invalid_parameters",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (0, 10)\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "independent_tenants",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "exact_boundary",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "denial_does_not_consume",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_parameters",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 55.335,
+  "status": "completed",
+  "completion": "implemented_not_verified",
+  "session_id": "d45abd94-1307-4575-b371-0fd630ed1a69",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 90898,
+    "output_tokens": 6046,
+    "cache_read_tokens": 77440,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8519,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 10,
+    "tool_calls": 12,
+    "validation_passes": 5,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M limiter.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/full-20261006T044158Z/worker-3/20261006T044158Z-7094/rate_window/workspace"
+}

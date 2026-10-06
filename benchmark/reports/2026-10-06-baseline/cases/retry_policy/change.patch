@@ -1,0 +1,45 @@
+diff --git a/retry.py b/retry.py
+index a0aded2..52ac8d2 100644
+--- a/retry.py
++++ b/retry.py
+@@ -1,11 +1,38 @@
+ """Small HTTP retry loop with injected transport and sleeper."""
+ 
++RETRYABLE_METHODS = ("GET", "HEAD")
++RETRYABLE_STATUSES = (429, 503)
++
++
++def _retry_after(response):
++    """Return a nonnegative numeric Retry-After, else None."""
++    value = response.get("retry_after")
++    if value is None:
++        headers = response.get("headers") or {}
++        value = headers.get("Retry-After", headers.get("retry-after"))
++    if value is None:
++        return None
++    try:
++        delay = float(value)
++    except (TypeError, ValueError):
++        return None
++    if delay < 0:
++        return None
++    return delay
++
+ 
+ def request(method, send, sleep, max_attempts=3):
++    if max_attempts < 1:
++        raise ValueError("max_attempts must be at least 1")
++
++    retryable = method.upper() in RETRYABLE_METHODS
+     response = None
+     for attempt in range(max_attempts):
+         response = send()
+-        if response["status"] not in (429, 503):
++        if not retryable or response["status"] not in RETRYABLE_STATUSES:
+             return response
+-        sleep(2 ** attempt)
++        if attempt == max_attempts - 1:
++            break
++        delay = _retry_after(response)
++        sleep(delay if delay is not None else 2 ** attempt)
+     return response
