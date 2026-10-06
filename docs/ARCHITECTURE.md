@@ -408,6 +408,10 @@ accepts only `pending` and `unavailable`; `passed`/`failed` statuses are
 kernel-owned, so a model cannot self-certify.
 Validation uses the configured `permissions.shell_timeout_seconds` default,
 just like shell execution; an explicit `timeout_seconds` overrides it.
+Linux validation enables Bash `pipefail`, so filtering test output cannot
+silently turn an upstream failure into Passed. Windows validation refuses
+cmd.exe pipelines, which cannot preserve upstream exit status; run checks
+separately or redirect output to a file. Ordinary shell semantics are unchanged.
 
 Evidence is a current-state ledger: the newest entry per claim is the current
 evidence; earlier entries stay in durable history. A validation that failed and

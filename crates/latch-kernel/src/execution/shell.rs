@@ -5,6 +5,66 @@
 use crate::workspace_path::resolve_workspace_path;
 use std::path::Path;
 
+/// Preserve upstream failures when a proving command filters its output.
+pub(crate) fn validation_command(command: &str) -> anyhow::Result<String> {
+    #[cfg(not(windows))]
+    {
+        Ok(format!("set -o pipefail\n{command}"))
+    }
+    #[cfg(windows)]
+    {
+        // cmd.exe has no pipefail. Refuse an implicit success from the last
+        // pipeline stage rather than claiming that upstream checks passed.
+        if has_cmd_pipeline(command) {
+            anyhow::bail!(
+                "Windows validation pipelines cannot prove upstream success; run checks separately or redirect output to a file"
+            );
+        }
+        Ok(command.to_owned())
+    }
+}
+
+#[cfg(any(windows, test))]
+fn has_cmd_pipeline(command: &str) -> bool {
+    let mut quoted = false;
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '^' if !quoted => {
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            '|' if !quoted => {
+                if chars.peek() == Some(&'|') {
+                    chars.next();
+                } else {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::has_cmd_pipeline;
+
+    #[test]
+    fn cmd_pipeline_detection_distinguishes_literals_and_conditionals() {
+        assert!(has_cmd_pipeline("python test.py | more"));
+        assert!(has_cmd_pipeline("echo ok || python test.py | more"));
+        for command in [
+            "python test.py || exit /b 1",
+            "echo ^|",
+            "python -c \"print('|')\"",
+        ] {
+            assert!(!has_cmd_pipeline(command), "{command}");
+        }
+    }
+}
+
 #[cfg(any(target_os = "linux", test))]
 pub(super) fn bash_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))

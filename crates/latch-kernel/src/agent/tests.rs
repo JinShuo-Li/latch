@@ -446,6 +446,42 @@ fn freshness_agent(dir: &tempfile::TempDir) -> (EventStore, Uuid, Agent) {
     policy_agent(dir, PermissionConfig::default(), vec![])
 }
 
+#[tokio::test]
+async fn validation_pipeline_cannot_certify_a_failed_upstream_check() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    let command = if cfg!(windows) {
+        "python -c \"assert False\" | more"
+    } else {
+        "python3 -c \"assert False\" 2>&1 | tail -3"
+    };
+    let result = agent
+        .run_validation("upstream check", command, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(result.is_error, "{}", result.output);
+    freshness_complete(&mut agent);
+    assert_ne!(agent.state().completion, CompletionState::Verified);
+    assert!(!store.events(sid).unwrap().iter().any(|event| matches!(
+        event.payload,
+        EventPayload::ValidationResult { passed: true, .. }
+    )));
+    #[cfg(target_os = "linux")]
+    {
+        let result = agent
+            .run_validation(
+                "upstream check",
+                "python3 -c \"assert True\" | tail -3",
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(!result.is_error, "{}", result.output);
+        freshness_complete(&mut agent);
+        assert_eq!(agent.state().completion, CompletionState::Verified);
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn freshness_git_external_diff_cannot_write_behind_read_only_classification() {

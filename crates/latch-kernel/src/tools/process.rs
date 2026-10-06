@@ -331,7 +331,8 @@ impl ToolExecutor {
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("command is required"))?
             .to_owned();
-        let profile = self.sandbox_profile(call);
+        let profile = self.command_profile(self.sandbox_profile(call), &command);
+        let command = crate::execution::validation_command(&command)?;
         self.run_process(&profile, &command, timeout_seconds, cancel)
             .await
     }

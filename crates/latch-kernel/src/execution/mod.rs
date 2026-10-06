@@ -17,6 +17,7 @@ mod windows_runtime;
 mod windows_runtime_tools;
 
 pub(crate) use shell::is_read_only_shell;
+pub(crate) use shell::validation_command;
 
 /// Model-facing syntax belongs to the selected execution platform, not the
 /// tool dispatcher. New shells supply their own policy and guidance here.
