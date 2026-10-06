@@ -160,7 +160,7 @@ def main():
                         | {"estimated_cny_off_peak": (r["cost_scenarios"]["CNY"]["off_peak"] or {}).get("total"),
                            "estimated_cny_peak": (r["cost_scenarios"]["CNY"]["peak"] or {}).get("total")})
     fields = list(dict.fromkeys(k for r in csv_rows for k in r))
-    writer = csv.DictWriter(buffer, fieldnames=fields)
+    writer = csv.DictWriter(buffer, fieldnames=fields, lineterminator="\n")
     writer.writeheader()
     writer.writerows(csv_rows)
     write(output / "per-attempt.csv", buffer.getvalue().encode())
