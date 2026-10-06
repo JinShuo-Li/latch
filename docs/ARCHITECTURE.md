@@ -426,7 +426,10 @@ generation. A Passed observation from another generation stays in the ledger
 for audit but is stale for completion and canonical context. A running
 write-capable managed process prevents a pass from certifying completion
 because it can write after validation. Read-only operations do not advance the
-generation. Validation and synchronous shell commands share the workspace
+generation. Shell and managed commands classified as read-only run with actual
+read-only filesystem grants, including in WORK mode: configured Git helpers
+cannot silently write behind the classifier. Explicit metadata or external
+write grants retain write tracking. Validation and synchronous shell commands share the workspace
 mutation lock with guarded edits; a pass overlapping an active managed writer
 or another session's mutation remains stale.
 Revalidation after the process exits on the current generation restores

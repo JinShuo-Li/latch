@@ -36,10 +36,9 @@ impl ToolExecutor {
             .unwrap_or("")
             .to_owned();
         let id = format!("proc-{}", Uuid::new_v4());
-        let profile = self.sandbox_profile(call);
+        let profile = self.command_profile(self.sandbox_profile(call), &command);
         let runner = self.sandbox_runner()?;
-        let may_write_workspace =
-            profile.workspace_writable() && !is_read_only_shell(&command, &self.workspace);
+        let may_write_workspace = profile.workspace_writable();
         if may_write_workspace {
             self.store.append(
                 self.session_id,
@@ -212,7 +211,8 @@ impl ToolExecutor {
         // Shared by root and child executors: validation cannot race a
         // synchronous shell write or a guarded workspace edit.
         let _workspace_guard = self.mutation_lock.lock().await;
-        let drift = profile.workspace_writable() && !is_read_only_shell(command, &self.workspace);
+        let profile = self.command_profile(profile.clone(), command);
+        let drift = profile.workspace_writable();
         let before = if drift {
             self.snapshot_dirty().await.ok().flatten()
         } else {
@@ -228,7 +228,7 @@ impl ToolExecutor {
         }
         let started = Instant::now();
         let (status, text, artifact) = self
-            .run_process_inner(profile, command, timeout_seconds, cancel)
+            .run_process_inner(&profile, command, timeout_seconds, cancel)
             .await?;
         if drift {
             self.classify_drift(command, before.as_deref()).await?;
@@ -240,6 +240,23 @@ impl ToolExecutor {
             artifact_id: artifact,
             elapsed: started.elapsed(),
         })
+    }
+
+    fn command_profile(&self, profile: SandboxProfile, command: &str) -> SandboxProfile {
+        // A name-based inspection classifier cannot prove that Git's configured
+        // helpers are harmless. Its read-only promise must be enforced by the
+        // backend, rather than used to skip mutation tracking on a write mount.
+        if is_read_only_shell(command, &self.workspace)
+            && !profile.capabilities.any(&[
+                crate::sandbox::Capability::GitMetadataWrite,
+                crate::sandbox::Capability::WorkspaceMetadataWrite,
+                crate::sandbox::Capability::ExternalFilesystemWrite,
+            ])
+        {
+            profile.read_only_filesystem()
+        } else {
+            profile
+        }
     }
     pub(super) async fn run_process_inner(
         &self,

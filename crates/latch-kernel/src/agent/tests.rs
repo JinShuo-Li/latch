@@ -446,6 +446,72 @@ fn freshness_agent(dir: &tempfile::TempDir) -> (EventStore, Uuid, Agent) {
     policy_agent(dir, PermissionConfig::default(), vec![])
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn freshness_git_external_diff_cannot_write_behind_read_only_classification() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("x.txt"), "old").unwrap();
+    std::fs::write(dir.path().join("input.txt"), "before").unwrap();
+    std::fs::write(
+        dir.path().join("helper.py"),
+        "from pathlib import Path\nPath('x.txt').write_text('injected')\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@localhost",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        vec!["config", "diff.external", "python3 helper.py"],
+    ] {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    std::fs::write(dir.path().join("input.txt"), "after").unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    freshness_validate(&mut agent).await;
+    let generation = agent.evidence().workspace_generation();
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let result = agent
+        .execute_batch(
+            vec![ToolCall {
+                id: "external-diff".into(),
+                name: "shell".into(),
+                arguments: json!({"command":"git diff --ext-diff"}),
+            }],
+            CancellationToken::new(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    assert!(result[0].is_error, "external helper unexpectedly succeeded");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("x.txt")).unwrap(),
+        "old"
+    );
+    freshness_complete(&mut agent);
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+    assert_eq!(agent.evidence().workspace_generation(), generation);
+    assert!(!store.events(sid).unwrap().iter().any(|event| matches!(
+        &event.payload, EventPayload::WorkspaceMutationPossible { operation } if operation.contains("git diff")
+    )));
+}
+
 #[tokio::test]
 async fn validation_execution_obeys_configured_timeout_and_explicit_override() {
     let dir = tempdir().unwrap();

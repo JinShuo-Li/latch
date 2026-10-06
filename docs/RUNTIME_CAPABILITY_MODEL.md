@@ -356,6 +356,11 @@ disturb the other.
 | App protocol for remote clients (Feishu/Slack/Telegram) | deferred |
 | MCP integration | deferred |
 
+Inspection shell commands run with enforced read-only filesystem grants even
+in WORK mode. The conservative command classifier does not prove that
+repository-configured helpers cannot write; the execution backend enforces
+the restriction. Explicit metadata/external write grants keep mutation tracking.
+
 On Windows, `WorkspaceRead` includes listing and traversing workspace
 directories, reading their metadata, and reading files. Ancestors needed to
 resolve the workspace path expose metadata only through inherited handles;

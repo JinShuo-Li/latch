@@ -205,6 +205,22 @@ impl SandboxProfile {
         self
     }
 
+    /// Enforce observation-only execution even if a command launches a helper.
+    /// Scratch space remains writable; approved host write mounts do not.
+    pub(crate) fn read_only_filesystem(mut self) -> Self {
+        self.capabilities.0.retain(|capability| {
+            !matches!(
+                capability,
+                Capability::WorkspaceSourceWrite
+                    | Capability::WorkspaceMetadataWrite
+                    | Capability::GitMetadataWrite
+                    | Capability::ExternalFilesystemWrite
+            )
+        });
+        self.external_roots.clear();
+        self
+    }
+
     /// Build-artifact writes never make the workspace writable; they only
     /// enable the private scratch target directory on read-only profiles.
     #[must_use]
