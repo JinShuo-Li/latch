@@ -144,8 +144,11 @@ python3 benchmark/report_comparison.py benchmark/runs/comparison-<stamp>-<pid> \
 The scheduler randomizes paired case order with a recorded seed and limits
 total concurrency across both agents to three. It also requires GNU
 `/usr/bin/time` and records CPU time and maximum single-process RSS (including
-waited-for descendants, not aggregate process-tree memory). Source and binary
-hashes, case hashes, scheduling order and progress are retained locally. A
+waited-for descendants, not aggregate process-tree memory).
+OpenCode's private server is incompletely accounted by this launcher-level
+measurement; raw CPU/RSS logs are retained but cannot compare agent resource
+usage. A complete process-tree sampler is needed for that comparison. Source
+and binary hashes, case hashes, scheduling order and progress are retained locally. A
 failed attempt is recorded without silently retrying it. Model tokens for
 interrupted Latch runs can be recovered from durable events, but unfinished
 provider requests may remain unreported.

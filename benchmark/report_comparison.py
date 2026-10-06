@@ -64,6 +64,7 @@ def aggregate(rows, prices):
         "tool_calls": sum((r.get("event_counts") or {}).get("tool_calls", 0) for r in rows),
         "resources": {key: distribution([(r.get("resources") or {}).get(key) for r in rows])
                       for key in ["cpu_user_seconds", "cpu_system_seconds", "max_rss_kib"]},
+        "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
         "cost_scenarios": {},
     }
     for currency, periods in prices["rates_per_million"].items():
@@ -139,8 +140,12 @@ def main():
     stats = {agent: aggregate([r for r in rows if r["agent"] == agent], prices) for agent in ["latch", "opencode"]}
     tiers = {tier: {agent: aggregate([r for r in rows if r["agent"] == agent and r["tier"] == tier], prices)
                     for agent in stats} for tier in run.TIERS}
+    common = {cid for cid in {r["case_id"] for r in rows}
+              if all(r["passed"] for r in rows if r["case_id"] == cid)}
+    paired = {agent: aggregate([r for r in rows if r["agent"] == agent and r["case_id"] in common], prices)
+              for agent in stats}
     save(output / "summary.json", summary)
-    save(output / "metrics.json", {"overall": stats, "tiers": tiers})
+    save(output / "metrics.json", {"overall": stats, "tiers": tiers, "paired_both_passed": paired})
     for name in ["deepseek-pricing.json", "host.json"]:
         write(output / name, (source / name).read_bytes())
     buffer = io.StringIO()
@@ -174,10 +179,15 @@ def main():
                ("Median seconds / attempt", f"{a['wall_seconds_all']['median']:.3f}", f"{b['wall_seconds_all']['median']:.3f}"),
                ("P90 seconds / attempt (nearest rank)", f"{a['wall_seconds_all']['p90_nearest_rank']:.3f}", f"{b['wall_seconds_all']['p90_nearest_rank']:.3f}"),
                ("Sum of task wall seconds", f"{a['wall_seconds_all']['sum']:.3f}", f"{b['wall_seconds_all']['sum']:.3f}"),
-               ("Mean maximum-child RSS, MiB", f"{a['resources']['max_rss_kib'].get('mean', 0)/1024:.2f}", f"{b['resources']['max_rss_kib'].get('mean', 0)/1024:.2f}"),
                ("Model turns (graph)", a["model_turns"], b["model_turns"]),
                ("Tool calls (graph)", a["tool_calls"], b["tool_calls"])]
     lines.extend(f"| {label} | {av} | {bv} |" for label, av, bv in metrics)
+    lines += ["", f"On the {len(common)} identical cases both agents passed, mean seconds were {paired['latch']['wall_seconds_all']['mean']:.3f} for Latch and {paired['opencode']['wall_seconds_all']['mean']:.3f} for OpenCode. Paired successful-case distributions are also retained in metrics.json.", "",
+              "| Tier | Latch passed | OpenCode passed | Latch mean seconds | OpenCode mean seconds |",
+              "| --- | ---: | ---: | ---: | ---: |"]
+    for tier, pair in tiers.items():
+        x, y = pair["latch"], pair["opencode"]
+        lines.append(f"| {tier} | {x['passed']}/{x['attempts']} | {y['passed']}/{y['attempts']} | {x['wall_seconds_all']['mean']:.3f} | {y['wall_seconds_all']['mean']:.3f} |")
     lines += ["", "## Cost estimate", "",
               "Prices retrieved 2026-10-06 from [DeepSeek CNY pricing](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) and [USD pricing](https://api-docs.deepseek.com/quick_start/pricing/). Per million tokens: off-peak CNY miss 1 / hit 0.02 / output 4; peak 2 / 0.04 / 8. USD off-peak 0.15 / 0.003 / 0.60; peak 0.30 / 0.006 / 1.20. These are separate official currency price lists, not FX conversions.", "",
               "Estimated cost = uncached input × miss rate + cached input × hit rate + total output × output rate, divided by 1,000,000. Cached tokens are already included in input; reasoning is already included in normalized output. These are hypothetical direct DeepSeek API prices applied to observed OpenCode Go usage, not actual Go invoices. Both time-of-day scenarios are shown; no billing period is assigned to Go calls.", "",
@@ -194,9 +204,14 @@ def main():
         x, y = pair["latch"], pair["opencode"]
         total = lambda r: (r.get("usage") or {}).get("input_tokens", 0) + (r.get("usage") or {}).get("output_tokens", 0)
         lines.append(f"| {cid} | {x.get('checks_passed')}/{x.get('checks_total')} | {y.get('checks_passed')}/{y.get('checks_total')} | {x['passed']} | {y['passed']} | {x.get('wall_seconds')} | {y.get('wall_seconds')} | {total(x)} | {total(y)} |")
-    lines += ["", "## Interpretation and evidence", "",
+    lines += ["", "## Failed acceptance checks", ""]
+    for r in rows:
+        if not r["passed"]:
+            failed = [c["name"] for c in r.get("final_checks", []) if not c["passed"]]
+            lines.append(f"- {r['agent']} / {r['case_id']}: {', '.join(failed)}; CLI exit {r.get('cli_exit_code')}, timeout {r.get('timed_out')}, completion {r.get('completion', 'not applicable')}.")
+    lines += ["", "Both agents failed zero-TTL rejection in lease_queue and refusal to append over a partial tail in append_index. OpenCode also implemented duplicate orders as INSERT OR IGNORE (a successful no-op) in transaction_outbox; its independent check expects duplicate rejection. These include underspecified prompt contracts: positive TTL and duplicate rejection are not explicit, and partial-tail wording admits different recovery interpretations. Scores and checks are preserved unchanged. Latch's Verified certifies its declared validation commands, not the undisclosed acceptance suite; its failed cases can still be Verified.", "", "## Interpretation and evidence", "",
               "One run per case is exploratory; random sampling, provider load and cache state can change results. Correctness uses independent acceptance plus successful CLI exit and exact model, not a comparison of Latch Verified with OpenCode termination. Failed cases remain included in overall averages; successful-only distributions and tier metrics are in metrics.json. All-attempt cost per pass includes spending on failed attempts, not the mean cost of passing attempts alone.", "",
-              "Wall time is monotonic CLI elapsed time including cold startup, provider and tool waits; task sums are not parallel batch wall time. GNU time CPU and RSS include waited-for descendants; RSS is the largest single-process high-water mark, not simultaneous total process-tree memory. Missing resource measurements are excluded, never imputed as zero. No OS cache flush or provider phase attribution was performed.", "",
+              "Wall time is monotonic CLI elapsed time including cold startup, provider and tool waits; task sums are not parallel batch wall time. Raw GNU time CPU/RSS are retained, but OpenCode's sandbox/private server is incompletely accounted (launcher RSS around 2 MiB is not the agent's RSS). These values are not comparable agent CPU/memory measurements and are omitted from the comparison table. A future memory comparison needs sampling/cgroup accounting of the complete process tree. Missing resource samples are not imputed as zero. No OS cache flush or provider phase attribution was performed.", "",
               "Token usage is provider-reported durable session activity. OpenCode v2 cache reads/writes are added to input and reasoning is added to output to match Latch's totals. If a timeout leaves a provider request unfinished, durable usage is a lower bound and the invoice may be higher. Pricing estimates hold observed cache hits constant; direct DeepSeek API could have different cache behavior. No claims of statistical significance or third-party benchmark validity are made.", "",
               f"Original isolated workspaces and databases remain in ignored `{source.relative_to(run.ROOT.parent)}`. Exported evidence excludes configs, credentials and databases. Per-attempt patches, stdout/stderr, resource logs and compressed durable records are under cases/. CSV includes input/output/cache usage and per-attempt estimated CNY cost; metrics.json includes USD/CNY scenarios and tier distributions.", ""]
     write(output / "README.md", "\n".join(lines).encode())
