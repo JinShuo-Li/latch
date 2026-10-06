@@ -991,6 +991,14 @@ async fn external_edit_blocks_undo_after_resume() {
             )],
         ),
         response("done", vec![]),
+        response(
+            "Acknowledging the completion correction.",
+            vec![call(
+                "complete-1",
+                "complete",
+                json!({"implementation_done":true}),
+            )],
+        ),
     ];
     let provider = Arc::new(FakeProvider::scripted(scripted));
     let tools = ToolExecutor::new(
@@ -1674,6 +1682,14 @@ async fn broad_work_proceeds_without_any_scope_review() {
     let scripted = vec![
         response("Applying the broad change.", calls),
         response("Done.", vec![]),
+        response(
+            "Acknowledging the completion correction.",
+            vec![call(
+                "complete-1",
+                "complete",
+                json!({"implementation_done":true}),
+            )],
+        ),
     ];
     let provider = Arc::new(FakeProvider::scripted(scripted));
     let tools = ToolExecutor::new(
