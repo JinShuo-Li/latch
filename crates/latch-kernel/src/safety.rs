@@ -444,7 +444,50 @@ fn is_read_filter_argument(tokens: &[String], index: usize) -> bool {
     if READ_PATH_FILTER_FLAGS.contains(&flag_name) {
         return true;
     }
-    index > 0 && READ_PATH_FILTER_FLAGS.contains(&tokens[index - 1].as_str())
+    (index > 0 && READ_PATH_FILTER_FLAGS.contains(&tokens[index - 1].as_str()))
+        || is_grep_invert_pattern(tokens, index)
+}
+
+/// `grep -v PATTERN` treats the argument after `-v` as a pattern, not a path
+/// to Git metadata. Keep this exception tied to a grep invocation so another
+/// command's `-v` option cannot hide a `.git` write target.
+fn is_grep_invert_pattern(tokens: &[String], index: usize) -> bool {
+    let start = tokens[..index]
+        .iter()
+        .rposition(|token| token == ";")
+        .map_or(0, |boundary| boundary + 1);
+    let Some(program) = tokens.get(start) else {
+        return false;
+    };
+    if program.rsplit(['/', '\\']).next() != Some("grep") {
+        return false;
+    }
+
+    let mut saw_invert = false;
+    let mut cursor = start + 1;
+    while cursor <= index {
+        let argument = &tokens[cursor];
+        if argument == "--" {
+            return saw_invert && cursor + 1 == index;
+        }
+        if argument == "-v" {
+            saw_invert = true;
+            cursor += 1;
+            continue;
+        }
+        if argument == "-e" || argument == "-f" {
+            // These options consume the next operand, which is not necessarily
+            // a path target even when its contents happen to mention `.git/`.
+            cursor += 2;
+            continue;
+        }
+        if argument.starts_with('-') {
+            cursor += 1;
+            continue;
+        }
+        return saw_invert && cursor == index;
+    }
+    false
 }
 
 const NETWORK_TOOLS: &[&str] = &[
@@ -1082,6 +1125,7 @@ mod tests {
         // inspection commands in machine mode.
         for command in [
             r#"ls -la && find . -name "*.py" -not -path "*/.git/*" | head -50"#,
+            r#"ls -la && find . -type f -name "*.py" -o -name "*.md" -o -name "*.toml" -o -name "*.cfg" | grep -v ".git/" | head -50"#,
             r#"rg --glob '**/.git/**' TODO"#,
             "find . -path ./.git/objects -prune -o -name '*.rs' -print",
             "grep -r TODO --exclude=*/.git/* .",
@@ -1091,13 +1135,27 @@ mod tests {
                 !capabilities.contains(Capability::GitMetadataWrite),
                 "read-only filter misclassified as a metadata write: {command}"
             );
+            if command.contains("grep -v") {
+                let classification = classify(
+                    "shell",
+                    &json!({"command": command}),
+                    context(Mode::Work, Safety::Standard, test_workspace()),
+                );
+                assert!(
+                    matches!(classification.decision, Decision::Allow),
+                    "read-only grep filter was not allowed: {:?}",
+                    classification.decision
+                );
+            }
         }
         // Real metadata targets still require explicit approval.
         for command in [
             "rm -rf .git",
             "rm .git/*",
             "echo x > .git/config",
+            "grep -v .git/ files.txt > .git/config",
             "git commit -m x",
+            "other-command -v .git/",
         ] {
             let capabilities = inferred_command_capabilities(command);
             assert!(
