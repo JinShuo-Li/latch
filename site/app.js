@@ -36,7 +36,7 @@ captureTabs.forEach((tab, index) => {
     showCapture(captureTabs[next].dataset.capture);
   });
 });
-showCapture("welcome");
+showCapture("session");
 
 async function copyText(text) {
   if (navigator.clipboard && window.isSecureContext) {
@@ -62,8 +62,10 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
     try {
       await copyText(source.textContent.trim());
       button.textContent = "Copied";
+      document.getElementById("copy-feedback").textContent = button.getAttribute("aria-label") + ": copied.";
     } catch {
       button.textContent = "Select text";
+      document.getElementById("copy-feedback").textContent = "Copy unavailable. Select the command text to copy it.";
     }
     clearTimeout(resetTimers.get(button));
     resetTimers.set(button, setTimeout(() => { button.textContent = "Copy"; }, 2000));
