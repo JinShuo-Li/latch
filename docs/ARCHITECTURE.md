@@ -462,6 +462,12 @@ that keeps claiming completion is honored on the next claim and the run still
 ends `ImplementedNotVerified`. A run that mutated nothing exits immediately;
 an empty required-validation set is never by itself a reason to keep going.
 
+If a terminal `complete` response contains no summary text, the kernel streams
+a fallback report with the derived completion state, files changed by Latch,
+shells or extensions during this run, and current required-validation statuses.
+Stale evidence is reported as unverified. This report adds no provider turn or
+fabricated assistant event and does not change completion truth.
+
 ## State, memory, and supervision
 
 Model `task_update` constraints are `TaskConstraint` memory; only actual user

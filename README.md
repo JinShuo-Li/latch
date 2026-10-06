@@ -41,6 +41,8 @@ Latch asks the model to include its final summary when it marks a task complete;
 the recorded validation determines whether that task is verified.
 After recorded edits, a missing implementation claim also receives one bounded
 correction opportunity; a normal CLI exit alone is not verified completion.
+An empty final completion summary receives a kernel report of recorded changes
+and current validation status without an extra model request.
 When several requirements need fresh evidence, one validation command can
 prove them together; older passes remain historical after later writes.
 Linux validation preserves failures through output-filtering pipelines. On

@@ -5084,6 +5084,87 @@ fn complete_response(id: &str) -> ModelResponse {
 }
 
 #[tokio::test]
+async fn empty_complete_summary_uses_kernel_facts_without_another_model_request() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w1"),
+            tool_response(
+                "Checking.",
+                "v1",
+                "validate",
+                json!({
+                    "requirement":"file exists", "command":if cfg!(windows) { "if exist added.txt (exit /b 0) else (exit /b 1)" } else { "test -f added.txt" },
+                }),
+            ),
+            tool_response("", "c1", "complete", json!({"implementation_done":true})),
+        ],
+    );
+    let output = agent
+        .run("Add a file.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert!(output.contains("Verified"), "{output}");
+    assert!(output.contains("added.txt"), "{output}");
+    assert!(output.contains("file exists"), "{output}");
+    let events = store.events(sid).unwrap();
+    assert_eq!(model_request_count(&events), 3);
+    // The report is derived by the kernel, not falsely recorded as a model turn.
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event.payload,
+                EventPayload::AssistantMessageCompleted { .. }
+            ))
+            .count(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn empty_complete_summary_reports_stale_evidence_as_unverified() {
+    let d = tempdir().unwrap();
+    let command = if cfg!(windows) {
+        "python -c \"assert True\""
+    } else {
+        "python3 -c \"assert True\""
+    };
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            tool_response(
+                "Checking.",
+                "v1",
+                "validate",
+                json!({"requirement":"check", "command":command}),
+            ),
+            write_new_file_response("w1"),
+            tool_response("", "c1", "complete", json!({"implementation_done":true})),
+            tool_response("", "c2", "complete", json!({"implementation_done":true})),
+        ],
+    );
+    let output = agent
+        .run("Add a file.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert!(output.contains("ImplementedNotVerified"), "{output}");
+    assert!(
+        output.to_ascii_lowercase().contains("unverified"),
+        "{output}"
+    );
+    assert!(output.contains("check"), "{output}");
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    assert_eq!(model_request_count(&store.events(sid).unwrap()), 4);
+}
+
+#[tokio::test]
 async fn a_mutation_without_complete_gets_one_opportunity_to_record_its_claim() {
     let d = tempdir().unwrap();
     let (store, sid, mut agent) = policy_agent(

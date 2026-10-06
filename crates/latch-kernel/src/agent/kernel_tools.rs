@@ -5,6 +5,49 @@ use super::dispatch::{tool_error, tool_ok};
 use super::*;
 
 impl Agent {
+    pub(super) fn completion_report(&self, start_sequence: u64) -> Result<String> {
+        let mut changed_paths = Vec::new();
+        for event in self.store.events_after(self.session_id, start_sequence)? {
+            if let EventPayload::FileChanged { after, owner, .. } = event.payload
+                && matches!(
+                    owner,
+                    latch_protocol::ChangeOwner::Latch
+                        | latch_protocol::ChangeOwner::Shell
+                        | latch_protocol::ChangeOwner::Extension(_)
+                )
+                && !changed_paths.contains(&after.path)
+            {
+                changed_paths.push(after.path);
+            }
+        }
+
+        let paths = if changed_paths.is_empty() {
+            "none recorded".to_owned()
+        } else {
+            changed_paths.join(", ")
+        };
+        let mut report = format!(
+            "Kernel completion report\nCompletion: {:?}.\nChanged files this run: {paths}.",
+            self.state.state().completion
+        );
+        if self.state.state().required_validations.is_empty() {
+            report.push_str("\nValidation: no required validations.");
+        } else {
+            report.push_str("\nValidation status:");
+            for requirement in &self.state.state().required_validations {
+                let status = match self.evidence.status_for_completion(requirement) {
+                    Some(EvidenceStatus::Passed) => "passed",
+                    Some(EvidenceStatus::Failed) => "failed",
+                    Some(EvidenceStatus::Pending) => "pending",
+                    Some(EvidenceStatus::Unavailable) => "unavailable",
+                    None => "unverified",
+                };
+                report.push_str(&format!("\n- {requirement}: {status}"));
+            }
+        }
+        Ok(report)
+    }
+
     pub(super) fn execute_kernel_tool(
         &mut self,
         call: &ToolCall,

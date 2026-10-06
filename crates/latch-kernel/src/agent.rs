@@ -1274,6 +1274,15 @@ impl Agent {
                     if correction {
                         continue;
                     }
+                    if response.text.trim().is_empty() {
+                        self.sync_completion(&sink)?;
+                        let report = self.completion_report(start)?;
+                        if !final_text.is_empty() {
+                            final_text.push_str("\n\n");
+                        }
+                        final_text.push_str(&report);
+                        sink(AgentOutput::Transient(StreamEvent::TextDelta(report)));
+                    }
                     break;
                 }
                 if !late.is_empty() {
