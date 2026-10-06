@@ -255,6 +255,8 @@ Memory/cache invariants (do not violate):
 
 ## Working preferences (maintainer)
 
+- Keep the root README focused on showcasing the product and results; put
+  detailed methodology and implementation explanations in linked documentation.
 - Implement the change and validate it; do not stop at a report or plan.
 - Small, atomic Conventional Commits grouped by concern; stage only intended files.
 - Push to `main` and confirm GitHub Actions is green (`gh run watch <run-id>`).

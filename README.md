@@ -58,11 +58,11 @@ On Windows, use a focused checkout owned by your account. Existing files whose A
 
 ## Benchmark results
 
-The following charts report the 6 October 2026 local comparison of Latch and
-OpenCode v2.0.22 on 25 candidate coding tasks each, using the same DeepSeek
-V4.1 Flash model, credential, prompts, timeouts and independent acceptance checks.
-Each task has one attempt per agent, with at most three attempts running globally.
-This is an exploratory comparison; it does not establish statistical significance.
+In this 25-task run, **Latch passed 23/25 tasks** versus OpenCode's **22/25**,
+with mean execution times of **34.78 s** and **49.92 s**, respectively.
+
+DeepSeek V4.1 Flash · 6 October 2026 · Single attempt per task ·
+[Full results and methodology](benchmark/reports/2026-10-06-full-comparison/README.md)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="benchmark/figures/2026-10-06/task-time-dark.svg">
@@ -78,12 +78,6 @@ This is an exploratory comparison; it does not establish statistical significanc
   <source media="(prefers-color-scheme: dark)" srcset="benchmark/figures/2026-10-06/task-cost-dark.svg">
   <img alt="Per-task estimated off-peak direct DeepSeek API cost in CNY: blue bars represent Latch and orange bars represent OpenCode; hatched bars mark failed tasks." src="benchmark/figures/2026-10-06/task-cost-light.svg">
 </picture>
-
-Input includes cache-hit tokens; output includes reasoning tokens. All-attempt
-averages include failed tasks. Cost estimates apply the dated
-[DeepSeek price list](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)
-to observed token usage and are not actual OpenCode Go invoices. CPU and memory
-are omitted because whole-agent resource accounting was not comparable.
 
 ## For contributors
 
