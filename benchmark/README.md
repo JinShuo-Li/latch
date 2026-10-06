@@ -105,3 +105,30 @@ model and tool waits; it does not attribute individual phases. Only the
 original `stream_records` and `config_layers` cases have been smoke tested
 with a real model. The full 25-case set needs repeated runs and difficulty
 calibration before it can support a comparative coding-agent score.
+
+## OpenCode comparison
+
+The optional local comparison runner uses the same prompts, pristine case
+workspaces and independent evaluator. It requires an installed `opencode`,
+Bubblewrap and `OPENCODE_GO_API_KEY` (use the same credential as Latch):
+
+```sh
+python3 benchmark/run_opencode.py --case spool_recovery \
+  --case stream_records --case cache_stampede --jobs 3
+```
+
+It starts private OpenCode servers with the `build` agent and the same
+`opencode-go/deepseek-v4.1-flash` model. The entire OpenCode process runs in
+Bubblewrap with the host home hidden, isolated state and a writable attempt
+directory; independent acceptance checks and reference repairs are not exposed
+to the agent. Provider network access remains enabled. Each attempt retains the
+case's existing timeout. Reports live in ignored `benchmark/runs/opencode-*`.
+Credentials and databases stay local and must not be included in exported
+reports. Concurrency is capped at three.
+
+The runner normalizes OpenCode's cached input into total input. OpenCode v2
+separates text/tool output and reasoning; their sum is the comparable output
+count. Latch already reports total input and total output. Costs remain null
+without a dated price snapshot. Compare external acceptance rather than
+equating OpenCode termination with Latch's kernel `Verified` state. Single
+attempts on three cases are exploratory, not an overall agent ranking.

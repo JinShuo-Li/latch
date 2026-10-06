@@ -86,6 +86,11 @@ bash scripts/release-gate.sh
   workspaces and reports land in ignored `benchmark/runs/`; see
   `benchmark/README.md`. The 25 candidate cases can be checked without a
   model call using `python3 benchmark/verify_cases.py` (requires Bubblewrap).
+- OpenCode comparison (local, opt-in, paid):
+  `python3 benchmark/run_opencode.py --case stream_records --jobs 3` requires
+  installed `opencode`, Bubblewrap and the same `OPENCODE_GO_API_KEY` as Latch.
+  It runs private OpenCode servers in isolated attempts, caps concurrency at
+  three and normalizes provider token counts; see `benchmark/README.md`.
 - Snapshot updates: `LATCH_UPDATE_SNAPSHOTS=1 cargo test -p latch-tui --lib`.
   Exception: `crates/latch-tui/tests/snapshots/v31_sidebar.txt` is `include_str!`,
   so edit it by hand and keep `cargo test -p latch-tui --lib` green.
