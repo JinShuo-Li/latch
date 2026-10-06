@@ -1,0 +1,34 @@
+diff --git a/cache.py b/cache.py
+index c334b4f..68296f0 100644
+--- a/cache.py
++++ b/cache.py
+@@ -1,11 +1,26 @@
+ """Concurrent in-process value cache."""
+ 
++import threading
++
+ 
+ class Cache:
+     def __init__(self):
+         self.values = {}
++        self._locks = {}
++        self._locks_guard = threading.Lock()
++
++    def _lock_for(self, key):
++        with self._locks_guard:
++            lock = self._locks.get(key)
++            if lock is None:
++                lock = self._locks[key] = threading.Lock()
++            return lock
+ 
+     def get(self, key, loader):
+-        if key not in self.values:
+-            self.values[key] = loader()
+-        return self.values[key]
++        if key in self.values:
++            return self.values[key]
++        with self._lock_for(key):
++            # Another caller may have completed the load while we waited.
++            if key not in self.values:
++                self.values[key] = loader()
++            return self.values[key]

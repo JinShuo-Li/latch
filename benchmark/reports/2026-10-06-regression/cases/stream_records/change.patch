@@ -1,0 +1,72 @@
+diff --git a/stream_records.py b/stream_records.py
+index 996a904..406ac0c 100644
+--- a/stream_records.py
++++ b/stream_records.py
+@@ -1,5 +1,6 @@
+ """Parse newline-delimited JSON events from arbitrary network byte chunks."""
+ 
++import codecs
+ import json
+ 
+ 
+@@ -7,9 +8,11 @@ def parse_records(chunks):
+     """Return JSON values from chunks; accept a final line without a newline."""
+     records = []
+     pending = ""
++    # A network read may end between two bytes of one UTF-8 character, so keep
++    # undecoded bytes buffered instead of dropping them with errors="ignore".
++    decoder = codecs.getincrementaldecoder("utf-8")()
+     for chunk in chunks:
+-        # A network read may end between two bytes of one UTF-8 character.
+-        pending += chunk.decode("utf-8", errors="ignore")
++        pending += decoder.decode(chunk)
+         lines = pending.split("\n")
+         pending = lines.pop()
+         for line in lines:
+diff --git a/test_stream_records.py b/test_stream_records.py
+index 4beaf11..547a63b 100644
+--- a/test_stream_records.py
++++ b/test_stream_records.py
+@@ -20,6 +20,42 @@ class StreamRecordsTest(unittest.TestCase):
+             [{"name": "中"}],
+         )
+ 
++    def test_no_records_lost_at_any_chunk_boundary(self):
++        payload = (
++            '{"id":1,"msg":"中文"}\n'
++            '{"id":2,"msg":"héllo"}\n'
++            '{"id":3}\n'
++        ).encode("utf-8")
++        expected = [
++            {"id": 1, "msg": "中文"},
++            {"id": 2, "msg": "héllo"},
++            {"id": 3},
++        ]
++        for split in range(len(payload) + 1):
++            with self.subTest(split=split):
++                self.assertEqual(
++                    parse_records([payload[:split], payload[split:]]), expected
++                )
++
++    def test_utf8_character_split_across_three_chunks(self):
++        payload = '{"name":"中"}\n'.encode("utf-8")
++        self.assertEqual(
++            parse_records([payload[:9], payload[9:11], payload[11:]]),
++            [{"name": "中"}],
++        )
++
++    def test_one_byte_per_chunk(self):
++        payload = '{"id":1}\n{"msg":"中"}\n'.encode("utf-8")
++        self.assertEqual(
++            parse_records([payload[i : i + 1] for i in range(len(payload))]),
++            [{"id": 1}, {"msg": "中"}],
++        )
++
++    def test_final_record_without_newline(self):
++        self.assertEqual(
++            parse_records([b'{"id":1}\n{"id":', b'2}']), [{"id": 1}, {"id": 2}]
++        )
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

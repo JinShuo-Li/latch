@@ -1,0 +1,83 @@
+{
+  "case_id": "spool_recovery",
+  "tier": "hard",
+  "title": "Crash-safe append-only job spool",
+  "case_sha256": "f8c9e3249c64c31b02ece94cd8044175ce64109a6b00adc45849e9564190e5d3",
+  "baseline_commit": "cbe332b1ec870f6d966ff0eb661a1d8e218b26ff",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "handler_failure_retries_same_job",
+      "passed": false,
+      "detail": "False"
+    },
+    {
+      "name": "partial_line_survives_restart",
+      "passed": false,
+      "detail": "/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 355, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 7 (char 6)\n"
+    },
+    {
+      "name": "multibyte_offsets_and_append",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "stale_checkpoint_fails_closed",
+      "passed": false,
+      "detail": "False"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "handler_failure_retries_same_job",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "partial_line_survives_restart",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "multibyte_offsets_and_append",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "stale_checkpoint_fails_closed",
+      "passed": true,
+      "detail": "True"
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 48.346,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "bc1f587b-e0ed-4635-8f48-e9d8960904d0",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 110030,
+    "output_tokens": 5943,
+    "cache_read_tokens": 86272,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.7841,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 16,
+    "validation_passes": 5,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M spool_recovery.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/regression-20261006T053148Z/worker-1/20261006T053148Z-44187/spool_recovery/workspace"
+}

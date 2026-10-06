@@ -1,0 +1,73 @@
+{
+  "case_id": "cache_stampede",
+  "tier": "hard",
+  "title": "Single-flight concurrent cache loads",
+  "case_sha256": "fd9bed5fcbb5304aad93ac07d5ada30f0d5bc0a16f9f6b1c6dab763d86b88195",
+  "baseline_commit": "5eee71936e7768b17934ba52d3e274d5ef789911",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "single_flight",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "failure_retries",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "other_key_progress",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "single_flight",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "failure_retries",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "other_key_progress",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 24.983,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "5ca8c011-29ed-403a-a1f7-59c63dd3c201",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 60895,
+    "output_tokens": 1631,
+    "cache_read_tokens": 50432,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8282,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 9,
+    "tool_calls": 9,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M cache.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/regression-20261006T053148Z/worker-3/20261006T053148Z-44190/cache_stampede/workspace"
+}

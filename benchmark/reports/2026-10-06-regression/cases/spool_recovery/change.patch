@@ -1,0 +1,63 @@
+diff --git a/spool_recovery.py b/spool_recovery.py
+index 256a6b1..a54685e 100644
+--- a/spool_recovery.py
++++ b/spool_recovery.py
+@@ -1,11 +1,27 @@
+ """Process JSONL jobs from an append-only spool with a durable byte checkpoint."""
+ 
+ import json
++import os
++import tempfile
+ from pathlib import Path
+ 
+ 
+ def _save_offset(path, offset):
+-    Path(path).write_text(str(offset), encoding="ascii")
++    """Commit the checkpoint atomically so a crash can never leave it half-written."""
++    path = Path(path)
++    handle, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
++    try:
++        with os.fdopen(handle, "w", encoding="ascii") as stream:
++            stream.write(str(offset))
++            stream.flush()
++            os.fsync(stream.fileno())
++        os.replace(temp_name, path)
++    except BaseException:
++        try:
++            os.unlink(temp_name)
++        except OSError:
++            pass
++        raise
+ 
+ 
+ def process_spool(spool_path, checkpoint_path, handler):
+@@ -15,11 +31,27 @@ def process_spool(spool_path, checkpoint_path, handler):
+     offset = int(checkpoint_path.read_text(encoding="ascii")) if checkpoint_path.exists() else 0
+     count = 0
+     with spool_path.open("rb") as spool:
++        spool.seek(0, os.SEEK_END)
++        size = spool.tell()
++        if offset < 0 or offset > size:
++            raise ValueError(
++                "checkpoint offset {0} is beyond spool size {1} ({2})".format(
++                    offset, size, spool_path
++                )
++            )
+         spool.seek(offset)
+-        for raw_line in spool:
++        while True:
++            raw_line = spool.readline()
++            if not raw_line:
++                break
++            if not raw_line.endswith(b"\n"):
++                # Incomplete trailing record: wait until the producer appends the rest.
++                break
+             job = json.loads(raw_line.decode("utf-8"))
++            # Only advance after the handler side effect succeeded, so a failed
++            # handler is retried on the next run (at-least-once delivery).
++            handler(job)
+             offset = spool.tell()
+             _save_offset(checkpoint_path, offset)
+-            handler(job)
+             count += 1
+     return count
