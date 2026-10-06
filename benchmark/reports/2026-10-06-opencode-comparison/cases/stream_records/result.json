@@ -1,0 +1,73 @@
+{
+  "case_id": "stream_records",
+  "tier": "easy",
+  "case_sha256": "40fd67ff61c84f4b783b2c9d1fc2791ac7047d521c13730bdfb148b20c94070c",
+  "baseline_commit": "165f135ec67f57d24f60517f96461471de472496",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "single_utf8_split",
+      "passed": false,
+      "detail": "[{'name': ''}]"
+    },
+    {
+      "name": "every_utf8_boundary",
+      "passed": false,
+      "detail": "[{'name': ''}]"
+    },
+    {
+      "name": "several_records_and_final_line",
+      "passed": true,
+      "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+    },
+    {
+      "name": "empty_chunks",
+      "passed": true,
+      "detail": "[{'id': 4}]"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "single_utf8_split",
+      "passed": true,
+      "detail": "[{'name': '中'}]"
+    },
+    {
+      "name": "every_utf8_boundary",
+      "passed": true,
+      "detail": "[{'name': '雪'}]"
+    },
+    {
+      "name": "several_records_and_final_line",
+      "passed": true,
+      "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+    },
+    {
+      "name": "empty_chunks",
+      "passed": true,
+      "detail": "[{'id': 4}]"
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 56.167,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 86354,
+    "uncached_input_tokens": 7378,
+    "output_tokens": 4493,
+    "reported_output_tokens": 2383,
+    "reasoning_tokens": 2110,
+    "cache_read_tokens": 78976,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 12
+  }
+}

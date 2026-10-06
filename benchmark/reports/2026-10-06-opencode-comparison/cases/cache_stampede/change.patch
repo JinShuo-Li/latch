@@ -1,0 +1,77 @@
+diff --git a/cache.py b/cache.py
+index c334b4f..21c7553 100644
+--- a/cache.py
++++ b/cache.py
+@@ -1,11 +1,69 @@
+ """Concurrent in-process value cache."""
+ 
++import threading
++
++
++class _Load:
++    """State for a single in-flight load, shared by all callers of a key."""
++
++    __slots__ = ("event", "value", "error")
++
++    def __init__(self):
++        self.event = threading.Event()
++        self.value = None
++        self.error = None
++
+ 
+ class Cache:
+     def __init__(self):
+         self.values = {}
++        self._loads = {}
++        self._lock = threading.Lock()
+ 
+     def get(self, key, loader):
+-        if key not in self.values:
+-            self.values[key] = loader()
+-        return self.values[key]
++        # Fast path: already cached. dict access is atomic under the GIL.
++        try:
++            return self.values[key]
++        except KeyError:
++            pass
++
++        # Decide whether this caller owns the load for ``key``. The lock is
++        # only held while inspecting/creating the in-flight record, so loads
++        # for different keys never block each other.
++        with self._lock:
++            try:
++                return self.values[key]
++            except KeyError:
++                pass
++            load = self._loads.get(key)
++            if load is None:
++                load = _Load()
++                self._loads[key] = load
++                owner = True
++            else:
++                owner = False
++
++        if not owner:
++            # A load is already running for this key: wait for its outcome
++            # instead of invoking the loader again.
++            load.event.wait()
++            if load.error is not None:
++                raise load.error
++            return load.value
++
++        # This caller owns the load. Publish the result to everyone waiting,
++        # and never cache failures so a later call can retry.
++        try:
++            value = loader()
++        except BaseException as error:
++            with self._lock:
++                self._loads.pop(key, None)
++            load.error = error
++            load.event.set()
++            raise
++        with self._lock:
++            self.values[key] = value
++            self._loads.pop(key, None)
++        load.value = value
++        load.event.set()
++        return value

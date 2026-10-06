@@ -1,0 +1,98 @@
+diff --git a/spool_recovery.py b/spool_recovery.py
+index 256a6b1..4b668ec 100644
+--- a/spool_recovery.py
++++ b/spool_recovery.py
+@@ -1,25 +1,88 @@
+ """Process JSONL jobs from an append-only spool with a durable byte checkpoint."""
+ 
+ import json
++import os
++import tempfile
+ from pathlib import Path
+ 
+ 
++def _load_offset(path):
++    """Return the checkpoint offset, or 0 when the checkpoint does not exist."""
++    path = Path(path)
++    try:
++        text = path.read_text(encoding="ascii")
++    except FileNotFoundError:
++        return 0
++    text = text.strip()
++    if not text:
++        raise ValueError(f"checkpoint {path} is empty or corrupt")
++    offset = int(text)
++    if offset < 0:
++        raise ValueError(f"checkpoint {path} holds a negative offset: {offset}")
++    return offset
++
++
+ def _save_offset(path, offset):
+-    Path(path).write_text(str(offset), encoding="ascii")
++    """Durably persist offset via an atomic replace.
++
++    The write goes to a temporary file in the same directory that is flushed
++    and fsynced before being renamed over the checkpoint.  An interrupted
++    write therefore leaves either the previous valid checkpoint or the new
++    one, never a partial value.
++    """
++    path = Path(path)
++    fd, tmp_name = tempfile.mkstemp(
++        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
++    )
++    try:
++        with os.fdopen(fd, "w", encoding="ascii") as stream:
++            stream.write(str(offset))
++            stream.flush()
++            os.fsync(stream.fileno())
++        os.replace(tmp_name, path)
++    except BaseException:
++        try:
++            os.unlink(tmp_name)
++        except OSError:
++            pass
++        raise
+ 
+ 
+ def process_spool(spool_path, checkpoint_path, handler):
+     """Call handler for each complete unprocessed record; return job count."""
+     spool_path = Path(spool_path)
+     checkpoint_path = Path(checkpoint_path)
+-    offset = int(checkpoint_path.read_text(encoding="ascii")) if checkpoint_path.exists() else 0
++    offset = _load_offset(checkpoint_path)
++    size = spool_path.stat().st_size
++
++    # Fail closed rather than silently skipping records when the checkpoint
++    # no longer matches the spool (e.g. the spool was truncated or replaced).
++    if offset > size:
++        raise ValueError(
++            f"checkpoint offset {offset} points beyond spool size {size}"
++        )
++
+     count = 0
+     with spool_path.open("rb") as spool:
++        if offset > 0:
++            spool.seek(offset - 1)
++            if spool.read(1) != b"\n":
++                raise ValueError(
++                    f"checkpoint offset {offset} is not at a record boundary"
++                )
+         spool.seek(offset)
+-        for raw_line in spool:
++        while True:
++            raw_line = spool.readline()
++            if not raw_line:
++                break
++            if not raw_line.endswith(b"\n"):
++                # Incomplete trailing record: leave it for a later append.
++                break
+             job = json.loads(raw_line.decode("utf-8"))
+-            offset = spool.tell()
+-            _save_offset(checkpoint_path, offset)
+             handler(job)
++            # Commit only after the handler succeeded so a crash or failure
++            # replays the job (at-least-once) instead of skipping it.
++            offset += len(raw_line)
++            _save_offset(checkpoint_path, offset)
+             count += 1
+     return count
