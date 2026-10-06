@@ -1206,8 +1206,8 @@ impl Agent {
                 {
                     // A final answer with no tool call normally ends the run. It
                     // does not when implementation actually changed the
-                    // workspace and the kernel-derived completion is still
-                    // `ImplementedNotVerified`: the kernel spends its single
+                    // workspace and its implementation claim or verification
+                    // is missing: the kernel spends its single
                     // correction turn rather than silently accepting an
                     // unverified change. A run that mutated nothing (read-only
                     // or explanatory work) exits here exactly as before.

@@ -9,7 +9,7 @@ use super::*;
 /// the kernel can justify: it asks for the evidence the model is responsible
 /// for producing, and names the honest exit when verification genuinely is not
 /// available.
-const VERIFICATION_CORRECTION: &str = "Kernel verification check: this run changed the workspace, but completion is IMPLEMENTED, NOT VERIFIED — no required validation has passed. Before finishing, do one of two things. Either run the validation that proves the change (validate takes a requirement name and the command that demonstrates it holds), or, if the change genuinely cannot be verified in this environment, record that with record_evidence so completion states the reason honestly. If the change needs no validation at all, say why in your final answer.";
+const VERIFICATION_CORRECTION: &str = "Kernel verification check: this run changed the workspace, but its implementation claim or current verification is missing. If implementation is done, run any missing validation (refresh several named requirements with one covering command and requirements), then call complete with implementation_done=true. If verification is unavailable, record_evidence and report why. If no validation is appropriate, explain why and record the implementation claim.";
 
 /// True when a durable event records a workspace mutation Latch itself made
 /// during the run: a guarded edit, a mutating shell command, or an extension
@@ -126,7 +126,10 @@ impl Agent {
     pub(super) fn take_verification_correction(&mut self) -> bool {
         if self.verification_correction_issued
             || !self.run_mutated_workspace
-            || self.state.state().completion != CompletionState::ImplementedNotVerified
+            || !matches!(
+                self.state.state().completion,
+                CompletionState::InProgress | CompletionState::ImplementedNotVerified
+            )
         {
             return false;
         }

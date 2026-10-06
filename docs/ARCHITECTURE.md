@@ -453,7 +453,8 @@ loop resolves it against the derived completion, and only `Verified` ends the
 run on the strength of its own claim. When the kernel has recorded a
 workspace mutation during the run — read from durable `FileChanged` events and
 never from model-authored `touched_files` — and completion is still
-`ImplementedNotVerified`, the loop spends exactly one corrective turn instead
+`InProgress` (missing the implementation claim) or `ImplementedNotVerified`,
+the loop spends exactly one corrective turn instead
 of exiting: the instruction travels the same durable `KernelContext` re-ground
 channel as progress supervision, asking the model to validate the change or
 record why verification is unavailable. A one-shot flag bounds it, so a model

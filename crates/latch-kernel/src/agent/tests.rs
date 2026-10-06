@@ -2033,7 +2033,7 @@ async fn approved_outside_write_executes_and_denied_write_does_not() {
     for approve in [true, false] {
         let store = EventStore::open_memory().unwrap();
         let sid = store.create_session(workspace_dir.path()).unwrap();
-        let responses = vec![
+        let mut responses = vec![
             ModelResponse {
                 text: "writing outside".into(),
                 tool_calls: vec![ToolCall {
@@ -2057,6 +2057,9 @@ async fn approved_outside_write_executes_and_denied_write_does_not() {
                 reasoning: vec![],
             },
         ];
+        if approve {
+            responses.push(final_response("The approved write is done but unverified."));
+        }
         let tools = ToolExecutor::new(
             workspace_dir.path().into(),
             workspace_dir.path().join("art"),
@@ -2374,11 +2377,12 @@ async fn external_effects_are_asked_even_under_autonomous_auto_approve() {
     let d = tempdir().unwrap();
     let outside = tempdir().unwrap();
     let target = outside.path().join("note.txt");
-    let responses = tool_then_final(
+    let mut responses = tool_then_final(
         "w1",
         "write",
         json!({"path": target.to_string_lossy(), "content": "hi", "base_hash": null}),
     );
+    responses.push(final_response("The approved write is done but unverified."));
     let (store, sid, mut agent) = policy_agent(
         &d,
         PermissionConfig {
@@ -5077,6 +5081,65 @@ fn complete_response(id: &str) -> ModelResponse {
         "complete",
         json!({"implementation_done": true}),
     )
+}
+
+#[tokio::test]
+async fn a_mutation_without_complete_gets_one_opportunity_to_record_its_claim() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w1"),
+            final_response("Added the file."),
+            complete_response("c1"),
+        ],
+    );
+    agent
+        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert!(agent.state().implementation_done);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    let events = store.events(sid).unwrap();
+    assert_eq!(model_request_count(&events), 3);
+    assert_eq!(verification_correction_count(&events), 1);
+}
+
+#[tokio::test]
+async fn a_verified_command_without_an_implementation_claim_still_gets_correction() {
+    let d = tempdir().unwrap();
+    let command = if cfg!(windows) {
+        "python -c \"assert True\""
+    } else {
+        "python3 -c \"assert True\""
+    };
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w1"),
+            tool_response(
+                "checking",
+                "v1",
+                "validate",
+                json!({"requirement":"check", "command":command}),
+            ),
+            final_response("Added and checked the file."),
+            complete_response("c1"),
+        ],
+    );
+    agent
+        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+    let events = store.events(sid).unwrap();
+    assert_eq!(model_request_count(&events), 4);
+    assert_eq!(verification_correction_count(&events), 1);
 }
 
 #[tokio::test]
