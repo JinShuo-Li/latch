@@ -91,6 +91,10 @@ bash scripts/release-gate.sh
   installed `opencode`, Bubblewrap and the same `OPENCODE_GO_API_KEY` as Latch.
   It runs private OpenCode servers in isolated attempts, caps concurrency at
   three and normalizes provider token counts; see `benchmark/README.md`.
+  Full paired comparison: `python3 benchmark/compare.py --latch-config <config>
+  --jobs 3` additionally requires GNU `/usr/bin/time`; one global cap covers
+  both agents. `benchmark/report_comparison.py` exports performance and dated
+  DeepSeek price scenarios without configs, credentials or databases.
 - Snapshot updates: `LATCH_UPDATE_SNAPSHOTS=1 cargo test -p latch-tui --lib`.
   Exception: `crates/latch-tui/tests/snapshots/v31_sidebar.txt` is `include_str!`,
   so edit it by hand and keep `cargo test -p latch-tui --lib` green.

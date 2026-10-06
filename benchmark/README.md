@@ -132,3 +132,29 @@ count. Latch already reports total input and total output. Costs remain null
 without a dated price snapshot. Compare external acceptance rather than
 equating OpenCode termination with Latch's kernel `Verified` state. Single
 attempts on three cases are exploratory, not an overall agent ranking.
+
+For a full 25-case comparison, use one scheduler for both agents:
+
+```sh
+python3 benchmark/compare.py --latch-config ~/.config/latch/config.toml --jobs 3
+python3 benchmark/report_comparison.py benchmark/runs/comparison-<stamp>-<pid> \
+  benchmark/reports/<report-name>
+```
+
+The scheduler randomizes paired case order with a recorded seed and limits
+total concurrency across both agents to three. It also requires GNU
+`/usr/bin/time` and records CPU time and maximum single-process RSS (including
+waited-for descendants, not aggregate process-tree memory). Source and binary
+hashes, case hashes, scheduling order and progress are retained locally. A
+failed attempt is recorded without silently retrying it. Model tokens for
+interrupted Latch runs can be recovered from durable events, but unfinished
+provider requests may remain unreported.
+
+The exporter requires a dated `deepseek-pricing.json` snapshot in the run
+directory with official sources and separate cache-hit, cache-miss and output
+rates. It reports peak/off-peak USD/CNY estimates, averages including failed
+attempts, cost per successful case including failed-attempt spending, tier
+statistics and per-attempt CSV data. These estimates apply direct DeepSeek API
+prices to observed OpenCode Go usage and are not actual Go invoices. Keep
+original configs and SQLite databases private; the exporter checks credential
+values before publishing compressed event records and logs.
