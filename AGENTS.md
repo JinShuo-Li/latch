@@ -209,6 +209,8 @@ Native ownership is split into runner/token/AppContainer/ACL/recovery/desktop/
 job/process modules; Win32 complexity stays outside the safe Rust kernel.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,group,configuration_center}.rs` and existing siblings.
+Mouse capture defaults on to prevent wheel-to-arrow history navigation;
+`LATCH_MOUSE_CAPTURE=0` opts out. Keep terminal mouse cleanup symmetric.
 
 Runtime platform rules: kernel invariants, port rules, capability semantics,
 transport independence, and the implemented-vs-deferred port map are normative

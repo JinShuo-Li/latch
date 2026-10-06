@@ -11,7 +11,7 @@ pub(super) struct Guard {
 impl Guard {
     pub(super) fn enter() -> Result<Self> {
         let mouse_capture =
-            std::env::var_os("LATCH_MOUSE_CAPTURE").is_some_and(|value| value == "1");
+            mouse_capture_enabled(std::env::var_os("LATCH_MOUSE_CAPTURE").as_deref());
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         if let Err(error) = enter_screen(&mut stdout, mouse_capture) {
@@ -32,6 +32,12 @@ impl Guard {
             }
         }
     }
+}
+
+pub(super) fn mouse_capture_enabled(value: Option<&std::ffi::OsStr>) -> bool {
+    // Without mouse reporting, terminals and multiplexers can translate the
+    // wheel into arrow keys, which would recall composer history.
+    value.is_none_or(|value| value != "0")
 }
 
 impl Drop for Guard {

@@ -1324,7 +1324,7 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                  composer: Enter send · Ctrl+J or Alt+Enter newline · Home/End line · Ctrl+Home/End buffer\n\
                  composer scroll: PgUp/PgDn when the prompt overflows\n\
                  transcript: Shift+PgUp/PgDn · Shift+Home/End\n\
-                 mouse wheel: set LATCH_MOUSE_CAPTURE=1 to enable (disables native mouse text selection)\n\
+                 mouse wheel: enabled by default · Shift-drag selects text in supported terminals · LATCH_MOUSE_CAPTURE=0 disables\n\
                  input: Ctrl+A/E line start/end · Ctrl+W delete word · Ctrl+U/K delete to line edges\n\
                  history: Up/Down at the first/last composer line recalls previous prompts\n\
                  interrupt: Ctrl+C cancels a running turn, or quits when idle\n\

@@ -2688,6 +2688,17 @@ fn child_agent_activity_reaches_the_status_row_and_sidebar() {
 }
 
 #[test]
+fn mouse_capture_defaults_on_with_an_explicit_opt_out() {
+    use super::runtime::mouse_capture_enabled;
+    use std::ffi::OsStr;
+
+    assert!(mouse_capture_enabled(None));
+    assert!(mouse_capture_enabled(Some(OsStr::new("1"))));
+    assert!(mouse_capture_enabled(Some(OsStr::new(""))));
+    assert!(!mouse_capture_enabled(Some(OsStr::new("0"))));
+}
+
+#[test]
 fn terminal_screen_commands_toggle_bracketed_paste_symmetrically() {
     let mut entered = Vec::new();
     let mut left = Vec::new();

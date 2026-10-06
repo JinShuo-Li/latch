@@ -937,9 +937,11 @@ the complete buffer is wrapped into grapheme-safe visual rows, an independent
 viewport offset tracks the visible window, and the terminal cursor is placed
 only while its visual row is visible. PageUp/PageDown move through an
 overflowing prompt and fall back to transcript scrolling when it fits; the
-wheel routes by pointer position when mouse capture is explicitly enabled with
-`LATCH_MOUSE_CAPTURE=1`. Native terminal text selection remains available by
-default; alternate-screen, paste, and optional mouse modes are left symmetrically.
+wheel routes by pointer position with mouse capture enabled by default, preventing
+terminals and multiplexers from translating wheel events into composer history
+keys. `LATCH_MOUSE_CAPTURE=0` opts out; native text selection typically uses
+Shift-drag while capture is active. Alternate-screen, paste, and mouse modes are
+left symmetrically.
 The idle composer uses an input row and a metadata row; multiline input grows
 within a bounded viewport. The palette (`latch-tui::theme`) centralizes every
 surface, status, and diff decision and degrades to semantic foregrounds without
