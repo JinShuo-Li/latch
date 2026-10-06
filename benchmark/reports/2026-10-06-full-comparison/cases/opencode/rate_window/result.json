@@ -1,0 +1,112 @@
+{
+  "case_id": "rate_window",
+  "tier": "hard",
+  "case_sha256": "a37c6e1028cd71cd159cd6ec32ec3de71bd6a35a72826ca56d764d9687597702",
+  "baseline_commit": "8d4bc3c044315c09ebff3591cc19f7c8dfe20aa5",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "independent_tenants",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "exact_boundary",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "denial_does_not_consume",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "invalid_parameters",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (0, 10)\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "independent_tenants",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "exact_boundary",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "denial_does_not_consume",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_parameters",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 30.957,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 52230,
+    "uncached_input_tokens": 3718,
+    "output_tokens": 2889,
+    "reported_output_tokens": 1819,
+    "reasoning_tokens": 1070,
+    "cache_read_tokens": 48512,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 8,
+    "tool_calls": 9
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 31.306,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2040,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0011154,
+        "input_hit": 0.000291072,
+        "output": 0.0034668,
+        "total": 0.004873272
+      },
+      "off_peak": {
+        "input_miss": 0.0005577,
+        "input_hit": 0.000145536,
+        "output": 0.0017334,
+        "total": 0.002436636
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.007436,
+        "input_hit": 0.00194048,
+        "output": 0.023112,
+        "total": 0.03248848
+      },
+      "off_peak": {
+        "input_miss": 0.003718,
+        "input_hit": 0.00097024,
+        "output": 0.011556,
+        "total": 0.01624424
+      }
+    }
+  }
+}

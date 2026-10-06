@@ -1,0 +1,23 @@
+	Command being timed: "/home/lijs/work/latch/target/release/latch run --config /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/ansi_width/config.toml --workspace /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/ansi_width/workspace --provider opencode-go --model deepseek-v4.1-flash --mode WORK --prompt A terminal status table aligns columns using display_width(text). ANSI color codes, combining marks and East Asian wide characters currently count as ordinary characters, so columns drift. Fix width.py for these cases while keeping the public function. Run visible tests and validate. --output json"
+	User time (seconds): 0.18
+	System time (seconds): 0.07
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:32.66
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 15876
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 4062
+	Voluntary context switches: 8816
+	Involuntary context switches: 7
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 21128
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

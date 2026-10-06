@@ -1,0 +1,118 @@
+{
+  "case_id": "transaction_outbox",
+  "tier": "hard",
+  "title": "Transactional order and outbox event",
+  "case_sha256": "3e74af9962dc6e4558dc5fbbab958d87df90547f51ea0ec412fdde7ea56c692c",
+  "baseline_commit": "1f3ad2a5d8831166889c195f2e6438a7056bd119",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "event_failure_rolls_back_order",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "duplicate_has_no_extra_event",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "insertion_order_and_valid_amount",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError: zero amount\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "event_failure_rolls_back_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "duplicate_has_no_extra_event",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "insertion_order_and_valid_amount",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 69.515,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "4f7b226e-f790-481a-a47b-04c613925448",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 95873,
+    "output_tokens": 8455,
+    "cache_read_tokens": 70400,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.7343,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 10,
+    "tool_calls": 14,
+    "validation_passes": 2,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M outbox.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/transaction_outbox/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 69.769,
+  "resources": {
+    "cpu_user_seconds": 0.39,
+    "cpu_system_seconds": 0.24,
+    "max_rss_kib": 16680,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 10,
+    "tool_calls": 14,
+    "validation_passes": 2,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.007641899999999999,
+        "input_hit": 0.0004224,
+        "output": 0.010146,
+        "total": 0.0182103
+      },
+      "off_peak": {
+        "input_miss": 0.0038209499999999996,
+        "input_hit": 0.0002112,
+        "output": 0.005073,
+        "total": 0.00910515
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.050946,
+        "input_hit": 0.002816,
+        "output": 0.06764,
+        "total": 0.12140200000000001
+      },
+      "off_peak": {
+        "input_miss": 0.025473,
+        "input_hit": 0.001408,
+        "output": 0.03382,
+        "total": 0.060701000000000005
+      }
+    }
+  }
+}

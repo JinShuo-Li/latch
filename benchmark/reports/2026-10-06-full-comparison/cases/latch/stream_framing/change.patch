@@ -1,0 +1,30 @@
+diff --git a/framing.py b/framing.py
+index 35b0500..268cd2c 100644
+--- a/framing.py
++++ b/framing.py
+@@ -4,13 +4,20 @@
+ class FrameDecoder:
+     def __init__(self, max_size=1024):
+         self.max_size = max_size
++        self._buffer = b""
+ 
+     def feed(self, chunk):
++        self._buffer += chunk
+         frames = []
+-        while len(chunk) >= 4:
+-            length = int.from_bytes(chunk[:4], "big")
+-            if len(chunk) < length + 4:
++        while True:
++            if len(self._buffer) < 4:
+                 break
+-            frames.append(chunk[4:length + 4])
+-            chunk = chunk[length + 4:]
++            length = int.from_bytes(self._buffer[:4], "big")
++            if length > self.max_size:
++                raise ValueError(
++                    "frame length {} exceeds max_size {}".format(length, self.max_size))
++            if len(self._buffer) < length + 4:
++                break
++            frames.append(self._buffer[4:length + 4])
++            self._buffer = self._buffer[length + 4:]
+         return frames

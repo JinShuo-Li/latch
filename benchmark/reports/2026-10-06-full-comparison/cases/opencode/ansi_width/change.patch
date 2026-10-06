@@ -1,0 +1,63 @@
+diff --git a/width.py b/width.py
+index 3ab7556..5927fba 100644
+--- a/width.py
++++ b/width.py
+@@ -1,5 +1,56 @@
+-"""Terminal display width for short status cells."""
++"""Terminal display width for short status cells.
++
++``display_width`` reports how many terminal columns a string occupies so that
++status tables can align their columns.  Unlike ``len`` it accounts for:
++
++* ANSI escape sequences (colour, cursor movement, hyperlinks, ...) which are
++  not rendered and therefore have no width;
++* combining marks and other zero-width formatting characters;
++* East Asian wide/fullwidth characters, which occupy two columns.
++"""
++
++import re
++import unicodedata
++
++# ANSI escape sequences.  The general shape is ESC followed by one of:
++#   * a CSI sequence: ESC [ <params> <intermediates> <final>
++#   * an OSC string:  ESC ] ... terminated by BEL or ST (ESC \)
++#   * a DCS/SOS/PM/APC string, also terminated by ST
++#   * any other two-byte "Fe" escape (ESC followed by 0x40-0x5F)
++_ANSI_RE = re.compile(
++    r"""
++    \x1b
++    (?:
++        \[ [0-?]* [ -/]* [@-~]            # CSI ... final byte
++      | \] [^\x07\x1b]* (?: \x07 | \x1b\\ )  # OSC ... BEL or ST
++      | [PX^_] [^\x1b]* \x1b\\            # DCS/SOS/PM/APC ... ST
++      | [\x40-\x5f]                       # other Fe escapes
++    )
++    """,
++    re.VERBOSE,
++)
++
++# Unicode general categories whose characters never advance the cursor.
++_ZERO_WIDTH_CATEGORIES = frozenset(("Mn", "Me", "Cf", "Cc"))
++
++
++def _char_width(char):
++    """Return the display width of a single character."""
++    # Combining marks (accents, diacritics, ...) attach to the previous glyph.
++    if unicodedata.combining(char):
++        return 0
++    # Formatting/control characters (ZWJ, zero-width space, ESC remnants, ...).
++    if unicodedata.category(char) in _ZERO_WIDTH_CATEGORIES:
++        return 0
++    # Wide and fullwidth East Asian characters take two columns.
++    if unicodedata.east_asian_width(char) in ("W", "F"):
++        return 2
++    return 1
+ 
+ 
+ def display_width(text):
+-    return len(text)
++    """Return the number of terminal columns needed to display *text*."""
++    if not text:
++        return 0
++    visible = _ANSI_RE.sub("", text)
++    return sum(_char_width(char) for char in visible)

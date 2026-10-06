@@ -1,0 +1,74 @@
+diff --git a/scheduler.py b/scheduler.py
+index 3ba649e..a11c8be 100644
+--- a/scheduler.py
++++ b/scheduler.py
+@@ -1,13 +1,64 @@
+ """Task graph execution; tasks maps names to dependency lists."""
+ 
++import heapq
++
+ 
+ def schedule(tasks, runner):
+-    completed = []
++    """Run every task exactly once after all its dependencies succeed.
++
++    Tasks are executed in dependency order.  When several tasks are ready at
++    the same time, the one declared first in ``tasks`` runs first.  The runner
++    is never invoked twice for the same task, and the first exception raised by
++    ``runner`` propagates immediately, halting the schedule.
++
++    Raises:
++        ValueError: if a dependency is not a declared task, or if the graph
++            contains a cycle.  This is checked before any task is run.
++    """
++    names = list(tasks)
++    position = {name: index for index, name in enumerate(names)}
++
++    # Validate dependencies up front, before running anything.
++    for name, dependencies in tasks.items():
++        for dependency in dependencies:
++            if dependency not in tasks:
++                raise ValueError(
++                    "unknown dependency {!r} required by {!r}".format(
++                        dependency, name
++                    )
++                )
++
++    # Build in-degree counts and reverse edges.  Repeated dependencies are
++    # treated as a single edge so a task is neither blocked nor run more than
++    # once because of duplicates.
++    in_degree = {name: 0 for name in names}
++    dependents = {name: [] for name in names}
+     for name, dependencies in tasks.items():
++        for dependency in dict.fromkeys(dependencies):
++            in_degree[name] += 1
++            dependents[dependency].append(name)
++
++    # Kahn's algorithm, using declaration order as the tie-breaker among ready
++    # tasks.  Running it to completion doubles as cycle detection.
++    ready = [position[name] for name in names if in_degree[name] == 0]
++    heapq.heapify(ready)
++
++    order = []
++    while ready:
++        index = heapq.heappop(ready)
++        current = names[index]
++        order.append(current)
++        for dependent in dependents[current]:
++            in_degree[dependent] -= 1
++            if in_degree[dependent] == 0:
++                heapq.heappush(ready, position[dependent])
++
++    if len(order) != len(tasks):
++        raise ValueError("dependency cycle detected")
++
++    # All tasks are now known to be runnable; execute in resolved order.
++    completed = []
++    for name in order:
+         runner(name)
+         completed.append(name)
+-        for dependency in dependencies:
+-            if dependency not in completed:
+-                runner(dependency)
+-                completed.append(dependency)
+     return completed

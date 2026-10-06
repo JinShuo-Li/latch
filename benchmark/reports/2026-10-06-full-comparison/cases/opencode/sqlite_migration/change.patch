@@ -1,0 +1,61 @@
+diff --git a/migration.py b/migration.py
+index 3ce3b85..2e40d05 100644
+--- a/migration.py
++++ b/migration.py
+@@ -1,8 +1,53 @@
+ """Address-book schema upgrade."""
+ 
++import sqlite3
++
++SCHEMA_VERSION = 2
++
++# Columns the ``users`` table must already have before we upgrade it.
++_REQUIRED_COLUMNS = ("id", "name")
++_EMAIL_COLUMN = "email"
++
++
++def _table_exists(connection, table):
++    row = connection.execute(
++        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
++        (table,),
++    ).fetchone()
++    return row is not None
++
++
++def _table_columns(connection, table):
++    # PRAGMA table_info rows are (cid, name, type, notnull, dflt_value, pk).
++    rows = connection.execute('PRAGMA table_info("%s")' % table).fetchall()
++    return {row[1]: row for row in rows}
++
+ 
+ def migrate(connection):
+-    connection.execute("DROP TABLE IF EXISTS users")
+-    connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT)")
+-    connection.execute("PRAGMA user_version = 2")
++    """Upgrade the address-book schema in place.
++
++    Adds a nullable ``email`` column to ``users`` so existing rows survive
++    with ``email`` set to NULL.  The upgrade is idempotent, never replaces an
++    incompatible table, and leaves the caller's connection open.
++    """
++    if _table_exists(connection, "users"):
++        columns = _table_columns(connection, "users")
++        missing = [name for name in _REQUIRED_COLUMNS if name not in columns]
++        if missing:
++            raise sqlite3.DatabaseError(
++                "users table is malformed: missing column(s): %s"
++                % ", ".join(missing)
++            )
++        if _EMAIL_COLUMN not in columns:
++            connection.execute("ALTER TABLE users ADD COLUMN email TEXT")
++    else:
++        connection.execute(
++            "CREATE TABLE users ("
++            "id INTEGER PRIMARY KEY, "
++            "name TEXT NOT NULL, "
++            "email TEXT"
++            ")"
++        )
++
++    connection.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
+     connection.commit()

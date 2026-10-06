@@ -1,0 +1,128 @@
+{
+  "case_id": "lease_queue",
+  "tier": "hard",
+  "title": "Queue lease expiry and stale acknowledgements",
+  "case_sha256": "65033941e56ada0b358e68246a5df09e287b38ff5578443caa243f46b8f49972",
+  "baseline_commit": "5183201be139aa4e7fab13c6233139e612434e4d",
+  "passed": false,
+  "baseline_checks": [
+    {
+      "name": "stale_ack_after_reclaim",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "no_duplicate_live_claim",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "attempts_and_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_lease",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "stale_ack_after_reclaim",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_duplicate_live_claim",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "attempts_and_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_lease",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 31.304,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "b243d1a9-bbde-4366-a355-24c0e016090e",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 62357,
+    "output_tokens": 3212,
+    "cache_read_tokens": 53504,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.858,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 8,
+    "tool_calls": 11,
+    "validation_passes": 4,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M queue.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/lease_queue/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 31.604,
+  "resources": {
+    "cpu_user_seconds": 0.19,
+    "cpu_system_seconds": 0.11,
+    "max_rss_kib": 15952,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 8,
+    "tool_calls": 11,
+    "validation_passes": 4,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0026559,
+        "input_hit": 0.000321024,
+        "output": 0.0038543999999999996,
+        "total": 0.006831324
+      },
+      "off_peak": {
+        "input_miss": 0.00132795,
+        "input_hit": 0.000160512,
+        "output": 0.0019271999999999998,
+        "total": 0.003415662
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.017706,
+        "input_hit": 0.00214016,
+        "output": 0.025696,
+        "total": 0.04554216
+      },
+      "off_peak": {
+        "input_miss": 0.008853,
+        "input_hit": 0.00107008,
+        "output": 0.012848,
+        "total": 0.02277108
+      }
+    }
+  }
+}

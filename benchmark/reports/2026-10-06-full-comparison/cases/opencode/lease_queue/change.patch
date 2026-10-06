@@ -1,0 +1,63 @@
+diff --git a/queue.py b/queue.py
+index 5ea4d0e..c474e98 100644
+--- a/queue.py
++++ b/queue.py
+@@ -20,7 +20,10 @@ class Queue:
+         return None
+ 
+     def ack(self, job_id, token):
+-        if job_id not in self.jobs:
++        job = self.jobs.get(job_id)
++        # Only the holder of the current lease may acknowledge. A job that was
++        # never claimed has no deadline and cannot be acked with a stale token.
++        if job is None or job["deadline"] is None or job["token"] != token:
+             return False
+         del self.jobs[job_id]
+         return True
+diff --git a/test_queue.py b/test_queue.py
+index a554b0d..9baadba 100644
+--- a/test_queue.py
++++ b/test_queue.py
+@@ -18,5 +18,42 @@ class QueueTest(unittest.TestCase):
+         self.assertFalse(q.ack("a", old))
+         self.assertTrue(q.ack("a", new))
+ 
++    def test_stale_ack_does_not_remove_new_lease(self):
++        q = Queue(); q.add("a")
++        _, old = q.claim(0, 10)
++        _, new = q.claim(11, 10)
++        self.assertFalse(q.ack("a", old))
++        self.assertIn("a", q.jobs)
++        self.assertEqual(q.jobs["a"]["token"], new)
++        self.assertTrue(q.ack("a", new))
++
++    def test_attempts_increase_on_each_claim(self):
++        q = Queue(); q.add("a")
++        q.claim(0, 10)
++        self.assertEqual(q.jobs["a"]["attempts"], 1)
++        q.claim(11, 10)
++        self.assertEqual(q.jobs["a"]["attempts"], 2)
++
++    def test_no_duplicate_concurrent_claim(self):
++        q = Queue(); q.add("a")
++        _, token = q.claim(0, 10)
++        self.assertIsNone(q.claim(5, 10))
++        self.assertEqual(q.jobs["a"]["token"], token)
++        self.assertIsNotNone(q.claim(10, 10))
++
++    def test_pending_order_preserved(self):
++        q = Queue()
++        for name in "abc":
++            q.add(name)
++        self.assertEqual(q.claim(0, 100)[0], "a")
++        self.assertEqual(q.claim(1, 100)[0], "b")
++        self.assertEqual(q.claim(2, 100)[0], "c")
++        self.assertIsNone(q.claim(3, 100))
++
++    def test_ack_unclaimed_or_missing_fails(self):
++        q = Queue(); q.add("a")
++        self.assertFalse(q.ack("a", None))
++        self.assertFalse(q.ack("missing", "x"))
++
+ 
+ if __name__ == "__main__": unittest.main()

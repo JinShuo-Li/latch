@@ -1,0 +1,102 @@
+{
+  "case_id": "option_values",
+  "tier": "easy",
+  "case_sha256": "c4771401772c7a03316eca9ad88c7c082e93a7f07337dd94e977a9b8fadfae19",
+  "baseline_commit": "453c2bb6b11620b8b0567f964fa75981e4ee1aba",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "empty_is_explicit",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "end_marker",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/options.py\", line 18, in parse_args\n    raise ValueError(f\"unknown option: {arg}\")\nValueError: unknown option: --\n"
+    },
+    {
+      "name": "missing_value_and_regular_options",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "empty_is_explicit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "end_marker",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "missing_value_and_regular_options",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 33.469,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 59196,
+    "uncached_input_tokens": 4796,
+    "output_tokens": 3493,
+    "reported_output_tokens": 1461,
+    "reasoning_tokens": 2032,
+    "cache_read_tokens": 54400,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 8,
+    "tool_calls": 9
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 33.695,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2196,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0014388,
+        "input_hit": 0.0003264,
+        "output": 0.004191599999999999,
+        "total": 0.005956799999999999
+      },
+      "off_peak": {
+        "input_miss": 0.0007194,
+        "input_hit": 0.0001632,
+        "output": 0.0020957999999999997,
+        "total": 0.0029783999999999995
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.009592,
+        "input_hit": 0.002176,
+        "output": 0.027944,
+        "total": 0.039712
+      },
+      "off_peak": {
+        "input_miss": 0.004796,
+        "input_hit": 0.001088,
+        "output": 0.013972,
+        "total": 0.019856
+      }
+    }
+  }
+}

@@ -1,0 +1,129 @@
+{
+  "case_id": "stream_records",
+  "tier": "easy",
+  "title": "Incremental UTF-8 event records",
+  "case_sha256": "40fd67ff61c84f4b783b2c9d1fc2791ac7047d521c13730bdfb148b20c94070c",
+  "baseline_commit": "cc2196b3176234337b9981bccaf953ab028836ca",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "single_utf8_split",
+      "passed": false,
+      "detail": "[{'name': ''}]"
+    },
+    {
+      "name": "every_utf8_boundary",
+      "passed": false,
+      "detail": "[{'name': ''}]"
+    },
+    {
+      "name": "several_records_and_final_line",
+      "passed": true,
+      "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+    },
+    {
+      "name": "empty_chunks",
+      "passed": true,
+      "detail": "[{'id': 4}]"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "single_utf8_split",
+      "passed": true,
+      "detail": "[{'name': '\u4e2d'}]"
+    },
+    {
+      "name": "every_utf8_boundary",
+      "passed": true,
+      "detail": "[{'name': '\u96ea'}]"
+    },
+    {
+      "name": "several_records_and_final_line",
+      "passed": true,
+      "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+    },
+    {
+      "name": "empty_chunks",
+      "passed": true,
+      "detail": "[{'id': 4}]"
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 42.362,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "f9cca69c-cfc1-4431-9c1d-13d8c050431b",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 96071,
+    "output_tokens": 3827,
+    "cache_read_tokens": 86272,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.898,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 14,
+    "validation_passes": 1,
+    "validation_failures": 1
+  },
+  "git_status": [
+    " M stream_records.py",
+    " M test_stream_records.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/stream_records/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 42.543,
+  "resources": {
+    "cpu_user_seconds": 0.22,
+    "cpu_system_seconds": 0.11,
+    "max_rss_kib": 16524,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 11,
+    "tool_calls": 14,
+    "validation_passes": 1,
+    "validation_failures": 1
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0029397,
+        "input_hit": 0.0005176320000000001,
+        "output": 0.0045924,
+        "total": 0.008049732
+      },
+      "off_peak": {
+        "input_miss": 0.00146985,
+        "input_hit": 0.00025881600000000004,
+        "output": 0.0022962,
+        "total": 0.004024866
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.019598,
+        "input_hit": 0.00345088,
+        "output": 0.030616,
+        "total": 0.05366488
+      },
+      "off_peak": {
+        "input_miss": 0.009799,
+        "input_hit": 0.00172544,
+        "output": 0.015308,
+        "total": 0.02683244
+      }
+    }
+  }
+}

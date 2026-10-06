@@ -1,0 +1,67 @@
+diff --git a/logging_store.py b/logging_store.py
+index 73422dd..ace0f88 100644
+--- a/logging_store.py
++++ b/logging_store.py
+@@ -3,12 +3,59 @@
+ from pathlib import Path
+ 
+ 
++def _archive(path, index):
++    """Return the path of archive number ``index`` (1 is the newest)."""
++    return path.with_name("{}.{}".format(path.name, index))
++
++
++def _rotate(path, backups):
++    """Shift the current log and its archives so a fresh log can be written.
++
++    Archive ``.1`` is the newest.  At most ``backups`` archives are kept,
++    so the oldest archive is discarded before the shift.
++    """
++    if backups < 1:
++        # Nothing to keep: drop the current contents.
++        path.unlink()
++        return
++
++    oldest = _archive(path, backups)
++    if oldest.exists():
++        oldest.unlink()
++
++    for index in range(backups - 1, 0, -1):
++        source = _archive(path, index)
++        if source.exists():
++            source.replace(_archive(path, index + 1))
++
++    path.replace(_archive(path, 1))
++
++
+ def append_log(path, line, max_bytes, backups=2):
++    """Append ``line`` to ``path``, rotating when ``max_bytes`` is exceeded.
++
++    Rotation moves the current log to ``.1`` and shifts every older archive
++    up by one (``.1`` -> ``.2``, ...).  Only ``backups`` archives are kept;
++    anything older is discarded.  An empty log is never rotated, so a single
++    oversized line is still written.
++    """
++    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool):
++        raise ValueError("max_bytes must be an integer")
++    if max_bytes <= 0:
++        raise ValueError("max_bytes must be greater than zero")
++
++    if not isinstance(backups, int) or isinstance(backups, bool):
++        raise ValueError("backups must be an integer")
++    if backups < 0:
++        raise ValueError("backups must not be negative")
++
+     path = Path(path)
+     path.parent.mkdir(parents=True, exist_ok=True)
+     encoded = (line + "\n").encode("utf-8")
+-    if path.exists() and path.stat().st_size + len(encoded) > max_bytes:
+-        archived = path.with_name(path.name + ".1")
+-        path.replace(archived)
++
++    if path.exists() and path.stat().st_size > 0:
++        if path.stat().st_size + len(encoded) > max_bytes:
++            _rotate(path, backups)
++
+     with path.open("ab") as stream:
+         stream.write(encoded)

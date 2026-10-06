@@ -1,0 +1,46 @@
+diff --git a/config_layers.py b/config_layers.py
+index 2e809db..49fee47 100644
+--- a/config_layers.py
++++ b/config_layers.py
+@@ -3,23 +3,37 @@
+ from copy import deepcopy
+ 
+ 
++def _merge(base, override):
++    """Deep-merge ``override`` onto a copy of ``base``.
++
++    Nested mappings are merged key by key so a partial override does not erase
++    unrelated sibling values. Neither input is mutated.
++    """
++    result = deepcopy(base)
++    for key, value in override.items():
++        if isinstance(value, dict) and isinstance(result.get(key), dict):
++            result[key] = _merge(result[key], value)
++        else:
++            result[key] = deepcopy(value)
++    return result
++
++
+ def resolve_config(defaults, project, environ, flags):
+     """Return merged settings; later sources take precedence.
+ 
+     ``None`` in flags means absent, while an empty string is an explicit value.
+     APP_ENDPOINT and APP_TIMEOUT override the corresponding nested settings.
+     """
+-    result = deepcopy(defaults)
+-    result.update(project)
++    result = _merge(defaults, project)
+     service = result.setdefault("service", {})
+     if "APP_ENDPOINT" in environ:
+         service["endpoint"] = environ["APP_ENDPOINT"]
+     if "APP_TIMEOUT" in environ:
+         service["timeout"] = int(environ["APP_TIMEOUT"])
+     for key, value in flags.items():
+-        if value:
++        if value is not None:
+             if key in ("endpoint", "timeout"):
+                 service[key] = value
+             else:
+-                result[key] = value
++                result[key] = deepcopy(value)
+     return result

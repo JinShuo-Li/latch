@@ -1,0 +1,118 @@
+{
+  "case_id": "cache_stampede",
+  "tier": "hard",
+  "title": "Single-flight concurrent cache loads",
+  "case_sha256": "fd9bed5fcbb5304aad93ac07d5ada30f0d5bc0a16f9f6b1c6dab763d86b88195",
+  "baseline_commit": "25acd4e87c1ff25fd9092320f64801546c489a09",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "single_flight",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "failure_retries",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "other_key_progress",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "single_flight",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "failure_retries",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "other_key_progress",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 32.604,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "e89a94c0-c00d-42b2-90ee-4bb1bdd65bf5",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 53331,
+    "output_tokens": 3622,
+    "cache_read_tokens": 43904,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8232,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 7,
+    "tool_calls": 10,
+    "validation_passes": 4,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M cache.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/cache_stampede/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 32.935,
+  "resources": {
+    "cpu_user_seconds": 0.2,
+    "cpu_system_seconds": 0.12,
+    "max_rss_kib": 16128,
+    "major_page_faults": 2,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 7,
+    "tool_calls": 10,
+    "validation_passes": 4,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0028281,
+        "input_hit": 0.000263424,
+        "output": 0.004346399999999999,
+        "total": 0.007437923999999999
+      },
+      "off_peak": {
+        "input_miss": 0.00141405,
+        "input_hit": 0.000131712,
+        "output": 0.0021731999999999997,
+        "total": 0.0037189619999999997
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.018854,
+        "input_hit": 0.00175616,
+        "output": 0.028976,
+        "total": 0.04958616
+      },
+      "off_peak": {
+        "input_miss": 0.009427,
+        "input_hit": 0.00087808,
+        "output": 0.014488,
+        "total": 0.02479308
+      }
+    }
+  }
+}

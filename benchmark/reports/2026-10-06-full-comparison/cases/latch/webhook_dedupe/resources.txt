@@ -1,0 +1,23 @@
+	Command being timed: "/home/lijs/work/latch/target/release/latch run --config /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/webhook_dedupe/config.toml --workspace /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/webhook_dedupe/workspace --provider opencode-go --model deepseek-v4.1-flash --mode WORK --prompt A webhook receiver uses SQLite to avoid processing the same event twice. It currently marks events done before the handler succeeds, so retries are lost; duplicate deliveries can also race. Fix process_event(db, event_id, payload, handler) in webhook.py. Return True only when this call handled the event, False for an already completed event. Roll back claims on handler failure, preserve a completed result across new connections, and avoid duplicate handler execution for sequential duplicate deliveries. Run tests and validate. --output json"
+	User time (seconds): 0.21
+	System time (seconds): 0.15
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:59.08
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 16036
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3840
+	Voluntary context switches: 8141
+	Involuntary context switches: 9
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 25296
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

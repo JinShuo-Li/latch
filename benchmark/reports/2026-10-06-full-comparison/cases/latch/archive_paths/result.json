@@ -1,0 +1,118 @@
+{
+  "case_id": "archive_paths",
+  "tier": "medium",
+  "title": "Safe ZIP import before extraction",
+  "case_sha256": "ed400cad189a9930733893bcaf5c85cc51d7a7eea4e29145c43dc85ea5b0fc14",
+  "baseline_commit": "78face3c570041c8ec7aa5154fad090da74d10a9",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "nested_file",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "traversal_preflight",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError: traversal accepted\n"
+    },
+    {
+      "name": "absolute_and_symlink",
+      "passed": false,
+      "detail": "e>\n  File \"/tmp/workspace/archive.py\", line 16, in extract_archive\n    target.write_bytes(source.read(member))\n  File \"/usr/lib/python3.12/pathlib.py\", line 1038, in write_bytes\n    with self.open(mode='wb') as f:\n         ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/outside.txt'\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "nested_file",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "traversal_preflight",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "absolute_and_symlink",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 34.721,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "95bfefe6-da50-4649-9b22-80605dcd5e61",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 64413,
+    "output_tokens": 3755,
+    "cache_read_tokens": 56192,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8724,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 8,
+    "tool_calls": 10,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M archive.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/archive_paths/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 34.996,
+  "resources": {
+    "cpu_user_seconds": 0.18,
+    "cpu_system_seconds": 0.12,
+    "max_rss_kib": 16268,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 8,
+    "tool_calls": 10,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0024663,
+        "input_hit": 0.000337152,
+        "output": 0.004506,
+        "total": 0.007309451999999999
+      },
+      "off_peak": {
+        "input_miss": 0.00123315,
+        "input_hit": 0.000168576,
+        "output": 0.002253,
+        "total": 0.0036547259999999996
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.016442,
+        "input_hit": 0.0022476799999999997,
+        "output": 0.03004,
+        "total": 0.04872968
+      },
+      "off_peak": {
+        "input_miss": 0.008221,
+        "input_hit": 0.0011238399999999999,
+        "output": 0.01502,
+        "total": 0.02436484
+      }
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "case_id": "config_layers",
+  "tier": "medium",
+  "case_sha256": "8197ad3a5b56a4ad24eb93b55ee4fd6217ffa345f54a03a0cb09281fe0490c11",
+  "baseline_commit": "7b57b016ecf2897b9a9e5a86cd9ff171b8c28c2f",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "nested_merge",
+      "passed": false,
+      "detail": "{'output': {'format': 'json'}, 'service': {'timeout': 12}}"
+    },
+    {
+      "name": "explicit_empty_after_environment",
+      "passed": false,
+      "detail": "'env'"
+    },
+    {
+      "name": "zero_and_false_are_explicit",
+      "passed": false,
+      "detail": "{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}"
+    },
+    {
+      "name": "inputs_unchanged",
+      "passed": false,
+      "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'endpoint': 'flag', 'timeout': 7}}]"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "nested_merge",
+      "passed": true,
+      "detail": "{'output': {'color': True, 'format': 'json'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 12}}"
+    },
+    {
+      "name": "explicit_empty_after_environment",
+      "passed": true,
+      "detail": "''"
+    },
+    {
+      "name": "zero_and_false_are_explicit",
+      "passed": true,
+      "detail": "{'output': {'color': True, 'format': 'text'}, 'quiet': False, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 0}}"
+    },
+    {
+      "name": "inputs_unchanged",
+      "passed": true,
+      "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'timeout': 9}}]"
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 33.57,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 47507,
+    "uncached_input_tokens": 4499,
+    "output_tokens": 3321,
+    "reported_output_tokens": 1826,
+    "reasoning_tokens": 1495,
+    "cache_read_tokens": 43008,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 7,
+    "tool_calls": 11
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 33.77,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2040,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0013497000000000001,
+        "input_hit": 0.000258048,
+        "output": 0.0039851999999999995,
+        "total": 0.0055929479999999995
+      },
+      "off_peak": {
+        "input_miss": 0.0006748500000000001,
+        "input_hit": 0.000129024,
+        "output": 0.0019925999999999998,
+        "total": 0.0027964739999999997
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.008998,
+        "input_hit": 0.00172032,
+        "output": 0.026568,
+        "total": 0.037286320000000005
+      },
+      "off_peak": {
+        "input_miss": 0.004499,
+        "input_hit": 0.00086016,
+        "output": 0.013284,
+        "total": 0.018643160000000002
+      }
+    }
+  }
+}

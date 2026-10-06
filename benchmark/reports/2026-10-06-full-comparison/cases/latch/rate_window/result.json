@@ -1,0 +1,128 @@
+{
+  "case_id": "rate_window",
+  "tier": "hard",
+  "title": "Rolling-window limit across tenants",
+  "case_sha256": "a37c6e1028cd71cd159cd6ec32ec3de71bd6a35a72826ca56d764d9687597702",
+  "baseline_commit": "c8486d17b77a01c7e2c09639c34348c86a15fd0a",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "independent_tenants",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "exact_boundary",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "denial_does_not_consume",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "invalid_parameters",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (0, 10)\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "independent_tenants",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "exact_boundary",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "denial_does_not_consume",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_parameters",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 19.618,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "1a41bec4-56dc-4d09-acf7-3ff042067922",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 38704,
+    "output_tokens": 1918,
+    "cache_read_tokens": 31232,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8069,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 6,
+    "tool_calls": 8,
+    "validation_passes": 1,
+    "validation_failures": 1
+  },
+  "git_status": [
+    " M limiter.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/rate_window/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 19.974,
+  "resources": {
+    "cpu_user_seconds": 0.09,
+    "cpu_system_seconds": 0.08,
+    "max_rss_kib": 16268,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 6,
+    "tool_calls": 8,
+    "validation_passes": 1,
+    "validation_failures": 1
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0022416,
+        "input_hit": 0.00018739199999999998,
+        "output": 0.0023016,
+        "total": 0.004730592
+      },
+      "off_peak": {
+        "input_miss": 0.0011208,
+        "input_hit": 9.369599999999999e-05,
+        "output": 0.0011508,
+        "total": 0.002365296
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.014944,
+        "input_hit": 0.00124928,
+        "output": 0.015344,
+        "total": 0.03153728
+      },
+      "off_peak": {
+        "input_miss": 0.007472,
+        "input_hit": 0.00062464,
+        "output": 0.007672,
+        "total": 0.01576864
+      }
+    }
+  }
+}

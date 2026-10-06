@@ -1,0 +1,45 @@
+diff --git a/importer.py b/importer.py
+index 30d6586..53a7271 100644
+--- a/importer.py
++++ b/importer.py
+@@ -3,10 +3,34 @@
+ import csv
+ 
+ 
+-def parse_chunks(chunks):
+-    rows = []
++def _iter_lines(chunks):
++    """Yield complete physical lines (with endings) from arbitrary chunks.
++
++    A chunk may end in the middle of a line, so the incomplete trailing
++    fragment is held back and prepended to the next chunk. Line endings are
++    preserved because ``csv.reader`` uses them to reconstruct newlines inside
++    quoted fields that span multiple physical lines.
++    """
++    tail = ""
+     for chunk in chunks:
+-        for line in chunk.splitlines():
+-            if line:
+-                rows.extend(csv.reader([line]))
+-    return rows
++        data = tail + chunk
++        if not data:
++            continue
++        lines = data.splitlines(keepends=True)
++        if lines and not lines[-1].endswith(("\n", "\r")):
++            tail = lines.pop()
++        else:
++            tail = ""
++        yield from lines
++    if tail:
++        yield tail
++
++
++def parse_chunks(chunks):
++    """Parse CSV text delivered in arbitrary chunks into a list of rows.
++
++    Quoted fields may contain commas and newlines, and records may be split
++    across chunk boundaries. ``csv.reader`` is given the reconstructed stream
++    of physical lines so it can keep a quoted field open across line breaks.
++    """
++    return [row for row in csv.reader(_iter_lines(chunks)) if row]

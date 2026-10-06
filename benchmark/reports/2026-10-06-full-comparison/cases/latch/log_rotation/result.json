@@ -1,0 +1,118 @@
+{
+  "case_id": "log_rotation",
+  "tier": "medium",
+  "title": "Bounded log rotation without data loss",
+  "case_sha256": "7ef03334a9909054a71fbf85033cfaf756997f50cd62302f1c9eb10533aefb4b",
+  "baseline_commit": "5337a091667911f33e0a19d64ec5a8ae9f21b6cb",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "archive_order",
+      "passed": false,
+      "detail": "line 7, in <module>\n  File \"/usr/lib/python3.12/pathlib.py\", line 1029, in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmpixgrj23n/app.log.2'\n"
+    },
+    {
+      "name": "bounded_archive_count",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "empty_log_and_limits",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "archive_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "bounded_archive_count",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "empty_log_and_limits",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 27.693,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "88ee436b-890c-493b-abd4-0bc0a3ad5aa1",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 69332,
+    "output_tokens": 2583,
+    "cache_read_tokens": 54784,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.7902,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 9,
+    "tool_calls": 10,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M logging_store.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/log_rotation/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 28.0,
+  "resources": {
+    "cpu_user_seconds": 0.11,
+    "cpu_system_seconds": 0.07,
+    "max_rss_kib": 15756,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 9,
+    "tool_calls": 10,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0043644,
+        "input_hit": 0.00032870400000000003,
+        "output": 0.0030996,
+        "total": 0.007792704
+      },
+      "off_peak": {
+        "input_miss": 0.0021822,
+        "input_hit": 0.00016435200000000001,
+        "output": 0.0015498,
+        "total": 0.003896352
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.029096,
+        "input_hit": 0.0021913600000000003,
+        "output": 0.020664,
+        "total": 0.05195136
+      },
+      "off_peak": {
+        "input_miss": 0.014548,
+        "input_hit": 0.0010956800000000001,
+        "output": 0.010332,
+        "total": 0.02597568
+      }
+    }
+  }
+}

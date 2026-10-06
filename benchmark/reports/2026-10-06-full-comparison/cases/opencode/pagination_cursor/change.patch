@@ -1,0 +1,169 @@
+diff --git a/feed.py b/feed.py
+index 475f654..59d4280 100644
+--- a/feed.py
++++ b/feed.py
+@@ -1,13 +1,63 @@
+-"""Ascending activity feed pagination."""
++"""Ascending activity feed pagination.
++
++Pages are ordered by the stable ``(timestamp, id)`` key.  The cursor is an
++opaque, URL-safe token that encodes the key of the last returned row rather
++than an array offset, so inserting or deleting rows between pages never
++causes a row to be skipped or duplicated.
++"""
+ 
+ import base64
++import json
++
++
++def _encode_cursor(key):
++    """Return an opaque URL-safe token for a ``(timestamp, id)`` key."""
++    payload = json.dumps(list(key), separators=(",", ":")).encode("utf-8")
++    return base64.urlsafe_b64encode(payload).decode("ascii")
++
++
++def _decode_cursor(cursor):
++    """Decode an opaque cursor back into a hashable ``(timestamp, id)`` key."""
++    if not isinstance(cursor, str):
++        raise ValueError("malformed cursor")
++    try:
++        payload = base64.urlsafe_b64decode(cursor.encode("ascii"))
++        key = json.loads(payload.decode("utf-8"))
++    except (ValueError, UnicodeError):
++        # binascii.Error and json.JSONDecodeError are both ValueError subclasses.
++        raise ValueError("malformed cursor")
++    if not isinstance(key, list) or len(key) != 2:
++        raise ValueError("malformed cursor")
++    return tuple(key)
+ 
+ 
+ def page(records, cursor, limit):
++    """Return ``(items, next_cursor)`` for one page of ``records``.
++
++    Records are ordered by ``(timestamp, id)``.  ``cursor`` is ``None`` for the
++    first page or a token returned by a previous call.  ``next_cursor`` is
++    ``None`` once the feed is exhausted.
++    """
++    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
++        raise ValueError("limit must be a positive integer")
++
++    after = _decode_cursor(cursor) if cursor is not None else None
++
+     ordered = sorted(records, key=lambda row: (row["timestamp"], row["id"]))
+-    start = int(base64.urlsafe_b64decode(cursor.encode()).decode()) if cursor else 0
+-    items = ordered[start:start + limit]
++    if after is not None:
++        try:
++            ordered = [
++                row
++                for row in ordered
++                if (row["timestamp"], row["id"]) > after
++            ]
++        except TypeError:
++            # Cursor key is not comparable with the stored keys.
++            raise ValueError("malformed cursor")
++
++    items = ordered[:limit]
+     next_cursor = None
+-    if start + limit < len(ordered):
+-        next_cursor = base64.urlsafe_b64encode(str(start + limit).encode()).decode()
++    if len(ordered) > limit:
++        last = items[-1]
++        next_cursor = _encode_cursor((last["timestamp"], last["id"]))
+     return items, next_cursor
+diff --git a/test_feed.py b/test_feed.py
+index 7068ab1..a0de850 100644
+--- a/test_feed.py
++++ b/test_feed.py
+@@ -19,6 +19,91 @@ class FeedTest(unittest.TestCase):
+         second, _ = page(ROWS[1:], cursor, 2)
+         self.assertEqual([row["id"] for row in first + second], ["a", "b", "c", "d"])
+ 
++    def test_delete_cursor_row(self):
++        # Deleting the row the cursor points at must not break the next page.
++        first, cursor = page(ROWS, None, 2)
++        without_b = [row for row in ROWS if row["id"] != "b"]
++        second, _ = page(without_b, cursor, 2)
++        self.assertEqual([row["id"] for row in first + second], ["a", "b", "c", "d"])
++
++    def test_delete_later_record(self):
++        first, cursor = page(ROWS, None, 2)
++        without_d = [row for row in ROWS if row["id"] != "d"]
++        second, end = page(without_d, cursor, 2)
++        self.assertEqual([row["id"] for row in first + second], ["a", "b", "c"])
++        self.assertIsNone(end)
++
++    def test_insert_after_cursor(self):
++        first, cursor = page(ROWS, None, 2)
++        inserted = ROWS + [{"timestamp": 4, "id": "e"}]
++        second, _ = page(inserted, cursor, 2)
++        self.assertEqual([row["id"] for row in first + second], ["a", "b", "c", "d"])
++
++    def test_cursor_is_not_an_offset(self):
++        _, cursor = page(ROWS, None, 2)
++        # New feed with an extra row before the cursor: offset 2 would skip "c".
++        shifted = [{"timestamp": 0, "id": "z"}] + ROWS
++        second, _ = page(shifted, cursor, 2)
++        self.assertEqual([row["id"] for row in second], ["c", "d"])
++
++    def test_empty_feed(self):
++        items, end = page([], None, 2)
++        self.assertEqual(items, [])
++        self.assertIsNone(end)
++
++    def test_exhausted_on_exact_page(self):
++        items, end = page(ROWS, None, 4)
++        self.assertEqual(items, ROWS)
++        self.assertIsNone(end)
++
++    def test_limit_larger_than_remaining(self):
++        _, cursor = page(ROWS, None, 2)
++        items, end = page(ROWS, cursor, 100)
++        self.assertEqual([row["id"] for row in items], ["c", "d"])
++        self.assertIsNone(end)
++
++    def test_limit_one(self):
++        seen = []
++        cursor = None
++        while True:
++            items, cursor = page(ROWS, cursor, 1)
++            seen.extend(row["id"] for row in items)
++            if cursor is None:
++                break
++        self.assertEqual(seen, ["a", "b", "c", "d"])
++
++    def test_unsorted_input(self):
++        shuffled = [ROWS[2], ROWS[0], ROWS[3], ROWS[1]]
++        first, cursor = page(shuffled, None, 2)
++        second, end = page(shuffled, cursor, 2)
++        self.assertEqual([row["id"] for row in first + second], ["a", "b", "c", "d"])
++        self.assertIsNone(end)
++
++    def test_malformed_cursors(self):
++        for bad in ["not-a-cursor", "", "!!!", "Mg==", "WzFd", "e30=",
++                    base64_bytes("[1]")]:
++            with self.assertRaises(ValueError):
++                page(ROWS, bad, 2)
++
++    def test_non_string_cursor(self):
++        with self.assertRaises(ValueError):
++            page(ROWS, 123, 2)
++
++    def test_nonpositive_limits(self):
++        for bad in [0, -1, -100]:
++            with self.assertRaises(ValueError):
++                page(ROWS, None, bad)
++
++    def test_invalid_limit_type(self):
++        for bad in [None, 1.5, "2"]:
++            with self.assertRaises(ValueError):
++                page(ROWS, None, bad)
++
++
++def base64_bytes(text):
++    import base64
++    return base64.urlsafe_b64encode(text.encode("ascii")).decode("ascii")
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

@@ -1,0 +1,118 @@
+{
+  "case_id": "atomic_config",
+  "tier": "hard",
+  "title": "Atomic config writes and backup recovery",
+  "case_sha256": "290b2139c6d95a0819b93cc95ecd939fb72e27a44e58dd04269238946fa8ae37",
+  "baseline_commit": "39479036ea57c2524105a863b0e743aeea326e56",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "invalid_input_keeps_live",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "backup_previous_and_recovery",
+      "passed": false,
+      "detail": "  return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n"
+    },
+    {
+      "name": "both_corrupt_fail",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "invalid_input_keeps_live",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "backup_previous_and_recovery",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "both_corrupt_fail",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 71.93,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "67509988-ce38-4414-b8ed-8c62c47f1dbb",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 123263,
+    "output_tokens": 10356,
+    "cache_read_tokens": 91904,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.7456,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 12,
+    "tool_calls": 15,
+    "validation_passes": 4,
+    "validation_failures": 3
+  },
+  "git_status": [
+    " M config_store.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/atomic_config/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 72.173,
+  "resources": {
+    "cpu_user_seconds": 0.4,
+    "cpu_system_seconds": 0.29,
+    "max_rss_kib": 16784,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 12,
+    "tool_calls": 15,
+    "validation_passes": 4,
+    "validation_failures": 3
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0094077,
+        "input_hit": 0.000551424,
+        "output": 0.0124272,
+        "total": 0.022386324
+      },
+      "off_peak": {
+        "input_miss": 0.00470385,
+        "input_hit": 0.000275712,
+        "output": 0.0062136,
+        "total": 0.011193162
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.062718,
+        "input_hit": 0.00367616,
+        "output": 0.082848,
+        "total": 0.14924216
+      },
+      "off_peak": {
+        "input_miss": 0.031359,
+        "input_hit": 0.00183808,
+        "output": 0.041424,
+        "total": 0.07462108
+      }
+    }
+  }
+}

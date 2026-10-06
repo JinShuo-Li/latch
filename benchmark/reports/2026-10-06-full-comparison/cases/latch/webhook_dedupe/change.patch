@@ -1,0 +1,87 @@
+diff --git a/test_webhook.py b/test_webhook.py
+index 535bf53..43e04d5 100644
+--- a/test_webhook.py
++++ b/test_webhook.py
+@@ -1,4 +1,7 @@
++import os
+ import sqlite3
++import tempfile
++import threading
+ import unittest
+ 
+ from webhook import process_event
+@@ -17,5 +20,39 @@ class WebhookTest(unittest.TestCase):
+             process_event(db, "id", 1, lambda _: (_ for _ in ()).throw(RuntimeError()))
+         self.assertTrue(process_event(db, "id", 1, lambda _: None))
+ 
++    def test_completion_survives_new_connection(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            path = os.path.join(tmp, "events.db")
++            first, second = sqlite3.connect(path), sqlite3.connect(path)
++            seen = []
++            self.assertTrue(process_event(first, "id", 1, seen.append))
++            self.assertFalse(process_event(second, "id", 1, seen.append))
++            self.assertEqual(seen, [1])
++
++    def test_concurrent_duplicate_runs_handler_once(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            path = os.path.join(tmp, "events.db")
++            seen, results, errors = [], [], []
++            barrier = threading.Barrier(2)
++
++            def deliver():
++                conn = sqlite3.connect(path, timeout=30)
++                try:
++                    barrier.wait()
++                    results.append(process_event(conn, "id", 1, seen.append))
++                except BaseException as exc:  # pragma: no cover - diagnostics
++                    errors.append(exc)
++                finally:
++                    conn.close()
++
++            threads = [threading.Thread(target=deliver) for _ in range(2)]
++            for thread in threads:
++                thread.start()
++            for thread in threads:
++                thread.join()
++            self.assertEqual(errors, [])
++            self.assertEqual(seen, [1])
++            self.assertEqual(sorted(results), [False, True])
++
+ 
+ if __name__ == "__main__": unittest.main()
+diff --git a/webhook.py b/webhook.py
+index 328e0af..8e1a36b 100644
+--- a/webhook.py
++++ b/webhook.py
+@@ -2,11 +2,25 @@
+ 
+ 
+ def process_event(db, event_id, payload, handler):
+-    db.execute("CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, done INTEGER)")
+-    existing = db.execute("SELECT done FROM events WHERE id=?", (event_id,)).fetchone()
+-    if existing:
++    db.execute(
++        "CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, done INTEGER NOT NULL DEFAULT 0)"
++    )
++    # Atomic claim: the primary key insert succeeds for exactly one delivery.
++    # done=0 means "claimed, handler not finished yet"; done=1 means completed.
++    claimed = db.execute(
++        "INSERT OR IGNORE INTO events(id, done) VALUES(?, 0)", (event_id,)
++    ).rowcount
++    db.commit()
++    if not claimed:
++        # Another delivery already claimed or completed this event.
+         return False
+-    db.execute("INSERT INTO events VALUES(?,1)", (event_id,))
++    try:
++        handler(payload)
++    except BaseException:
++        # Release the claim so the delivery can be retried.
++        db.execute("DELETE FROM events WHERE id=? AND done=0", (event_id,))
++        db.commit()
++        raise
++    db.execute("UPDATE events SET done=1 WHERE id=?", (event_id,))
+     db.commit()
+-    handler(payload)
+     return True

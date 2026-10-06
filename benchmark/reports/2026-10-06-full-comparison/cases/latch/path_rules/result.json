@@ -1,0 +1,118 @@
+{
+  "case_id": "path_rules",
+  "tier": "easy",
+  "title": "Ordered ignore and reinclude rules",
+  "case_sha256": "a1705a5755c50b5f9b7f07c6a26b79d1b0d707a9afaf8e39b3fd8d93c690be1e",
+  "baseline_commit": "ecab60768c6233e69c2952ebf7a931ae474e38a6",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "reinclude",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "last_rule_wins",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unmatched_and_other_exclusions",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "reinclude",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "last_rule_wins",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unmatched_and_other_exclusions",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 11.656,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "fb042352-0068-4c31-9cb4-7e6c66fcc6ca",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 26778,
+    "output_tokens": 558,
+    "cache_read_tokens": 24320,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.9082,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 5,
+    "tool_calls": 6,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M rules.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/path_rules/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 11.848,
+  "resources": {
+    "cpu_user_seconds": 0.07,
+    "cpu_system_seconds": 0.01,
+    "max_rss_kib": 15552,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 5,
+    "tool_calls": 6,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0007373999999999999,
+        "input_hit": 0.00014592,
+        "output": 0.0006696,
+        "total": 0.00155292
+      },
+      "off_peak": {
+        "input_miss": 0.00036869999999999996,
+        "input_hit": 7.296e-05,
+        "output": 0.0003348,
+        "total": 0.00077646
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.004916,
+        "input_hit": 0.0009728000000000001,
+        "output": 0.004464,
+        "total": 0.0103528
+      },
+      "off_peak": {
+        "input_miss": 0.002458,
+        "input_hit": 0.00048640000000000006,
+        "output": 0.002232,
+        "total": 0.0051764
+      }
+    }
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "case_id": "log_rotation",
+  "tier": "medium",
+  "case_sha256": "7ef03334a9909054a71fbf85033cfaf756997f50cd62302f1c9eb10533aefb4b",
+  "baseline_commit": "c1430ac5a3560bab3a8b9f5bb86ce44cc4050985",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "archive_order",
+      "passed": false,
+      "detail": "line 7, in <module>\n  File \"/usr/lib/python3.12/pathlib.py\", line 1029, in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmp7vsh9wij/app.log.2'\n"
+    },
+    {
+      "name": "bounded_archive_count",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "empty_log_and_limits",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "archive_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "bounded_archive_count",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "empty_log_and_limits",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 74.832,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 134215,
+    "uncached_input_tokens": 9415,
+    "output_tokens": 6409,
+    "reported_output_tokens": 2778,
+    "reasoning_tokens": 3631,
+    "cache_read_tokens": 124800,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 14,
+    "tool_calls": 15
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 75.13,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2176,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0028245,
+        "input_hit": 0.0007488000000000001,
+        "output": 0.007690799999999999,
+        "total": 0.011264099999999999
+      },
+      "off_peak": {
+        "input_miss": 0.00141225,
+        "input_hit": 0.00037440000000000005,
+        "output": 0.0038453999999999997,
+        "total": 0.0056320499999999996
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.01883,
+        "input_hit": 0.004992,
+        "output": 0.051272,
+        "total": 0.075094
+      },
+      "off_peak": {
+        "input_miss": 0.009415,
+        "input_hit": 0.002496,
+        "output": 0.025636,
+        "total": 0.037547
+      }
+    }
+  }
+}

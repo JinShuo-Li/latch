@@ -1,0 +1,118 @@
+{
+  "case_id": "duration_units",
+  "tier": "easy",
+  "title": "Millisecond and second timeout parsing",
+  "case_sha256": "276dc7d8fe60bbb844ca58499376cd646c07077527b27d4f6049488b3b6e0857",
+  "baseline_commit": "4f9723f0b3bf0339e8440b1b40c1f2350d9a684f",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "units",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '250m'\n"
+    },
+    {
+      "name": "reject_malformed",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: -1s\n"
+    },
+    {
+      "name": "zero_and_large",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '0m'\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "units",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "reject_malformed",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "zero_and_large",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 14.5,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "14c9907d-27c4-4d88-abac-bffe374114de",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 29035,
+    "output_tokens": 1176,
+    "cache_read_tokens": 25600,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8817,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 5,
+    "tool_calls": 7,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M duration.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/duration_units/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 14.784,
+  "resources": {
+    "cpu_user_seconds": 0.09,
+    "cpu_system_seconds": 0.04,
+    "max_rss_kib": 15480,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 5,
+    "tool_calls": 7,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0010305,
+        "input_hit": 0.0001536,
+        "output": 0.0014112,
+        "total": 0.0025953
+      },
+      "off_peak": {
+        "input_miss": 0.00051525,
+        "input_hit": 7.68e-05,
+        "output": 0.0007056,
+        "total": 0.00129765
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.00687,
+        "input_hit": 0.001024,
+        "output": 0.009408,
+        "total": 0.017302
+      },
+      "off_peak": {
+        "input_miss": 0.003435,
+        "input_hit": 0.000512,
+        "output": 0.004704,
+        "total": 0.008651
+      }
+    }
+  }
+}

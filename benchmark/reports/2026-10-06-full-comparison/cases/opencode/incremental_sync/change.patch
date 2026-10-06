@@ -1,0 +1,96 @@
+diff --git a/sync.py b/sync.py
+index 0ba34d1..4bef174 100644
+--- a/sync.py
++++ b/sync.py
+@@ -1,23 +1,80 @@
+ """Incremental directory mirror."""
+ 
++import hashlib
+ import json
+ import shutil
+ from pathlib import Path
+ 
++MANIFEST_NAME = ".manifest.json"
++_CHUNK_SIZE = 1024 * 1024
++
++
++def _file_hash(path):
++    """Return the SHA-256 hex digest of a file's contents."""
++    digest = hashlib.sha256()
++    with open(path, "rb") as handle:
++        for chunk in iter(lambda: handle.read(_CHUNK_SIZE), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _source_files(source):
++    """Yield regular files under source, rejecting any symbolic link."""
++    for path in source.rglob("*"):
++        if path.is_symlink():
++            raise ValueError(f"refusing to mirror symlink: {path}")
++        if path.is_file():
++            yield path
++
++
++def _load_manifest(manifest):
++    if manifest.exists():
++        try:
++            return json.loads(manifest.read_text())
++        except (ValueError, OSError):
++            return {}
++    return {}
++
+ 
+ def sync_tree(source, destination):
+     source, destination = Path(source), Path(destination)
+     destination.mkdir(parents=True, exist_ok=True)
+-    manifest = destination / ".manifest.json"
+-    previous = json.loads(manifest.read_text()) if manifest.exists() else {}
++    manifest = destination / MANIFEST_NAME
++    previous = _load_manifest(manifest)
++
++    # Read the whole source first so symlinks are rejected before we touch the
++    # destination and so every change is detected by content, not name.
+     current = {}
+-    for path in source.rglob("*"):
+-        if path.is_file():
+-            relative = path.relative_to(source).as_posix()
+-            current[relative] = str(path.stat().st_size)
+-            target = destination / relative
+-            if relative not in previous:
+-                target.parent.mkdir(parents=True, exist_ok=True)
+-                shutil.copy2(path, target)
+-    manifest.write_text(json.dumps(current))
++    for path in _source_files(source):
++        current[path.relative_to(source).as_posix()] = _file_hash(path)
++
++    # Copy new or changed files; leave unchanged files untouched.
++    for relative, digest in current.items():
++        target = destination / relative
++        if (relative in previous and previous[relative] == digest
++                and target.is_file() and not target.is_symlink()):
++            continue
++        target.parent.mkdir(parents=True, exist_ok=True)
++        if target.is_symlink() or target.is_dir():
++            if target.is_dir() and not target.is_symlink():
++                shutil.rmtree(target)
++            else:
++                target.unlink()
++        shutil.copy2(source / relative, target)
++
++    # Remove destination entries that are absent from the source.
++    for path in sorted(destination.rglob("*"), key=lambda p: len(p.parts), reverse=True):
++        if path == manifest:
++            continue
++        if path.is_symlink() or path.is_file():
++            if path.relative_to(destination).as_posix() not in current:
++                path.unlink()
++        elif path.is_dir():
++            try:
++                path.rmdir()
++            except OSError:
++                pass  # not empty, keep it
++
++    # Only record the manifest once copying and deleting have both succeeded.
++    manifest.write_text(json.dumps(current, sort_keys=True))
+     return current

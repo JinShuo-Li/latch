@@ -1,0 +1,55 @@
+diff --git a/archive.py b/archive.py
+index 8a3fd01..0d1d26a 100644
+--- a/archive.py
++++ b/archive.py
+@@ -1,16 +1,46 @@
+ """ZIP document import."""
+ 
++import stat
+ import zipfile
+-from pathlib import Path
++from pathlib import Path, PurePosixPath, PureWindowsPath
++
++
++def _validate_member(member):
++    """Reject unsafe archive members before anything is written to disk."""
++    name = member.filename
++    if not name:
++        raise ValueError("archive member has an empty name")
++
++    # Symbolic links could redirect later writes outside the destination.
++    mode = member.external_attr >> 16
++    if stat.S_ISLNK(mode):
++        raise ValueError(f"archive member {name!r} is a symbolic link")
++
++    # Treat backslashes as separators so Windows-style traversal is caught too.
++    normalized = name.replace("\\", "/")
++    if normalized.startswith("/"):
++        raise ValueError(f"archive member {name!r} is an absolute path")
++
++    windows = PureWindowsPath(name)
++    if windows.is_absolute() or windows.drive:
++        raise ValueError(f"archive member {name!r} is an absolute path")
++
++    if ".." in PurePosixPath(normalized).parts:
++        raise ValueError(f"archive member {name!r} contains path traversal")
+ 
+ 
+ def extract_archive(archive, destination):
+     destination = Path(destination)
+     extracted = []
+     with zipfile.ZipFile(archive) as source:
+-        for member in source.infolist():
+-            if member.is_dir():
+-                continue
++        files = [m for m in source.infolist() if not m.is_dir()]
++
++        # Validate the whole archive first so a bad entry never leaves a
++        # partially extracted good entry behind.
++        for member in files:
++            _validate_member(member)
++
++        for member in files:
+             target = destination / member.filename
+             target.parent.mkdir(parents=True, exist_ok=True)
+             target.write_bytes(source.read(member))

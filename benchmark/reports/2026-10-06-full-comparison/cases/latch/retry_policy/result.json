@@ -1,0 +1,129 @@
+{
+  "case_id": "retry_policy",
+  "tier": "medium",
+  "title": "Idempotent HTTP retries and Retry-After",
+  "case_sha256": "3f68e7ae89dae07bbec8ece327af5b102a2c31bea6a927e81b12e7573ac9df8f",
+  "baseline_commit": "988c508c97f089a555b7b28d777e77e4bf89d48f",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "post_not_retried",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "retry_after_and_backoff",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "last_attempt_no_sleep",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "invalid_budget",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError: zero attempts accepted\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "post_not_retried",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "retry_after_and_backoff",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "last_attempt_no_sleep",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_budget",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 24.269,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "0abef3ea-5219-4a05-bc7a-3bde86c96f41",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 48272,
+    "output_tokens": 2418,
+    "cache_read_tokens": 40448,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8379,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 7,
+    "tool_calls": 9,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M retry.py",
+    " M test_retry.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/retry_policy/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 24.637,
+  "resources": {
+    "cpu_user_seconds": 0.14,
+    "cpu_system_seconds": 0.06,
+    "max_rss_kib": 15660,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 7,
+    "tool_calls": 9,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0023472,
+        "input_hit": 0.00024268800000000002,
+        "output": 0.0029016,
+        "total": 0.005491487999999999
+      },
+      "off_peak": {
+        "input_miss": 0.0011736,
+        "input_hit": 0.00012134400000000001,
+        "output": 0.0014508,
+        "total": 0.0027457439999999996
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.015648,
+        "input_hit": 0.0016179200000000001,
+        "output": 0.019344,
+        "total": 0.03660992
+      },
+      "off_peak": {
+        "input_miss": 0.007824,
+        "input_hit": 0.0008089600000000001,
+        "output": 0.009672,
+        "total": 0.01830496
+      }
+    }
+  }
+}

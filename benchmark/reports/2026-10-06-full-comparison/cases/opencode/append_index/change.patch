@@ -1,0 +1,78 @@
+diff --git a/event_log.py b/event_log.py
+index 877e180..79cbd7a 100644
+--- a/event_log.py
++++ b/event_log.py
+@@ -1,4 +1,11 @@
+-"""Append-only JSONL event log."""
++"""Append-only JSONL event log.
++
++Each record is a JSON document encoded as UTF-8 and terminated by a single
++newline byte. A record without its terminating newline (for example, the
++result of an interrupted write) is *incomplete*: it is never returned by
++:meth:`EventLog.read_all`, never included by :meth:`EventLog.rebuild_index`,
++and is discarded before the next append so new data is not written over it.
++"""
+ 
+ import json
+ from pathlib import Path
+@@ -8,15 +15,55 @@ class EventLog:
+     def __init__(self, path):
+         self.path = Path(path)
+ 
++    def _complete_size(self):
++        """Number of leading bytes that make up complete, newline-terminated lines."""
++        if not self.path.exists():
++            return 0
++        data = self.path.read_bytes()
++        if data.endswith(b"\n"):
++            return len(data)
++        # No trailing newline: everything after the last newline is an
++        # incomplete record and is not part of the valid log.
++        return data.rfind(b"\n") + 1
++
+     def append(self, event):
+         self.path.parent.mkdir(parents=True, exist_ok=True)
+-        offset = self.path.stat().st_size if self.path.exists() else 0
+-        with self.path.open("ab") as stream:
+-            stream.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
++        # Append at the end of the last *complete* record, truncating any
++        # partial tail rather than writing over it.
++        offset = self._complete_size()
++        payload = (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
++        mode = "r+b" if self.path.exists() else "wb"
++        with self.path.open(mode) as stream:
++            stream.truncate(offset)
++            stream.seek(offset)
++            stream.write(payload)
+         return offset
+ 
+     def read_all(self):
+-        return [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines()]
++        events = []
++        if not self.path.exists():
++            return events
++        with self.path.open("rb") as stream:
++            for raw in stream:
++                if not raw.endswith(b"\n"):
++                    # Unterminated trailing fragment: not a visible record.
++                    break
++                line = raw[:-1]
++                if not line.strip():
++                    continue
++                events.append(json.loads(line.decode("utf-8")))
++        return events
+ 
+     def rebuild_index(self):
+-        return list(range(len(self.read_all())))
++        offsets = []
++        if not self.path.exists():
++            return offsets
++        offset = 0
++        with self.path.open("rb") as stream:
++            for raw in stream:
++                if not raw.endswith(b"\n"):
++                    # Stop at the first incomplete record.
++                    break
++                offsets.append(offset)
++                offset += len(raw)
++        return offsets

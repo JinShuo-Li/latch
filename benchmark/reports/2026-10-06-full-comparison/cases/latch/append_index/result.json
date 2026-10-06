@@ -1,0 +1,118 @@
+{
+  "case_id": "append_index",
+  "tier": "hard",
+  "title": "Append-only event index after partial writes",
+  "case_sha256": "4e36dcf6d370cc8abaa19c4a780207d33e3f35a69a7c51aa913eb4297fc8ddf6",
+  "baseline_commit": "a37e936d6a0b1c9d3b86f0734b797deaf65de220",
+  "passed": false,
+  "baseline_checks": [
+    {
+      "name": "utf8_offsets",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "partial_tail_hidden",
+      "passed": false,
+      "detail": "py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting ',' delimiter: line 1 column 8 (char 7)\n"
+    },
+    {
+      "name": "append_rejects_partial_tail",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "utf8_offsets",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "partial_tail_hidden",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "append_rejects_partial_tail",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 33.562,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "b85f8895-ddf5-4d18-99fc-db07829ce050",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 64810,
+    "output_tokens": 3698,
+    "cache_read_tokens": 56448,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.871,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 8,
+    "tool_calls": 12,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M event_log.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/append_index/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 33.913,
+  "resources": {
+    "cpu_user_seconds": 0.19,
+    "cpu_system_seconds": 0.11,
+    "max_rss_kib": 16188,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 8,
+    "tool_calls": 12,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0025085999999999997,
+        "input_hit": 0.00033868799999999997,
+        "output": 0.0044376,
+        "total": 0.007284888
+      },
+      "off_peak": {
+        "input_miss": 0.0012542999999999999,
+        "input_hit": 0.00016934399999999998,
+        "output": 0.0022188,
+        "total": 0.003642444
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.016724,
+        "input_hit": 0.00225792,
+        "output": 0.029584,
+        "total": 0.04856592
+      },
+      "off_peak": {
+        "input_miss": 0.008362,
+        "input_hit": 0.00112896,
+        "output": 0.014792,
+        "total": 0.02428296
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+diff --git a/migration.py b/migration.py
+index 3ce3b85..743b645 100644
+--- a/migration.py
++++ b/migration.py
+@@ -1,8 +1,44 @@
+ """Address-book schema upgrade."""
+ 
++import sqlite3
++
++SCHEMA_VERSION = 2
++
++_WITHOUT_EMAIL = ["id", "name"]
++_WITH_EMAIL = ["id", "name", "email"]
++
++
++class SchemaError(ValueError, sqlite3.DatabaseError):
++    """The existing users table cannot be upgraded safely."""
++
++
++def _columns(connection, table):
++    return [row[1] for row in connection.execute("PRAGMA table_info(%s)" % table)]
++
+ 
+ def migrate(connection):
+-    connection.execute("DROP TABLE IF EXISTS users")
+-    connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT)")
+-    connection.execute("PRAGMA user_version = 2")
++    """Add users.email in place, leaving the caller's connection open.
++
++    Rows of an existing users(id, name) table are preserved with email NULL,
++    and an unexpected schema is reported instead of being replaced.
++    """
++    exists = connection.execute(
++        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'"
++    ).fetchone() is not None
++
++    if exists:
++        columns = _columns(connection, "users")
++        if columns == _WITHOUT_EMAIL:
++            connection.execute("ALTER TABLE users ADD COLUMN email TEXT")
++        elif columns != _WITH_EMAIL:
++            raise SchemaError(
++                "users table has unexpected columns %r; refusing to replace it" % (columns,)
++            )
++    else:
++        connection.execute(
++            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT)"
++        )
++
++    connection.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
+     connection.commit()
++

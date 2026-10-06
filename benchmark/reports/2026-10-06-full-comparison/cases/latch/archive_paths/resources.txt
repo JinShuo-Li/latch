@@ -1,0 +1,23 @@
+	Command being timed: "/home/lijs/work/latch/target/release/latch run --config /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/archive_paths/config.toml --workspace /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/archive_paths/workspace --provider opencode-go --model deepseek-v4.1-flash --mode WORK --prompt A document importer extracts user-supplied ZIP files. It currently writes entries whose names contain ../ and may partially extract a good entry before discovering a bad one. Fix extract_archive(archive, destination) in archive.py: reject absolute paths, traversal and symbolic links before writing any file, preserve ordinary nested files, and return the extracted relative paths. Run visible tests and validate. --output json"
+	User time (seconds): 0.18
+	System time (seconds): 0.12
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:36.45
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 16268
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 4017
+	Voluntary context switches: 10464
+	Involuntary context switches: 7
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 18448
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

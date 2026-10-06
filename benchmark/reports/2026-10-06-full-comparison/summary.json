@@ -1,0 +1,5913 @@
+{
+  "source_revision": "170efcbb3b5f0507f9e757c71c5340c9049cc523",
+  "started_at_utc": "20261006T060117Z",
+  "max_concurrency_across_both_agents": 3,
+  "schedule_seed": 42,
+  "schedule": [
+    [
+      "latch",
+      "cache_stampede"
+    ],
+    [
+      "opencode",
+      "cache_stampede"
+    ],
+    [
+      "opencode",
+      "retry_policy"
+    ],
+    [
+      "latch",
+      "retry_policy"
+    ],
+    [
+      "opencode",
+      "http_ranges"
+    ],
+    [
+      "latch",
+      "http_ranges"
+    ],
+    [
+      "latch",
+      "lease_queue"
+    ],
+    [
+      "opencode",
+      "lease_queue"
+    ],
+    [
+      "latch",
+      "incremental_sync"
+    ],
+    [
+      "opencode",
+      "incremental_sync"
+    ],
+    [
+      "latch",
+      "stream_records"
+    ],
+    [
+      "opencode",
+      "stream_records"
+    ],
+    [
+      "opencode",
+      "path_rules"
+    ],
+    [
+      "latch",
+      "path_rules"
+    ],
+    [
+      "opencode",
+      "log_rotation"
+    ],
+    [
+      "latch",
+      "log_rotation"
+    ],
+    [
+      "latch",
+      "atomic_config"
+    ],
+    [
+      "opencode",
+      "atomic_config"
+    ],
+    [
+      "opencode",
+      "spool_recovery"
+    ],
+    [
+      "latch",
+      "spool_recovery"
+    ],
+    [
+      "opencode",
+      "pagination_cursor"
+    ],
+    [
+      "latch",
+      "pagination_cursor"
+    ],
+    [
+      "latch",
+      "dag_scheduler"
+    ],
+    [
+      "opencode",
+      "dag_scheduler"
+    ],
+    [
+      "opencode",
+      "csv_chunks"
+    ],
+    [
+      "latch",
+      "csv_chunks"
+    ],
+    [
+      "latch",
+      "append_index"
+    ],
+    [
+      "opencode",
+      "append_index"
+    ],
+    [
+      "latch",
+      "stream_framing"
+    ],
+    [
+      "opencode",
+      "stream_framing"
+    ],
+    [
+      "latch",
+      "sqlite_migration"
+    ],
+    [
+      "opencode",
+      "sqlite_migration"
+    ],
+    [
+      "opencode",
+      "duration_units"
+    ],
+    [
+      "latch",
+      "duration_units"
+    ],
+    [
+      "latch",
+      "transaction_outbox"
+    ],
+    [
+      "opencode",
+      "transaction_outbox"
+    ],
+    [
+      "opencode",
+      "option_values"
+    ],
+    [
+      "latch",
+      "option_values"
+    ],
+    [
+      "latch",
+      "webhook_dedupe"
+    ],
+    [
+      "opencode",
+      "webhook_dedupe"
+    ],
+    [
+      "opencode",
+      "archive_paths"
+    ],
+    [
+      "latch",
+      "archive_paths"
+    ],
+    [
+      "latch",
+      "config_layers"
+    ],
+    [
+      "opencode",
+      "config_layers"
+    ],
+    [
+      "latch",
+      "ansi_width"
+    ],
+    [
+      "opencode",
+      "ansi_width"
+    ],
+    [
+      "opencode",
+      "header_merge"
+    ],
+    [
+      "latch",
+      "header_merge"
+    ],
+    [
+      "opencode",
+      "rate_window"
+    ],
+    [
+      "latch",
+      "rate_window"
+    ]
+  ],
+  "provider": "opencode-go",
+  "model": "deepseek-v4.1-flash",
+  "latch_sha256": "aaaf98791fc68e5108d7115d14f02a77df1daa6426d698793595d51f084fbdba",
+  "opencode_sha256": "32cf5aa0a69a650e36277e3315d189835ddc79fb9aa1d0aef5025be5af5ad122",
+  "opencode_version": "opencode v2.0.22",
+  "latch_config_sha256": "3dad151abc9fd2cd60876eebc902c60076d2687571ce6e943b079faa30e4f713",
+  "runner_sha256": "96e1ac3fb07665f4a0c67162fdcfa551ae2c0adcdd3c64f0e4156d0e3b9935c0",
+  "case_sha256": {
+    "ansi_width": "016925ca9835ffb5cd11dce9a2ec6f5501b9c34aa91947d716e691e5e954be29",
+    "csv_chunks": "0c51a65082c9134acda968d1e464fbe530077654a1127aea2ee1c1715e64ebdd",
+    "duration_units": "276dc7d8fe60bbb844ca58499376cd646c07077527b27d4f6049488b3b6e0857",
+    "header_merge": "c5e44a403445969e877c4562f3e7ad95a89b812cc928c208fb720e5feaa3f88e",
+    "option_values": "c4771401772c7a03316eca9ad88c7c082e93a7f07337dd94e977a9b8fadfae19",
+    "path_rules": "a1705a5755c50b5f9b7f07c6a26b79d1b0d707a9afaf8e39b3fd8d93c690be1e",
+    "stream_records": "40fd67ff61c84f4b783b2c9d1fc2791ac7047d521c13730bdfb148b20c94070c",
+    "archive_paths": "ed400cad189a9930733893bcaf5c85cc51d7a7eea4e29145c43dc85ea5b0fc14",
+    "config_layers": "8197ad3a5b56a4ad24eb93b55ee4fd6217ffa345f54a03a0cb09281fe0490c11",
+    "http_ranges": "0229834c0c751e3d871b04f1ffc51f8265fa9b945de26eba2a7a0165c8c3f3f6",
+    "log_rotation": "7ef03334a9909054a71fbf85033cfaf756997f50cd62302f1c9eb10533aefb4b",
+    "pagination_cursor": "162d9eb4d737cfe4c9b47caecfdf7c263feff8f254d84df017ff5586b070141b",
+    "retry_policy": "3f68e7ae89dae07bbec8ece327af5b102a2c31bea6a927e81b12e7573ac9df8f",
+    "sqlite_migration": "b3630a792dc9e32efe880a988102da05bc947fa1fa2cd0c9d3b1f0d6a3a3ceb0",
+    "append_index": "4e36dcf6d370cc8abaa19c4a780207d33e3f35a69a7c51aa913eb4297fc8ddf6",
+    "atomic_config": "290b2139c6d95a0819b93cc95ecd939fb72e27a44e58dd04269238946fa8ae37",
+    "cache_stampede": "fd9bed5fcbb5304aad93ac07d5ada30f0d5bc0a16f9f6b1c6dab763d86b88195",
+    "dag_scheduler": "3e922357d00da8c5ec9e536e8ffa826151c289a55b5c00058f0903b7beb29b0a",
+    "incremental_sync": "fcb9c149a70a19e8336f31643a9b00cdc4afad48682512163781400f4decbee5",
+    "lease_queue": "65033941e56ada0b358e68246a5df09e287b38ff5578443caa243f46b8f49972",
+    "rate_window": "a37c6e1028cd71cd159cd6ec32ec3de71bd6a35a72826ca56d764d9687597702",
+    "spool_recovery": "f8c9e3249c64c31b02ece94cd8044175ce64109a6b00adc45849e9564190e5d3",
+    "stream_framing": "61f5cfe8235723d9e7b5c1fd21673c2cbf10d183257f0a700aaa69b3ae0b3653",
+    "transaction_outbox": "3e74af9962dc6e4558dc5fbbab958d87df90547f51ea0ec412fdde7ea56c692c",
+    "webhook_dedupe": "2940ba8691d0f0ef57f5ffcfb396ae31d93092891743c86b496c83a37b6a2a32"
+  },
+  "attempts_per_agent_per_case": 1,
+  "pricing": null,
+  "finished_at_utc": "2026-10-06T06:13:56.125765+00:00",
+  "batch_wall_seconds": 719.819,
+  "cases": [
+    {
+      "case_id": "ansi_width",
+      "tier": "easy",
+      "title": "Terminal cell width with color and Unicode",
+      "case_sha256": "016925ca9835ffb5cd11dce9a2ec6f5501b9c34aa91947d716e691e5e954be29",
+      "baseline_commit": "23ac24c0e5765267e0634a12696939939acbfd2d",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "ansi_and_cjk",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "combining_and_emoji",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "control_sequences",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "ansi_and_cjk",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "combining_and_emoji",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "control_sequences",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 30.869,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "a04f3231-1db9-4776-8933-2f4868791c97",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 69687,
+        "output_tokens": 2826,
+        "cache_read_tokens": 62080,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8908,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 10,
+        "tool_calls": 10,
+        "validation_passes": 3,
+        "validation_failures": 1
+      },
+      "git_status": [
+        " M width.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/ansi_width/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 31.16,
+      "resources": {
+        "cpu_user_seconds": 0.18,
+        "cpu_system_seconds": 0.07,
+        "max_rss_kib": 15876,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 10,
+        "tool_calls": 10,
+        "validation_passes": 3,
+        "validation_failures": 1
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0022821,
+            "input_hit": 0.00037248,
+            "output": 0.0033912,
+            "total": 0.00604578
+          },
+          "off_peak": {
+            "input_miss": 0.00114105,
+            "input_hit": 0.00018624,
+            "output": 0.0016956,
+            "total": 0.00302289
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.015214,
+            "input_hit": 0.0024832,
+            "output": 0.022608,
+            "total": 0.0403052
+          },
+          "off_peak": {
+            "input_miss": 0.007607,
+            "input_hit": 0.0012416,
+            "output": 0.011304,
+            "total": 0.0201526
+          }
+        }
+      }
+    },
+    {
+      "case_id": "append_index",
+      "tier": "hard",
+      "title": "Append-only event index after partial writes",
+      "case_sha256": "4e36dcf6d370cc8abaa19c4a780207d33e3f35a69a7c51aa913eb4297fc8ddf6",
+      "baseline_commit": "a37e936d6a0b1c9d3b86f0734b797deaf65de220",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "utf8_offsets",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "partial_tail_hidden",
+          "passed": false,
+          "detail": "py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting ',' delimiter: line 1 column 8 (char 7)\n"
+        },
+        {
+          "name": "append_rejects_partial_tail",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "utf8_offsets",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "partial_tail_hidden",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "append_rejects_partial_tail",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+        }
+      ],
+      "checks_passed": 2,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 33.562,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "b85f8895-ddf5-4d18-99fc-db07829ce050",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 64810,
+        "output_tokens": 3698,
+        "cache_read_tokens": 56448,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.871,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 12,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M event_log.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/append_index/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 33.913,
+      "resources": {
+        "cpu_user_seconds": 0.19,
+        "cpu_system_seconds": 0.11,
+        "max_rss_kib": 16188,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 8,
+        "tool_calls": 12,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0025085999999999997,
+            "input_hit": 0.00033868799999999997,
+            "output": 0.0044376,
+            "total": 0.007284888
+          },
+          "off_peak": {
+            "input_miss": 0.0012542999999999999,
+            "input_hit": 0.00016934399999999998,
+            "output": 0.0022188,
+            "total": 0.003642444
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.016724,
+            "input_hit": 0.00225792,
+            "output": 0.029584,
+            "total": 0.04856592
+          },
+          "off_peak": {
+            "input_miss": 0.008362,
+            "input_hit": 0.00112896,
+            "output": 0.014792,
+            "total": 0.02428296
+          }
+        }
+      }
+    },
+    {
+      "case_id": "archive_paths",
+      "tier": "medium",
+      "title": "Safe ZIP import before extraction",
+      "case_sha256": "ed400cad189a9930733893bcaf5c85cc51d7a7eea4e29145c43dc85ea5b0fc14",
+      "baseline_commit": "78face3c570041c8ec7aa5154fad090da74d10a9",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "nested_file",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "traversal_preflight",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError: traversal accepted\n"
+        },
+        {
+          "name": "absolute_and_symlink",
+          "passed": false,
+          "detail": "e>\n  File \"/tmp/workspace/archive.py\", line 16, in extract_archive\n    target.write_bytes(source.read(member))\n  File \"/usr/lib/python3.12/pathlib.py\", line 1038, in write_bytes\n    with self.open(mode='wb') as f:\n         ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/outside.txt'\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "nested_file",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "traversal_preflight",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "absolute_and_symlink",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 34.721,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "95bfefe6-da50-4649-9b22-80605dcd5e61",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 64413,
+        "output_tokens": 3755,
+        "cache_read_tokens": 56192,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8724,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 10,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M archive.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/archive_paths/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 34.996,
+      "resources": {
+        "cpu_user_seconds": 0.18,
+        "cpu_system_seconds": 0.12,
+        "max_rss_kib": 16268,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 8,
+        "tool_calls": 10,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0024663,
+            "input_hit": 0.000337152,
+            "output": 0.004506,
+            "total": 0.007309451999999999
+          },
+          "off_peak": {
+            "input_miss": 0.00123315,
+            "input_hit": 0.000168576,
+            "output": 0.002253,
+            "total": 0.0036547259999999996
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.016442,
+            "input_hit": 0.0022476799999999997,
+            "output": 0.03004,
+            "total": 0.04872968
+          },
+          "off_peak": {
+            "input_miss": 0.008221,
+            "input_hit": 0.0011238399999999999,
+            "output": 0.01502,
+            "total": 0.02436484
+          }
+        }
+      }
+    },
+    {
+      "case_id": "atomic_config",
+      "tier": "hard",
+      "title": "Atomic config writes and backup recovery",
+      "case_sha256": "290b2139c6d95a0819b93cc95ecd939fb72e27a44e58dd04269238946fa8ae37",
+      "baseline_commit": "39479036ea57c2524105a863b0e743aeea326e56",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "invalid_input_keeps_live",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "backup_previous_and_recovery",
+          "passed": false,
+          "detail": "  return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n"
+        },
+        {
+          "name": "both_corrupt_fail",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "invalid_input_keeps_live",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "backup_previous_and_recovery",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "both_corrupt_fail",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 71.93,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "67509988-ce38-4414-b8ed-8c62c47f1dbb",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 123263,
+        "output_tokens": 10356,
+        "cache_read_tokens": 91904,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.7456,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 12,
+        "tool_calls": 15,
+        "validation_passes": 4,
+        "validation_failures": 3
+      },
+      "git_status": [
+        " M config_store.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/atomic_config/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 72.173,
+      "resources": {
+        "cpu_user_seconds": 0.4,
+        "cpu_system_seconds": 0.29,
+        "max_rss_kib": 16784,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 12,
+        "tool_calls": 15,
+        "validation_passes": 4,
+        "validation_failures": 3
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0094077,
+            "input_hit": 0.000551424,
+            "output": 0.0124272,
+            "total": 0.022386324
+          },
+          "off_peak": {
+            "input_miss": 0.00470385,
+            "input_hit": 0.000275712,
+            "output": 0.0062136,
+            "total": 0.011193162
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.062718,
+            "input_hit": 0.00367616,
+            "output": 0.082848,
+            "total": 0.14924216
+          },
+          "off_peak": {
+            "input_miss": 0.031359,
+            "input_hit": 0.00183808,
+            "output": 0.041424,
+            "total": 0.07462108
+          }
+        }
+      }
+    },
+    {
+      "case_id": "cache_stampede",
+      "tier": "hard",
+      "title": "Single-flight concurrent cache loads",
+      "case_sha256": "fd9bed5fcbb5304aad93ac07d5ada30f0d5bc0a16f9f6b1c6dab763d86b88195",
+      "baseline_commit": "25acd4e87c1ff25fd9092320f64801546c489a09",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "single_flight",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "failure_retries",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "other_key_progress",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "single_flight",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "failure_retries",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "other_key_progress",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 32.604,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "e89a94c0-c00d-42b2-90ee-4bb1bdd65bf5",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 53331,
+        "output_tokens": 3622,
+        "cache_read_tokens": 43904,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8232,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 10,
+        "validation_passes": 4,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M cache.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/cache_stampede/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 32.935,
+      "resources": {
+        "cpu_user_seconds": 0.2,
+        "cpu_system_seconds": 0.12,
+        "max_rss_kib": 16128,
+        "major_page_faults": 2,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 7,
+        "tool_calls": 10,
+        "validation_passes": 4,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0028281,
+            "input_hit": 0.000263424,
+            "output": 0.004346399999999999,
+            "total": 0.007437923999999999
+          },
+          "off_peak": {
+            "input_miss": 0.00141405,
+            "input_hit": 0.000131712,
+            "output": 0.0021731999999999997,
+            "total": 0.0037189619999999997
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.018854,
+            "input_hit": 0.00175616,
+            "output": 0.028976,
+            "total": 0.04958616
+          },
+          "off_peak": {
+            "input_miss": 0.009427,
+            "input_hit": 0.00087808,
+            "output": 0.014488,
+            "total": 0.02479308
+          }
+        }
+      }
+    },
+    {
+      "case_id": "config_layers",
+      "tier": "medium",
+      "title": "Layered CLI configuration",
+      "case_sha256": "8197ad3a5b56a4ad24eb93b55ee4fd6217ffa345f54a03a0cb09281fe0490c11",
+      "baseline_commit": "341e7f817fe4315505ee293b95cbbac7c001231e",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "nested_merge",
+          "passed": false,
+          "detail": "{'output': {'format': 'json'}, 'service': {'timeout': 12}}"
+        },
+        {
+          "name": "explicit_empty_after_environment",
+          "passed": false,
+          "detail": "'env'"
+        },
+        {
+          "name": "zero_and_false_are_explicit",
+          "passed": false,
+          "detail": "{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}"
+        },
+        {
+          "name": "inputs_unchanged",
+          "passed": false,
+          "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'endpoint': 'flag', 'timeout': 7}}]"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "nested_merge",
+          "passed": true,
+          "detail": "{'output': {'color': True, 'format': 'json'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 12}}"
+        },
+        {
+          "name": "explicit_empty_after_environment",
+          "passed": true,
+          "detail": "''"
+        },
+        {
+          "name": "zero_and_false_are_explicit",
+          "passed": true,
+          "detail": "{'output': {'color': True, 'format': 'text'}, 'quiet': False, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 0}}"
+        },
+        {
+          "name": "inputs_unchanged",
+          "passed": true,
+          "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'timeout': 9}}]"
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 46.25,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "5e196483-1458-4464-9b92-5af1190ce534",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 115942,
+        "output_tokens": 5157,
+        "cache_read_tokens": 102528,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8843,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 11,
+        "tool_calls": 13,
+        "validation_passes": 2,
+        "validation_failures": 3
+      },
+      "git_status": [
+        " M config_layers.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/config_layers/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 46.435,
+      "resources": {
+        "cpu_user_seconds": 0.23,
+        "cpu_system_seconds": 0.14,
+        "max_rss_kib": 16096,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 11,
+        "tool_calls": 13,
+        "validation_passes": 2,
+        "validation_failures": 3
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0040241999999999995,
+            "input_hit": 0.000615168,
+            "output": 0.006188399999999999,
+            "total": 0.010827767999999998
+          },
+          "off_peak": {
+            "input_miss": 0.0020120999999999997,
+            "input_hit": 0.000307584,
+            "output": 0.0030941999999999996,
+            "total": 0.005413883999999999
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.026828,
+            "input_hit": 0.00410112,
+            "output": 0.041256,
+            "total": 0.07218512
+          },
+          "off_peak": {
+            "input_miss": 0.013414,
+            "input_hit": 0.00205056,
+            "output": 0.020628,
+            "total": 0.03609256
+          }
+        }
+      }
+    },
+    {
+      "case_id": "csv_chunks",
+      "tier": "easy",
+      "title": "CSV rows across network chunks",
+      "case_sha256": "0c51a65082c9134acda968d1e464fbe530077654a1127aea2ee1c1715e64ebdd",
+      "baseline_commit": "feee5192f0bc28fdd2c80767ba801368b119b730",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "quoted_newline",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "every_split",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "crlf_and_final_row",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "quoted_newline",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "every_split",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "crlf_and_final_row",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 41.84,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "2252b337-0753-4110-97df-84fdd50587bf",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 86567,
+        "output_tokens": 3710,
+        "cache_read_tokens": 76544,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8842,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 11,
+        "tool_calls": 14,
+        "validation_passes": 2,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M importer.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/csv_chunks/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 42.08,
+      "resources": {
+        "cpu_user_seconds": 0.21,
+        "cpu_system_seconds": 0.14,
+        "max_rss_kib": 16180,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 11,
+        "tool_calls": 14,
+        "validation_passes": 2,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0030069000000000003,
+            "input_hit": 0.000459264,
+            "output": 0.004452,
+            "total": 0.007918164
+          },
+          "off_peak": {
+            "input_miss": 0.0015034500000000001,
+            "input_hit": 0.000229632,
+            "output": 0.002226,
+            "total": 0.003959082
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.020046,
+            "input_hit": 0.00306176,
+            "output": 0.02968,
+            "total": 0.05278776
+          },
+          "off_peak": {
+            "input_miss": 0.010023,
+            "input_hit": 0.00153088,
+            "output": 0.01484,
+            "total": 0.02639388
+          }
+        }
+      }
+    },
+    {
+      "case_id": "dag_scheduler",
+      "tier": "hard",
+      "title": "Dependency-aware task scheduler",
+      "case_sha256": "3e922357d00da8c5ec9e536e8ffa826151c289a55b5c00058f0903b7beb29b0a",
+      "baseline_commit": "73c6853a74ec24b9b47b6f465fefd1fdfc781dfa",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "shared_dependency_once",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "cycle_before_side_effect",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: cycle\n"
+        },
+        {
+          "name": "unknown_before_side_effect",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: unknown\n"
+        },
+        {
+          "name": "runner_failure_stops_dependents",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 9, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "shared_dependency_once",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "cycle_before_side_effect",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unknown_before_side_effect",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "runner_failure_stops_dependents",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 24.992,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "64ed05c1-0310-4554-99e9-66518f87a97d",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 41282,
+        "output_tokens": 2548,
+        "cache_read_tokens": 35456,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8589,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 6,
+        "tool_calls": 8,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M scheduler.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/dag_scheduler/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 25.333,
+      "resources": {
+        "cpu_user_seconds": 0.11,
+        "cpu_system_seconds": 0.12,
+        "max_rss_kib": 15992,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 6,
+        "tool_calls": 8,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0017477999999999999,
+            "input_hit": 0.00021273600000000002,
+            "output": 0.0030575999999999997,
+            "total": 0.005018135999999999
+          },
+          "off_peak": {
+            "input_miss": 0.0008738999999999999,
+            "input_hit": 0.00010636800000000001,
+            "output": 0.0015287999999999999,
+            "total": 0.0025090679999999997
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.011652,
+            "input_hit": 0.00141824,
+            "output": 0.020384,
+            "total": 0.033454239999999996
+          },
+          "off_peak": {
+            "input_miss": 0.005826,
+            "input_hit": 0.00070912,
+            "output": 0.010192,
+            "total": 0.016727119999999998
+          }
+        }
+      }
+    },
+    {
+      "case_id": "duration_units",
+      "tier": "easy",
+      "title": "Millisecond and second timeout parsing",
+      "case_sha256": "276dc7d8fe60bbb844ca58499376cd646c07077527b27d4f6049488b3b6e0857",
+      "baseline_commit": "4f9723f0b3bf0339e8440b1b40c1f2350d9a684f",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "units",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '250m'\n"
+        },
+        {
+          "name": "reject_malformed",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: -1s\n"
+        },
+        {
+          "name": "zero_and_large",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '0m'\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "units",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "reject_malformed",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "zero_and_large",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 14.5,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "14c9907d-27c4-4d88-abac-bffe374114de",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 29035,
+        "output_tokens": 1176,
+        "cache_read_tokens": 25600,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8817,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 5,
+        "tool_calls": 7,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M duration.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/duration_units/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 14.784,
+      "resources": {
+        "cpu_user_seconds": 0.09,
+        "cpu_system_seconds": 0.04,
+        "max_rss_kib": 15480,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 5,
+        "tool_calls": 7,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0010305,
+            "input_hit": 0.0001536,
+            "output": 0.0014112,
+            "total": 0.0025953
+          },
+          "off_peak": {
+            "input_miss": 0.00051525,
+            "input_hit": 7.68e-05,
+            "output": 0.0007056,
+            "total": 0.00129765
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.00687,
+            "input_hit": 0.001024,
+            "output": 0.009408,
+            "total": 0.017302
+          },
+          "off_peak": {
+            "input_miss": 0.003435,
+            "input_hit": 0.000512,
+            "output": 0.004704,
+            "total": 0.008651
+          }
+        }
+      }
+    },
+    {
+      "case_id": "header_merge",
+      "tier": "easy",
+      "title": "Case-insensitive HTTP header aggregation",
+      "case_sha256": "c5e44a403445969e877c4562f3e7ad95a89b812cc928c208fb720e5feaa3f88e",
+      "baseline_commit": "41e705a5ead0a675f0d8de5a4e1c95b9fdfcd965",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "ordinary_case_insensitive",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "set_cookie_separate",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "order_and_single",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "ordinary_case_insensitive",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "set_cookie_separate",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "order_and_single",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 21.593,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "55571dfb-021f-4e38-aabf-77888e339185",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 36998,
+        "output_tokens": 1921,
+        "cache_read_tokens": 32128,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8684,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 6,
+        "tool_calls": 8,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M headers.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/header_merge/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 21.87,
+      "resources": {
+        "cpu_user_seconds": 0.09,
+        "cpu_system_seconds": 0.08,
+        "max_rss_kib": 15976,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 6,
+        "tool_calls": 8,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.001461,
+            "input_hit": 0.000192768,
+            "output": 0.0023052,
+            "total": 0.003958968
+          },
+          "off_peak": {
+            "input_miss": 0.0007305,
+            "input_hit": 9.6384e-05,
+            "output": 0.0011526,
+            "total": 0.001979484
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.00974,
+            "input_hit": 0.00128512,
+            "output": 0.015368,
+            "total": 0.02639312
+          },
+          "off_peak": {
+            "input_miss": 0.00487,
+            "input_hit": 0.00064256,
+            "output": 0.007684,
+            "total": 0.01319656
+          }
+        }
+      }
+    },
+    {
+      "case_id": "http_ranges",
+      "tier": "medium",
+      "title": "HTTP byte ranges for downloads",
+      "case_sha256": "0229834c0c751e3d871b04f1ffc51f8265fa9b945de26eba2a7a0165c8c3f3f6",
+      "baseline_commit": "2f8a0e56d095ca025d0000c6199edcde2d41d8b8",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "inclusive_and_open_end",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "suffix_and_clamp",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "unsatisfiable_and_invalid",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "inclusive_and_open_end",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "suffix_and_clamp",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unsatisfiable_and_invalid",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 37.331,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "d387485b-1f90-4879-ada6-ce7b7f0d6428",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 79504,
+        "output_tokens": 3333,
+        "cache_read_tokens": 72064,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.9064,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 10,
+        "tool_calls": 11,
+        "validation_passes": 1,
+        "validation_failures": 1
+      },
+      "git_status": [
+        " M ranges.py",
+        " M test_ranges.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/http_ranges/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 37.614,
+      "resources": {
+        "cpu_user_seconds": 0.19,
+        "cpu_system_seconds": 0.08,
+        "max_rss_kib": 16152,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 10,
+        "tool_calls": 11,
+        "validation_passes": 1,
+        "validation_failures": 1
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.002232,
+            "input_hit": 0.000432384,
+            "output": 0.0039996,
+            "total": 0.0066639839999999995
+          },
+          "off_peak": {
+            "input_miss": 0.001116,
+            "input_hit": 0.000216192,
+            "output": 0.0019998,
+            "total": 0.0033319919999999998
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.01488,
+            "input_hit": 0.00288256,
+            "output": 0.026664,
+            "total": 0.044426560000000004
+          },
+          "off_peak": {
+            "input_miss": 0.00744,
+            "input_hit": 0.00144128,
+            "output": 0.013332,
+            "total": 0.022213280000000002
+          }
+        }
+      }
+    },
+    {
+      "case_id": "incremental_sync",
+      "tier": "hard",
+      "title": "Incremental mirror with content hashes",
+      "case_sha256": "fcb9c149a70a19e8336f31643a9b00cdc4afad48682512163781400f4decbee5",
+      "baseline_commit": "e052148ac52bff4c9230bde6960374b8c22f3694",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "changed_same_size",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "deleted_and_nested",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "unchanged_keeps_mtime",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "symlink_rejected_without_manifest_change",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: link accepted\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "changed_same_size",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "deleted_and_nested",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unchanged_keeps_mtime",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "symlink_rejected_without_manifest_change",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 46.456,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "77de1e2d-d647-46f1-8958-3c6fde3b91b4",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 70991,
+        "output_tokens": 6348,
+        "cache_read_tokens": 59648,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8402,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 11,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M sync.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/incremental_sync/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 46.807,
+      "resources": {
+        "cpu_user_seconds": 0.27,
+        "cpu_system_seconds": 0.18,
+        "max_rss_kib": 16496,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 8,
+        "tool_calls": 11,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0034029,
+            "input_hit": 0.00035788800000000005,
+            "output": 0.0076175999999999995,
+            "total": 0.011378388
+          },
+          "off_peak": {
+            "input_miss": 0.00170145,
+            "input_hit": 0.00017894400000000003,
+            "output": 0.0038087999999999998,
+            "total": 0.005689194
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.022686,
+            "input_hit": 0.00238592,
+            "output": 0.050784,
+            "total": 0.07585592000000001
+          },
+          "off_peak": {
+            "input_miss": 0.011343,
+            "input_hit": 0.00119296,
+            "output": 0.025392,
+            "total": 0.037927960000000004
+          }
+        }
+      }
+    },
+    {
+      "case_id": "lease_queue",
+      "tier": "hard",
+      "title": "Queue lease expiry and stale acknowledgements",
+      "case_sha256": "65033941e56ada0b358e68246a5df09e287b38ff5578443caa243f46b8f49972",
+      "baseline_commit": "5183201be139aa4e7fab13c6233139e612434e4d",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "stale_ack_after_reclaim",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "no_duplicate_live_claim",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "attempts_and_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_lease",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "stale_ack_after_reclaim",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "no_duplicate_live_claim",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "attempts_and_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_lease",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 31.304,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "b243d1a9-bbde-4366-a355-24c0e016090e",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 62357,
+        "output_tokens": 3212,
+        "cache_read_tokens": 53504,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.858,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 11,
+        "validation_passes": 4,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M queue.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/lease_queue/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 31.604,
+      "resources": {
+        "cpu_user_seconds": 0.19,
+        "cpu_system_seconds": 0.11,
+        "max_rss_kib": 15952,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 8,
+        "tool_calls": 11,
+        "validation_passes": 4,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0026559,
+            "input_hit": 0.000321024,
+            "output": 0.0038543999999999996,
+            "total": 0.006831324
+          },
+          "off_peak": {
+            "input_miss": 0.00132795,
+            "input_hit": 0.000160512,
+            "output": 0.0019271999999999998,
+            "total": 0.003415662
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.017706,
+            "input_hit": 0.00214016,
+            "output": 0.025696,
+            "total": 0.04554216
+          },
+          "off_peak": {
+            "input_miss": 0.008853,
+            "input_hit": 0.00107008,
+            "output": 0.012848,
+            "total": 0.02277108
+          }
+        }
+      }
+    },
+    {
+      "case_id": "log_rotation",
+      "tier": "medium",
+      "title": "Bounded log rotation without data loss",
+      "case_sha256": "7ef03334a9909054a71fbf85033cfaf756997f50cd62302f1c9eb10533aefb4b",
+      "baseline_commit": "5337a091667911f33e0a19d64ec5a8ae9f21b6cb",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "archive_order",
+          "passed": false,
+          "detail": "line 7, in <module>\n  File \"/usr/lib/python3.12/pathlib.py\", line 1029, in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmpixgrj23n/app.log.2'\n"
+        },
+        {
+          "name": "bounded_archive_count",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "empty_log_and_limits",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "archive_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "bounded_archive_count",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "empty_log_and_limits",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 27.693,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "88ee436b-890c-493b-abd4-0bc0a3ad5aa1",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 69332,
+        "output_tokens": 2583,
+        "cache_read_tokens": 54784,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.7902,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 9,
+        "tool_calls": 10,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M logging_store.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/log_rotation/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 28.0,
+      "resources": {
+        "cpu_user_seconds": 0.11,
+        "cpu_system_seconds": 0.07,
+        "max_rss_kib": 15756,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 9,
+        "tool_calls": 10,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0043644,
+            "input_hit": 0.00032870400000000003,
+            "output": 0.0030996,
+            "total": 0.007792704
+          },
+          "off_peak": {
+            "input_miss": 0.0021822,
+            "input_hit": 0.00016435200000000001,
+            "output": 0.0015498,
+            "total": 0.003896352
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.029096,
+            "input_hit": 0.0021913600000000003,
+            "output": 0.020664,
+            "total": 0.05195136
+          },
+          "off_peak": {
+            "input_miss": 0.014548,
+            "input_hit": 0.0010956800000000001,
+            "output": 0.010332,
+            "total": 0.02597568
+          }
+        }
+      }
+    },
+    {
+      "case_id": "option_values",
+      "tier": "easy",
+      "title": "Explicit empty CLI option values",
+      "case_sha256": "c4771401772c7a03316eca9ad88c7c082e93a7f07337dd94e977a9b8fadfae19",
+      "baseline_commit": "9e53ebe2a1069ee480e74ce07ec50d14683ef08a",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "empty_is_explicit",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "end_marker",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/options.py\", line 18, in parse_args\n    raise ValueError(f\"unknown option: {arg}\")\nValueError: unknown option: --\n"
+        },
+        {
+          "name": "missing_value_and_regular_options",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "empty_is_explicit",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "end_marker",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "missing_value_and_regular_options",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 22.952,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "8b975540-f283-4667-b40f-120b4a938606",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 37097,
+        "output_tokens": 2290,
+        "cache_read_tokens": 32768,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8833,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 6,
+        "tool_calls": 7,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M options.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/option_values/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 23.221,
+      "resources": {
+        "cpu_user_seconds": 0.13,
+        "cpu_system_seconds": 0.08,
+        "max_rss_kib": 15680,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 6,
+        "tool_calls": 7,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0012987,
+            "input_hit": 0.000196608,
+            "output": 0.002748,
+            "total": 0.004243308
+          },
+          "off_peak": {
+            "input_miss": 0.00064935,
+            "input_hit": 9.8304e-05,
+            "output": 0.001374,
+            "total": 0.002121654
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.008658,
+            "input_hit": 0.00131072,
+            "output": 0.01832,
+            "total": 0.02828872
+          },
+          "off_peak": {
+            "input_miss": 0.004329,
+            "input_hit": 0.00065536,
+            "output": 0.00916,
+            "total": 0.01414436
+          }
+        }
+      }
+    },
+    {
+      "case_id": "pagination_cursor",
+      "tier": "medium",
+      "title": "Stable keyset pagination after deletions",
+      "case_sha256": "162d9eb4d737cfe4c9b47caecfdf7c263feff8f254d84df017ff5586b070141b",
+      "baseline_commit": "d46f452c477e436cdff451d7c819e48ea83512f9",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "deletion_between_pages",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "same_timestamp_and_insert",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "bad_cursor_and_limit",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (None, 0)\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "deletion_between_pages",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "same_timestamp_and_insert",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "bad_cursor_and_limit",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 23.085,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "024e3f18-638a-4f4c-b217-b55149f00388",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 46233,
+        "output_tokens": 2164,
+        "cache_read_tokens": 41472,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.897,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 8,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M feed.py",
+        " M test_feed.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/pagination_cursor/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 23.385,
+      "resources": {
+        "cpu_user_seconds": 0.09,
+        "cpu_system_seconds": 0.09,
+        "max_rss_kib": 16036,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 7,
+        "tool_calls": 8,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0014283,
+            "input_hit": 0.000248832,
+            "output": 0.0025968,
+            "total": 0.004273931999999999
+          },
+          "off_peak": {
+            "input_miss": 0.00071415,
+            "input_hit": 0.000124416,
+            "output": 0.0012984,
+            "total": 0.0021369659999999997
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.009522,
+            "input_hit": 0.0016588800000000002,
+            "output": 0.017312,
+            "total": 0.02849288
+          },
+          "off_peak": {
+            "input_miss": 0.004761,
+            "input_hit": 0.0008294400000000001,
+            "output": 0.008656,
+            "total": 0.01424644
+          }
+        }
+      }
+    },
+    {
+      "case_id": "path_rules",
+      "tier": "easy",
+      "title": "Ordered ignore and reinclude rules",
+      "case_sha256": "a1705a5755c50b5f9b7f07c6a26b79d1b0d707a9afaf8e39b3fd8d93c690be1e",
+      "baseline_commit": "ecab60768c6233e69c2952ebf7a931ae474e38a6",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "reinclude",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "last_rule_wins",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unmatched_and_other_exclusions",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "reinclude",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "last_rule_wins",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unmatched_and_other_exclusions",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 11.656,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "fb042352-0068-4c31-9cb4-7e6c66fcc6ca",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 26778,
+        "output_tokens": 558,
+        "cache_read_tokens": 24320,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.9082,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 5,
+        "tool_calls": 6,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M rules.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/path_rules/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 11.848,
+      "resources": {
+        "cpu_user_seconds": 0.07,
+        "cpu_system_seconds": 0.01,
+        "max_rss_kib": 15552,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 5,
+        "tool_calls": 6,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0007373999999999999,
+            "input_hit": 0.00014592,
+            "output": 0.0006696,
+            "total": 0.00155292
+          },
+          "off_peak": {
+            "input_miss": 0.00036869999999999996,
+            "input_hit": 7.296e-05,
+            "output": 0.0003348,
+            "total": 0.00077646
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.004916,
+            "input_hit": 0.0009728000000000001,
+            "output": 0.004464,
+            "total": 0.0103528
+          },
+          "off_peak": {
+            "input_miss": 0.002458,
+            "input_hit": 0.00048640000000000006,
+            "output": 0.002232,
+            "total": 0.0051764
+          }
+        }
+      }
+    },
+    {
+      "case_id": "rate_window",
+      "tier": "hard",
+      "title": "Rolling-window limit across tenants",
+      "case_sha256": "a37c6e1028cd71cd159cd6ec32ec3de71bd6a35a72826ca56d764d9687597702",
+      "baseline_commit": "c8486d17b77a01c7e2c09639c34348c86a15fd0a",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "independent_tenants",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "exact_boundary",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "denial_does_not_consume",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "invalid_parameters",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (0, 10)\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "independent_tenants",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "exact_boundary",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "denial_does_not_consume",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_parameters",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 19.618,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "1a41bec4-56dc-4d09-acf7-3ff042067922",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 38704,
+        "output_tokens": 1918,
+        "cache_read_tokens": 31232,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8069,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 6,
+        "tool_calls": 8,
+        "validation_passes": 1,
+        "validation_failures": 1
+      },
+      "git_status": [
+        " M limiter.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/rate_window/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 19.974,
+      "resources": {
+        "cpu_user_seconds": 0.09,
+        "cpu_system_seconds": 0.08,
+        "max_rss_kib": 16268,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 6,
+        "tool_calls": 8,
+        "validation_passes": 1,
+        "validation_failures": 1
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0022416,
+            "input_hit": 0.00018739199999999998,
+            "output": 0.0023016,
+            "total": 0.004730592
+          },
+          "off_peak": {
+            "input_miss": 0.0011208,
+            "input_hit": 9.369599999999999e-05,
+            "output": 0.0011508,
+            "total": 0.002365296
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.014944,
+            "input_hit": 0.00124928,
+            "output": 0.015344,
+            "total": 0.03153728
+          },
+          "off_peak": {
+            "input_miss": 0.007472,
+            "input_hit": 0.00062464,
+            "output": 0.007672,
+            "total": 0.01576864
+          }
+        }
+      }
+    },
+    {
+      "case_id": "retry_policy",
+      "tier": "medium",
+      "title": "Idempotent HTTP retries and Retry-After",
+      "case_sha256": "3f68e7ae89dae07bbec8ece327af5b102a2c31bea6a927e81b12e7573ac9df8f",
+      "baseline_commit": "988c508c97f089a555b7b28d777e77e4bf89d48f",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "post_not_retried",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "retry_after_and_backoff",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "last_attempt_no_sleep",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "invalid_budget",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError: zero attempts accepted\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "post_not_retried",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "retry_after_and_backoff",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "last_attempt_no_sleep",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_budget",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 24.269,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "0abef3ea-5219-4a05-bc7a-3bde86c96f41",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 48272,
+        "output_tokens": 2418,
+        "cache_read_tokens": 40448,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8379,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 9,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M retry.py",
+        " M test_retry.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/retry_policy/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 24.637,
+      "resources": {
+        "cpu_user_seconds": 0.14,
+        "cpu_system_seconds": 0.06,
+        "max_rss_kib": 15660,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 7,
+        "tool_calls": 9,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0023472,
+            "input_hit": 0.00024268800000000002,
+            "output": 0.0029016,
+            "total": 0.005491487999999999
+          },
+          "off_peak": {
+            "input_miss": 0.0011736,
+            "input_hit": 0.00012134400000000001,
+            "output": 0.0014508,
+            "total": 0.0027457439999999996
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.015648,
+            "input_hit": 0.0016179200000000001,
+            "output": 0.019344,
+            "total": 0.03660992
+          },
+          "off_peak": {
+            "input_miss": 0.007824,
+            "input_hit": 0.0008089600000000001,
+            "output": 0.009672,
+            "total": 0.01830496
+          }
+        }
+      }
+    },
+    {
+      "case_id": "spool_recovery",
+      "tier": "hard",
+      "title": "Crash-safe append-only job spool",
+      "case_sha256": "f8c9e3249c64c31b02ece94cd8044175ce64109a6b00adc45849e9564190e5d3",
+      "baseline_commit": "4a42b5018f8e5a8c6c5c452d39a7a991764e3fcf",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "handler_failure_retries_same_job",
+          "passed": false,
+          "detail": "False"
+        },
+        {
+          "name": "partial_line_survives_restart",
+          "passed": false,
+          "detail": "/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 355, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 7 (char 6)\n"
+        },
+        {
+          "name": "multibyte_offsets_and_append",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "stale_checkpoint_fails_closed",
+          "passed": false,
+          "detail": "False"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "handler_failure_retries_same_job",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "partial_line_survives_restart",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "multibyte_offsets_and_append",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "stale_checkpoint_fails_closed",
+          "passed": true,
+          "detail": "True"
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 31.224,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "07cd3888-4c53-420c-8c0f-0dd5f6786ae4",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 64439,
+        "output_tokens": 5309,
+        "cache_read_tokens": 52864,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8204,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 9,
+        "validation_passes": 2,
+        "validation_failures": 1
+      },
+      "git_status": [
+        " M spool_recovery.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/spool_recovery/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 31.485,
+      "resources": {
+        "cpu_user_seconds": 0.25,
+        "cpu_system_seconds": 0.19,
+        "max_rss_kib": 16292,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 7,
+        "tool_calls": 9,
+        "validation_passes": 2,
+        "validation_failures": 1
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0034725,
+            "input_hit": 0.00031718400000000003,
+            "output": 0.0063708,
+            "total": 0.010160484000000001
+          },
+          "off_peak": {
+            "input_miss": 0.00173625,
+            "input_hit": 0.00015859200000000002,
+            "output": 0.0031854,
+            "total": 0.0050802420000000004
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.02315,
+            "input_hit": 0.00211456,
+            "output": 0.042472,
+            "total": 0.06773656
+          },
+          "off_peak": {
+            "input_miss": 0.011575,
+            "input_hit": 0.00105728,
+            "output": 0.021236,
+            "total": 0.03386828
+          }
+        }
+      }
+    },
+    {
+      "case_id": "sqlite_migration",
+      "tier": "medium",
+      "title": "Idempotent SQLite schema migration",
+      "case_sha256": "b3630a792dc9e32efe880a988102da05bc947fa1fa2cd0c9d3b1f0d6a3a3ceb0",
+      "baseline_commit": "232f291f29dba97420a3d75cdf63ced4dfee2388",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "preserves_rows",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "idempotent",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "malformed_schema_rejected",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError: malformed schema replaced\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "preserves_rows",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "idempotent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "malformed_schema_rejected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 47.164,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "7b562a2b-8434-448c-aa35-e21719a2aa31",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 65872,
+        "output_tokens": 6233,
+        "cache_read_tokens": 54784,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.8317,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 10,
+        "validation_passes": 4,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M migration.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/sqlite_migration/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 47.489,
+      "resources": {
+        "cpu_user_seconds": 0.32,
+        "cpu_system_seconds": 0.17,
+        "max_rss_kib": 16060,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 7,
+        "tool_calls": 10,
+        "validation_passes": 4,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0033264,
+            "input_hit": 0.00032870400000000003,
+            "output": 0.0074795999999999994,
+            "total": 0.011134704
+          },
+          "off_peak": {
+            "input_miss": 0.0016632,
+            "input_hit": 0.00016435200000000001,
+            "output": 0.0037397999999999997,
+            "total": 0.005567352
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.022176,
+            "input_hit": 0.0021913600000000003,
+            "output": 0.049864,
+            "total": 0.07423136
+          },
+          "off_peak": {
+            "input_miss": 0.011088,
+            "input_hit": 0.0010956800000000001,
+            "output": 0.024932,
+            "total": 0.03711568
+          }
+        }
+      }
+    },
+    {
+      "case_id": "stream_framing",
+      "tier": "hard",
+      "title": "Length-prefixed frame decoder under arbitrary chunks",
+      "case_sha256": "61f5cfe8235723d9e7b5c1fd21673c2cbf10d183257f0a700aaa69b3ae0b3653",
+      "baseline_commit": "9937c7f2635d1aaf6302bc75a4d4fc6b48840ec1",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "all_split_points",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "one_byte_chunks",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "oversize_prefix",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: oversize accepted\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "all_split_points",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "one_byte_chunks",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "oversize_prefix",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 26.314,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "71999267-e47b-4582-a9c0-f076dc3cc88d",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 60461,
+        "output_tokens": 1798,
+        "cache_read_tokens": 52480,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.868,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 9,
+        "tool_calls": 12,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M framing.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/stream_framing/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 26.596,
+      "resources": {
+        "cpu_user_seconds": 0.12,
+        "cpu_system_seconds": 0.08,
+        "max_rss_kib": 15820,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 9,
+        "tool_calls": 12,
+        "validation_passes": 3,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0023943,
+            "input_hit": 0.00031488,
+            "output": 0.0021576,
+            "total": 0.004866779999999999
+          },
+          "off_peak": {
+            "input_miss": 0.00119715,
+            "input_hit": 0.00015744,
+            "output": 0.0010788,
+            "total": 0.0024333899999999997
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.015962,
+            "input_hit": 0.0020992,
+            "output": 0.014384,
+            "total": 0.0324452
+          },
+          "off_peak": {
+            "input_miss": 0.007981,
+            "input_hit": 0.0010496,
+            "output": 0.007192,
+            "total": 0.0162226
+          }
+        }
+      }
+    },
+    {
+      "case_id": "stream_records",
+      "tier": "easy",
+      "title": "Incremental UTF-8 event records",
+      "case_sha256": "40fd67ff61c84f4b783b2c9d1fc2791ac7047d521c13730bdfb148b20c94070c",
+      "baseline_commit": "cc2196b3176234337b9981bccaf953ab028836ca",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "single_utf8_split",
+          "passed": false,
+          "detail": "[{'name': ''}]"
+        },
+        {
+          "name": "every_utf8_boundary",
+          "passed": false,
+          "detail": "[{'name': ''}]"
+        },
+        {
+          "name": "several_records_and_final_line",
+          "passed": true,
+          "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+        },
+        {
+          "name": "empty_chunks",
+          "passed": true,
+          "detail": "[{'id': 4}]"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "single_utf8_split",
+          "passed": true,
+          "detail": "[{'name': '\u4e2d'}]"
+        },
+        {
+          "name": "every_utf8_boundary",
+          "passed": true,
+          "detail": "[{'name': '\u96ea'}]"
+        },
+        {
+          "name": "several_records_and_final_line",
+          "passed": true,
+          "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+        },
+        {
+          "name": "empty_chunks",
+          "passed": true,
+          "detail": "[{'id': 4}]"
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 42.362,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "f9cca69c-cfc1-4431-9c1d-13d8c050431b",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 96071,
+        "output_tokens": 3827,
+        "cache_read_tokens": 86272,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.898,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 11,
+        "tool_calls": 14,
+        "validation_passes": 1,
+        "validation_failures": 1
+      },
+      "git_status": [
+        " M stream_records.py",
+        " M test_stream_records.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/stream_records/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 42.543,
+      "resources": {
+        "cpu_user_seconds": 0.22,
+        "cpu_system_seconds": 0.11,
+        "max_rss_kib": 16524,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 11,
+        "tool_calls": 14,
+        "validation_passes": 1,
+        "validation_failures": 1
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0029397,
+            "input_hit": 0.0005176320000000001,
+            "output": 0.0045924,
+            "total": 0.008049732
+          },
+          "off_peak": {
+            "input_miss": 0.00146985,
+            "input_hit": 0.00025881600000000004,
+            "output": 0.0022962,
+            "total": 0.004024866
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.019598,
+            "input_hit": 0.00345088,
+            "output": 0.030616,
+            "total": 0.05366488
+          },
+          "off_peak": {
+            "input_miss": 0.009799,
+            "input_hit": 0.00172544,
+            "output": 0.015308,
+            "total": 0.02683244
+          }
+        }
+      }
+    },
+    {
+      "case_id": "transaction_outbox",
+      "tier": "hard",
+      "title": "Transactional order and outbox event",
+      "case_sha256": "3e74af9962dc6e4558dc5fbbab958d87df90547f51ea0ec412fdde7ea56c692c",
+      "baseline_commit": "1f3ad2a5d8831166889c195f2e6438a7056bd119",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "event_failure_rolls_back_order",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "duplicate_has_no_extra_event",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "insertion_order_and_valid_amount",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError: zero amount\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "event_failure_rolls_back_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "duplicate_has_no_extra_event",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "insertion_order_and_valid_amount",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 69.515,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "4f7b226e-f790-481a-a47b-04c613925448",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 95873,
+        "output_tokens": 8455,
+        "cache_read_tokens": 70400,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.7343,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 10,
+        "tool_calls": 14,
+        "validation_passes": 2,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M outbox.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/transaction_outbox/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 69.769,
+      "resources": {
+        "cpu_user_seconds": 0.39,
+        "cpu_system_seconds": 0.24,
+        "max_rss_kib": 16680,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 10,
+        "tool_calls": 14,
+        "validation_passes": 2,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.007641899999999999,
+            "input_hit": 0.0004224,
+            "output": 0.010146,
+            "total": 0.0182103
+          },
+          "off_peak": {
+            "input_miss": 0.0038209499999999996,
+            "input_hit": 0.0002112,
+            "output": 0.005073,
+            "total": 0.00910515
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.050946,
+            "input_hit": 0.002816,
+            "output": 0.06764,
+            "total": 0.12140200000000001
+          },
+          "off_peak": {
+            "input_miss": 0.025473,
+            "input_hit": 0.001408,
+            "output": 0.03382,
+            "total": 0.060701000000000005
+          }
+        }
+      }
+    },
+    {
+      "case_id": "webhook_dedupe",
+      "tier": "hard",
+      "title": "Idempotent webhook delivery with durable claims",
+      "case_sha256": "2940ba8691d0f0ef57f5ffcfb396ae31d93092891743c86b496c83a37b6a2a32",
+      "baseline_commit": "88f46643843253352e7b70e270ddc83bb540e426",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "handler_failure_retry",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "duplicate_only_once",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "durable_across_connection",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "handler_failure_retry",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "duplicate_only_once",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "durable_across_connection",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 55.605,
+      "status": "completed",
+      "completion": "verified",
+      "session_id": "f0157c8b-3178-4dbb-b5b6-447869c09788",
+      "profile": {
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "effort": "provider_default"
+      },
+      "usage": {
+        "input_tokens": 109508,
+        "output_tokens": 5417,
+        "cache_read_tokens": 98688,
+        "cache_write_tokens": null,
+        "cache_read_fraction": 0.9012,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 12,
+        "tool_calls": 13,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "git_status": [
+        " M test_webhook.py",
+        " M webhook.py"
+      ],
+      "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/webhook_dedupe/workspace",
+      "agent": "latch",
+      "attempt_total_seconds": 55.806,
+      "resources": {
+        "cpu_user_seconds": 0.21,
+        "cpu_system_seconds": 0.15,
+        "max_rss_kib": 16036,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "root_event_counts": {
+        "model_turns": 12,
+        "tool_calls": 13,
+        "validation_passes": 1,
+        "validation_failures": 0
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.003246,
+            "input_hit": 0.000592128,
+            "output": 0.0065004,
+            "total": 0.010338528
+          },
+          "off_peak": {
+            "input_miss": 0.001623,
+            "input_hit": 0.000296064,
+            "output": 0.0032502,
+            "total": 0.005169264
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.02164,
+            "input_hit": 0.00394752,
+            "output": 0.043336,
+            "total": 0.06892352
+          },
+          "off_peak": {
+            "input_miss": 0.01082,
+            "input_hit": 0.00197376,
+            "output": 0.021668,
+            "total": 0.03446176
+          }
+        }
+      }
+    },
+    {
+      "case_id": "ansi_width",
+      "tier": "easy",
+      "case_sha256": "016925ca9835ffb5cd11dce9a2ec6f5501b9c34aa91947d716e691e5e954be29",
+      "baseline_commit": "1df591c168299c60f1faba4d4881df8285e5afab",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "ansi_and_cjk",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "combining_and_emoji",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "control_sequences",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "ansi_and_cjk",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "combining_and_emoji",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "control_sequences",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 59.502,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 102830,
+        "uncached_input_tokens": 8622,
+        "output_tokens": 6384,
+        "reported_output_tokens": 2629,
+        "reasoning_tokens": 3755,
+        "cache_read_tokens": 94208,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 11,
+        "tool_calls": 17
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 59.786,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2180,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0025866,
+            "input_hit": 0.0005652480000000001,
+            "output": 0.007660799999999999,
+            "total": 0.010812648
+          },
+          "off_peak": {
+            "input_miss": 0.0012933,
+            "input_hit": 0.00028262400000000004,
+            "output": 0.0038303999999999994,
+            "total": 0.005406324
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.017244,
+            "input_hit": 0.0037683200000000003,
+            "output": 0.051072,
+            "total": 0.07208432
+          },
+          "off_peak": {
+            "input_miss": 0.008622,
+            "input_hit": 0.0018841600000000002,
+            "output": 0.025536,
+            "total": 0.03604216
+          }
+        }
+      }
+    },
+    {
+      "case_id": "append_index",
+      "tier": "hard",
+      "case_sha256": "4e36dcf6d370cc8abaa19c4a780207d33e3f35a69a7c51aa913eb4297fc8ddf6",
+      "baseline_commit": "b6cf0bbbf945155802e91891796cd559a2f76869",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "utf8_offsets",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "partial_tail_hidden",
+          "passed": false,
+          "detail": "py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting ',' delimiter: line 1 column 8 (char 7)\n"
+        },
+        {
+          "name": "append_rejects_partial_tail",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "utf8_offsets",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "partial_tail_hidden",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "append_rejects_partial_tail",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: append over partial\n"
+        }
+      ],
+      "checks_passed": 2,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 55.678,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 87006,
+        "uncached_input_tokens": 9438,
+        "output_tokens": 7449,
+        "reported_output_tokens": 3985,
+        "reasoning_tokens": 3464,
+        "cache_read_tokens": 77568,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 9,
+        "tool_calls": 13
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 56.028,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2168,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0028314,
+            "input_hit": 0.000465408,
+            "output": 0.008938799999999998,
+            "total": 0.012235607999999999
+          },
+          "off_peak": {
+            "input_miss": 0.0014157,
+            "input_hit": 0.000232704,
+            "output": 0.004469399999999999,
+            "total": 0.006117803999999999
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.018876,
+            "input_hit": 0.0031027200000000002,
+            "output": 0.059592,
+            "total": 0.08157072
+          },
+          "off_peak": {
+            "input_miss": 0.009438,
+            "input_hit": 0.0015513600000000001,
+            "output": 0.029796,
+            "total": 0.04078536
+          }
+        }
+      }
+    },
+    {
+      "case_id": "archive_paths",
+      "tier": "medium",
+      "case_sha256": "ed400cad189a9930733893bcaf5c85cc51d7a7eea4e29145c43dc85ea5b0fc14",
+      "baseline_commit": "e6d5d63015bec4ed99c7be6630c96e2a0c726004",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "nested_file",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "traversal_preflight",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError: traversal accepted\n"
+        },
+        {
+          "name": "absolute_and_symlink",
+          "passed": false,
+          "detail": "e>\n  File \"/tmp/workspace/archive.py\", line 16, in extract_archive\n    target.write_bytes(source.read(member))\n  File \"/usr/lib/python3.12/pathlib.py\", line 1038, in write_bytes\n    with self.open(mode='wb') as f:\n         ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/outside.txt'\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "nested_file",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "traversal_preflight",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "absolute_and_symlink",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 49.345,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 100920,
+        "uncached_input_tokens": 7864,
+        "output_tokens": 5451,
+        "reported_output_tokens": 2673,
+        "reasoning_tokens": 2778,
+        "cache_read_tokens": 93056,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 11,
+        "tool_calls": 13
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 49.616,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0023591999999999997,
+            "input_hit": 0.000558336,
+            "output": 0.0065412,
+            "total": 0.009458735999999999
+          },
+          "off_peak": {
+            "input_miss": 0.0011795999999999998,
+            "input_hit": 0.000279168,
+            "output": 0.0032706,
+            "total": 0.004729367999999999
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.015728,
+            "input_hit": 0.0037222400000000004,
+            "output": 0.043608,
+            "total": 0.06305824
+          },
+          "off_peak": {
+            "input_miss": 0.007864,
+            "input_hit": 0.0018611200000000002,
+            "output": 0.021804,
+            "total": 0.03152912
+          }
+        }
+      }
+    },
+    {
+      "case_id": "atomic_config",
+      "tier": "hard",
+      "case_sha256": "290b2139c6d95a0819b93cc95ecd939fb72e27a44e58dd04269238946fa8ae37",
+      "baseline_commit": "4ab60f09f1cd976dfc40ea70019b4537db8f188a",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "invalid_input_keeps_live",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "backup_previous_and_recovery",
+          "passed": false,
+          "detail": "  return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n"
+        },
+        {
+          "name": "both_corrupt_fail",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "invalid_input_keeps_live",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "backup_previous_and_recovery",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "both_corrupt_fail",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 93.691,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 145808,
+        "uncached_input_tokens": 12944,
+        "output_tokens": 11345,
+        "reported_output_tokens": 4292,
+        "reasoning_tokens": 7053,
+        "cache_read_tokens": 132864,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 12,
+        "tool_calls": 15
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 93.915,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0038832,
+            "input_hit": 0.0007971839999999999,
+            "output": 0.013614,
+            "total": 0.018294384
+          },
+          "off_peak": {
+            "input_miss": 0.0019416,
+            "input_hit": 0.00039859199999999997,
+            "output": 0.006807,
+            "total": 0.009147192
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.025888,
+            "input_hit": 0.00531456,
+            "output": 0.09076,
+            "total": 0.12196256
+          },
+          "off_peak": {
+            "input_miss": 0.012944,
+            "input_hit": 0.00265728,
+            "output": 0.04538,
+            "total": 0.06098128
+          }
+        }
+      }
+    },
+    {
+      "case_id": "cache_stampede",
+      "tier": "hard",
+      "case_sha256": "fd9bed5fcbb5304aad93ac07d5ada30f0d5bc0a16f9f6b1c6dab763d86b88195",
+      "baseline_commit": "25acd4e87c1ff25fd9092320f64801546c489a09",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "single_flight",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "failure_retries",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "other_key_progress",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "single_flight",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "failure_retries",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "other_key_progress",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 35.436,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 54432,
+        "uncached_input_tokens": 4000,
+        "output_tokens": 2856,
+        "reported_output_tokens": 2106,
+        "reasoning_tokens": 750,
+        "cache_read_tokens": 50432,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 10
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 35.759,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2176,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0012,
+            "input_hit": 0.00030259199999999997,
+            "output": 0.0034271999999999996,
+            "total": 0.004929792
+          },
+          "off_peak": {
+            "input_miss": 0.0006,
+            "input_hit": 0.00015129599999999998,
+            "output": 0.0017135999999999998,
+            "total": 0.002464896
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.008,
+            "input_hit": 0.0020172799999999998,
+            "output": 0.022848,
+            "total": 0.03286528
+          },
+          "off_peak": {
+            "input_miss": 0.004,
+            "input_hit": 0.0010086399999999999,
+            "output": 0.011424,
+            "total": 0.01643264
+          }
+        }
+      }
+    },
+    {
+      "case_id": "config_layers",
+      "tier": "medium",
+      "case_sha256": "8197ad3a5b56a4ad24eb93b55ee4fd6217ffa345f54a03a0cb09281fe0490c11",
+      "baseline_commit": "7b57b016ecf2897b9a9e5a86cd9ff171b8c28c2f",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "nested_merge",
+          "passed": false,
+          "detail": "{'output': {'format': 'json'}, 'service': {'timeout': 12}}"
+        },
+        {
+          "name": "explicit_empty_after_environment",
+          "passed": false,
+          "detail": "'env'"
+        },
+        {
+          "name": "zero_and_false_are_explicit",
+          "passed": false,
+          "detail": "{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}"
+        },
+        {
+          "name": "inputs_unchanged",
+          "passed": false,
+          "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'endpoint': 'flag', 'timeout': 7}}]"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "nested_merge",
+          "passed": true,
+          "detail": "{'output': {'color': True, 'format': 'json'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 12}}"
+        },
+        {
+          "name": "explicit_empty_after_environment",
+          "passed": true,
+          "detail": "''"
+        },
+        {
+          "name": "zero_and_false_are_explicit",
+          "passed": true,
+          "detail": "{'output': {'color': True, 'format': 'text'}, 'quiet': False, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 0}}"
+        },
+        {
+          "name": "inputs_unchanged",
+          "passed": true,
+          "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'timeout': 9}}]"
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 33.57,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 47507,
+        "uncached_input_tokens": 4499,
+        "output_tokens": 3321,
+        "reported_output_tokens": 1826,
+        "reasoning_tokens": 1495,
+        "cache_read_tokens": 43008,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 11
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 33.77,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0013497000000000001,
+            "input_hit": 0.000258048,
+            "output": 0.0039851999999999995,
+            "total": 0.0055929479999999995
+          },
+          "off_peak": {
+            "input_miss": 0.0006748500000000001,
+            "input_hit": 0.000129024,
+            "output": 0.0019925999999999998,
+            "total": 0.0027964739999999997
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.008998,
+            "input_hit": 0.00172032,
+            "output": 0.026568,
+            "total": 0.037286320000000005
+          },
+          "off_peak": {
+            "input_miss": 0.004499,
+            "input_hit": 0.00086016,
+            "output": 0.013284,
+            "total": 0.018643160000000002
+          }
+        }
+      }
+    },
+    {
+      "case_id": "csv_chunks",
+      "tier": "easy",
+      "case_sha256": "0c51a65082c9134acda968d1e464fbe530077654a1127aea2ee1c1715e64ebdd",
+      "baseline_commit": "6dc39c0a40dd743843891f8bba6d46be9f3c39b7",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "quoted_newline",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "every_split",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "crlf_and_final_row",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "quoted_newline",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "every_split",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "crlf_and_final_row",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 50.289,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 55113,
+        "uncached_input_tokens": 7369,
+        "output_tokens": 5711,
+        "reported_output_tokens": 1897,
+        "reasoning_tokens": 3814,
+        "cache_read_tokens": 47744,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 10
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 50.523,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2168,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0022107,
+            "input_hit": 0.000286464,
+            "output": 0.006853199999999999,
+            "total": 0.009350364
+          },
+          "off_peak": {
+            "input_miss": 0.00110535,
+            "input_hit": 0.000143232,
+            "output": 0.0034265999999999997,
+            "total": 0.004675182
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.014738,
+            "input_hit": 0.00190976,
+            "output": 0.045688,
+            "total": 0.06233576
+          },
+          "off_peak": {
+            "input_miss": 0.007369,
+            "input_hit": 0.00095488,
+            "output": 0.022844,
+            "total": 0.03116788
+          }
+        }
+      }
+    },
+    {
+      "case_id": "dag_scheduler",
+      "tier": "hard",
+      "case_sha256": "3e922357d00da8c5ec9e536e8ffa826151c289a55b5c00058f0903b7beb29b0a",
+      "baseline_commit": "63f0a7f96e35bde59da74fee12807fce6c388811",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "shared_dependency_once",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "cycle_before_side_effect",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: cycle\n"
+        },
+        {
+          "name": "unknown_before_side_effect",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: unknown\n"
+        },
+        {
+          "name": "runner_failure_stops_dependents",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 9, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "shared_dependency_once",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "cycle_before_side_effect",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unknown_before_side_effect",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "runner_failure_stops_dependents",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 60.096,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 123877,
+        "uncached_input_tokens": 8805,
+        "output_tokens": 6004,
+        "reported_output_tokens": 3582,
+        "reasoning_tokens": 2422,
+        "cache_read_tokens": 115072,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 14,
+        "tool_calls": 15
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 60.442,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0026415,
+            "input_hit": 0.000690432,
+            "output": 0.0072048,
+            "total": 0.010536732
+          },
+          "off_peak": {
+            "input_miss": 0.00132075,
+            "input_hit": 0.000345216,
+            "output": 0.0036024,
+            "total": 0.005268366
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.01761,
+            "input_hit": 0.00460288,
+            "output": 0.048032,
+            "total": 0.07024488
+          },
+          "off_peak": {
+            "input_miss": 0.008805,
+            "input_hit": 0.00230144,
+            "output": 0.024016,
+            "total": 0.03512244
+          }
+        }
+      }
+    },
+    {
+      "case_id": "duration_units",
+      "tier": "easy",
+      "case_sha256": "276dc7d8fe60bbb844ca58499376cd646c07077527b27d4f6049488b3b6e0857",
+      "baseline_commit": "7f889761186133a8d3c30b5ae64ac691bd9eef97",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "units",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '250m'\n"
+        },
+        {
+          "name": "reject_malformed",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: -1s\n"
+        },
+        {
+          "name": "zero_and_large",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/duration.py\", line 7, in parse_duration\n    return int(value.replace(unit, \"\", 1)) * factor\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: '0m'\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "units",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "reject_malformed",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "zero_and_large",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 24.27,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 42145,
+        "uncached_input_tokens": 2593,
+        "output_tokens": 1845,
+        "reported_output_tokens": 1312,
+        "reasoning_tokens": 533,
+        "cache_read_tokens": 39552,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 7,
+        "tool_calls": 7
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 24.555,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0007779,
+            "input_hit": 0.00023731200000000002,
+            "output": 0.002214,
+            "total": 0.003229212
+          },
+          "off_peak": {
+            "input_miss": 0.00038895,
+            "input_hit": 0.00011865600000000001,
+            "output": 0.001107,
+            "total": 0.001614606
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.005186,
+            "input_hit": 0.00158208,
+            "output": 0.01476,
+            "total": 0.02152808
+          },
+          "off_peak": {
+            "input_miss": 0.002593,
+            "input_hit": 0.00079104,
+            "output": 0.00738,
+            "total": 0.01076404
+          }
+        }
+      }
+    },
+    {
+      "case_id": "header_merge",
+      "tier": "easy",
+      "case_sha256": "c5e44a403445969e877c4562f3e7ad95a89b812cc928c208fb720e5feaa3f88e",
+      "baseline_commit": "2f24864b4ac5c209fe3a40fb781b3e9666b9b8d5",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "ordinary_case_insensitive",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "set_cookie_separate",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "order_and_single",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "ordinary_case_insensitive",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "set_cookie_separate",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "order_and_single",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 50.705,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 80001,
+        "uncached_input_tokens": 7041,
+        "output_tokens": 5112,
+        "reported_output_tokens": 1911,
+        "reasoning_tokens": 3201,
+        "cache_read_tokens": 72960,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 10,
+        "tool_calls": 11
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 50.976,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2176,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0021122999999999997,
+            "input_hit": 0.00043776,
+            "output": 0.0061344,
+            "total": 0.00868446
+          },
+          "off_peak": {
+            "input_miss": 0.0010561499999999998,
+            "input_hit": 0.00021888,
+            "output": 0.0030672,
+            "total": 0.00434223
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.014082,
+            "input_hit": 0.0029184000000000002,
+            "output": 0.040896,
+            "total": 0.0578964
+          },
+          "off_peak": {
+            "input_miss": 0.007041,
+            "input_hit": 0.0014592000000000001,
+            "output": 0.020448,
+            "total": 0.0289482
+          }
+        }
+      }
+    },
+    {
+      "case_id": "http_ranges",
+      "tier": "medium",
+      "case_sha256": "0229834c0c751e3d871b04f1ffc51f8265fa9b945de26eba2a7a0165c8c3f3f6",
+      "baseline_commit": "f287ed67c634a13f513f8d1440def78e418ba3e9",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "inclusive_and_open_end",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "suffix_and_clamp",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "unsatisfiable_and_invalid",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "inclusive_and_open_end",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "suffix_and_clamp",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unsatisfiable_and_invalid",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 31.153,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 53851,
+        "uncached_input_tokens": 4827,
+        "output_tokens": 3185,
+        "reported_output_tokens": 2206,
+        "reasoning_tokens": 979,
+        "cache_read_tokens": 49024,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 8
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 31.436,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2180,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0014481,
+            "input_hit": 0.000294144,
+            "output": 0.003822,
+            "total": 0.0055642439999999994
+          },
+          "off_peak": {
+            "input_miss": 0.00072405,
+            "input_hit": 0.000147072,
+            "output": 0.001911,
+            "total": 0.0027821219999999997
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.009654,
+            "input_hit": 0.00196096,
+            "output": 0.02548,
+            "total": 0.037094959999999996
+          },
+          "off_peak": {
+            "input_miss": 0.004827,
+            "input_hit": 0.00098048,
+            "output": 0.01274,
+            "total": 0.018547479999999998
+          }
+        }
+      }
+    },
+    {
+      "case_id": "incremental_sync",
+      "tier": "hard",
+      "case_sha256": "fcb9c149a70a19e8336f31643a9b00cdc4afad48682512163781400f4decbee5",
+      "baseline_commit": "626904692e7b4f6a154c3f354323ef2b0847e44e",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "changed_same_size",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "deleted_and_nested",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "unchanged_keeps_mtime",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "symlink_rejected_without_manifest_change",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: link accepted\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "changed_same_size",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "deleted_and_nested",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unchanged_keeps_mtime",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "symlink_rejected_without_manifest_change",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 59.784,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 119466,
+        "uncached_input_tokens": 9514,
+        "output_tokens": 6674,
+        "reported_output_tokens": 2819,
+        "reasoning_tokens": 3855,
+        "cache_read_tokens": 109952,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 12,
+        "tool_calls": 11
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 60.133,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2104,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0028542,
+            "input_hit": 0.000659712,
+            "output": 0.0080088,
+            "total": 0.011522712
+          },
+          "off_peak": {
+            "input_miss": 0.0014271,
+            "input_hit": 0.000329856,
+            "output": 0.0040044,
+            "total": 0.005761356
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.019028,
+            "input_hit": 0.0043980799999999995,
+            "output": 0.053392,
+            "total": 0.07681808
+          },
+          "off_peak": {
+            "input_miss": 0.009514,
+            "input_hit": 0.0021990399999999998,
+            "output": 0.026696,
+            "total": 0.03840904
+          }
+        }
+      }
+    },
+    {
+      "case_id": "lease_queue",
+      "tier": "hard",
+      "case_sha256": "65033941e56ada0b358e68246a5df09e287b38ff5578443caa243f46b8f49972",
+      "baseline_commit": "5953e6bf43ae85b8a08373b810c604b3e530768d",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "stale_ack_after_reclaim",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "no_duplicate_live_claim",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "attempts_and_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_lease",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "stale_ack_after_reclaim",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "no_duplicate_live_claim",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "attempts_and_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_lease",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 49.546,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 86131,
+        "uncached_input_tokens": 6643,
+        "output_tokens": 5271,
+        "reported_output_tokens": 2461,
+        "reasoning_tokens": 2810,
+        "cache_read_tokens": 79488,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 11,
+        "tool_calls": 11
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 49.842,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2036,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0019928999999999997,
+            "input_hit": 0.000476928,
+            "output": 0.0063252,
+            "total": 0.008795028
+          },
+          "off_peak": {
+            "input_miss": 0.0009964499999999999,
+            "input_hit": 0.000238464,
+            "output": 0.0031626,
+            "total": 0.004397514
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.013286,
+            "input_hit": 0.00317952,
+            "output": 0.042168,
+            "total": 0.058633519999999995
+          },
+          "off_peak": {
+            "input_miss": 0.006643,
+            "input_hit": 0.00158976,
+            "output": 0.021084,
+            "total": 0.029316759999999997
+          }
+        }
+      }
+    },
+    {
+      "case_id": "log_rotation",
+      "tier": "medium",
+      "case_sha256": "7ef03334a9909054a71fbf85033cfaf756997f50cd62302f1c9eb10533aefb4b",
+      "baseline_commit": "c1430ac5a3560bab3a8b9f5bb86ce44cc4050985",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "archive_order",
+          "passed": false,
+          "detail": "line 7, in <module>\n  File \"/usr/lib/python3.12/pathlib.py\", line 1029, in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmp7vsh9wij/app.log.2'\n"
+        },
+        {
+          "name": "bounded_archive_count",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "empty_log_and_limits",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "archive_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "bounded_archive_count",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "empty_log_and_limits",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 74.832,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 134215,
+        "uncached_input_tokens": 9415,
+        "output_tokens": 6409,
+        "reported_output_tokens": 2778,
+        "reasoning_tokens": 3631,
+        "cache_read_tokens": 124800,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 14,
+        "tool_calls": 15
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 75.13,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2176,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0028245,
+            "input_hit": 0.0007488000000000001,
+            "output": 0.007690799999999999,
+            "total": 0.011264099999999999
+          },
+          "off_peak": {
+            "input_miss": 0.00141225,
+            "input_hit": 0.00037440000000000005,
+            "output": 0.0038453999999999997,
+            "total": 0.0056320499999999996
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.01883,
+            "input_hit": 0.004992,
+            "output": 0.051272,
+            "total": 0.075094
+          },
+          "off_peak": {
+            "input_miss": 0.009415,
+            "input_hit": 0.002496,
+            "output": 0.025636,
+            "total": 0.037547
+          }
+        }
+      }
+    },
+    {
+      "case_id": "option_values",
+      "tier": "easy",
+      "case_sha256": "c4771401772c7a03316eca9ad88c7c082e93a7f07337dd94e977a9b8fadfae19",
+      "baseline_commit": "453c2bb6b11620b8b0567f964fa75981e4ee1aba",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "empty_is_explicit",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "end_marker",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/options.py\", line 18, in parse_args\n    raise ValueError(f\"unknown option: {arg}\")\nValueError: unknown option: --\n"
+        },
+        {
+          "name": "missing_value_and_regular_options",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "empty_is_explicit",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "end_marker",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "missing_value_and_regular_options",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 33.469,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 59196,
+        "uncached_input_tokens": 4796,
+        "output_tokens": 3493,
+        "reported_output_tokens": 1461,
+        "reasoning_tokens": 2032,
+        "cache_read_tokens": 54400,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 9
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 33.695,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2196,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0014388,
+            "input_hit": 0.0003264,
+            "output": 0.004191599999999999,
+            "total": 0.005956799999999999
+          },
+          "off_peak": {
+            "input_miss": 0.0007194,
+            "input_hit": 0.0001632,
+            "output": 0.0020957999999999997,
+            "total": 0.0029783999999999995
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.009592,
+            "input_hit": 0.002176,
+            "output": 0.027944,
+            "total": 0.039712
+          },
+          "off_peak": {
+            "input_miss": 0.004796,
+            "input_hit": 0.001088,
+            "output": 0.013972,
+            "total": 0.019856
+          }
+        }
+      }
+    },
+    {
+      "case_id": "pagination_cursor",
+      "tier": "medium",
+      "case_sha256": "162d9eb4d737cfe4c9b47caecfdf7c263feff8f254d84df017ff5586b070141b",
+      "baseline_commit": "1867452fd0ed83b380e53e22ce756b71c514971e",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "deletion_between_pages",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "same_timestamp_and_insert",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "bad_cursor_and_limit",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (None, 0)\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "deletion_between_pages",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "same_timestamp_and_insert",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "bad_cursor_and_limit",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 82.168,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 125931,
+        "uncached_input_tokens": 12651,
+        "output_tokens": 10205,
+        "reported_output_tokens": 4044,
+        "reasoning_tokens": 6161,
+        "cache_read_tokens": 113280,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 11,
+        "tool_calls": 12
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 82.445,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2104,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0037952999999999997,
+            "input_hit": 0.0006796800000000001,
+            "output": 0.012246,
+            "total": 0.01672098
+          },
+          "off_peak": {
+            "input_miss": 0.0018976499999999999,
+            "input_hit": 0.00033984000000000005,
+            "output": 0.006123,
+            "total": 0.00836049
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.025302,
+            "input_hit": 0.0045312,
+            "output": 0.08164,
+            "total": 0.11147320000000001
+          },
+          "off_peak": {
+            "input_miss": 0.012651,
+            "input_hit": 0.0022656,
+            "output": 0.04082,
+            "total": 0.055736600000000004
+          }
+        }
+      }
+    },
+    {
+      "case_id": "path_rules",
+      "tier": "easy",
+      "case_sha256": "a1705a5755c50b5f9b7f07c6a26b79d1b0d707a9afaf8e39b3fd8d93c690be1e",
+      "baseline_commit": "53d692870a6cd6356e3f18db030343e7ecd16bd2",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "reinclude",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "last_rule_wins",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unmatched_and_other_exclusions",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "reinclude",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "last_rule_wins",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "unmatched_and_other_exclusions",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 20.65,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 45167,
+        "uncached_input_tokens": 1647,
+        "output_tokens": 951,
+        "reported_output_tokens": 861,
+        "reasoning_tokens": 90,
+        "cache_read_tokens": 43520,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 8
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 20.855,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0004940999999999999,
+            "input_hit": 0.00026112,
+            "output": 0.0011412,
+            "total": 0.0018964199999999998
+          },
+          "off_peak": {
+            "input_miss": 0.00024704999999999996,
+            "input_hit": 0.00013056,
+            "output": 0.0005706,
+            "total": 0.0009482099999999999
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.003294,
+            "input_hit": 0.0017408,
+            "output": 0.007608,
+            "total": 0.012642800000000001
+          },
+          "off_peak": {
+            "input_miss": 0.001647,
+            "input_hit": 0.0008704,
+            "output": 0.003804,
+            "total": 0.0063214000000000005
+          }
+        }
+      }
+    },
+    {
+      "case_id": "rate_window",
+      "tier": "hard",
+      "case_sha256": "a37c6e1028cd71cd159cd6ec32ec3de71bd6a35a72826ca56d764d9687597702",
+      "baseline_commit": "8d4bc3c044315c09ebff3591cc19f7c8dfe20aa5",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "independent_tenants",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "exact_boundary",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "denial_does_not_consume",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "invalid_parameters",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (0, 10)\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "independent_tenants",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "exact_boundary",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "denial_does_not_consume",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_parameters",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 30.957,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 52230,
+        "uncached_input_tokens": 3718,
+        "output_tokens": 2889,
+        "reported_output_tokens": 1819,
+        "reasoning_tokens": 1070,
+        "cache_read_tokens": 48512,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 8,
+        "tool_calls": 9
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 31.306,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0011154,
+            "input_hit": 0.000291072,
+            "output": 0.0034668,
+            "total": 0.004873272
+          },
+          "off_peak": {
+            "input_miss": 0.0005577,
+            "input_hit": 0.000145536,
+            "output": 0.0017334,
+            "total": 0.002436636
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.007436,
+            "input_hit": 0.00194048,
+            "output": 0.023112,
+            "total": 0.03248848
+          },
+          "off_peak": {
+            "input_miss": 0.003718,
+            "input_hit": 0.00097024,
+            "output": 0.011556,
+            "total": 0.01624424
+          }
+        }
+      }
+    },
+    {
+      "case_id": "retry_policy",
+      "tier": "medium",
+      "case_sha256": "3f68e7ae89dae07bbec8ece327af5b102a2c31bea6a927e81b12e7573ac9df8f",
+      "baseline_commit": "a4442b07da908c208a5bd622e9ea18a4cc6c9cc5",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "post_not_retried",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "retry_after_and_backoff",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "last_attempt_no_sleep",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "invalid_budget",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError: zero attempts accepted\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "post_not_retried",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "retry_after_and_backoff",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "last_attempt_no_sleep",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "invalid_budget",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 44.103,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 69050,
+        "uncached_input_tokens": 7482,
+        "output_tokens": 5573,
+        "reported_output_tokens": 3645,
+        "reasoning_tokens": 1928,
+        "cache_read_tokens": 61568,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 9,
+        "tool_calls": 13
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 44.561,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2184,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0022446,
+            "input_hit": 0.000369408,
+            "output": 0.006687599999999999,
+            "total": 0.009301608
+          },
+          "off_peak": {
+            "input_miss": 0.0011223,
+            "input_hit": 0.000184704,
+            "output": 0.0033437999999999996,
+            "total": 0.004650804
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.014964,
+            "input_hit": 0.0024627200000000003,
+            "output": 0.044584,
+            "total": 0.06201072
+          },
+          "off_peak": {
+            "input_miss": 0.007482,
+            "input_hit": 0.0012313600000000001,
+            "output": 0.022292,
+            "total": 0.03100536
+          }
+        }
+      }
+    },
+    {
+      "case_id": "spool_recovery",
+      "tier": "hard",
+      "case_sha256": "f8c9e3249c64c31b02ece94cd8044175ce64109a6b00adc45849e9564190e5d3",
+      "baseline_commit": "2c3034e37f6a3946b815d120faa5d9de9499089c",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "handler_failure_retries_same_job",
+          "passed": false,
+          "detail": "False"
+        },
+        {
+          "name": "partial_line_survives_restart",
+          "passed": false,
+          "detail": "/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 355, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 7 (char 6)\n"
+        },
+        {
+          "name": "multibyte_offsets_and_append",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "stale_checkpoint_fails_closed",
+          "passed": false,
+          "detail": "False"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "handler_failure_retries_same_job",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "partial_line_survives_restart",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "multibyte_offsets_and_append",
+          "passed": true,
+          "detail": "True"
+        },
+        {
+          "name": "stale_checkpoint_fails_closed",
+          "passed": true,
+          "detail": "True"
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 79.901,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 160910,
+        "uncached_input_tokens": 13710,
+        "output_tokens": 9036,
+        "reported_output_tokens": 3730,
+        "reasoning_tokens": 5306,
+        "cache_read_tokens": 147200,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 13,
+        "tool_calls": 15
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 80.157,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.004113,
+            "input_hit": 0.0008832,
+            "output": 0.010843199999999999,
+            "total": 0.0158394
+          },
+          "off_peak": {
+            "input_miss": 0.0020565,
+            "input_hit": 0.0004416,
+            "output": 0.0054215999999999995,
+            "total": 0.0079197
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.02742,
+            "input_hit": 0.005888,
+            "output": 0.072288,
+            "total": 0.10559600000000001
+          },
+          "off_peak": {
+            "input_miss": 0.01371,
+            "input_hit": 0.002944,
+            "output": 0.036144,
+            "total": 0.052798000000000005
+          }
+        }
+      }
+    },
+    {
+      "case_id": "sqlite_migration",
+      "tier": "medium",
+      "case_sha256": "b3630a792dc9e32efe880a988102da05bc947fa1fa2cd0c9d3b1f0d6a3a3ceb0",
+      "baseline_commit": "085315b38e5ed3e92ab7aaf4ec79c32688196807",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "preserves_rows",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "idempotent",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "malformed_schema_rejected",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError: malformed schema replaced\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "preserves_rows",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "idempotent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "malformed_schema_rejected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 52.838,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 83549,
+        "uncached_input_tokens": 7645,
+        "output_tokens": 5781,
+        "reported_output_tokens": 1819,
+        "reasoning_tokens": 3962,
+        "cache_read_tokens": 75904,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 10,
+        "tool_calls": 11
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 53.176,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2092,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0022935,
+            "input_hit": 0.000455424,
+            "output": 0.0069372,
+            "total": 0.009686124
+          },
+          "off_peak": {
+            "input_miss": 0.00114675,
+            "input_hit": 0.000227712,
+            "output": 0.0034686,
+            "total": 0.004843062
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.01529,
+            "input_hit": 0.00303616,
+            "output": 0.046248,
+            "total": 0.06457415999999999
+          },
+          "off_peak": {
+            "input_miss": 0.007645,
+            "input_hit": 0.00151808,
+            "output": 0.023124,
+            "total": 0.032287079999999996
+          }
+        }
+      }
+    },
+    {
+      "case_id": "stream_framing",
+      "tier": "hard",
+      "case_sha256": "61f5cfe8235723d9e7b5c1fd21673c2cbf10d183257f0a700aaa69b3ae0b3653",
+      "baseline_commit": "3f9e009460cc58bfa2ff58621fe59adcf3809949",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "all_split_points",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "one_byte_chunks",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "oversize_prefix",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: oversize accepted\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "all_split_points",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "one_byte_chunks",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "oversize_prefix",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 36.042,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 83323,
+        "uncached_input_tokens": 4731,
+        "output_tokens": 2849,
+        "reported_output_tokens": 2181,
+        "reasoning_tokens": 668,
+        "cache_read_tokens": 78592,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 12,
+        "tool_calls": 13
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 36.346,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0014192999999999999,
+            "input_hit": 0.00047155200000000003,
+            "output": 0.0034187999999999996,
+            "total": 0.005309652
+          },
+          "off_peak": {
+            "input_miss": 0.0007096499999999999,
+            "input_hit": 0.00023577600000000001,
+            "output": 0.0017093999999999998,
+            "total": 0.002654826
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.009462,
+            "input_hit": 0.0031436800000000003,
+            "output": 0.022792,
+            "total": 0.03539768
+          },
+          "off_peak": {
+            "input_miss": 0.004731,
+            "input_hit": 0.0015718400000000001,
+            "output": 0.011396,
+            "total": 0.01769884
+          }
+        }
+      }
+    },
+    {
+      "case_id": "stream_records",
+      "tier": "easy",
+      "case_sha256": "40fd67ff61c84f4b783b2c9d1fc2791ac7047d521c13730bdfb148b20c94070c",
+      "baseline_commit": "4e03db2a13859713656c9c5fb81a6e702bd0fc04",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "single_utf8_split",
+          "passed": false,
+          "detail": "[{'name': ''}]"
+        },
+        {
+          "name": "every_utf8_boundary",
+          "passed": false,
+          "detail": "[{'name': ''}]"
+        },
+        {
+          "name": "several_records_and_final_line",
+          "passed": true,
+          "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+        },
+        {
+          "name": "empty_chunks",
+          "passed": true,
+          "detail": "[{'id': 4}]"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "single_utf8_split",
+          "passed": true,
+          "detail": "[{'name': '\u4e2d'}]"
+        },
+        {
+          "name": "every_utf8_boundary",
+          "passed": true,
+          "detail": "[{'name': '\u96ea'}]"
+        },
+        {
+          "name": "several_records_and_final_line",
+          "passed": true,
+          "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+        },
+        {
+          "name": "empty_chunks",
+          "passed": true,
+          "detail": "[{'id': 4}]"
+        }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 41.882,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 82265,
+        "uncached_input_tokens": 5465,
+        "output_tokens": 3770,
+        "reported_output_tokens": 2402,
+        "reasoning_tokens": 1368,
+        "cache_read_tokens": 76800,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 11,
+        "tool_calls": 13
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 42.068,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2040,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0016395,
+            "input_hit": 0.00046080000000000003,
+            "output": 0.004524,
+            "total": 0.0066243000000000005
+          },
+          "off_peak": {
+            "input_miss": 0.00081975,
+            "input_hit": 0.00023040000000000002,
+            "output": 0.002262,
+            "total": 0.0033121500000000003
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.01093,
+            "input_hit": 0.003072,
+            "output": 0.03016,
+            "total": 0.044162
+          },
+          "off_peak": {
+            "input_miss": 0.005465,
+            "input_hit": 0.001536,
+            "output": 0.01508,
+            "total": 0.022081
+          }
+        }
+      }
+    },
+    {
+      "case_id": "transaction_outbox",
+      "tier": "hard",
+      "case_sha256": "3e74af9962dc6e4558dc5fbbab958d87df90547f51ea0ec412fdde7ea56c692c",
+      "baseline_commit": "d36db44e01403b6a2e438dd5d699b204883425b4",
+      "passed": false,
+      "baseline_checks": [
+        {
+          "name": "event_failure_rolls_back_order",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "duplicate_has_no_extra_event",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "insertion_order_and_valid_amount",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError: zero amount\n"
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "event_failure_rolls_back_order",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "duplicate_has_no_extra_event",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError: duplicate accepted\n"
+        },
+        {
+          "name": "insertion_order_and_valid_amount",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 2,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 39.094,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 45730,
+        "uncached_input_tokens": 5922,
+        "output_tokens": 5041,
+        "reported_output_tokens": 1670,
+        "reasoning_tokens": 3371,
+        "cache_read_tokens": 39808,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 6,
+        "tool_calls": 9
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 39.414,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2104,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0017766,
+            "input_hit": 0.000238848,
+            "output": 0.0060492,
+            "total": 0.008064648
+          },
+          "off_peak": {
+            "input_miss": 0.0008883,
+            "input_hit": 0.000119424,
+            "output": 0.0030246,
+            "total": 0.004032324
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.011844,
+            "input_hit": 0.00159232,
+            "output": 0.040328,
+            "total": 0.053764320000000004
+          },
+          "off_peak": {
+            "input_miss": 0.005922,
+            "input_hit": 0.00079616,
+            "output": 0.020164,
+            "total": 0.026882160000000002
+          }
+        }
+      }
+    },
+    {
+      "case_id": "webhook_dedupe",
+      "tier": "hard",
+      "case_sha256": "2940ba8691d0f0ef57f5ffcfb396ae31d93092891743c86b496c83a37b6a2a32",
+      "baseline_commit": "66c1e20c5ecda980a5a4c707efd7f8dbeed45fee",
+      "passed": true,
+      "baseline_checks": [
+        {
+          "name": "handler_failure_retry",
+          "passed": false,
+          "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+        },
+        {
+          "name": "duplicate_only_once",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "durable_across_connection",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "final_checks": [
+        {
+          "name": "handler_failure_retry",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "duplicate_only_once",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "durable_across_connection",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "cli_exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 59.085,
+      "models": [
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "usage": {
+        "input_tokens": 95182,
+        "uncached_input_tokens": 8526,
+        "output_tokens": 6892,
+        "reported_output_tokens": 2277,
+        "reasoning_tokens": 4615,
+        "cache_read_tokens": 86656,
+        "cache_write_tokens": 0,
+        "estimated_cost_usd": null
+      },
+      "event_counts": {
+        "model_turns": 10,
+        "tool_calls": 12
+      },
+      "agent": "opencode",
+      "attempt_total_seconds": 59.279,
+      "resources": {
+        "cpu_user_seconds": 0.0,
+        "cpu_system_seconds": 0.0,
+        "max_rss_kib": 2104,
+        "major_page_faults": 0,
+        "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+      },
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "input_miss": 0.0025578,
+            "input_hit": 0.000519936,
+            "output": 0.008270399999999999,
+            "total": 0.011348135999999998
+          },
+          "off_peak": {
+            "input_miss": 0.0012789,
+            "input_hit": 0.000259968,
+            "output": 0.0041351999999999995,
+            "total": 0.005674067999999999
+          }
+        },
+        "CNY": {
+          "peak": {
+            "input_miss": 0.017052,
+            "input_hit": 0.00346624,
+            "output": 0.055136,
+            "total": 0.07565424
+          },
+          "off_peak": {
+            "input_miss": 0.008526,
+            "input_hit": 0.00173312,
+            "output": 0.027568,
+            "total": 0.03782712
+          }
+        }
+      }
+    }
+  ]
+}

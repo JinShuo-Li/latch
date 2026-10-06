@@ -1,0 +1,112 @@
+diff --git a/retry.py b/retry.py
+index a0aded2..d16cf3c 100644
+--- a/retry.py
++++ b/retry.py
+@@ -1,11 +1,35 @@
+ """Small HTTP retry loop with injected transport and sleeper."""
+ 
++RETRYABLE_METHODS = ("GET", "HEAD")
++TRANSIENT_STATUSES = (429, 503)
++
+ 
+ def request(method, send, sleep, max_attempts=3):
++    if max_attempts < 1:
++        raise ValueError("max_attempts must be at least 1")
++
++    retryable = method.upper() in RETRYABLE_METHODS
+     response = None
+     for attempt in range(max_attempts):
+         response = send()
+-        if response["status"] not in (429, 503):
++        if response["status"] not in TRANSIENT_STATUSES:
++            return response
++        if not retryable or attempt == max_attempts - 1:
+             return response
+-        sleep(2 ** attempt)
++        sleep(_retry_delay(response, attempt))
+     return response
++
++
++def _retry_delay(response, attempt):
++    headers = response.get("headers") or {}
++    for key, value in headers.items():
++        if key.lower() != "retry-after":
++            continue
++        try:
++            delay = float(value)
++        except (TypeError, ValueError):
++            break
++        if delay >= 0:
++            return delay
++        break
++    return 2 ** attempt
+diff --git a/test_retry.py b/test_retry.py
+index 472bfa5..4e73cb9 100644
+--- a/test_retry.py
++++ b/test_retry.py
+@@ -15,6 +15,65 @@ class RetryTest(unittest.TestCase):
+         self.assertEqual(result["status"], 503)
+         self.assertEqual(len(calls), 1)
+ 
++    def test_get_retries_then_returns_success(self):
++        responses = iter([{"status": 503}, {"status": 429}, {"status": 200}])
++        sleeps = []
++        result = request("GET", lambda: next(responses), sleeps.append)
++        self.assertEqual(result, {"status": 200})
++        self.assertEqual(sleeps, [1, 2])
++
++    def test_head_is_retryable(self):
++        calls = []
++        responses = iter([{"status": 429}, {"status": 200}])
++        result = request("HEAD", lambda: calls.append(1) or next(responses),
++                         lambda _: None)
++        self.assertEqual(result, {"status": 200})
++        self.assertEqual(len(calls), 2)
++
++    def test_non_transient_status_is_returned(self):
++        calls = []
++        result = request("GET", lambda: calls.append(1) or {"status": 404},
++                         lambda _: None)
++        self.assertEqual(result["status"], 404)
++        self.assertEqual(len(calls), 1)
++
++    def test_does_not_sleep_after_final_attempt(self):
++        sleeps = []
++        result = request("GET", lambda: {"status": 503}, sleeps.append,
++                         max_attempts=3)
++        self.assertEqual(result["status"], 503)
++        self.assertEqual(sleeps, [1, 2])
++
++    def test_numeric_retry_after_is_honored(self):
++        responses = iter([{"status": 429, "headers": {"Retry-After": "5"}},
++                          {"status": 503, "headers": {"retry-after": "0"}},
++                          {"status": 200}])
++        sleeps = []
++        result = request("GET", lambda: next(responses), sleeps.append)
++        self.assertEqual(result, {"status": 200})
++        self.assertEqual(sleeps, [5.0, 0.0])
++
++    def test_non_numeric_retry_after_falls_back_to_backoff(self):
++        responses = iter([{"status": 429, "headers": {"Retry-After": "later"}},
++                          {"status": 200}])
++        sleeps = []
++        result = request("GET", lambda: next(responses), sleeps.append)
++        self.assertEqual(result, {"status": 200})
++        self.assertEqual(sleeps, [1])
++
++    def test_negative_retry_after_falls_back_to_backoff(self):
++        responses = iter([{"status": 503, "headers": {"Retry-After": "-3"}},
++                          {"status": 200}])
++        sleeps = []
++        result = request("GET", lambda: next(responses), sleeps.append)
++        self.assertEqual(result, {"status": 200})
++        self.assertEqual(sleeps, [1])
++
++    def test_rejects_max_attempts_below_one(self):
++        with self.assertRaises(ValueError):
++            request("GET", lambda: {"status": 200}, lambda _: None,
++                    max_attempts=0)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

@@ -1,0 +1,69 @@
+diff --git a/spool_recovery.py b/spool_recovery.py
+index 256a6b1..9e15d11 100644
+--- a/spool_recovery.py
++++ b/spool_recovery.py
+@@ -1,25 +1,60 @@
+ """Process JSONL jobs from an append-only spool with a durable byte checkpoint."""
+ 
+ import json
++import os
++import tempfile
+ from pathlib import Path
+ 
+ 
+ def _save_offset(path, offset):
+-    Path(path).write_text(str(offset), encoding="ascii")
++    """Persist offset atomically so an interrupted write cannot corrupt it."""
++    path = Path(path)
++    fd, temp_path = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
++    try:
++        with os.fdopen(fd, "w", encoding="ascii") as stream:
++            stream.write(str(offset))
++            stream.flush()
++            os.fsync(stream.fileno())
++        os.replace(temp_path, path)
++    except BaseException:
++        if os.path.exists(temp_path):
++            os.unlink(temp_path)
++        raise
++    _fsync_directory(path.parent)
++
++
++def _fsync_directory(directory):
++    fd = os.open(str(directory), os.O_RDONLY)
++    try:
++        os.fsync(fd)
++    except OSError:  # directories cannot be fsynced on every platform
++        pass
++    finally:
++        os.close(fd)
+ 
+ 
+ def process_spool(spool_path, checkpoint_path, handler):
+     """Call handler for each complete unprocessed record; return job count."""
+     spool_path = Path(spool_path)
+     checkpoint_path = Path(checkpoint_path)
++    size = spool_path.stat().st_size
+     offset = int(checkpoint_path.read_text(encoding="ascii")) if checkpoint_path.exists() else 0
++    if offset > size:
++        raise ValueError(
++            "checkpoint offset %d points beyond spool of %d bytes" % (offset, size)
++        )
+     count = 0
+     with spool_path.open("rb") as spool:
+         spool.seek(offset)
+-        for raw_line in spool:
++        while True:
++            raw_line = spool.readline()
++            if not raw_line.endswith(b"\n"):
++                # EOF, or an incomplete trailing record that may still be appended.
++                break
++            next_offset = spool.tell()
+             job = json.loads(raw_line.decode("utf-8"))
+-            offset = spool.tell()
+-            _save_offset(checkpoint_path, offset)
+             handler(job)
++            offset = next_offset
++            _save_offset(checkpoint_path, offset)
+             count += 1
+     return count

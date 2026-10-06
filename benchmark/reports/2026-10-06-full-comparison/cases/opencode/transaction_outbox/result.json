@@ -1,0 +1,102 @@
+{
+  "case_id": "transaction_outbox",
+  "tier": "hard",
+  "case_sha256": "3e74af9962dc6e4558dc5fbbab958d87df90547f51ea0ec412fdde7ea56c692c",
+  "baseline_commit": "d36db44e01403b6a2e438dd5d699b204883425b4",
+  "passed": false,
+  "baseline_checks": [
+    {
+      "name": "event_failure_rolls_back_order",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "duplicate_has_no_extra_event",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "insertion_order_and_valid_amount",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError: zero amount\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "event_failure_rolls_back_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "duplicate_has_no_extra_event",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError: duplicate accepted\n"
+    },
+    {
+      "name": "insertion_order_and_valid_amount",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 2,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 39.094,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 45730,
+    "uncached_input_tokens": 5922,
+    "output_tokens": 5041,
+    "reported_output_tokens": 1670,
+    "reasoning_tokens": 3371,
+    "cache_read_tokens": 39808,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 6,
+    "tool_calls": 9
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 39.414,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2104,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0017766,
+        "input_hit": 0.000238848,
+        "output": 0.0060492,
+        "total": 0.008064648
+      },
+      "off_peak": {
+        "input_miss": 0.0008883,
+        "input_hit": 0.000119424,
+        "output": 0.0030246,
+        "total": 0.004032324
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.011844,
+        "input_hit": 0.00159232,
+        "output": 0.040328,
+        "total": 0.053764320000000004
+      },
+      "off_peak": {
+        "input_miss": 0.005922,
+        "input_hit": 0.00079616,
+        "output": 0.020164,
+        "total": 0.026882160000000002
+      }
+    }
+  }
+}

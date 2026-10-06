@@ -1,0 +1,52 @@
+diff --git a/cache.py b/cache.py
+index c334b4f..5e19e50 100644
+--- a/cache.py
++++ b/cache.py
+@@ -1,11 +1,44 @@
+ """Concurrent in-process value cache."""
+ 
++import threading
++
+ 
+ class Cache:
+     def __init__(self):
+         self.values = {}
++        # Guards ``values`` and ``_load_locks``.  Never held while a loader
++        # runs, so slow loads for one key cannot block unrelated keys.
++        self._lock = threading.Lock()
++        # One lock per key, so concurrent callers for the same key coordinate
++        # while callers for different keys proceed independently.
++        self._load_locks = {}
++
++    def _load_lock(self, key):
++        with self._lock:
++            lock = self._load_locks.get(key)
++            if lock is None:
++                lock = threading.Lock()
++                self._load_locks[key] = lock
++            return lock
+ 
+     def get(self, key, loader):
+-        if key not in self.values:
+-            self.values[key] = loader()
+-        return self.values[key]
++        with self._lock:
++            if key in self.values:
++                return self.values[key]
++
++        # Serialize only callers loading this same key.
++        with self._load_lock(key):
++            # A previous loader (or one we waited on) may have populated the
++            # value while we were acquiring the per-key lock.
++            with self._lock:
++                if key in self.values:
++                    return self.values[key]
++
++            # Run the loader outside the global lock.  If it raises, the
++            # per-key lock is released and nothing is stored, so a later call
++            # can retry.
++            value = loader()
++
++            with self._lock:
++                self.values[key] = value
++            return value

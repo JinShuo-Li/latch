@@ -1,0 +1,41 @@
+diff --git a/duration.py b/duration.py
+index ca4abdc..d4c18e4 100644
+--- a/duration.py
++++ b/duration.py
+@@ -1,8 +1,32 @@
+ """Scheduler duration parser returning milliseconds."""
+ 
++import re
++
++_UNITS = (
++    ("ms", 1),
++    ("s", 1000),
++    ("m", 60000),
++    ("h", 3600000),
++)
++
++_DURATION_RE = re.compile(r"^(?P<amount>\d+)(?P<unit>ms|s|m|h)$")
++
+ 
+ def parse_duration(value):
+-    for unit, factor in (("s", 1000), ("m", 60000), ("h", 3600000), ("ms", 1)):
+-        if unit in value:
+-            return int(value.replace(unit, "", 1)) * factor
+-    raise ValueError("unknown duration")
++    """Parse a duration string into a non-negative integer number of milliseconds.
++
++    Accepted forms are a non-negative integer immediately followed by one of
++    ``ms``, ``s``, ``m``, or ``h`` (for example ``"250ms"``, ``"2s"``,
++    ``"3m"``, ``"1h"``). Anything else, including negative values and trailing
++    text, raises ``ValueError``.
++    """
++    if not isinstance(value, str):
++        raise ValueError("duration must be a string")
++
++    match = _DURATION_RE.match(value)
++    if match is None:
++        raise ValueError(f"malformed duration: {value!r}")
++
++    amount = int(match.group("amount"))
++    factor = dict(_UNITS)[match.group("unit")]
++    return amount * factor

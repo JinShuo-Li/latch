@@ -1,0 +1,118 @@
+{
+  "case_id": "sqlite_migration",
+  "tier": "medium",
+  "title": "Idempotent SQLite schema migration",
+  "case_sha256": "b3630a792dc9e32efe880a988102da05bc947fa1fa2cd0c9d3b1f0d6a3a3ceb0",
+  "baseline_commit": "232f291f29dba97420a3d75cdf63ced4dfee2388",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "preserves_rows",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "idempotent",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "malformed_schema_rejected",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError: malformed schema replaced\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "preserves_rows",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "idempotent",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "malformed_schema_rejected",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 47.164,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "7b562a2b-8434-448c-aa35-e21719a2aa31",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 65872,
+    "output_tokens": 6233,
+    "cache_read_tokens": 54784,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8317,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 7,
+    "tool_calls": 10,
+    "validation_passes": 4,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M migration.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/sqlite_migration/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 47.489,
+  "resources": {
+    "cpu_user_seconds": 0.32,
+    "cpu_system_seconds": 0.17,
+    "max_rss_kib": 16060,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 7,
+    "tool_calls": 10,
+    "validation_passes": 4,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0033264,
+        "input_hit": 0.00032870400000000003,
+        "output": 0.0074795999999999994,
+        "total": 0.011134704
+      },
+      "off_peak": {
+        "input_miss": 0.0016632,
+        "input_hit": 0.00016435200000000001,
+        "output": 0.0037397999999999997,
+        "total": 0.005567352
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.022176,
+        "input_hit": 0.0021913600000000003,
+        "output": 0.049864,
+        "total": 0.07423136
+      },
+      "off_peak": {
+        "input_miss": 0.011088,
+        "input_hit": 0.0010956800000000001,
+        "output": 0.024932,
+        "total": 0.03711568
+      }
+    }
+  }
+}

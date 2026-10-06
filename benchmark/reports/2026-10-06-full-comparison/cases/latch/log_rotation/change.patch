@@ -1,0 +1,33 @@
+diff --git a/logging_store.py b/logging_store.py
+index 73422dd..0409ae8 100644
+--- a/logging_store.py
++++ b/logging_store.py
+@@ -4,11 +4,25 @@ from pathlib import Path
+ 
+ 
+ def append_log(path, line, max_bytes, backups=2):
++    if max_bytes <= 0:
++        raise ValueError("max_bytes must be positive")
++    if backups < 1:
++        raise ValueError("backups must be at least 1")
++
+     path = Path(path)
+     path.parent.mkdir(parents=True, exist_ok=True)
+     encoded = (line + "\n").encode("utf-8")
+-    if path.exists() and path.stat().st_size + len(encoded) > max_bytes:
+-        archived = path.with_name(path.name + ".1")
+-        path.replace(archived)
++
++    size = path.stat().st_size if path.exists() else 0
++    if size > 0 and size + len(encoded) > max_bytes:
++        oldest = path.with_name(path.name + f".{backups}")
++        if oldest.exists():
++            oldest.unlink()
++        for index in range(backups - 1, 0, -1):
++            source = path.with_name(path.name + f".{index}")
++            if source.exists():
++                source.replace(path.with_name(path.name + f".{index + 1}"))
++        path.replace(path.with_name(path.name + ".1"))
++
+     with path.open("ab") as stream:
+         stream.write(encoded)

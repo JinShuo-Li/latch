@@ -1,0 +1,7 @@
+{
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "python": "3.13.13",
+  "logical_cpus": 16,
+  "cpu_model": "Intel(R) Core(TM) Ultra 9 285H",
+  "memory_total": "MemTotal:       16045720 kB"
+}

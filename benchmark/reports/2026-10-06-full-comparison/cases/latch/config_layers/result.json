@@ -1,0 +1,128 @@
+{
+  "case_id": "config_layers",
+  "tier": "medium",
+  "title": "Layered CLI configuration",
+  "case_sha256": "8197ad3a5b56a4ad24eb93b55ee4fd6217ffa345f54a03a0cb09281fe0490c11",
+  "baseline_commit": "341e7f817fe4315505ee293b95cbbac7c001231e",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "nested_merge",
+      "passed": false,
+      "detail": "{'output': {'format': 'json'}, 'service': {'timeout': 12}}"
+    },
+    {
+      "name": "explicit_empty_after_environment",
+      "passed": false,
+      "detail": "'env'"
+    },
+    {
+      "name": "zero_and_false_are_explicit",
+      "passed": false,
+      "detail": "{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}"
+    },
+    {
+      "name": "inputs_unchanged",
+      "passed": false,
+      "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'endpoint': 'flag', 'timeout': 7}}]"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "nested_merge",
+      "passed": true,
+      "detail": "{'output': {'color': True, 'format': 'json'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 12}}"
+    },
+    {
+      "name": "explicit_empty_after_environment",
+      "passed": true,
+      "detail": "''"
+    },
+    {
+      "name": "zero_and_false_are_explicit",
+      "passed": true,
+      "detail": "{'output': {'color': True, 'format': 'text'}, 'quiet': False, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 0}}"
+    },
+    {
+      "name": "inputs_unchanged",
+      "passed": true,
+      "detail": "[{'output': {'color': True, 'format': 'text'}, 'service': {'endpoint': 'default', 'retries': 2, 'timeout': 30}}, {'service': {'timeout': 9}}]"
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 46.25,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "5e196483-1458-4464-9b92-5af1190ce534",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 115942,
+    "output_tokens": 5157,
+    "cache_read_tokens": 102528,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8843,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 13,
+    "validation_passes": 2,
+    "validation_failures": 3
+  },
+  "git_status": [
+    " M config_layers.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/config_layers/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 46.435,
+  "resources": {
+    "cpu_user_seconds": 0.23,
+    "cpu_system_seconds": 0.14,
+    "max_rss_kib": 16096,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 11,
+    "tool_calls": 13,
+    "validation_passes": 2,
+    "validation_failures": 3
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0040241999999999995,
+        "input_hit": 0.000615168,
+        "output": 0.006188399999999999,
+        "total": 0.010827767999999998
+      },
+      "off_peak": {
+        "input_miss": 0.0020120999999999997,
+        "input_hit": 0.000307584,
+        "output": 0.0030941999999999996,
+        "total": 0.005413883999999999
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.026828,
+        "input_hit": 0.00410112,
+        "output": 0.041256,
+        "total": 0.07218512
+      },
+      "off_peak": {
+        "input_miss": 0.013414,
+        "input_hit": 0.00205056,
+        "output": 0.020628,
+        "total": 0.03609256
+      }
+    }
+  }
+}

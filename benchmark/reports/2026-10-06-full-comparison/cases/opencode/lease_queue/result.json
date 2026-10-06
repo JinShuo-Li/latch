@@ -1,0 +1,112 @@
+{
+  "case_id": "lease_queue",
+  "tier": "hard",
+  "case_sha256": "65033941e56ada0b358e68246a5df09e287b38ff5578443caa243f46b8f49972",
+  "baseline_commit": "5953e6bf43ae85b8a08373b810c604b3e530768d",
+  "passed": false,
+  "baseline_checks": [
+    {
+      "name": "stale_ack_after_reclaim",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "no_duplicate_live_claim",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "attempts_and_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_lease",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "stale_ack_after_reclaim",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_duplicate_live_claim",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "attempts_and_order",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_lease",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: zero ttl\n"
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 49.546,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 86131,
+    "uncached_input_tokens": 6643,
+    "output_tokens": 5271,
+    "reported_output_tokens": 2461,
+    "reasoning_tokens": 2810,
+    "cache_read_tokens": 79488,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 11
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 49.842,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2036,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0019928999999999997,
+        "input_hit": 0.000476928,
+        "output": 0.0063252,
+        "total": 0.008795028
+      },
+      "off_peak": {
+        "input_miss": 0.0009964499999999999,
+        "input_hit": 0.000238464,
+        "output": 0.0031626,
+        "total": 0.004397514
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.013286,
+        "input_hit": 0.00317952,
+        "output": 0.042168,
+        "total": 0.058633519999999995
+      },
+      "off_peak": {
+        "input_miss": 0.006643,
+        "input_hit": 0.00158976,
+        "output": 0.021084,
+        "total": 0.029316759999999997
+      }
+    }
+  }
+}

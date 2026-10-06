@@ -1,0 +1,23 @@
+diff --git a/headers.py b/headers.py
+index a3962f6..99e8d95 100644
+--- a/headers.py
++++ b/headers.py
+@@ -1,8 +1,17 @@
+ """Normalize incoming gateway headers."""
+ 
++SET_COOKIE = "set-cookie"
++
+ 
+ def normalize_headers(pairs):
+     result = {}
+     for name, value in pairs:
+-        result[name] = value
++        key = name.lower()
++        if key == SET_COOKIE:
++            # Set-Cookie fields are not combinable: keep each value separate.
++            result.setdefault(key, []).append(value)
++        elif key in result:
++            result[key] = result[key] + ", " + value
++        else:
++            result[key] = value
+     return result

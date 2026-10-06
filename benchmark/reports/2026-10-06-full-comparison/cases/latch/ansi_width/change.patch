@@ -1,0 +1,35 @@
+diff --git a/width.py b/width.py
+index 3ab7556..bc6aacc 100644
+--- a/width.py
++++ b/width.py
+@@ -1,5 +1,29 @@
+ """Terminal display width for short status cells."""
+ 
++import re
++import unicodedata
++
++# Escape sequences (CSI, OSC, and two-character escapes) occupy no columns.
++_ANSI_RE = re.compile(
++    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])"
++)
++
++# Characters that never occupy a column: combining marks and format
++# characters (zero width space, variation selectors, ...).
++_ZERO_WIDTH_CATEGORIES = frozenset(("Mn", "Me", "Cf"))
++
++
++def _char_width(char):
++    if unicodedata.combining(char):
++        return 0
++    if unicodedata.category(char) in _ZERO_WIDTH_CATEGORIES:
++        return 0
++    if unicodedata.east_asian_width(char) in ("W", "F"):
++        return 2
++    return 1
++
+ 
+ def display_width(text):
+-    return len(text)
++    """Number of terminal columns used to display *text*."""
++    plain = _ANSI_RE.sub("", text)
++    return sum(_char_width(char) for char in plain)

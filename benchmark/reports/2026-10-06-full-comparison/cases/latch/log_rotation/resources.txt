@@ -1,0 +1,23 @@
+	Command being timed: "/home/lijs/work/latch/target/release/latch run --config /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/log_rotation/config.toml --workspace /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/log_rotation/workspace --provider opencode-go --model deepseek-v4.1-flash --mode WORK --prompt An on-call service rotates a text log before appending a new line. When max_bytes is exceeded, current rotation overwrites the newest archive and loses older lines. Fix append_log(path, line, max_bytes, backups) in logging_store.py. Archive .1 is newest, keep up to backups archives, do not rotate for an empty log, and reject invalid size/backup limits. Run visible tests and validate. --output json"
+	User time (seconds): 0.11
+	System time (seconds): 0.07
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:27.69
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 15756
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3335
+	Voluntary context switches: 5462
+	Involuntary context switches: 3
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 19176
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

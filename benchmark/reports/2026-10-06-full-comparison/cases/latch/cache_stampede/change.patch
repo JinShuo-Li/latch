@@ -1,0 +1,60 @@
+diff --git a/cache.py b/cache.py
+index c334b4f..1ee6bde 100644
+--- a/cache.py
++++ b/cache.py
+@@ -1,11 +1,52 @@
+ """Concurrent in-process value cache."""
+ 
++import threading
++
++
++class _Load:
++    """One in-flight load, shared by every caller waiting on a key."""
++
++    def __init__(self):
++        self.done = threading.Event()
++        self.value = None
++        self.error = None
++
+ 
+ class Cache:
+     def __init__(self):
+         self.values = {}
++        self._lock = threading.Lock()
++        self._loads = {}
+ 
+     def get(self, key, loader):
+-        if key not in self.values:
+-            self.values[key] = loader()
+-        return self.values[key]
++        with self._lock:
++            if key in self.values:
++                return self.values[key]
++            load = self._loads.get(key)
++            if load is None:
++                load = _Load()
++                self._loads[key] = load
++                owner = True
++            else:
++                owner = False
++
++        if not owner:
++            load.done.wait()
++            if load.error is not None:
++                raise load.error
++            return load.value
++
++        try:
++            value = loader()
++        except BaseException as error:
++            with self._lock:
++                del self._loads[key]
++                load.error = error
++            load.done.set()
++            raise
++        with self._lock:
++            self.values[key] = value
++            del self._loads[key]
++            load.value = value
++        load.done.set()
++        return value

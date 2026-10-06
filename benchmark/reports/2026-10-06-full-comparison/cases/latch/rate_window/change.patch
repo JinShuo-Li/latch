@@ -1,0 +1,30 @@
+diff --git a/limiter.py b/limiter.py
+index 33d53f1..7c02899 100644
+--- a/limiter.py
++++ b/limiter.py
+@@ -3,13 +3,21 @@
+ 
+ class RateLimiter:
+     def __init__(self, max_requests, window):
++        if max_requests <= 0:
++            raise ValueError("max_requests must be positive")
++        if window <= 0:
++            raise ValueError("window must be positive")
+         self.max_requests = max_requests
+         self.window = window
+-        self.timestamps = []
++        self.timestamps = {}
+ 
+     def allow(self, tenant, now):
+-        self.timestamps = [stamp for stamp in self.timestamps if now - stamp <= self.window]
+-        if len(self.timestamps) >= self.max_requests:
++        stamps = self.timestamps.get(tenant, [])
++        # Requests older than or exactly `window` seconds have expired.
++        stamps = [stamp for stamp in stamps if now - stamp < self.window]
++        if len(stamps) >= self.max_requests:
++            self.timestamps[tenant] = stamps
+             return False
+-        self.timestamps.append(now)
++        stamps.append(now)
++        self.timestamps[tenant] = stamps
+         return True

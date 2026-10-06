@@ -1,0 +1,45 @@
+diff --git a/archive.py b/archive.py
+index 8a3fd01..0870815 100644
+--- a/archive.py
++++ b/archive.py
+@@ -1,18 +1,33 @@
+ """ZIP document import."""
+ 
++import stat
+ import zipfile
+-from pathlib import Path
++from pathlib import Path, PurePosixPath, PureWindowsPath
++
++
++def _safe_name(member):
++    """Return the member's relative path, or raise ValueError if unsafe."""
++    name = member.filename
++    normalized = name.replace("\\", "/")
++    posix = PurePosixPath(normalized)
++    if not normalized or posix.is_absolute() or PureWindowsPath(name).drive:
++        raise ValueError(f"unsafe archive entry: {name!r}")
++    if ".." in posix.parts:
++        raise ValueError(f"unsafe archive entry: {name!r}")
++    if stat.S_ISLNK(member.external_attr >> 16):
++        raise ValueError(f"symbolic link archive entry: {name!r}")
++    return name
+ 
+ 
+ def extract_archive(archive, destination):
+     destination = Path(destination)
+-    extracted = []
+     with zipfile.ZipFile(archive) as source:
+-        for member in source.infolist():
+-            if member.is_dir():
+-                continue
+-            target = destination / member.filename
++        members = [member for member in source.infolist() if not member.is_dir()]
++        names = [_safe_name(member) for member in members]
++        extracted = []
++        for member, name in zip(members, names):
++            target = destination / name
+             target.parent.mkdir(parents=True, exist_ok=True)
+             target.write_bytes(source.read(member))
+-            extracted.append(member.filename)
++            extracted.append(name)
+     return extracted

@@ -1,0 +1,63 @@
+diff --git a/scheduler.py b/scheduler.py
+index 3ba649e..eda3653 100644
+--- a/scheduler.py
++++ b/scheduler.py
+@@ -1,13 +1,53 @@
+ """Task graph execution; tasks maps names to dependency lists."""
+ 
+ 
++def _resolve_order(tasks):
++    """Validate the graph and return a dependency-safe declaration order."""
++    dependencies = {
++        name: list(dict.fromkeys(deps)) for name, deps in tasks.items()
++    }
++    for name, deps in dependencies.items():
++        for dependency in deps:
++            if dependency not in dependencies:
++                raise ValueError(
++                    "unknown dependency %r required by %r" % (dependency, name)
++                )
++
++    dependents = {name: [] for name in dependencies}
++    pending = {}
++    for name, deps in dependencies.items():
++        pending[name] = len(deps)
++        for dependency in deps:
++            dependents[dependency].append(name)
++
++    order = list(dependencies)
++    scheduled = set()
++    resolved = []
++    while True:
++        for name in order:
++            if name not in scheduled and pending[name] == 0:
++                break
++        else:
++            break
++        scheduled.add(name)
++        resolved.append(name)
++        for dependent in dependents[name]:
++            pending[dependent] -= 1
++
++    if len(resolved) != len(order):
++        raise ValueError("dependency cycle among tasks: %s" % sorted(set(order) - scheduled))
++
++    return resolved
++
++
+ def schedule(tasks, runner):
++    """Run every task once, after its dependencies succeeded.
++
++    Tasks are run in declaration order among those that are ready. A runner
++    failure (raised exception) stops the run and propagates.
++    """
+     completed = []
+-    for name, dependencies in tasks.items():
++    for name in _resolve_order(tasks):
+         runner(name)
+         completed.append(name)
+-        for dependency in dependencies:
+-            if dependency not in completed:
+-                runner(dependency)
+-                completed.append(dependency)
+     return completed

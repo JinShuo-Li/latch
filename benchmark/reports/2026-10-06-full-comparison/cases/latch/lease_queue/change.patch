@@ -1,0 +1,14 @@
+diff --git a/queue.py b/queue.py
+index 5ea4d0e..d5d32d3 100644
+--- a/queue.py
++++ b/queue.py
+@@ -20,7 +20,8 @@ class Queue:
+         return None
+ 
+     def ack(self, job_id, token):
+-        if job_id not in self.jobs:
++        job = self.jobs.get(job_id)
++        if job is None or job["token"] is None or job["token"] != token:
+             return False
+         del self.jobs[job_id]
+         return True

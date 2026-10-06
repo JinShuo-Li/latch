@@ -1,0 +1,36 @@
+diff --git a/limiter.py b/limiter.py
+index 33d53f1..9e2f6be 100644
+--- a/limiter.py
++++ b/limiter.py
+@@ -3,13 +3,27 @@
+ 
+ class RateLimiter:
+     def __init__(self, max_requests, window):
++        if max_requests <= 0:
++            raise ValueError("max_requests must be positive")
++        if window <= 0:
++            raise ValueError("window must be positive")
+         self.max_requests = max_requests
+         self.window = window
+-        self.timestamps = []
++        self.timestamps = {}
+ 
+     def allow(self, tenant, now):
+-        self.timestamps = [stamp for stamp in self.timestamps if now - stamp <= self.window]
+-        if len(self.timestamps) >= self.max_requests:
++        # Keep only timestamps that fall strictly inside the rolling window.
++        # A request made exactly `window` seconds ago is expired.
++        tenant_stamps = [
++            stamp
++            for stamp in self.timestamps.get(tenant, [])
++            if now - stamp < self.window
++        ]
++        if len(tenant_stamps) >= self.max_requests:
++            # Denied requests must not consume quota, but persist the pruned
++            # window so stale entries do not accumulate.
++            self.timestamps[tenant] = tenant_stamps
+             return False
+-        self.timestamps.append(now)
++        tenant_stamps.append(now)
++        self.timestamps[tenant] = tenant_stamps
+         return True

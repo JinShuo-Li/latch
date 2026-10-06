@@ -1,0 +1,112 @@
+{
+  "case_id": "spool_recovery",
+  "tier": "hard",
+  "case_sha256": "f8c9e3249c64c31b02ece94cd8044175ce64109a6b00adc45849e9564190e5d3",
+  "baseline_commit": "2c3034e37f6a3946b815d120faa5d9de9499089c",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "handler_failure_retries_same_job",
+      "passed": false,
+      "detail": "False"
+    },
+    {
+      "name": "partial_line_survives_restart",
+      "passed": false,
+      "detail": "/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 355, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 7 (char 6)\n"
+    },
+    {
+      "name": "multibyte_offsets_and_append",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "stale_checkpoint_fails_closed",
+      "passed": false,
+      "detail": "False"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "handler_failure_retries_same_job",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "partial_line_survives_restart",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "multibyte_offsets_and_append",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "stale_checkpoint_fails_closed",
+      "passed": true,
+      "detail": "True"
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 79.901,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 160910,
+    "uncached_input_tokens": 13710,
+    "output_tokens": 9036,
+    "reported_output_tokens": 3730,
+    "reasoning_tokens": 5306,
+    "cache_read_tokens": 147200,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 13,
+    "tool_calls": 15
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 80.157,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2040,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.004113,
+        "input_hit": 0.0008832,
+        "output": 0.010843199999999999,
+        "total": 0.0158394
+      },
+      "off_peak": {
+        "input_miss": 0.0020565,
+        "input_hit": 0.0004416,
+        "output": 0.0054215999999999995,
+        "total": 0.0079197
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.02742,
+        "input_hit": 0.005888,
+        "output": 0.072288,
+        "total": 0.10559600000000001
+      },
+      "off_peak": {
+        "input_miss": 0.01371,
+        "input_hit": 0.002944,
+        "output": 0.036144,
+        "total": 0.052798000000000005
+      }
+    }
+  }
+}

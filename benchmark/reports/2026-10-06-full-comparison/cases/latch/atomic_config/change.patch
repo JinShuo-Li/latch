@@ -1,0 +1,101 @@
+diff --git a/config_store.py b/config_store.py
+index 0ceac0c..482a0fb 100644
+--- a/config_store.py
++++ b/config_store.py
+@@ -1,16 +1,92 @@
+ """Daemon JSON configuration with backup."""
+ 
+ import json
++import os
++import tempfile
++from collections.abc import Mapping
+ from pathlib import Path
+ 
+ 
+ def write_config(path, data):
++    """Validate ``data``, back up the previous config, then replace it atomically.
++
++    ``data`` must be a JSON-serializable mapping. Nothing on disk is touched
++    before validation succeeds, so a rejected write leaves the previous
++    configuration (and its backup) intact.
++    """
+     path = Path(path)
++    payload = _serialize(data)
++
++    previous = _load_mapping(path)[0]
++    if previous is not None:
++        # Only ever back up a config that parsed as valid JSON.
++        _atomic_write(_backup_path(path), json.dumps(previous).encode("utf-8"))
++
+     path.parent.mkdir(parents=True, exist_ok=True)
+-    if path.exists():
+-        path.with_name(path.name + ".bak").write_bytes(path.read_bytes())
+-    path.write_text(json.dumps(data), encoding="utf-8")
++    _atomic_write(path, payload)
+ 
+ 
+ def read_config(path):
+-    return json.loads(Path(path).read_text(encoding="utf-8"))
++    """Return the config at ``path``, falling back to a valid ``.bak`` copy."""
++    path = Path(path)
++    backup = _backup_path(path)
++
++    value, live_error = _load_mapping(path)
++    if live_error is None:
++        return value
++
++    value, backup_error = _load_mapping(backup)
++    if backup_error is None:
++        return value
++
++    if isinstance(live_error, FileNotFoundError) and isinstance(
++        backup_error, FileNotFoundError
++    ):
++        raise live_error
++    raise ValueError(
++        f"no valid config at {path} ({live_error}) or {backup} ({backup_error})"
++    ) from live_error
++
++
++def _backup_path(path):
++    return path.with_name(path.name + ".bak")
++
++
++def _serialize(data):
++    if not isinstance(data, Mapping):
++        raise TypeError(f"config data must be a mapping, got {type(data).__name__}")
++    try:
++        return json.dumps(data).encode("utf-8")
++    except (TypeError, ValueError) as exc:
++        raise TypeError(f"config data is not JSON-serializable: {exc}") from exc
++
++
++def _load_mapping(path):
++    """Return ``(value, None)`` for a valid JSON object, else ``(None, error)``."""
++    try:
++        text = path.read_text(encoding="utf-8")
++    except OSError as exc:
++        return None, exc
++    try:
++        value = json.loads(text)
++    except ValueError as exc:
++        return None, exc
++    if not isinstance(value, Mapping):
++        return None, ValueError(f"{path} does not contain a JSON object")
++    return value, None
++
++
++def _atomic_write(path, payload):
++    handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
++    try:
++        with os.fdopen(handle, "wb") as stream:
++            stream.write(payload)
++            stream.flush()
++            os.fsync(stream.fileno())
++        os.replace(temporary, path)
++    except BaseException:
++        try:
++            os.unlink(temporary)
++        except OSError:
++            pass
++        raise

@@ -1,0 +1,23 @@
+	Command being timed: "/usr/bin/bwrap --die-with-parent --new-session --unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try --ro-bind / / --dev /dev --proc /proc --tmpfs /home --tmpfs /tmp --tmpfs /run --bind /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/opencode/lease_queue /run/attempt --dir /tmp/bin --ro-bind /home/lijs/.opencode/bin/opencode /tmp/bin/opencode --setenv HOME /run/attempt/home --setenv PATH /usr/local/bin:/usr/bin:/bin --setenv XDG_DATA_HOME /run/attempt/data --setenv XDG_CONFIG_HOME /run/attempt/config --setenv XDG_STATE_HOME /run/attempt/state --setenv XDG_CACHE_HOME /run/attempt/cache --chdir /run/attempt/workspace -- /tmp/bin/opencode run --standalone --auto --agent build --model opencode-go/deepseek-v4.1-flash --format json --title Benchmark lease_queue A worker queue leases jobs to consumers. Expired jobs must be redelivered, but an old worker's late acknowledgement currently removes the new worker's lease. Fix Queue in queue.py: claim(now, ttl) returns (job_id, token) or None, ack(job_id, token) succeeds only for the current lease, and attempts increase on each claim. Preserve pending order and no duplicate concurrent claims. Run tests and validate."
+	User time (seconds): 0.00
+	System time (seconds): 0.00
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:53.10
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2036
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 114
+	Voluntary context switches: 2
+	Involuntary context switches: 0
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

@@ -1,0 +1,65 @@
+diff --git a/event_log.py b/event_log.py
+index 877e180..16064b3 100644
+--- a/event_log.py
++++ b/event_log.py
+@@ -5,18 +5,56 @@ from pathlib import Path
+ 
+ 
+ class EventLog:
++    """JSONL event store whose index holds UTF-8 byte offsets of records."""
++
+     def __init__(self, path):
+         self.path = Path(path)
+ 
+     def append(self, event):
++        """Append ``event`` and return the byte offset it was written at.
++
++        An unterminated trailing record (an interrupted write) is discarded
++        first, so new records never land on top of a partial tail.
++        """
+         self.path.parent.mkdir(parents=True, exist_ok=True)
+-        offset = self.path.stat().st_size if self.path.exists() else 0
++        offset = self._truncate_partial_tail()
++        payload = (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+         with self.path.open("ab") as stream:
+-            stream.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
++            stream.write(payload)
+         return offset
+ 
+     def read_all(self):
+-        return [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines()]
++        """Return the events of every newline-terminated record, in order."""
++        return [json.loads(raw) for _, raw in self._complete_records()]
+ 
+     def rebuild_index(self):
+-        return list(range(len(self.read_all())))
++        """Return the byte offset of every complete record, in order."""
++        return [offset for offset, _ in self._complete_records()]
++
++    def _complete_records(self):
++        """Yield ``(offset, raw_line)`` for each complete (terminated) record."""
++        if not self.path.exists():
++            return []
++        data = self.path.read_bytes()
++        records = []
++        start = 0
++        while True:
++            end = data.find(b"\n", start)
++            if end == -1:
++                break
++            line = data[start:end]
++            if line.strip():
++                records.append((start, line))
++            start = end + 1
++        return records
++
++    def _truncate_partial_tail(self):
++        """Drop an unterminated trailing record; return the resulting size."""
++        if not self.path.exists():
++            return 0
++        data = self.path.read_bytes()
++        complete = data.rfind(b"\n") + 1
++        if complete != len(data):
++            with self.path.open("r+b") as stream:
++                stream.truncate(complete)
++        return complete

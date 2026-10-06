@@ -1,0 +1,112 @@
+{
+  "case_id": "stream_records",
+  "tier": "easy",
+  "case_sha256": "40fd67ff61c84f4b783b2c9d1fc2791ac7047d521c13730bdfb148b20c94070c",
+  "baseline_commit": "4e03db2a13859713656c9c5fb81a6e702bd0fc04",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "single_utf8_split",
+      "passed": false,
+      "detail": "[{'name': ''}]"
+    },
+    {
+      "name": "every_utf8_boundary",
+      "passed": false,
+      "detail": "[{'name': ''}]"
+    },
+    {
+      "name": "several_records_and_final_line",
+      "passed": true,
+      "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+    },
+    {
+      "name": "empty_chunks",
+      "passed": true,
+      "detail": "[{'id': 4}]"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "single_utf8_split",
+      "passed": true,
+      "detail": "[{'name': '\u4e2d'}]"
+    },
+    {
+      "name": "every_utf8_boundary",
+      "passed": true,
+      "detail": "[{'name': '\u96ea'}]"
+    },
+    {
+      "name": "several_records_and_final_line",
+      "passed": true,
+      "detail": "[{'id': 1}, {'id': 2}, {'id': 3}]"
+    },
+    {
+      "name": "empty_chunks",
+      "passed": true,
+      "detail": "[{'id': 4}]"
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 41.882,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 82265,
+    "uncached_input_tokens": 5465,
+    "output_tokens": 3770,
+    "reported_output_tokens": 2402,
+    "reasoning_tokens": 1368,
+    "cache_read_tokens": 76800,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 13
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 42.068,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2040,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0016395,
+        "input_hit": 0.00046080000000000003,
+        "output": 0.004524,
+        "total": 0.0066243000000000005
+      },
+      "off_peak": {
+        "input_miss": 0.00081975,
+        "input_hit": 0.00023040000000000002,
+        "output": 0.002262,
+        "total": 0.0033121500000000003
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.01093,
+        "input_hit": 0.003072,
+        "output": 0.03016,
+        "total": 0.044162
+      },
+      "off_peak": {
+        "input_miss": 0.005465,
+        "input_hit": 0.001536,
+        "output": 0.01508,
+        "total": 0.022081
+      }
+    }
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "case_id": "spool_recovery",
+  "tier": "hard",
+  "title": "Crash-safe append-only job spool",
+  "case_sha256": "f8c9e3249c64c31b02ece94cd8044175ce64109a6b00adc45849e9564190e5d3",
+  "baseline_commit": "4a42b5018f8e5a8c6c5c452d39a7a991764e3fcf",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "handler_failure_retries_same_job",
+      "passed": false,
+      "detail": "False"
+    },
+    {
+      "name": "partial_line_survives_restart",
+      "passed": false,
+      "detail": "/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 355, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 7 (char 6)\n"
+    },
+    {
+      "name": "multibyte_offsets_and_append",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "stale_checkpoint_fails_closed",
+      "passed": false,
+      "detail": "False"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "handler_failure_retries_same_job",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "partial_line_survives_restart",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "multibyte_offsets_and_append",
+      "passed": true,
+      "detail": "True"
+    },
+    {
+      "name": "stale_checkpoint_fails_closed",
+      "passed": true,
+      "detail": "True"
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 31.224,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "07cd3888-4c53-420c-8c0f-0dd5f6786ae4",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 64439,
+    "output_tokens": 5309,
+    "cache_read_tokens": 52864,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8204,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 7,
+    "tool_calls": 9,
+    "validation_passes": 2,
+    "validation_failures": 1
+  },
+  "git_status": [
+    " M spool_recovery.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/spool_recovery/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 31.485,
+  "resources": {
+    "cpu_user_seconds": 0.25,
+    "cpu_system_seconds": 0.19,
+    "max_rss_kib": 16292,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 7,
+    "tool_calls": 9,
+    "validation_passes": 2,
+    "validation_failures": 1
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0034725,
+        "input_hit": 0.00031718400000000003,
+        "output": 0.0063708,
+        "total": 0.010160484000000001
+      },
+      "off_peak": {
+        "input_miss": 0.00173625,
+        "input_hit": 0.00015859200000000002,
+        "output": 0.0031854,
+        "total": 0.0050802420000000004
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.02315,
+        "input_hit": 0.00211456,
+        "output": 0.042472,
+        "total": 0.06773656
+      },
+      "off_peak": {
+        "input_miss": 0.011575,
+        "input_hit": 0.00105728,
+        "output": 0.021236,
+        "total": 0.03386828
+      }
+    }
+  }
+}

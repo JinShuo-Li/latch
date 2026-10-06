@@ -1,0 +1,60 @@
+diff --git a/retry.py b/retry.py
+index a0aded2..f48f924 100644
+--- a/retry.py
++++ b/retry.py
+@@ -1,11 +1,53 @@
+ """Small HTTP retry loop with injected transport and sleeper."""
+ 
++RETRYABLE_METHODS = frozenset({"GET", "HEAD"})
++RETRYABLE_STATUSES = frozenset({429, 503})
++
++
++def _retry_after(response):
++    """Return the raw Retry-After value from a response, if present."""
++    if not isinstance(response, dict):
++        return None
++    for key in ("retry_after", "Retry-After", "retry-after"):
++        if key in response:
++            return response[key]
++    headers = response.get("headers")
++    if isinstance(headers, dict):
++        for key in ("Retry-After", "retry_after", "retry-after"):
++            if key in headers:
++                return headers[key]
++    return None
++
++
++def _delay(response, attempt):
++    """Retry-After when it is a nonnegative number, else 1, 2, 4, ... seconds."""
++    value = _retry_after(response)
++    if not isinstance(value, bool):
++        try:
++            seconds = float(value)
++        except (TypeError, ValueError):
++            seconds = None
++        if seconds is not None and seconds == seconds and seconds >= 0:
++            return int(seconds) if seconds.is_integer() else seconds
++    return 2 ** attempt
++
+ 
+ def request(method, send, sleep, max_attempts=3):
++    """Call ``send`` until a non-retryable response or attempts run out.
++
++    Only GET and HEAD are retried, and only on 429/503. ``sleep`` is called
++    between attempts, never after the final one. The last response is returned.
++    """
++    if max_attempts < 1:
++        raise ValueError("max_attempts must be at least 1")
++
++    retryable = isinstance(method, str) and method.upper() in RETRYABLE_METHODS
+     response = None
+     for attempt in range(max_attempts):
+         response = send()
+-        if response["status"] not in (429, 503):
++        if response["status"] not in RETRYABLE_STATUSES:
++            return response
++        if not retryable or attempt == max_attempts - 1:
+             return response
+-        sleep(2 ** attempt)
++        sleep(_delay(response, attempt))
+     return response

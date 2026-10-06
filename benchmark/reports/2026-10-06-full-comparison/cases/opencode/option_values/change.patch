@@ -1,0 +1,28 @@
+diff --git a/options.py b/options.py
+index 6abec72..9a00dd5 100644
+--- a/options.py
++++ b/options.py
+@@ -4,16 +4,20 @@
+ def parse_args(argv):
+     result = {"label": None, "quiet": False, "files": []}
+     index = 0
++    options_ended = False
+     while index < len(argv):
+         arg = argv[index]
+-        if arg == "--quiet":
++        if options_ended:
++            result["files"].append(arg)
++        elif arg == "--":
++            options_ended = True
++        elif arg == "--quiet":
+             result["quiet"] = True
+         elif arg == "--label":
+             index += 1
+             if index >= len(argv):
+                 raise ValueError("--label needs a value")
+-            if argv[index]:
+-                result["label"] = argv[index]
++            result["label"] = argv[index]
+         elif arg.startswith("-"):
+             raise ValueError(f"unknown option: {arg}")
+         else:

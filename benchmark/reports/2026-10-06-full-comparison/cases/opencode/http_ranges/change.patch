@@ -1,0 +1,139 @@
+diff --git a/ranges.py b/ranges.py
+index 2ccbb75..bac7059 100644
+--- a/ranges.py
++++ b/ranges.py
+@@ -2,12 +2,65 @@
+ 
+ 
+ def serve_range(data, header):
++    """Serve a single HTTP byte range from ``data``.
++
++    ``header`` is the raw ``Range`` request header (or ``None``/empty when the
++    client asked for the whole representation).  Returns
++    ``(status, body, content_range)``.
++    """
++    size = len(data)
++
++    # No Range header: full representation.
+     if not header:
+         return 200, data, None
++
+     if not header.startswith("bytes="):
+-        raise ValueError("invalid range")
+-    start, end = header[6:].split("-", 1)
+-    start = int(start or 0)
+-    end = int(end or len(data))
+-    body = data[start:end]
+-    return 206, body, f"bytes {start}-{end}/{len(data)}"
++        raise ValueError("invalid range unit")
++    spec = header[6:]
++
++    # A single range only.
++    if "," in spec:
++        raise ValueError("multiple ranges are not supported")
++
++    if "-" not in spec:
++        raise ValueError("malformed range")
++
++    start_str, end_str = spec.split("-", 1)
++
++    if not start_str and not end_str:
++        raise ValueError("malformed range")
++
++    if start_str == "":
++        # Suffix range: the final N bytes.
++        suffix = _to_int(end_str)
++        if suffix <= 0:
++            return 416, b"", f"bytes */{size}"
++        if suffix >= size:
++            start, end = 0, size - 1
++        else:
++            start, end = size - suffix, size - 1
++    else:
++        start = _to_int(start_str)
++        if end_str == "":
++            # Open-ended range: from start to the end.
++            end = size - 1
++        else:
++            end = _to_int(end_str)
++
++    # Unsatisfiable ranges.
++    if start < 0 or end < start or size == 0 or start >= size:
++        return 416, b"", f"bytes */{size}"
++
++    # Clamp an oversized end to the last byte.
++    if end >= size:
++        end = size - 1
++
++    body = data[start:end + 1]
++    return 206, body, f"bytes {start}-{end}/{size}"
++
++
++def _to_int(value):
++    value = value.strip()
++    if not value or not value.isdigit():
++        raise ValueError("malformed range")
++    return int(value)
+diff --git a/test_ranges.py b/test_ranges.py
+index 419c57d..c132bc4 100644
+--- a/test_ranges.py
++++ b/test_ranges.py
+@@ -11,6 +11,58 @@ class RangesTest(unittest.TestCase):
+         self.assertEqual(serve_range(b"abcdef", "bytes=1-3"),
+                          (206, b"bcd", "bytes 1-3/6"))
+ 
++    def test_open_ended(self):
++        self.assertEqual(serve_range(b"abcdef", "bytes=3-"),
++                         (206, b"def", "bytes 3-5/6"))
++
++    def test_suffix(self):
++        self.assertEqual(serve_range(b"abcdef", "bytes=-2"),
++                         (206, b"ef", "bytes 4-5/6"))
++
++    def test_suffix_larger_than_data(self):
++        self.assertEqual(serve_range(b"abcdef", "bytes=-100"),
++                         (206, b"abcdef", "bytes 0-5/6"))
++
++    def test_clamp_oversized_end(self):
++        self.assertEqual(serve_range(b"abcdef", "bytes=2-100"),
++                         (206, b"cdef", "bytes 2-5/6"))
++
++    def test_single_byte(self):
++        self.assertEqual(serve_range(b"abcdef", "bytes=0-0"),
++                         (206, b"a", "bytes 0-0/6"))
++
++    def test_unsatisfiable_start_past_end(self):
++        self.assertEqual(serve_range(b"abcdef", "bytes=6-"),
++                         (416, b"", "bytes */6"))
++
++    def test_unsatisfiable_suffix_zero(self):
++        self.assertEqual(serve_range(b"abcdef", "bytes=-0"),
++                         (416, b"", "bytes */6"))
++
++    def test_unsatisfiable_empty_data(self):
++        self.assertEqual(serve_range(b"", "bytes=0-"),
++                         (416, b"", "bytes */0"))
++
++    def test_malformed_multiple_ranges(self):
++        with self.assertRaises(ValueError):
++            serve_range(b"abcdef", "bytes=0-1,3-4")
++
++    def test_malformed_non_numeric(self):
++        with self.assertRaises(ValueError):
++            serve_range(b"abcdef", "bytes=a-b")
++
++    def test_malformed_no_dash(self):
++        with self.assertRaises(ValueError):
++            serve_range(b"abcdef", "bytes=3")
++
++    def test_malformed_unit(self):
++        with self.assertRaises(ValueError):
++            serve_range(b"abcdef", "items=0-1")
++
++    def test_malformed_empty_spec(self):
++        with self.assertRaises(ValueError):
++            serve_range(b"abcdef", "bytes=-")
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

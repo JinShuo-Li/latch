@@ -1,0 +1,118 @@
+{
+  "case_id": "ansi_width",
+  "tier": "easy",
+  "title": "Terminal cell width with color and Unicode",
+  "case_sha256": "016925ca9835ffb5cd11dce9a2ec6f5501b9c34aa91947d716e691e5e954be29",
+  "baseline_commit": "23ac24c0e5765267e0634a12696939939acbfd2d",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "ansi_and_cjk",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "combining_and_emoji",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "control_sequences",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "ansi_and_cjk",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "combining_and_emoji",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "control_sequences",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 30.869,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "a04f3231-1db9-4776-8933-2f4868791c97",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 69687,
+    "output_tokens": 2826,
+    "cache_read_tokens": 62080,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8908,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 10,
+    "tool_calls": 10,
+    "validation_passes": 3,
+    "validation_failures": 1
+  },
+  "git_status": [
+    " M width.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/ansi_width/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 31.16,
+  "resources": {
+    "cpu_user_seconds": 0.18,
+    "cpu_system_seconds": 0.07,
+    "max_rss_kib": 15876,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 10,
+    "tool_calls": 10,
+    "validation_passes": 3,
+    "validation_failures": 1
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0022821,
+        "input_hit": 0.00037248,
+        "output": 0.0033912,
+        "total": 0.00604578
+      },
+      "off_peak": {
+        "input_miss": 0.00114105,
+        "input_hit": 0.00018624,
+        "output": 0.0016956,
+        "total": 0.00302289
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.015214,
+        "input_hit": 0.0024832,
+        "output": 0.022608,
+        "total": 0.0403052
+      },
+      "off_peak": {
+        "input_miss": 0.007607,
+        "input_hit": 0.0012416,
+        "output": 0.011304,
+        "total": 0.0201526
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+	Command being timed: "/usr/bin/bwrap --die-with-parent --new-session --unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try --ro-bind / / --dev /dev --proc /proc --tmpfs /home --tmpfs /tmp --tmpfs /run --bind /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/opencode/dag_scheduler /run/attempt --dir /tmp/bin --ro-bind /home/lijs/.opencode/bin/opencode /tmp/bin/opencode --setenv HOME /run/attempt/home --setenv PATH /usr/local/bin:/usr/bin:/bin --setenv XDG_DATA_HOME /run/attempt/data --setenv XDG_CONFIG_HOME /run/attempt/config --setenv XDG_STATE_HOME /run/attempt/state --setenv XDG_CACHE_HOME /run/attempt/cache --chdir /run/attempt/workspace -- /tmp/bin/opencode run --standalone --auto --agent build --model opencode-go/deepseek-v4.1-flash --format json --title Benchmark dag_scheduler A build scheduler runs tasks with dependencies. It currently starts dependents as soon as their parent is started, may run a shared dependency twice, and never rejects cycles. Fix schedule(tasks, runner) in scheduler.py. Run each task once only after all dependencies have succeeded; preserve declaration order among ready tasks; stop on the first runner failure; raise ValueError for unknown dependencies or cycles before running any task. Run visible tests and validate."
+	User time (seconds): 0.00
+	System time (seconds): 0.00
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:03.54
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2040
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 116
+	Voluntary context switches: 2
+	Involuntary context switches: 0
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

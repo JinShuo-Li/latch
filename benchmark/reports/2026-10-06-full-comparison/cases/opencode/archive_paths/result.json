@@ -1,0 +1,102 @@
+{
+  "case_id": "archive_paths",
+  "tier": "medium",
+  "case_sha256": "ed400cad189a9930733893bcaf5c85cc51d7a7eea4e29145c43dc85ea5b0fc14",
+  "baseline_commit": "e6d5d63015bec4ed99c7be6630c96e2a0c726004",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "nested_file",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "traversal_preflight",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\nAssertionError: traversal accepted\n"
+    },
+    {
+      "name": "absolute_and_symlink",
+      "passed": false,
+      "detail": "e>\n  File \"/tmp/workspace/archive.py\", line 16, in extract_archive\n    target.write_bytes(source.read(member))\n  File \"/usr/lib/python3.12/pathlib.py\", line 1038, in write_bytes\n    with self.open(mode='wb') as f:\n         ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/pathlib.py\", line 1015, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/outside.txt'\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "nested_file",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "traversal_preflight",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "absolute_and_symlink",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 49.345,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 100920,
+    "uncached_input_tokens": 7864,
+    "output_tokens": 5451,
+    "reported_output_tokens": 2673,
+    "reasoning_tokens": 2778,
+    "cache_read_tokens": 93056,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 13
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 49.616,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2040,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0023591999999999997,
+        "input_hit": 0.000558336,
+        "output": 0.0065412,
+        "total": 0.009458735999999999
+      },
+      "off_peak": {
+        "input_miss": 0.0011795999999999998,
+        "input_hit": 0.000279168,
+        "output": 0.0032706,
+        "total": 0.004729367999999999
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.015728,
+        "input_hit": 0.0037222400000000004,
+        "output": 0.043608,
+        "total": 0.06305824
+      },
+      "off_peak": {
+        "input_miss": 0.007864,
+        "input_hit": 0.0018611200000000002,
+        "output": 0.021804,
+        "total": 0.03152912
+      }
+    }
+  }
+}

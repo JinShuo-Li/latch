@@ -1,0 +1,39 @@
+diff --git a/importer.py b/importer.py
+index 30d6586..526e99a 100644
+--- a/importer.py
++++ b/importer.py
+@@ -3,10 +3,28 @@
+ import csv
+ 
+ 
+-def parse_chunks(chunks):
+-    rows = []
++def _iter_lines(chunks):
++    """Yield lines from chunks, holding back an unterminated line.
++
++    Chunk boundaries are arbitrary, so a line may be split across chunks; the
++    partial tail is buffered until the next chunk (or the end of input).
++    """
++    pending = ""
+     for chunk in chunks:
+-        for line in chunk.splitlines():
+-            if line:
+-                rows.extend(csv.reader([line]))
+-    return rows
++        pending += chunk
++        start = 0
++        while True:
++            index = pending.find("\n", start)
++            if index == -1:
++                break
++            yield pending[start:index + 1]
++            start = index + 1
++        pending = pending[start:]
++    if pending:
++        yield pending
++
++
++def parse_chunks(chunks):
++    # csv.reader keeps quoted fields (with their commas and newlines) intact
++    # across chunk boundaries; blank lines are skipped as before.
++    return [row for row in csv.reader(_iter_lines(chunks)) if row]

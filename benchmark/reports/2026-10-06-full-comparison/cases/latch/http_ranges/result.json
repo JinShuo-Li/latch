@@ -1,0 +1,119 @@
+{
+  "case_id": "http_ranges",
+  "tier": "medium",
+  "title": "HTTP byte ranges for downloads",
+  "case_sha256": "0229834c0c751e3d871b04f1ffc51f8265fa9b945de26eba2a7a0165c8c3f3f6",
+  "baseline_commit": "2f8a0e56d095ca025d0000c6199edcde2d41d8b8",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "inclusive_and_open_end",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "suffix_and_clamp",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "unsatisfiable_and_invalid",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "inclusive_and_open_end",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "suffix_and_clamp",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unsatisfiable_and_invalid",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 37.331,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "d387485b-1f90-4879-ada6-ce7b7f0d6428",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 79504,
+    "output_tokens": 3333,
+    "cache_read_tokens": 72064,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.9064,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 10,
+    "tool_calls": 11,
+    "validation_passes": 1,
+    "validation_failures": 1
+  },
+  "git_status": [
+    " M ranges.py",
+    " M test_ranges.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/http_ranges/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 37.614,
+  "resources": {
+    "cpu_user_seconds": 0.19,
+    "cpu_system_seconds": 0.08,
+    "max_rss_kib": 16152,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 10,
+    "tool_calls": 11,
+    "validation_passes": 1,
+    "validation_failures": 1
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.002232,
+        "input_hit": 0.000432384,
+        "output": 0.0039996,
+        "total": 0.0066639839999999995
+      },
+      "off_peak": {
+        "input_miss": 0.001116,
+        "input_hit": 0.000216192,
+        "output": 0.0019998,
+        "total": 0.0033319919999999998
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.01488,
+        "input_hit": 0.00288256,
+        "output": 0.026664,
+        "total": 0.044426560000000004
+      },
+      "off_peak": {
+        "input_miss": 0.00744,
+        "input_hit": 0.00144128,
+        "output": 0.013332,
+        "total": 0.022213280000000002
+      }
+    }
+  }
+}

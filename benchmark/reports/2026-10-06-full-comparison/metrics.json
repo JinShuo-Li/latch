@@ -1,0 +1,1514 @@
+{
+  "overall": {
+    "latch": {
+      "attempts": 25,
+      "passed": 23,
+      "failed": 2,
+      "checks_passed": 81,
+      "checks_total": 83,
+      "timeouts": 0,
+      "harness_errors": 0,
+      "completion_states": {
+        "verified": 25
+      },
+      "usage_missing_attempts": 0,
+      "tokens": {
+        "input_tokens": 1656820,
+        "output_tokens": 94632,
+        "cache_read_tokens": 1408512,
+        "total_tokens": 1751452,
+        "uncached_input_tokens": 248308,
+        "cache_hit_fraction": 0.8501297666614358
+      },
+      "wall_seconds_all": {
+        "samples": 25,
+        "sum": 869.409,
+        "mean": 34.776360000000004,
+        "median": 31.304,
+        "p90_nearest_rank": 55.605,
+        "min": 11.656,
+        "max": 71.93
+      },
+      "wall_seconds_passed": {
+        "samples": 23,
+        "sum": 804.543,
+        "mean": 34.98013043478261,
+        "median": 31.224,
+        "p90_nearest_rank": 55.605,
+        "min": 11.656,
+        "max": 71.93
+      },
+      "tokens_per_attempt": {
+        "samples": 25,
+        "sum": 1751452,
+        "mean": 70058.08,
+        "median": 68508,
+        "p90_nearest_rank": 114925,
+        "min": 27336,
+        "max": 133619
+      },
+      "model_turns": 206,
+      "tool_calls": 260,
+      "resources": {
+        "cpu_user_seconds": {
+          "samples": 25,
+          "sum": 4.67,
+          "mean": 0.1868,
+          "median": 0.19,
+          "p90_nearest_rank": 0.32,
+          "min": 0.07,
+          "max": 0.4
+        },
+        "cpu_system_seconds": {
+          "samples": 25,
+          "sum": 2.93,
+          "mean": 0.1172,
+          "median": 0.11,
+          "p90_nearest_rank": 0.19,
+          "min": 0.01,
+          "max": 0.29
+        },
+        "max_rss_kib": {
+          "samples": 25,
+          "sum": 401932,
+          "mean": 16077.28,
+          "median": 16060,
+          "p90_nearest_rank": 16524,
+          "min": 15480,
+          "max": 16784
+        }
+      },
+      "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "measured_attempts": 25,
+            "total": {
+              "input_miss": 0.0744924,
+              "input_hit": 0.008451072,
+              "output": 0.11355839999999999,
+              "total": 0.196501872
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.002979696,
+              "input_hit": 0.00033804288,
+              "output": 0.004542335999999999,
+              "total": 0.00786007488
+            },
+            "all_attempt_cost_per_success": 0.008543559652173913
+          },
+          "off_peak": {
+            "measured_attempts": 25,
+            "total": {
+              "input_miss": 0.0372462,
+              "input_hit": 0.004225536,
+              "output": 0.056779199999999995,
+              "total": 0.098250936
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.001489848,
+              "input_hit": 0.00016902144,
+              "output": 0.0022711679999999996,
+              "total": 0.00393003744
+            },
+            "all_attempt_cost_per_success": 0.0042717798260869565
+          }
+        },
+        "CNY": {
+          "peak": {
+            "measured_attempts": 25,
+            "total": {
+              "input_miss": 0.496616,
+              "input_hit": 0.05634048,
+              "output": 0.7570560000000001,
+              "total": 1.31001248
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.01986464,
+              "input_hit": 0.0022536191999999997,
+              "output": 0.030282240000000002,
+              "total": 0.0524004992
+            },
+            "all_attempt_cost_per_success": 0.05695706434782608
+          },
+          "off_peak": {
+            "measured_attempts": 25,
+            "total": {
+              "input_miss": 0.248308,
+              "input_hit": 0.02817024,
+              "output": 0.37852800000000003,
+              "total": 0.65500624
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.00993232,
+              "input_hit": 0.0011268095999999999,
+              "output": 0.015141120000000001,
+              "total": 0.0262002496
+            },
+            "all_attempt_cost_per_success": 0.02847853217391304
+          }
+        }
+      }
+    },
+    "opencode": {
+      "attempts": 25,
+      "passed": 22,
+      "failed": 3,
+      "checks_passed": 80,
+      "checks_total": 83,
+      "timeouts": 0,
+      "harness_errors": 0,
+      "completion_states": {
+        "not_applicable": 25
+      },
+      "usage_missing_attempts": 0,
+      "tokens": {
+        "input_tokens": 2135835,
+        "output_tokens": 133497,
+        "cache_read_tokens": 1955968,
+        "total_tokens": 2269332,
+        "uncached_input_tokens": 179867,
+        "cache_hit_fraction": 0.9157860977088585
+      },
+      "wall_seconds_all": {
+        "samples": 25,
+        "sum": 1248.086,
+        "mean": 49.92344,
+        "median": 49.546,
+        "p90_nearest_rank": 79.901,
+        "min": 20.65,
+        "max": 93.691
+      },
+      "wall_seconds_passed": {
+        "samples": 22,
+        "sum": 1103.768,
+        "mean": 50.17127272727273,
+        "median": 49.817,
+        "p90_nearest_rank": 79.901,
+        "min": 20.65,
+        "max": 93.691
+      },
+      "tokens_per_attempt": {
+        "samples": 25,
+        "sum": 2269332,
+        "mean": 90773.28,
+        "median": 86172,
+        "p90_nearest_rank": 140624,
+        "min": 43990,
+        "max": 169946
+      },
+      "model_turns": 247,
+      "tool_calls": 291,
+      "resources": {
+        "cpu_user_seconds": {
+          "samples": 25,
+          "sum": 0.0,
+          "mean": 0.0,
+          "median": 0.0,
+          "p90_nearest_rank": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "cpu_system_seconds": {
+          "samples": 25,
+          "sum": 0.0,
+          "mean": 0.0,
+          "median": 0.0,
+          "p90_nearest_rank": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "max_rss_kib": {
+          "samples": 25,
+          "sum": 52548,
+          "mean": 2101.92,
+          "median": 2104,
+          "p90_nearest_rank": 2180,
+          "min": 2036,
+          "max": 2196
+        }
+      },
+      "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "measured_attempts": 25,
+            "total": {
+              "input_miss": 0.0539601,
+              "input_hit": 0.011735808,
+              "output": 0.1601964,
+              "total": 0.22589230799999999
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.002158404,
+              "input_hit": 0.00046943232,
+              "output": 0.006407856,
+              "total": 0.00903569232
+            },
+            "all_attempt_cost_per_success": 0.010267832181818181
+          },
+          "off_peak": {
+            "measured_attempts": 25,
+            "total": {
+              "input_miss": 0.02698005,
+              "input_hit": 0.005867904,
+              "output": 0.0800982,
+              "total": 0.11294615399999999
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.001079202,
+              "input_hit": 0.00023471616,
+              "output": 0.003203928,
+              "total": 0.00451784616
+            },
+            "all_attempt_cost_per_success": 0.005133916090909091
+          }
+        },
+        "CNY": {
+          "peak": {
+            "measured_attempts": 25,
+            "total": {
+              "input_miss": 0.359734,
+              "input_hit": 0.07823872,
+              "output": 1.067976,
+              "total": 1.50594872
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.01438936,
+              "input_hit": 0.0031295488,
+              "output": 0.04271904,
+              "total": 0.060237948799999996
+            },
+            "all_attempt_cost_per_success": 0.06845221454545454
+          },
+          "off_peak": {
+            "measured_attempts": 25,
+            "total": {
+              "input_miss": 0.179867,
+              "input_hit": 0.03911936,
+              "output": 0.533988,
+              "total": 0.75297436
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.00719468,
+              "input_hit": 0.0015647744,
+              "output": 0.02135952,
+              "total": 0.030118974399999998
+            },
+            "all_attempt_cost_per_success": 0.03422610727272727
+          }
+        }
+      }
+    }
+  },
+  "tiers": {
+    "easy": {
+      "latch": {
+        "attempts": 7,
+        "passed": 7,
+        "failed": 0,
+        "checks_passed": 22,
+        "checks_total": 22,
+        "timeouts": 0,
+        "harness_errors": 0,
+        "completion_states": {
+          "verified": 7
+        },
+        "usage_missing_attempts": 0,
+        "tokens": {
+          "input_tokens": 382233,
+          "output_tokens": 16308,
+          "cache_read_tokens": 339712,
+          "total_tokens": 398541,
+          "uncached_input_tokens": 42521,
+          "cache_hit_fraction": 0.8887563344870799
+        },
+        "wall_seconds_all": {
+          "samples": 7,
+          "sum": 185.77200000000002,
+          "mean": 26.538857142857143,
+          "median": 22.952,
+          "p90_nearest_rank": 42.362,
+          "min": 11.656,
+          "max": 42.362
+        },
+        "wall_seconds_passed": {
+          "samples": 7,
+          "sum": 185.77200000000002,
+          "mean": 26.538857142857143,
+          "median": 22.952,
+          "p90_nearest_rank": 42.362,
+          "min": 11.656,
+          "max": 42.362
+        },
+        "tokens_per_attempt": {
+          "samples": 7,
+          "sum": 398541,
+          "mean": 56934.42857142857,
+          "median": 39387,
+          "p90_nearest_rank": 99898,
+          "min": 27336,
+          "max": 99898
+        },
+        "model_turns": 54,
+        "tool_calls": 66,
+        "resources": {
+          "cpu_user_seconds": {
+            "samples": 7,
+            "sum": 0.99,
+            "mean": 0.14142857142857143,
+            "median": 0.13,
+            "p90_nearest_rank": 0.22,
+            "min": 0.07,
+            "max": 0.22
+          },
+          "cpu_system_seconds": {
+            "samples": 7,
+            "sum": 0.53,
+            "mean": 0.07571428571428572,
+            "median": 0.08,
+            "p90_nearest_rank": 0.14,
+            "min": 0.01,
+            "max": 0.14
+          },
+          "max_rss_kib": {
+            "samples": 7,
+            "sum": 111268,
+            "mean": 15895.42857142857,
+            "median": 15876,
+            "p90_nearest_rank": 16524,
+            "min": 15480,
+            "max": 16524
+          }
+        },
+        "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+        "cost_scenarios": {
+          "USD": {
+            "peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.0127563,
+                "input_hit": 0.0020382720000000003,
+                "output": 0.0195696,
+                "total": 0.034364172
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0018223285714285714,
+                "input_hit": 0.00029118171428571435,
+                "output": 0.002795657142857143,
+                "total": 0.004909167428571428
+              },
+              "all_attempt_cost_per_success": 0.004909167428571428
+            },
+            "off_peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.00637815,
+                "input_hit": 0.0010191360000000001,
+                "output": 0.0097848,
+                "total": 0.017182086
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0009111642857142857,
+                "input_hit": 0.00014559085714285717,
+                "output": 0.0013978285714285714,
+                "total": 0.002454583714285714
+              },
+              "all_attempt_cost_per_success": 0.002454583714285714
+            }
+          },
+          "CNY": {
+            "peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.085042,
+                "input_hit": 0.01358848,
+                "output": 0.130464,
+                "total": 0.22909448
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.012148857142857144,
+                "input_hit": 0.0019412114285714285,
+                "output": 0.018637714285714285,
+                "total": 0.032727782857142854
+              },
+              "all_attempt_cost_per_success": 0.032727782857142854
+            },
+            "off_peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.042521,
+                "input_hit": 0.00679424,
+                "output": 0.065232,
+                "total": 0.11454724
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.006074428571428572,
+                "input_hit": 0.0009706057142857143,
+                "output": 0.009318857142857143,
+                "total": 0.016363891428571427
+              },
+              "all_attempt_cost_per_success": 0.016363891428571427
+            }
+          }
+        }
+      },
+      "opencode": {
+        "attempts": 7,
+        "passed": 7,
+        "failed": 0,
+        "checks_passed": 22,
+        "checks_total": 22,
+        "timeouts": 0,
+        "harness_errors": 0,
+        "completion_states": {
+          "not_applicable": 7
+        },
+        "usage_missing_attempts": 0,
+        "tokens": {
+          "input_tokens": 466717,
+          "output_tokens": 27266,
+          "cache_read_tokens": 429184,
+          "total_tokens": 493983,
+          "uncached_input_tokens": 37533,
+          "cache_hit_fraction": 0.919580816640491
+        },
+        "wall_seconds_all": {
+          "samples": 7,
+          "sum": 280.767,
+          "mean": 40.10957142857143,
+          "median": 41.882,
+          "p90_nearest_rank": 59.502,
+          "min": 20.65,
+          "max": 59.502
+        },
+        "wall_seconds_passed": {
+          "samples": 7,
+          "sum": 280.767,
+          "mean": 40.10957142857143,
+          "median": 41.882,
+          "p90_nearest_rank": 59.502,
+          "min": 20.65,
+          "max": 59.502
+        },
+        "tokens_per_attempt": {
+          "samples": 7,
+          "sum": 493983,
+          "mean": 70569,
+          "median": 62689,
+          "p90_nearest_rank": 109214,
+          "min": 43990,
+          "max": 109214
+        },
+        "model_turns": 62,
+        "tool_calls": 75,
+        "resources": {
+          "cpu_user_seconds": {
+            "samples": 7,
+            "sum": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "p90_nearest_rank": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "cpu_system_seconds": {
+            "samples": 7,
+            "sum": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "p90_nearest_rank": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "max_rss_kib": {
+            "samples": 7,
+            "sum": 14840,
+            "mean": 2120,
+            "median": 2168,
+            "p90_nearest_rank": 2196,
+            "min": 2040,
+            "max": 2196
+          }
+        },
+        "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+        "cost_scenarios": {
+          "USD": {
+            "peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.0112599,
+                "input_hit": 0.002575104,
+                "output": 0.0327192,
+                "total": 0.046554204
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0016085571428571428,
+                "input_hit": 0.000367872,
+                "output": 0.004674171428571428,
+                "total": 0.0066506005714285716
+              },
+              "all_attempt_cost_per_success": 0.0066506005714285716
+            },
+            "off_peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.00562995,
+                "input_hit": 0.001287552,
+                "output": 0.0163596,
+                "total": 0.023277102
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0008042785714285714,
+                "input_hit": 0.000183936,
+                "output": 0.002337085714285714,
+                "total": 0.0033253002857142858
+              },
+              "all_attempt_cost_per_success": 0.0033253002857142858
+            }
+          },
+          "CNY": {
+            "peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.075066,
+                "input_hit": 0.01716736,
+                "output": 0.218128,
+                "total": 0.31036136
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.010723714285714284,
+                "input_hit": 0.00245248,
+                "output": 0.031161142857142856,
+                "total": 0.04433733714285714
+              },
+              "all_attempt_cost_per_success": 0.04433733714285714
+            },
+            "off_peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.037533,
+                "input_hit": 0.00858368,
+                "output": 0.109064,
+                "total": 0.15518068
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.005361857142857142,
+                "input_hit": 0.00122624,
+                "output": 0.015580571428571428,
+                "total": 0.02216866857142857
+              },
+              "all_attempt_cost_per_success": 0.02216866857142857
+            }
+          }
+        }
+      }
+    },
+    "medium": {
+      "latch": {
+        "attempts": 7,
+        "passed": 7,
+        "failed": 0,
+        "checks_passed": 23,
+        "checks_total": 23,
+        "timeouts": 0,
+        "harness_errors": 0,
+        "completion_states": {
+          "verified": 7
+        },
+        "usage_missing_attempts": 0,
+        "tokens": {
+          "input_tokens": 489568,
+          "output_tokens": 25643,
+          "cache_read_tokens": 422272,
+          "total_tokens": 515211,
+          "uncached_input_tokens": 67296,
+          "cache_hit_fraction": 0.8625400352964246
+        },
+        "wall_seconds_all": {
+          "samples": 7,
+          "sum": 240.513,
+          "mean": 34.359,
+          "median": 34.721,
+          "p90_nearest_rank": 47.164,
+          "min": 23.085,
+          "max": 47.164
+        },
+        "wall_seconds_passed": {
+          "samples": 7,
+          "sum": 240.513,
+          "mean": 34.359,
+          "median": 34.721,
+          "p90_nearest_rank": 47.164,
+          "min": 23.085,
+          "max": 47.164
+        },
+        "tokens_per_attempt": {
+          "samples": 7,
+          "sum": 515211,
+          "mean": 73601.57142857143,
+          "median": 71915,
+          "p90_nearest_rank": 121099,
+          "min": 48397,
+          "max": 121099
+        },
+        "model_turns": 59,
+        "tool_calls": 71,
+        "resources": {
+          "cpu_user_seconds": {
+            "samples": 7,
+            "sum": 1.26,
+            "mean": 0.18,
+            "median": 0.18,
+            "p90_nearest_rank": 0.32,
+            "min": 0.09,
+            "max": 0.32
+          },
+          "cpu_system_seconds": {
+            "samples": 7,
+            "sum": 0.73,
+            "mean": 0.10428571428571429,
+            "median": 0.09,
+            "p90_nearest_rank": 0.17,
+            "min": 0.06,
+            "max": 0.17
+          },
+          "max_rss_kib": {
+            "samples": 7,
+            "sum": 112028,
+            "mean": 16004,
+            "median": 16060,
+            "p90_nearest_rank": 16268,
+            "min": 15660,
+            "max": 16268
+          }
+        },
+        "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+        "cost_scenarios": {
+          "USD": {
+            "peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.0201888,
+                "input_hit": 0.002533632,
+                "output": 0.030771599999999996,
+                "total": 0.053494032
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0028841142857142857,
+                "input_hit": 0.00036194742857142856,
+                "output": 0.004395942857142857,
+                "total": 0.007642004571428571
+              },
+              "all_attempt_cost_per_success": 0.007642004571428571
+            },
+            "off_peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.0100944,
+                "input_hit": 0.001266816,
+                "output": 0.015385799999999998,
+                "total": 0.026747016
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0014420571428571428,
+                "input_hit": 0.00018097371428571428,
+                "output": 0.0021979714285714283,
+                "total": 0.0038210022857142856
+              },
+              "all_attempt_cost_per_success": 0.0038210022857142856
+            }
+          },
+          "CNY": {
+            "peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.134592,
+                "input_hit": 0.01689088,
+                "output": 0.205144,
+                "total": 0.35662688
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.01922742857142857,
+                "input_hit": 0.0024129828571428573,
+                "output": 0.029306285714285712,
+                "total": 0.05094669714285714
+              },
+              "all_attempt_cost_per_success": 0.05094669714285714
+            },
+            "off_peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.067296,
+                "input_hit": 0.00844544,
+                "output": 0.102572,
+                "total": 0.17831344
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.009613714285714284,
+                "input_hit": 0.0012064914285714286,
+                "output": 0.014653142857142856,
+                "total": 0.02547334857142857
+              },
+              "all_attempt_cost_per_success": 0.02547334857142857
+            }
+          }
+        }
+      },
+      "opencode": {
+        "attempts": 7,
+        "passed": 7,
+        "failed": 0,
+        "checks_passed": 23,
+        "checks_total": 23,
+        "timeouts": 0,
+        "harness_errors": 0,
+        "completion_states": {
+          "not_applicable": 7
+        },
+        "usage_missing_attempts": 0,
+        "tokens": {
+          "input_tokens": 615023,
+          "output_tokens": 39925,
+          "cache_read_tokens": 560640,
+          "total_tokens": 654948,
+          "uncached_input_tokens": 54383,
+          "cache_hit_fraction": 0.9115756646499399
+        },
+        "wall_seconds_all": {
+          "samples": 7,
+          "sum": 368.009,
+          "mean": 52.572714285714284,
+          "median": 49.345,
+          "p90_nearest_rank": 82.168,
+          "min": 31.153,
+          "max": 82.168
+        },
+        "wall_seconds_passed": {
+          "samples": 7,
+          "sum": 368.009,
+          "mean": 52.572714285714284,
+          "median": 49.345,
+          "p90_nearest_rank": 82.168,
+          "min": 31.153,
+          "max": 82.168
+        },
+        "tokens_per_attempt": {
+          "samples": 7,
+          "sum": 654948,
+          "mean": 93564,
+          "median": 89330,
+          "p90_nearest_rank": 140624,
+          "min": 50828,
+          "max": 140624
+        },
+        "model_turns": 70,
+        "tool_calls": 83,
+        "resources": {
+          "cpu_user_seconds": {
+            "samples": 7,
+            "sum": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "p90_nearest_rank": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "cpu_system_seconds": {
+            "samples": 7,
+            "sum": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "p90_nearest_rank": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "max_rss_kib": {
+            "samples": 7,
+            "sum": 14816,
+            "mean": 2116.5714285714284,
+            "median": 2104,
+            "p90_nearest_rank": 2184,
+            "min": 2040,
+            "max": 2184
+          }
+        },
+        "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+        "cost_scenarios": {
+          "USD": {
+            "peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.0163149,
+                "input_hit": 0.0033638400000000003,
+                "output": 0.047909999999999994,
+                "total": 0.06758874
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0023307000000000002,
+                "input_hit": 0.0004805485714285715,
+                "output": 0.006844285714285713,
+                "total": 0.009655534285714284
+              },
+              "all_attempt_cost_per_success": 0.009655534285714284
+            },
+            "off_peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.00815745,
+                "input_hit": 0.0016819200000000002,
+                "output": 0.023954999999999997,
+                "total": 0.03379437
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0011653500000000001,
+                "input_hit": 0.00024027428571428574,
+                "output": 0.0034221428571428567,
+                "total": 0.004827767142857142
+              },
+              "all_attempt_cost_per_success": 0.004827767142857142
+            }
+          },
+          "CNY": {
+            "peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.108766,
+                "input_hit": 0.0224256,
+                "output": 0.3194,
+                "total": 0.4505916
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.015538,
+                "input_hit": 0.0032036571428571427,
+                "output": 0.04562857142857143,
+                "total": 0.06437022857142857
+              },
+              "all_attempt_cost_per_success": 0.06437022857142857
+            },
+            "off_peak": {
+              "measured_attempts": 7,
+              "total": {
+                "input_miss": 0.054383,
+                "input_hit": 0.0112128,
+                "output": 0.1597,
+                "total": 0.2252958
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.007769,
+                "input_hit": 0.0016018285714285714,
+                "output": 0.022814285714285714,
+                "total": 0.032185114285714286
+              },
+              "all_attempt_cost_per_success": 0.032185114285714286
+            }
+          }
+        }
+      }
+    },
+    "hard": {
+      "latch": {
+        "attempts": 11,
+        "passed": 9,
+        "failed": 2,
+        "checks_passed": 36,
+        "checks_total": 38,
+        "timeouts": 0,
+        "harness_errors": 0,
+        "completion_states": {
+          "verified": 11
+        },
+        "usage_missing_attempts": 0,
+        "tokens": {
+          "input_tokens": 785019,
+          "output_tokens": 52681,
+          "cache_read_tokens": 646528,
+          "total_tokens": 837700,
+          "uncached_input_tokens": 138491,
+          "cache_hit_fraction": 0.8235826139239942
+        },
+        "wall_seconds_all": {
+          "samples": 11,
+          "sum": 443.124,
+          "mean": 40.284,
+          "median": 32.604,
+          "p90_nearest_rank": 69.515,
+          "min": 19.618,
+          "max": 71.93
+        },
+        "wall_seconds_passed": {
+          "samples": 9,
+          "sum": 378.258,
+          "mean": 42.028666666666666,
+          "median": 32.604,
+          "p90_nearest_rank": 71.93,
+          "min": 19.618,
+          "max": 71.93
+        },
+        "tokens_per_attempt": {
+          "samples": 11,
+          "sum": 837700,
+          "mean": 76154.54545454546,
+          "median": 68508,
+          "p90_nearest_rank": 114925,
+          "min": 40622,
+          "max": 133619
+        },
+        "model_turns": 93,
+        "tool_calls": 123,
+        "resources": {
+          "cpu_user_seconds": {
+            "samples": 11,
+            "sum": 2.42,
+            "mean": 0.22,
+            "median": 0.2,
+            "p90_nearest_rank": 0.39,
+            "min": 0.09,
+            "max": 0.4
+          },
+          "cpu_system_seconds": {
+            "samples": 11,
+            "sum": 1.67,
+            "mean": 0.15181818181818182,
+            "median": 0.12,
+            "p90_nearest_rank": 0.24,
+            "min": 0.08,
+            "max": 0.29
+          },
+          "max_rss_kib": {
+            "samples": 11,
+            "sum": 178636,
+            "mean": 16239.636363636364,
+            "median": 16188,
+            "p90_nearest_rank": 16680,
+            "min": 15820,
+            "max": 16784
+          }
+        },
+        "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+        "cost_scenarios": {
+          "USD": {
+            "peak": {
+              "measured_attempts": 11,
+              "total": {
+                "input_miss": 0.041547299999999995,
+                "input_hit": 0.003879168,
+                "output": 0.0632172,
+                "total": 0.108643668
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0037770272727272723,
+                "input_hit": 0.00035265163636363637,
+                "output": 0.005747018181818182,
+                "total": 0.009876697090909091
+              },
+              "all_attempt_cost_per_success": 0.012071518666666666
+            },
+            "off_peak": {
+              "measured_attempts": 11,
+              "total": {
+                "input_miss": 0.020773649999999998,
+                "input_hit": 0.001939584,
+                "output": 0.0316086,
+                "total": 0.054321834
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0018885136363636361,
+                "input_hit": 0.00017632581818181818,
+                "output": 0.002873509090909091,
+                "total": 0.004938348545454546
+              },
+              "all_attempt_cost_per_success": 0.006035759333333333
+            }
+          },
+          "CNY": {
+            "peak": {
+              "measured_attempts": 11,
+              "total": {
+                "input_miss": 0.276982,
+                "input_hit": 0.02586112,
+                "output": 0.421448,
+                "total": 0.7242911200000001
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.02518018181818182,
+                "input_hit": 0.002351010909090909,
+                "output": 0.038313454545454546,
+                "total": 0.06584464727272728
+              },
+              "all_attempt_cost_per_success": 0.08047679111111111
+            },
+            "off_peak": {
+              "measured_attempts": 11,
+              "total": {
+                "input_miss": 0.138491,
+                "input_hit": 0.01293056,
+                "output": 0.210724,
+                "total": 0.36214556000000003
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.01259009090909091,
+                "input_hit": 0.0011755054545454545,
+                "output": 0.019156727272727273,
+                "total": 0.03292232363636364
+              },
+              "all_attempt_cost_per_success": 0.040238395555555556
+            }
+          }
+        }
+      },
+      "opencode": {
+        "attempts": 11,
+        "passed": 8,
+        "failed": 3,
+        "checks_passed": 35,
+        "checks_total": 38,
+        "timeouts": 0,
+        "harness_errors": 0,
+        "completion_states": {
+          "not_applicable": 11
+        },
+        "usage_missing_attempts": 0,
+        "tokens": {
+          "input_tokens": 1054095,
+          "output_tokens": 66306,
+          "cache_read_tokens": 966144,
+          "total_tokens": 1120401,
+          "uncached_input_tokens": 87951,
+          "cache_hit_fraction": 0.916562548916369
+        },
+        "wall_seconds_all": {
+          "samples": 11,
+          "sum": 599.31,
+          "mean": 54.482727272727274,
+          "median": 55.678,
+          "p90_nearest_rank": 79.901,
+          "min": 30.957,
+          "max": 93.691
+        },
+        "wall_seconds_passed": {
+          "samples": 8,
+          "sum": 454.992,
+          "mean": 56.874,
+          "median": 59.4345,
+          "p90_nearest_rank": 93.691,
+          "min": 30.957,
+          "max": 93.691
+        },
+        "tokens_per_attempt": {
+          "samples": 11,
+          "sum": 1120401,
+          "mean": 101854.63636363637,
+          "median": 94455,
+          "p90_nearest_rank": 157153,
+          "min": 50771,
+          "max": 169946
+        },
+        "model_turns": 115,
+        "tool_calls": 133,
+        "resources": {
+          "cpu_user_seconds": {
+            "samples": 11,
+            "sum": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "p90_nearest_rank": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "cpu_system_seconds": {
+            "samples": 11,
+            "sum": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "p90_nearest_rank": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "max_rss_kib": {
+            "samples": 11,
+            "sum": 22892,
+            "mean": 2081.090909090909,
+            "median": 2040,
+            "p90_nearest_rank": 2168,
+            "min": 2036,
+            "max": 2176
+          }
+        },
+        "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+        "cost_scenarios": {
+          "USD": {
+            "peak": {
+              "measured_attempts": 11,
+              "total": {
+                "input_miss": 0.0263853,
+                "input_hit": 0.005796864,
+                "output": 0.07956719999999999,
+                "total": 0.11174936399999999
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0023986636363636364,
+                "input_hit": 0.0005269876363636363,
+                "output": 0.007233381818181817,
+                "total": 0.01015903309090909
+              },
+              "all_attempt_cost_per_success": 0.013968670499999999
+            },
+            "off_peak": {
+              "measured_attempts": 11,
+              "total": {
+                "input_miss": 0.01319265,
+                "input_hit": 0.002898432,
+                "output": 0.039783599999999995,
+                "total": 0.055874681999999995
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.0011993318181818182,
+                "input_hit": 0.00026349381818181815,
+                "output": 0.0036166909090909086,
+                "total": 0.005079516545454545
+              },
+              "all_attempt_cost_per_success": 0.006984335249999999
+            }
+          },
+          "CNY": {
+            "peak": {
+              "measured_attempts": 11,
+              "total": {
+                "input_miss": 0.175902,
+                "input_hit": 0.03864576,
+                "output": 0.530448,
+                "total": 0.74499576
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.01599109090909091,
+                "input_hit": 0.003513250909090909,
+                "output": 0.048222545454545455,
+                "total": 0.06772688727272727
+              },
+              "all_attempt_cost_per_success": 0.09312447
+            },
+            "off_peak": {
+              "measured_attempts": 11,
+              "total": {
+                "input_miss": 0.087951,
+                "input_hit": 0.01932288,
+                "output": 0.265224,
+                "total": 0.37249788
+              },
+              "mean_per_measured_attempt": {
+                "input_miss": 0.007995545454545455,
+                "input_hit": 0.0017566254545454546,
+                "output": 0.024111272727272728,
+                "total": 0.033863443636363635
+              },
+              "all_attempt_cost_per_success": 0.046562235
+            }
+          }
+        }
+      }
+    }
+  },
+  "paired_both_passed": {
+    "latch": {
+      "attempts": 22,
+      "passed": 22,
+      "failed": 0,
+      "checks_passed": 73,
+      "checks_total": 73,
+      "timeouts": 0,
+      "harness_errors": 0,
+      "completion_states": {
+        "verified": 22
+      },
+      "usage_missing_attempts": 0,
+      "tokens": {
+        "input_tokens": 1433780,
+        "output_tokens": 79267,
+        "cache_read_tokens": 1228160,
+        "total_tokens": 1513047,
+        "uncached_input_tokens": 205620,
+        "cache_hit_fraction": 0.8565888769546235
+      },
+      "wall_seconds_all": {
+        "samples": 22,
+        "sum": 735.028,
+        "mean": 33.410363636363634,
+        "median": 31.0465,
+        "p90_nearest_rank": 47.164,
+        "min": 11.656,
+        "max": 71.93
+      },
+      "wall_seconds_passed": {
+        "samples": 22,
+        "sum": 735.028,
+        "mean": 33.410363636363634,
+        "median": 31.0465,
+        "p90_nearest_rank": 47.164,
+        "min": 11.656,
+        "max": 71.93
+      },
+      "tokens_per_attempt": {
+        "samples": 22,
+        "sum": 1513047,
+        "mean": 68774.86363636363,
+        "median": 68958.0,
+        "p90_nearest_rank": 114925,
+        "min": 27336,
+        "max": 133619
+      },
+      "model_turns": 180,
+      "tool_calls": 223,
+      "resources": {
+        "cpu_user_seconds": {
+          "samples": 22,
+          "sum": 3.9,
+          "mean": 0.17727272727272728,
+          "median": 0.18,
+          "p90_nearest_rank": 0.27,
+          "min": 0.07,
+          "max": 0.4
+        },
+        "cpu_system_seconds": {
+          "samples": 22,
+          "sum": 2.47,
+          "mean": 0.11227272727272727,
+          "median": 0.1,
+          "p90_nearest_rank": 0.18,
+          "min": 0.01,
+          "max": 0.29
+        },
+        "max_rss_kib": {
+          "samples": 22,
+          "sum": 353112,
+          "mean": 16050.545454545454,
+          "median": 16048.0,
+          "p90_nearest_rank": 16496,
+          "min": 15480,
+          "max": 16784
+        }
+      },
+      "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "measured_attempts": 22,
+            "total": {
+              "input_miss": 0.061686,
+              "input_hit": 0.007368960000000001,
+              "output": 0.0951204,
+              "total": 0.16417536
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.002803909090909091,
+              "input_hit": 0.0003349527272727273,
+              "output": 0.004323654545454545,
+              "total": 0.007462516363636363
+            },
+            "all_attempt_cost_per_success": 0.007462516363636363
+          },
+          "off_peak": {
+            "measured_attempts": 22,
+            "total": {
+              "input_miss": 0.030843,
+              "input_hit": 0.0036844800000000004,
+              "output": 0.0475602,
+              "total": 0.08208768
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.0014019545454545454,
+              "input_hit": 0.00016747636363636365,
+              "output": 0.0021618272727272725,
+              "total": 0.0037312581818181815
+            },
+            "all_attempt_cost_per_success": 0.0037312581818181815
+          }
+        },
+        "CNY": {
+          "peak": {
+            "measured_attempts": 22,
+            "total": {
+              "input_miss": 0.41124,
+              "input_hit": 0.0491264,
+              "output": 0.634136,
+              "total": 1.0945024
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.018692727272727274,
+              "input_hit": 0.002233018181818182,
+              "output": 0.028824363636363638,
+              "total": 0.04975010909090909
+            },
+            "all_attempt_cost_per_success": 0.04975010909090909
+          },
+          "off_peak": {
+            "measured_attempts": 22,
+            "total": {
+              "input_miss": 0.20562,
+              "input_hit": 0.0245632,
+              "output": 0.317068,
+              "total": 0.5472512
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.009346363636363637,
+              "input_hit": 0.001116509090909091,
+              "output": 0.014412181818181819,
+              "total": 0.024875054545454547
+            },
+            "all_attempt_cost_per_success": 0.024875054545454547
+          }
+        }
+      }
+    },
+    "opencode": {
+      "attempts": 22,
+      "passed": 22,
+      "failed": 0,
+      "checks_passed": 73,
+      "checks_total": 73,
+      "timeouts": 0,
+      "harness_errors": 0,
+      "completion_states": {
+        "not_applicable": 22
+      },
+      "usage_missing_attempts": 0,
+      "tokens": {
+        "input_tokens": 1916968,
+        "output_tokens": 115736,
+        "cache_read_tokens": 1759104,
+        "total_tokens": 2032704,
+        "uncached_input_tokens": 157864,
+        "cache_hit_fraction": 0.9176491209034267
+      },
+      "wall_seconds_all": {
+        "samples": 22,
+        "sum": 1103.768,
+        "mean": 50.17127272727273,
+        "median": 49.817,
+        "p90_nearest_rank": 79.901,
+        "min": 20.65,
+        "max": 93.691
+      },
+      "wall_seconds_passed": {
+        "samples": 22,
+        "sum": 1103.768,
+        "mean": 50.17127272727273,
+        "median": 49.817,
+        "p90_nearest_rank": 79.901,
+        "min": 20.65,
+        "max": 93.691
+      },
+      "tokens_per_attempt": {
+        "samples": 22,
+        "sum": 2032704,
+        "mean": 92395.63636363637,
+        "median": 86103.5,
+        "p90_nearest_rank": 140624,
+        "min": 43990,
+        "max": 169946
+      },
+      "model_turns": 221,
+      "tool_calls": 258,
+      "resources": {
+        "cpu_user_seconds": {
+          "samples": 22,
+          "sum": 0.0,
+          "mean": 0.0,
+          "median": 0.0,
+          "p90_nearest_rank": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "cpu_system_seconds": {
+          "samples": 22,
+          "sum": 0.0,
+          "mean": 0.0,
+          "median": 0.0,
+          "p90_nearest_rank": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "max_rss_kib": {
+          "samples": 22,
+          "sum": 46240,
+          "mean": 2101.818181818182,
+          "median": 2098.0,
+          "p90_nearest_rank": 2180,
+          "min": 2040,
+          "max": 2196
+        }
+      },
+      "resource_accounting_scope": "GNU time launcher/waited-child accounting; OpenCode private server is incompletely accounted; not comparable agent CPU/RSS",
+      "cost_scenarios": {
+        "USD": {
+          "peak": {
+            "measured_attempts": 22,
+            "total": {
+              "input_miss": 0.0473592,
+              "input_hit": 0.010554624,
+              "output": 0.13888319999999998,
+              "total": 0.196797024
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.002152690909090909,
+              "input_hit": 0.0004797556363636364,
+              "output": 0.006312872727272726,
+              "total": 0.008945319272727272
+            },
+            "all_attempt_cost_per_success": 0.008945319272727272
+          },
+          "off_peak": {
+            "measured_attempts": 22,
+            "total": {
+              "input_miss": 0.0236796,
+              "input_hit": 0.005277312,
+              "output": 0.06944159999999999,
+              "total": 0.098398512
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.0010763454545454545,
+              "input_hit": 0.0002398778181818182,
+              "output": 0.003156436363636363,
+              "total": 0.004472659636363636
+            },
+            "all_attempt_cost_per_success": 0.004472659636363636
+          }
+        },
+        "CNY": {
+          "peak": {
+            "measured_attempts": 22,
+            "total": {
+              "input_miss": 0.315728,
+              "input_hit": 0.07036416,
+              "output": 0.925888,
+              "total": 1.31198016
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.014351272727272728,
+              "input_hit": 0.0031983709090909087,
+              "output": 0.04208581818181818,
+              "total": 0.05963546181818182
+            },
+            "all_attempt_cost_per_success": 0.05963546181818182
+          },
+          "off_peak": {
+            "measured_attempts": 22,
+            "total": {
+              "input_miss": 0.157864,
+              "input_hit": 0.03518208,
+              "output": 0.462944,
+              "total": 0.65599008
+            },
+            "mean_per_measured_attempt": {
+              "input_miss": 0.007175636363636364,
+              "input_hit": 0.0015991854545454544,
+              "output": 0.02104290909090909,
+              "total": 0.02981773090909091
+            },
+            "all_attempt_cost_per_success": 0.02981773090909091
+          }
+        }
+      }
+    }
+  }
+}

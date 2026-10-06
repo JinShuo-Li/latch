@@ -1,0 +1,101 @@
+diff --git a/framing.py b/framing.py
+index 35b0500..00d2ca5 100644
+--- a/framing.py
++++ b/framing.py
+@@ -2,15 +2,37 @@
+ 
+ 
+ class FrameDecoder:
++    """Decode 4-byte big-endian length-prefixed frames from arbitrary chunks.
++
++    ``feed`` may be called with any chunking of the wire stream. Partial
++    prefixes and bodies are buffered until enough bytes arrive. Only the body
++    of a frame is returned (the 4-byte length prefix is stripped).
++    """
++
+     def __init__(self, max_size=1024):
+         self.max_size = max_size
++        self._buffer = bytearray()
+ 
+     def feed(self, chunk):
++        """Append *chunk* and return the list of complete frames now available.
++
++        A frame length greater than ``max_size`` raises ``ValueError`` as soon
++        as the 4-byte prefix is available, before the body is buffered.
++        """
++        self._buffer.extend(chunk)
+         frames = []
+-        while len(chunk) >= 4:
+-            length = int.from_bytes(chunk[:4], "big")
+-            if len(chunk) < length + 4:
++
++        while len(self._buffer) >= 4:
++            length = int.from_bytes(self._buffer[:4], "big")
++            if length > self.max_size:
++                raise ValueError(
++                    "frame length %d exceeds max_size %d"
++                    % (length, self.max_size)
++                )
++            if len(self._buffer) < length + 4:
++                # Body is incomplete; keep the prefix and any partial body.
+                 break
+-            frames.append(chunk[4:length + 4])
+-            chunk = chunk[length + 4:]
++            frames.append(bytes(self._buffer[4:length + 4]))
++            del self._buffer[:length + 4]
++
+         return frames
+diff --git a/test_framing.py b/test_framing.py
+index 0c6af8e..4acbf75 100644
+--- a/test_framing.py
++++ b/test_framing.py
+@@ -19,4 +19,49 @@ class FramingTest(unittest.TestCase):
+                              [b"hello", b"world"])
+ 
+ 
++class FrameDecoderEdgeCaseTest(unittest.TestCase):
++    def test_partial_prefix_is_kept(self):
++        decoder = FrameDecoder()
++        self.assertEqual(decoder.feed(b"\x00\x00"), [])
++        self.assertEqual(decoder.feed(b"\x00\x05"), [])
++        self.assertEqual(decoder.feed(b"hello"), [b"hello"])
++
++    def test_partial_body_is_kept(self):
++        decoder = FrameDecoder()
++        self.assertEqual(decoder.feed(frame(b"hello")[:6]), [])
++        self.assertEqual(decoder.feed(frame(b"hello")[6:]), [b"hello"])
++
++    def test_multiple_frames_in_one_chunk(self):
++        decoder = FrameDecoder()
++        wire = frame(b"a") + frame(b"bb") + frame(b"ccc")
++        self.assertEqual(decoder.feed(wire), [b"a", b"bb", b"ccc"])
++        self.assertEqual(decoder.feed(b""), [])
++
++    def test_empty_frame(self):
++        self.assertEqual(FrameDecoder().feed(frame(b"")), [b""])
++
++    def test_rejects_oversized_before_body(self):
++        decoder = FrameDecoder(max_size=4)
++        # Prefix alone announces a 5-byte body, which exceeds max_size.
++        with self.assertRaises(ValueError):
++            decoder.feed((5).to_bytes(4, "big"))
++        # The offending prefix is retained and re-rejected on later calls,
++        # rather than silently dropped or allowed to consume the body.
++        with self.assertRaises(ValueError):
++            decoder.feed(b"")
++
++    def test_oversized_within_larger_chunk(self):
++        decoder = FrameDecoder(max_size=4)
++        with self.assertRaises(ValueError):
++            decoder.feed(frame(b"hello"))
++
++    def test_continues_after_complete_frame(self):
++        decoder = FrameDecoder()
++        wire = frame(b"one") + frame(b"two")
++        self.assertEqual(decoder.feed(wire[:5]), [])
++        self.assertEqual(decoder.feed(wire[5:]), [b"one", b"two"])
++        # Decoder is reusable and keeps no stale state.
++        self.assertEqual(decoder.feed(frame(b"three")), [b"three"])
++
++
+ if __name__ == "__main__": unittest.main()

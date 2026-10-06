@@ -1,0 +1,119 @@
+{
+  "case_id": "pagination_cursor",
+  "tier": "medium",
+  "title": "Stable keyset pagination after deletions",
+  "case_sha256": "162d9eb4d737cfe4c9b47caecfdf7c263feff8f254d84df017ff5586b070141b",
+  "baseline_commit": "d46f452c477e436cdff451d7c819e48ea83512f9",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "deletion_between_pages",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "same_timestamp_and_insert",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "bad_cursor_and_limit",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: (None, 0)\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "deletion_between_pages",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "same_timestamp_and_insert",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "bad_cursor_and_limit",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 23.085,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "024e3f18-638a-4f4c-b217-b55149f00388",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 46233,
+    "output_tokens": 2164,
+    "cache_read_tokens": 41472,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.897,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 7,
+    "tool_calls": 8,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M feed.py",
+    " M test_feed.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/pagination_cursor/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 23.385,
+  "resources": {
+    "cpu_user_seconds": 0.09,
+    "cpu_system_seconds": 0.09,
+    "max_rss_kib": 16036,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 7,
+    "tool_calls": 8,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0014283,
+        "input_hit": 0.000248832,
+        "output": 0.0025968,
+        "total": 0.004273931999999999
+      },
+      "off_peak": {
+        "input_miss": 0.00071415,
+        "input_hit": 0.000124416,
+        "output": 0.0012984,
+        "total": 0.0021369659999999997
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.009522,
+        "input_hit": 0.0016588800000000002,
+        "output": 0.017312,
+        "total": 0.02849288
+      },
+      "off_peak": {
+        "input_miss": 0.004761,
+        "input_hit": 0.0008294400000000001,
+        "output": 0.008656,
+        "total": 0.01424644
+      }
+    }
+  }
+}

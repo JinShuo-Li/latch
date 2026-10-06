@@ -1,0 +1,25 @@
+diff --git a/duration.py b/duration.py
+index ca4abdc..a372549 100644
+--- a/duration.py
++++ b/duration.py
+@@ -1,8 +1,16 @@
+ """Scheduler duration parser returning milliseconds."""
+ 
++import re
++
++_DURATION_RE = re.compile(r"(\d+)(ms|s|m|h)\Z")
++_FACTORS = {"ms": 1, "s": 1000, "m": 60000, "h": 3600000}
++
+ 
+ def parse_duration(value):
+-    for unit, factor in (("s", 1000), ("m", 60000), ("h", 3600000), ("ms", 1)):
+-        if unit in value:
+-            return int(value.replace(unit, "", 1)) * factor
+-    raise ValueError("unknown duration")
++    if not isinstance(value, str):
++        raise ValueError("duration must be a string")
++    match = _DURATION_RE.fullmatch(value)
++    if match is None:
++        raise ValueError("malformed duration: %r" % (value,))
++    amount, unit = match.groups()
++    return int(amount) * _FACTORS[unit]

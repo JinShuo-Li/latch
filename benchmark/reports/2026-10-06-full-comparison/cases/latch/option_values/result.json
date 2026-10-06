@@ -1,0 +1,118 @@
+{
+  "case_id": "option_values",
+  "tier": "easy",
+  "title": "Explicit empty CLI option values",
+  "case_sha256": "c4771401772c7a03316eca9ad88c7c082e93a7f07337dd94e977a9b8fadfae19",
+  "baseline_commit": "9e53ebe2a1069ee480e74ce07ec50d14683ef08a",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "empty_is_explicit",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "end_marker",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/tmp/workspace/options.py\", line 18, in parse_args\n    raise ValueError(f\"unknown option: {arg}\")\nValueError: unknown option: --\n"
+    },
+    {
+      "name": "missing_value_and_regular_options",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "empty_is_explicit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "end_marker",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "missing_value_and_regular_options",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 22.952,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "8b975540-f283-4667-b40f-120b4a938606",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 37097,
+    "output_tokens": 2290,
+    "cache_read_tokens": 32768,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8833,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 6,
+    "tool_calls": 7,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M options.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/option_values/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 23.221,
+  "resources": {
+    "cpu_user_seconds": 0.13,
+    "cpu_system_seconds": 0.08,
+    "max_rss_kib": 15680,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 6,
+    "tool_calls": 7,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0012987,
+        "input_hit": 0.000196608,
+        "output": 0.002748,
+        "total": 0.004243308
+      },
+      "off_peak": {
+        "input_miss": 0.00064935,
+        "input_hit": 9.8304e-05,
+        "output": 0.001374,
+        "total": 0.002121654
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.008658,
+        "input_hit": 0.00131072,
+        "output": 0.01832,
+        "total": 0.02828872
+      },
+      "off_peak": {
+        "input_miss": 0.004329,
+        "input_hit": 0.00065536,
+        "output": 0.00916,
+        "total": 0.01414436
+      }
+    }
+  }
+}

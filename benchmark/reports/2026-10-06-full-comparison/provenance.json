@@ -1,0 +1,13 @@
+{
+  "measured_product_source_revision": "170efcbb3b5f0507f9e757c71c5340c9049cc523",
+  "scheduler_revision": "a6ae497",
+  "scheduler_sha256": "96e1ac3fb07665f4a0c67162fdcfa551ae2c0adcdd3c64f0e4156d0e3b9935c0",
+  "report_revision": "f7005c88f945f87bf4a5cadf6359b88daf0aa9e1",
+  "report_formatter_sha256": "d20dff769153b0b826a168681270ccd5ead98295ef9c01b11f8624634c215e25",
+  "case_verification_exit_code": 0,
+  "completed_attempts": 50,
+  "usage_measurements": 50,
+  "maximum_benchmark_concurrency": 3,
+  "scope": "One fresh attempt per agent per case; no silent retry; no case or acceptance changes",
+  "resource_accounting": "Launcher-level GNU time metrics retained as diagnostic data only; not comparable whole-agent memory/CPU"
+}

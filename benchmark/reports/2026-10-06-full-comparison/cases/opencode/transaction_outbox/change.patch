@@ -1,0 +1,43 @@
+diff --git a/outbox.py b/outbox.py
+index 764d4ae..9387f5d 100644
+--- a/outbox.py
++++ b/outbox.py
+@@ -4,13 +4,34 @@ import json
+ 
+ 
+ def create_order(db, order_id, amount):
++    """Create an order and its outbox event in a single atomic transaction.
++
++    A nonpositive ``amount`` is rejected. Inserting an order that already
++    exists is a no-op: the existing order is kept and no additional event is
++    emitted. Both rows commit together, so an event failure rolls the order
++    back.
++    """
++    if amount <= 0:
++        raise ValueError("amount must be positive")
++
+     db.execute("CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY, amount INTEGER)")
+     db.execute("CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT)")
+-    db.execute("INSERT INTO orders VALUES(?,?)", (order_id, amount))
+-    db.commit()
+-    db.execute("INSERT INTO outbox(payload) VALUES(?)", (json.dumps({"id": order_id, "amount": amount}),))
+-    db.commit()
++
++    try:
++        cursor = db.execute(
++            "INSERT OR IGNORE INTO orders VALUES(?,?)", (order_id, amount)
++        )
++        if cursor.rowcount:
++            db.execute(
++                "INSERT INTO outbox(payload) VALUES(?)",
++                (json.dumps({"id": order_id, "amount": amount}),),
++            )
++        db.commit()
++    except Exception:
++        db.rollback()
++        raise
+ 
+ 
+ def pending_events(db):
++    """Return unsent outbox events in insertion order as parsed payloads."""
+     return [json.loads(row[0]) for row in db.execute("SELECT payload FROM outbox ORDER BY seq")]

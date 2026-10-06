@@ -1,0 +1,102 @@
+{
+  "case_id": "ansi_width",
+  "tier": "easy",
+  "case_sha256": "016925ca9835ffb5cd11dce9a2ec6f5501b9c34aa91947d716e691e5e954be29",
+  "baseline_commit": "1df591c168299c60f1faba4d4881df8285e5afab",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "ansi_and_cjk",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "combining_and_emoji",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "control_sequences",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "ansi_and_cjk",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "combining_and_emoji",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "control_sequences",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 59.502,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 102830,
+    "uncached_input_tokens": 8622,
+    "output_tokens": 6384,
+    "reported_output_tokens": 2629,
+    "reasoning_tokens": 3755,
+    "cache_read_tokens": 94208,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 17
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 59.786,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2180,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0025866,
+        "input_hit": 0.0005652480000000001,
+        "output": 0.007660799999999999,
+        "total": 0.010812648
+      },
+      "off_peak": {
+        "input_miss": 0.0012933,
+        "input_hit": 0.00028262400000000004,
+        "output": 0.0038303999999999994,
+        "total": 0.005406324
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.017244,
+        "input_hit": 0.0037683200000000003,
+        "output": 0.051072,
+        "total": 0.07208432
+      },
+      "off_peak": {
+        "input_miss": 0.008622,
+        "input_hit": 0.0018841600000000002,
+        "output": 0.025536,
+        "total": 0.03604216
+      }
+    }
+  }
+}

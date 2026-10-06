@@ -1,0 +1,102 @@
+{
+  "case_id": "sqlite_migration",
+  "tier": "medium",
+  "case_sha256": "b3630a792dc9e32efe880a988102da05bc947fa1fa2cd0c9d3b1f0d6a3a3ceb0",
+  "baseline_commit": "085315b38e5ed3e92ab7aaf4ec79c32688196807",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "preserves_rows",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "idempotent",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "malformed_schema_rejected",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 6, in <module>\nAssertionError: malformed schema replaced\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "preserves_rows",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "idempotent",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "malformed_schema_rejected",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 52.838,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 83549,
+    "uncached_input_tokens": 7645,
+    "output_tokens": 5781,
+    "reported_output_tokens": 1819,
+    "reasoning_tokens": 3962,
+    "cache_read_tokens": 75904,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 10,
+    "tool_calls": 11
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 53.176,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2092,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0022935,
+        "input_hit": 0.000455424,
+        "output": 0.0069372,
+        "total": 0.009686124
+      },
+      "off_peak": {
+        "input_miss": 0.00114675,
+        "input_hit": 0.000227712,
+        "output": 0.0034686,
+        "total": 0.004843062
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.01529,
+        "input_hit": 0.00303616,
+        "output": 0.046248,
+        "total": 0.06457415999999999
+      },
+      "off_peak": {
+        "input_miss": 0.007645,
+        "input_hit": 0.00151808,
+        "output": 0.023124,
+        "total": 0.032287079999999996
+      }
+    }
+  }
+}

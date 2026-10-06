@@ -1,0 +1,112 @@
+{
+  "case_id": "incremental_sync",
+  "tier": "hard",
+  "case_sha256": "fcb9c149a70a19e8336f31643a9b00cdc4afad48682512163781400f4decbee5",
+  "baseline_commit": "626904692e7b4f6a154c3f354323ef2b0847e44e",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "changed_same_size",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "deleted_and_nested",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "unchanged_keeps_mtime",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "symlink_rejected_without_manifest_change",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: link accepted\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "changed_same_size",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "deleted_and_nested",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unchanged_keeps_mtime",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "symlink_rejected_without_manifest_change",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 59.784,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 119466,
+    "uncached_input_tokens": 9514,
+    "output_tokens": 6674,
+    "reported_output_tokens": 2819,
+    "reasoning_tokens": 3855,
+    "cache_read_tokens": 109952,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 12,
+    "tool_calls": 11
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 60.133,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2104,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0028542,
+        "input_hit": 0.000659712,
+        "output": 0.0080088,
+        "total": 0.011522712
+      },
+      "off_peak": {
+        "input_miss": 0.0014271,
+        "input_hit": 0.000329856,
+        "output": 0.0040044,
+        "total": 0.005761356
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.019028,
+        "input_hit": 0.0043980799999999995,
+        "output": 0.053392,
+        "total": 0.07681808
+      },
+      "off_peak": {
+        "input_miss": 0.009514,
+        "input_hit": 0.0021990399999999998,
+        "output": 0.026696,
+        "total": 0.03840904
+      }
+    }
+  }
+}

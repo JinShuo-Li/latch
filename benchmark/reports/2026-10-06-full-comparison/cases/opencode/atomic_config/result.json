@@ -1,0 +1,102 @@
+{
+  "case_id": "atomic_config",
+  "tier": "hard",
+  "case_sha256": "290b2139c6d95a0819b93cc95ecd939fb72e27a44e58dd04269238946fa8ae37",
+  "baseline_commit": "4ab60f09f1cd976dfc40ea70019b4537db8f188a",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "invalid_input_keeps_live",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "backup_previous_and_recovery",
+      "passed": false,
+      "detail": "  return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/json/decoder.py\", line 353, in raw_decode\n    obj, end = self.scan_once(s, idx)\n               ^^^^^^^^^^^^^^^^^^^^^^\njson.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n"
+    },
+    {
+      "name": "both_corrupt_fail",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "invalid_input_keeps_live",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "backup_previous_and_recovery",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "both_corrupt_fail",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 93.691,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 145808,
+    "uncached_input_tokens": 12944,
+    "output_tokens": 11345,
+    "reported_output_tokens": 4292,
+    "reasoning_tokens": 7053,
+    "cache_read_tokens": 132864,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 12,
+    "tool_calls": 15
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 93.915,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2040,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0038832,
+        "input_hit": 0.0007971839999999999,
+        "output": 0.013614,
+        "total": 0.018294384
+      },
+      "off_peak": {
+        "input_miss": 0.0019416,
+        "input_hit": 0.00039859199999999997,
+        "output": 0.006807,
+        "total": 0.009147192
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.025888,
+        "input_hit": 0.00531456,
+        "output": 0.09076,
+        "total": 0.12196256
+      },
+      "off_peak": {
+        "input_miss": 0.012944,
+        "input_hit": 0.00265728,
+        "output": 0.04538,
+        "total": 0.06098128
+      }
+    }
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "case_id": "stream_framing",
+  "tier": "hard",
+  "title": "Length-prefixed frame decoder under arbitrary chunks",
+  "case_sha256": "61f5cfe8235723d9e7b5c1fd21673c2cbf10d183257f0a700aaa69b3ae0b3653",
+  "baseline_commit": "9937c7f2635d1aaf6302bc75a4d4fc6b48840ec1",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "all_split_points",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "one_byte_chunks",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "oversize_prefix",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: oversize accepted\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "all_split_points",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "one_byte_chunks",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "oversize_prefix",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 26.314,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "71999267-e47b-4582-a9c0-f076dc3cc88d",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 60461,
+    "output_tokens": 1798,
+    "cache_read_tokens": 52480,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.868,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 9,
+    "tool_calls": 12,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M framing.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/stream_framing/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 26.596,
+  "resources": {
+    "cpu_user_seconds": 0.12,
+    "cpu_system_seconds": 0.08,
+    "max_rss_kib": 15820,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 9,
+    "tool_calls": 12,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0023943,
+        "input_hit": 0.00031488,
+        "output": 0.0021576,
+        "total": 0.004866779999999999
+      },
+      "off_peak": {
+        "input_miss": 0.00119715,
+        "input_hit": 0.00015744,
+        "output": 0.0010788,
+        "total": 0.0024333899999999997
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.015962,
+        "input_hit": 0.0020992,
+        "output": 0.014384,
+        "total": 0.0324452
+      },
+      "off_peak": {
+        "input_miss": 0.007981,
+        "input_hit": 0.0010496,
+        "output": 0.007192,
+        "total": 0.0162226
+      }
+    }
+  }
+}

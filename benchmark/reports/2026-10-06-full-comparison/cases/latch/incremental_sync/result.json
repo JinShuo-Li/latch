@@ -1,0 +1,128 @@
+{
+  "case_id": "incremental_sync",
+  "tier": "hard",
+  "title": "Incremental mirror with content hashes",
+  "case_sha256": "fcb9c149a70a19e8336f31643a9b00cdc4afad48682512163781400f4decbee5",
+  "baseline_commit": "e052148ac52bff4c9230bde6960374b8c22f3694",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "changed_same_size",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "deleted_and_nested",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "unchanged_keeps_mtime",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "symlink_rejected_without_manifest_change",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 8, in <module>\nAssertionError: link accepted\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "changed_same_size",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "deleted_and_nested",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unchanged_keeps_mtime",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "symlink_rejected_without_manifest_change",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 46.456,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "77de1e2d-d647-46f1-8958-3c6fde3b91b4",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 70991,
+    "output_tokens": 6348,
+    "cache_read_tokens": 59648,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8402,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 8,
+    "tool_calls": 11,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M sync.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/incremental_sync/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 46.807,
+  "resources": {
+    "cpu_user_seconds": 0.27,
+    "cpu_system_seconds": 0.18,
+    "max_rss_kib": 16496,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 8,
+    "tool_calls": 11,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0034029,
+        "input_hit": 0.00035788800000000005,
+        "output": 0.0076175999999999995,
+        "total": 0.011378388
+      },
+      "off_peak": {
+        "input_miss": 0.00170145,
+        "input_hit": 0.00017894400000000003,
+        "output": 0.0038087999999999998,
+        "total": 0.005689194
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.022686,
+        "input_hit": 0.00238592,
+        "output": 0.050784,
+        "total": 0.07585592000000001
+      },
+      "off_peak": {
+        "input_miss": 0.011343,
+        "input_hit": 0.00119296,
+        "output": 0.025392,
+        "total": 0.037927960000000004
+      }
+    }
+  }
+}

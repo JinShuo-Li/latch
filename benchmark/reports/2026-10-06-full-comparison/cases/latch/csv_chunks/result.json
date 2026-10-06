@@ -1,0 +1,118 @@
+{
+  "case_id": "csv_chunks",
+  "tier": "easy",
+  "title": "CSV rows across network chunks",
+  "case_sha256": "0c51a65082c9134acda968d1e464fbe530077654a1127aea2ee1c1715e64ebdd",
+  "baseline_commit": "feee5192f0bc28fdd2c80767ba801368b119b730",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "quoted_newline",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "every_split",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "crlf_and_final_row",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "quoted_newline",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "every_split",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "crlf_and_final_row",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 41.84,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "2252b337-0753-4110-97df-84fdd50587bf",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 86567,
+    "output_tokens": 3710,
+    "cache_read_tokens": 76544,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8842,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 11,
+    "tool_calls": 14,
+    "validation_passes": 2,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M importer.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/csv_chunks/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 42.08,
+  "resources": {
+    "cpu_user_seconds": 0.21,
+    "cpu_system_seconds": 0.14,
+    "max_rss_kib": 16180,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 11,
+    "tool_calls": 14,
+    "validation_passes": 2,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0030069000000000003,
+        "input_hit": 0.000459264,
+        "output": 0.004452,
+        "total": 0.007918164
+      },
+      "off_peak": {
+        "input_miss": 0.0015034500000000001,
+        "input_hit": 0.000229632,
+        "output": 0.002226,
+        "total": 0.003959082
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.020046,
+        "input_hit": 0.00306176,
+        "output": 0.02968,
+        "total": 0.05278776
+      },
+      "off_peak": {
+        "input_miss": 0.010023,
+        "input_hit": 0.00153088,
+        "output": 0.01484,
+        "total": 0.02639388
+      }
+    }
+  }
+}

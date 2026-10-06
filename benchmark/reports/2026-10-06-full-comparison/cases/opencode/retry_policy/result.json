@@ -1,0 +1,112 @@
+{
+  "case_id": "retry_policy",
+  "tier": "medium",
+  "case_sha256": "3f68e7ae89dae07bbec8ece327af5b102a2c31bea6a927e81b12e7573ac9df8f",
+  "baseline_commit": "a4442b07da908c208a5bd622e9ea18a4cc6c9cc5",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "post_not_retried",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "retry_after_and_backoff",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "last_attempt_no_sleep",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "invalid_budget",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nAssertionError: zero attempts accepted\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "post_not_retried",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "retry_after_and_backoff",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "last_attempt_no_sleep",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invalid_budget",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 44.103,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 69050,
+    "uncached_input_tokens": 7482,
+    "output_tokens": 5573,
+    "reported_output_tokens": 3645,
+    "reasoning_tokens": 1928,
+    "cache_read_tokens": 61568,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 9,
+    "tool_calls": 13
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 44.561,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2184,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0022446,
+        "input_hit": 0.000369408,
+        "output": 0.006687599999999999,
+        "total": 0.009301608
+      },
+      "off_peak": {
+        "input_miss": 0.0011223,
+        "input_hit": 0.000184704,
+        "output": 0.0033437999999999996,
+        "total": 0.004650804
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.014964,
+        "input_hit": 0.0024627200000000003,
+        "output": 0.044584,
+        "total": 0.06201072
+      },
+      "off_peak": {
+        "input_miss": 0.007482,
+        "input_hit": 0.0012313600000000001,
+        "output": 0.022292,
+        "total": 0.03100536
+      }
+    }
+  }
+}

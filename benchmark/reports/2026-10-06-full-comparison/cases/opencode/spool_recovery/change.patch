@@ -1,0 +1,108 @@
+diff --git a/spool_recovery.py b/spool_recovery.py
+index 256a6b1..a3eecea 100644
+--- a/spool_recovery.py
++++ b/spool_recovery.py
+@@ -1,25 +1,97 @@
+ """Process JSONL jobs from an append-only spool with a durable byte checkpoint."""
+ 
+ import json
++import os
++import tempfile
+ from pathlib import Path
+ 
+ 
++def _fsync_directory(directory):
++    """Best-effort fsync of a directory so a rename survives a crash."""
++    try:
++        fd = os.open(directory, os.O_RDONLY)
++    except OSError:
++        return
++    try:
++        os.fsync(fd)
++    except OSError:
++        pass
++    finally:
++        os.close(fd)
++
++
+ def _save_offset(path, offset):
+-    Path(path).write_text(str(offset), encoding="ascii")
++    """Persist ``offset`` atomically.
++
++    The value is written to a temporary file in the same directory, flushed
++    and fsynced, then atomically renamed over the checkpoint.  An interrupted
++    write therefore leaves either the old or the new offset, never a partial
++    or truncated value.
++    """
++    path = Path(path)
++    directory = path.parent
++    fd, temporary = tempfile.mkstemp(
++        dir=directory, prefix=path.name + ".", suffix=".tmp"
++    )
++    try:
++        with os.fdopen(fd, "w", encoding="ascii") as stream:
++            stream.write(str(offset))
++            stream.flush()
++            os.fsync(stream.fileno())
++        os.replace(temporary, path)
++    except BaseException:
++        try:
++            os.unlink(temporary)
++        except OSError:
++            pass
++        raise
++    _fsync_directory(directory)
++
++
++def _load_offset(path, size):
++    """Read and validate the checkpoint against the current spool size."""
++    path = Path(path)
++    if not path.exists():
++        return 0
++    text = path.read_text(encoding="ascii").strip()
++    if not text:
++        raise ValueError(f"checkpoint {path} is empty")
++    try:
++        offset = int(text)
++    except ValueError as exc:
++        raise ValueError(f"checkpoint {path} is not a valid byte offset") from exc
++    if offset < 0 or offset > size:
++        raise ValueError(
++            f"checkpoint {path} points to byte {offset}, "
++            f"outside the current spool (0..{size})"
++        )
++    return offset
+ 
+ 
+ def process_spool(spool_path, checkpoint_path, handler):
+-    """Call handler for each complete unprocessed record; return job count."""
++    """Call handler for each complete unprocessed record; return job count.
++
++    Only newline-terminated records are processed, so a partially written
++    trailing line is left untouched for the next run once it is complete.  The
++    checkpoint is advanced only after the handler returns successfully, so a
++    failed or crashed handler causes the record to be delivered again
++    (at-least-once).
++    """
+     spool_path = Path(spool_path)
+     checkpoint_path = Path(checkpoint_path)
+-    offset = int(checkpoint_path.read_text(encoding="ascii")) if checkpoint_path.exists() else 0
++    size = spool_path.stat().st_size
++    offset = _load_offset(checkpoint_path, size)
+     count = 0
+     with spool_path.open("rb") as spool:
+         spool.seek(offset)
+-        for raw_line in spool:
++        while True:
++            raw_line = spool.readline()
++            if not raw_line:
++                break  # clean end of spool
++            if not raw_line.endswith(b"\n"):
++                break  # incomplete trailing record; wait for the append
+             job = json.loads(raw_line.decode("utf-8"))
+-            offset = spool.tell()
+-            _save_offset(checkpoint_path, offset)
+             handler(job)
+             count += 1
++            _save_offset(checkpoint_path, spool.tell())
+     return count

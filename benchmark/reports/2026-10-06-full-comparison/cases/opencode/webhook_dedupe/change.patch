@@ -1,0 +1,49 @@
+diff --git a/webhook.py b/webhook.py
+index 328e0af..e8e01c0 100644
+--- a/webhook.py
++++ b/webhook.py
+@@ -1,12 +1,40 @@
+ """Webhook idempotency backed by SQLite."""
+ 
++import sqlite3
++
+ 
+ def process_event(db, event_id, payload, handler):
++    """Run ``handler`` at most once for ``event_id``.
++
++    Returns ``True`` only when this call claimed and successfully handled the
++    event, and ``False`` when the event was already completed (or is currently
++    being handled by another delivery).
++
++    A delivery first inserts a claim row (``done=0``) in the same transaction
++    the handler runs in.  The row is only flipped to ``done=1`` and committed
++    once the handler returns, so a failure rolls the claim back and lets a
++    retry through.  Holding the transaction open while the handler runs means a
++    concurrent duplicate cannot insert a second claim, and a committed
++    ``done=1`` row is visible to every new connection.
++    """
+     db.execute("CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, done INTEGER)")
+-    existing = db.execute("SELECT done FROM events WHERE id=?", (event_id,)).fetchone()
+-    if existing:
++
++    try:
++        db.execute("INSERT INTO events(id, done) VALUES(?, 0)", (event_id,))
++    except sqlite3.IntegrityError:
++        # The event already exists: either completed, or claimed by another
++        # delivery that is still running.  Neither case is ours to handle.
++        db.rollback()
+         return False
+-    db.execute("INSERT INTO events VALUES(?,1)", (event_id,))
++
++    try:
++        handler(payload)
++    except Exception:
++        # Discard the claim so a later delivery can retry the event.
++        db.rollback()
++        raise
++
++    # Mark the event complete and persist it for all future connections.
++    db.execute("UPDATE events SET done=1 WHERE id=?", (event_id,))
+     db.commit()
+-    handler(payload)
+     return True

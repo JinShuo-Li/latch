@@ -1,0 +1,112 @@
+{
+  "case_id": "dag_scheduler",
+  "tier": "hard",
+  "case_sha256": "3e922357d00da8c5ec9e536e8ffa826151c289a55b5c00058f0903b7beb29b0a",
+  "baseline_commit": "63f0a7f96e35bde59da74fee12807fce6c388811",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "shared_dependency_once",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "cycle_before_side_effect",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: cycle\n"
+    },
+    {
+      "name": "unknown_before_side_effect",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: unknown\n"
+    },
+    {
+      "name": "runner_failure_stops_dependents",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 9, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "shared_dependency_once",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "cycle_before_side_effect",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unknown_before_side_effect",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "runner_failure_stops_dependents",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 60.096,
+  "models": [
+    "opencode-go/deepseek-v4.1-flash"
+  ],
+  "usage": {
+    "input_tokens": 123877,
+    "uncached_input_tokens": 8805,
+    "output_tokens": 6004,
+    "reported_output_tokens": 3582,
+    "reasoning_tokens": 2422,
+    "cache_read_tokens": 115072,
+    "cache_write_tokens": 0,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 14,
+    "tool_calls": 15
+  },
+  "agent": "opencode",
+  "attempt_total_seconds": 60.442,
+  "resources": {
+    "cpu_user_seconds": 0.0,
+    "cpu_system_seconds": 0.0,
+    "max_rss_kib": 2040,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0026415,
+        "input_hit": 0.000690432,
+        "output": 0.0072048,
+        "total": 0.010536732
+      },
+      "off_peak": {
+        "input_miss": 0.00132075,
+        "input_hit": 0.000345216,
+        "output": 0.0036024,
+        "total": 0.005268366
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.01761,
+        "input_hit": 0.00460288,
+        "output": 0.048032,
+        "total": 0.07024488
+      },
+      "off_peak": {
+        "input_miss": 0.008805,
+        "input_hit": 0.00230144,
+        "output": 0.024016,
+        "total": 0.03512244
+      }
+    }
+  }
+}

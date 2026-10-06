@@ -1,0 +1,31 @@
+diff --git a/headers.py b/headers.py
+index a3962f6..7023f5e 100644
+--- a/headers.py
++++ b/headers.py
+@@ -1,8 +1,25 @@
+ """Normalize incoming gateway headers."""
+ 
++# Header fields that must not be comma-joined when they appear more than
++# once, because a comma is a legal character inside their value.
++NON_COMBINABLE = frozenset({"set-cookie"})
++
+ 
+ def normalize_headers(pairs):
++    """Normalize ordered ``(name, value)`` header pairs into a dict.
++
++    Header names are case-insensitive, so they are folded to lowercase.
++    Repeated ordinary fields are combined with ``", "``.  ``Set-Cookie``
++    (and any other field in :data:`NON_COMBINABLE`) is kept as a list so
++    that each value stays separate.
++    """
+     result = {}
+     for name, value in pairs:
+-        result[name] = value
++        key = name.lower()
++        if key in NON_COMBINABLE:
++            result.setdefault(key, []).append(value)
++        elif key in result:
++            result[key] = result[key] + ", " + value
++        else:
++            result[key] = value
+     return result

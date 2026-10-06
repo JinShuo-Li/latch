@@ -1,0 +1,128 @@
+{
+  "case_id": "dag_scheduler",
+  "tier": "hard",
+  "title": "Dependency-aware task scheduler",
+  "case_sha256": "3e922357d00da8c5ec9e536e8ffa826151c289a55b5c00058f0903b7beb29b0a",
+  "baseline_commit": "73c6853a74ec24b9b47b6f465fefd1fdfc781dfa",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "shared_dependency_once",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "cycle_before_side_effect",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: cycle\n"
+    },
+    {
+      "name": "unknown_before_side_effect",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nAssertionError: unknown\n"
+    },
+    {
+      "name": "runner_failure_stops_dependents",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 9, in <module>\nAssertionError\n"
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "shared_dependency_once",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "cycle_before_side_effect",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "unknown_before_side_effect",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "runner_failure_stops_dependents",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 4,
+  "checks_total": 4,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 24.992,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "64ed05c1-0310-4554-99e9-66518f87a97d",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 41282,
+    "output_tokens": 2548,
+    "cache_read_tokens": 35456,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.8589,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 6,
+    "tool_calls": 8,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M scheduler.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/dag_scheduler/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 25.333,
+  "resources": {
+    "cpu_user_seconds": 0.11,
+    "cpu_system_seconds": 0.12,
+    "max_rss_kib": 15992,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 6,
+    "tool_calls": 8,
+    "validation_passes": 3,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.0017477999999999999,
+        "input_hit": 0.00021273600000000002,
+        "output": 0.0030575999999999997,
+        "total": 0.005018135999999999
+      },
+      "off_peak": {
+        "input_miss": 0.0008738999999999999,
+        "input_hit": 0.00010636800000000001,
+        "output": 0.0015287999999999999,
+        "total": 0.0025090679999999997
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.011652,
+        "input_hit": 0.00141824,
+        "output": 0.020384,
+        "total": 0.033454239999999996
+      },
+      "off_peak": {
+        "input_miss": 0.005826,
+        "input_hit": 0.00070912,
+        "output": 0.010192,
+        "total": 0.016727119999999998
+      }
+    }
+  }
+}

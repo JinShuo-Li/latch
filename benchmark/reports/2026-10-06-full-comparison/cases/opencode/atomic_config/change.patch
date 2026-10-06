@@ -1,0 +1,221 @@
+diff --git a/config_store.py b/config_store.py
+index 0ceac0c..d3ec84d 100644
+--- a/config_store.py
++++ b/config_store.py
+@@ -1,16 +1,104 @@
+-"""Daemon JSON configuration with backup."""
++"""Daemon JSON configuration with backup and atomic replacement."""
+ 
+ import json
++import os
++import tempfile
++from collections.abc import Mapping
+ from pathlib import Path
+ 
+ 
++def _backup_path(path):
++    """Return the backup path that sits next to *path*."""
++    return Path(path).with_name(Path(path).name + ".bak")
++
++
++def _parse_config(text):
++    """Parse *text* as JSON, requiring a JSON object (mapping)."""
++    value = json.loads(text)
++    if not isinstance(value, Mapping):
++        raise ValueError("configuration must be a JSON object")
++    return value
++
++
++def _atomic_write_text(path, text):
++    """Write *text* to *path* atomically (temp file + os.replace)."""
++    path = Path(path)
++    fd, tmp_name = tempfile.mkstemp(
++        dir=str(path.parent), prefix="." + path.name + ".", suffix=".tmp"
++    )
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as handle:
++            handle.write(text)
++            handle.flush()
++            os.fsync(handle.fileno())
++        os.replace(tmp_name, path)
++    except BaseException:
++        try:
++            os.unlink(tmp_name)
++        except FileNotFoundError:
++            pass
++        raise
++
++
+ def write_config(path, data):
++    """Persist *data* to *path*.
++
++    The mapping is fully validated and serialized before any file is touched.
++    The previous valid configuration is preserved as ``<name>.bak`` and the
++    live file is replaced atomically so a crash can never leave it corrupt.
++    """
++    if not isinstance(data, Mapping):
++        raise TypeError("configuration data must be a mapping")
++
++    # Serialize first so validation errors never modify the filesystem.
++    # allow_nan=False keeps the output valid, standards-compliant JSON.
++    serialized = json.dumps(data, allow_nan=False)
++
+     path = Path(path)
+     path.parent.mkdir(parents=True, exist_ok=True)
++
+     if path.exists():
+-        path.with_name(path.name + ".bak").write_bytes(path.read_bytes())
+-    path.write_text(json.dumps(data), encoding="utf-8")
++        try:
++            existing = path.read_text(encoding="utf-8")
++            _parse_config(existing)
++        except (OSError, ValueError):
++            # The live file is missing/corrupt: keep any existing good backup.
++            pass
++        else:
++            # Preserve the previous *valid* configuration as the backup.
++            _atomic_write_text(_backup_path(path), existing)
++
++    _atomic_write_text(path, serialized)
+ 
+ 
+ def read_config(path):
+-    return json.loads(Path(path).read_text(encoding="utf-8"))
++    """Read the configuration from *path*.
++
++    If the live file is missing or corrupt, fall back to a valid backup. If
++    neither copy is usable, raise an error.
++    """
++    path = Path(path)
++    backup = _backup_path(path)
++
++    live_error = None
++    try:
++        return _parse_config(path.read_text(encoding="utf-8"))
++    except (OSError, ValueError) as exc:
++        live_error = exc
++
++    backup_error = None
++    try:
++        return _parse_config(backup.read_text(encoding="utf-8"))
++    except (OSError, ValueError) as exc:
++        backup_error = exc
++
++    if isinstance(live_error, FileNotFoundError) and isinstance(
++        backup_error, FileNotFoundError
++    ):
++        raise FileNotFoundError(
++            "no configuration file found at {!s} or its backup".format(path)
++        )
++
++    raise ValueError(
++        "no valid configuration at {!s} (backup also unusable)".format(path)
++    ) from live_error
+diff --git a/test_config_store.py b/test_config_store.py
+index 3bda97c..7cc2444 100644
+--- a/test_config_store.py
++++ b/test_config_store.py
+@@ -1,3 +1,5 @@
++import json
++import os
+ import tempfile
+ import unittest
+ from pathlib import Path
+@@ -20,5 +22,96 @@ class ConfigStoreTest(unittest.TestCase):
+                 write_config(path, {"bad": {1}})
+             self.assertEqual(read_config(path), {"port": 8080})
+ 
++    def test_write_rejects_non_mapping(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            for bad in ([1, 2, 3], "text", 42, None):
++                with self.assertRaises(TypeError):
++                    write_config(path, bad)
++            self.assertFalse(path.exists())
++
++    def test_invalid_write_does_not_touch_files(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            write_config(path, {"port": 8080})
++            write_config(path, {"port": 9090})
++            backup = path.with_name("settings.json.bak")
++            live_before = path.read_bytes()
++            backup_before = backup.read_bytes()
++
++            with self.assertRaises(TypeError):
++                write_config(path, {"bad": {1}})
++
++            self.assertEqual(path.read_bytes(), live_before)
++            self.assertEqual(backup.read_bytes(), backup_before)
++            self.assertEqual(list(Path(directory).glob("*.tmp")), [])
++
++    def test_backup_holds_previous_valid_config(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            write_config(path, {"port": 8080})
++            self.assertFalse(path.with_name("settings.json.bak").exists())
++
++            write_config(path, {"port": 9090})
++            backup = path.with_name("settings.json.bak")
++            self.assertEqual(json.loads(backup.read_text()), {"port": 8080})
++            self.assertEqual(read_config(path), {"port": 9090})
++
++    def test_recover_from_corrupt_live(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            write_config(path, {"port": 8080})
++            write_config(path, {"port": 9090})  # backup now holds 8080
++            path.write_text("{ this is not json", encoding="utf-8")
++
++            self.assertEqual(read_config(path), {"port": 8080})
++
++    def test_recover_when_live_missing(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            write_config(path, {"port": 8080})
++            write_config(path, {"port": 9090})
++            path.unlink()
++
++            self.assertEqual(read_config(path), {"port": 8080})
++
++    def test_fail_when_both_copies_bad(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            backup = path.with_name("settings.json.bak")
++            path.write_text("not json", encoding="utf-8")
++            backup.write_text("also not json", encoding="utf-8")
++
++            with self.assertRaises(ValueError):
++                read_config(path)
++
++    def test_corrupt_live_does_not_clobber_good_backup(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            backup = path.with_name("settings.json.bak")
++            write_config(path, {"port": 8080})
++            write_config(path, {"port": 9090})  # backup holds {"port": 8080}
++            path.write_text("corrupt", encoding="utf-8")
++
++            write_config(path, {"port": 7070})
++
++            # The previously valid config is still the backup.
++            self.assertEqual(json.loads(backup.read_text()), {"port": 8080})
++            self.assertEqual(read_config(path), {"port": 7070})
++
++    def test_read_missing_raises_file_not_found(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            with self.assertRaises(FileNotFoundError):
++                read_config(path)
++
++    def test_no_temp_files_left_behind(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "nested" / "settings.json"
++            write_config(path, {"port": 8080})
++            write_config(path, {"port": 9090})
++            self.assertEqual(list(Path(directory).rglob("*.tmp")), [])
++
+ 
+-if __name__ == "__main__": unittest.main()
++if __name__ == "__main__":
++    unittest.main()

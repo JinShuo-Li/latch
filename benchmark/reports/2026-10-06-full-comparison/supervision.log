@@ -1,0 +1,127 @@
+REPORT_ROOT /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350
+START latch cache_stampede
+START opencode cache_stampede
+START opencode retry_policy
+DONE latch cache_stampede PASS 3/3 32.604s
+START latch retry_policy
+cache_stampede PASS 3/3 35.436s
+DONE opencode cache_stampede PASS 3/3 35.436s
+START opencode http_ranges
+retry_policy PASS 4/4 44.103s
+DONE opencode retry_policy PASS 4/4 44.103s
+START latch http_ranges
+DONE latch retry_policy PASS 4/4 24.269s
+START latch lease_queue
+http_ranges PASS 3/3 31.153s
+DONE opencode http_ranges PASS 3/3 31.153s
+START opencode lease_queue
+DONE latch http_ranges PASS 3/3 37.331s
+START latch incremental_sync
+DONE latch lease_queue FAIL 3/4 31.304s
+START opencode incremental_sync
+lease_queue FAIL 3/4 49.546s
+DONE opencode lease_queue FAIL 3/4 49.546s
+START latch stream_records
+DONE latch incremental_sync PASS 4/4 46.456s
+START opencode stream_records
+incremental_sync PASS 4/4 59.784s
+DONE opencode incremental_sync PASS 4/4 59.784s
+START opencode path_rules
+DONE latch stream_records PASS 4/4 42.362s
+START latch path_rules
+path_rules PASS 3/3 20.65s
+DONE opencode path_rules PASS 3/3 20.65s
+START opencode log_rotation
+stream_records PASS 4/4 41.882s
+DONE opencode stream_records PASS 4/4 41.882s
+START latch log_rotation
+DONE latch path_rules PASS 3/3 11.656s
+START latch atomic_config
+DONE latch log_rotation PASS 3/3 27.693s
+START opencode atomic_config
+DONE latch atomic_config PASS 3/3 71.93s
+START opencode spool_recovery
+log_rotation PASS 3/3 74.832s
+DONE opencode log_rotation PASS 3/3 74.832s
+START latch spool_recovery
+DONE latch spool_recovery PASS 4/4 31.224s
+START opencode pagination_cursor
+atomic_config PASS 3/3 93.691s
+DONE opencode atomic_config PASS 3/3 93.691s
+START latch pagination_cursor
+DONE latch pagination_cursor PASS 3/3 23.085s
+START latch dag_scheduler
+spool_recovery PASS 4/4 79.901s
+DONE opencode spool_recovery PASS 4/4 79.901s
+START opencode dag_scheduler
+DONE latch dag_scheduler PASS 4/4 24.992s
+START opencode csv_chunks
+pagination_cursor PASS 3/3 82.168s
+DONE opencode pagination_cursor PASS 3/3 82.168s
+START latch csv_chunks
+dag_scheduler PASS 4/4 60.096s
+DONE opencode dag_scheduler PASS 4/4 60.096s
+START latch append_index
+csv_chunks PASS 3/3 50.289s
+DONE opencode csv_chunks PASS 3/3 50.289s
+START opencode append_index
+DONE latch csv_chunks PASS 3/3 41.84s
+START latch stream_framing
+DONE latch append_index FAIL 2/3 33.562s
+START opencode stream_framing
+DONE latch stream_framing PASS 3/3 26.314s
+START latch sqlite_migration
+append_index FAIL 2/3 55.678s
+DONE opencode append_index FAIL 2/3 55.678s
+START opencode sqlite_migration
+stream_framing PASS 3/3 36.042s
+DONE opencode stream_framing PASS 3/3 36.042s
+START opencode duration_units
+DONE latch sqlite_migration PASS 3/3 47.164s
+START latch duration_units
+duration_units PASS 3/3 24.27s
+DONE opencode duration_units PASS 3/3 24.27s
+START latch transaction_outbox
+DONE latch duration_units PASS 3/3 14.5s
+START opencode transaction_outbox
+sqlite_migration PASS 3/3 52.838s
+DONE opencode sqlite_migration PASS 3/3 52.838s
+START opencode option_values
+transaction_outbox FAIL 2/3 39.094s
+DONE opencode transaction_outbox FAIL 2/3 39.094s
+START latch option_values
+option_values PASS 3/3 33.469s
+DONE opencode option_values PASS 3/3 33.469s
+START latch webhook_dedupe
+DONE latch transaction_outbox PASS 3/3 69.515s
+START opencode webhook_dedupe
+DONE latch option_values PASS 3/3 22.952s
+START opencode archive_paths
+DONE latch webhook_dedupe PASS 3/3 55.605s
+START latch archive_paths
+archive_paths PASS 3/3 49.345s
+DONE opencode archive_paths PASS 3/3 49.345s
+START latch config_layers
+webhook_dedupe PASS 3/3 59.085s
+DONE opencode webhook_dedupe PASS 3/3 59.085s
+START opencode config_layers
+DONE latch archive_paths PASS 3/3 34.721s
+START latch ansi_width
+config_layers PASS 4/4 33.57s
+DONE opencode config_layers PASS 4/4 33.57s
+START opencode ansi_width
+DONE latch config_layers PASS 4/4 46.25s
+START opencode header_merge
+DONE latch ansi_width PASS 3/3 30.869s
+START latch header_merge
+DONE latch header_merge PASS 3/3 21.593s
+START opencode rate_window
+header_merge PASS 3/3 50.705s
+DONE opencode header_merge PASS 3/3 50.705s
+START latch rate_window
+ansi_width PASS 3/3 59.502s
+DONE opencode ansi_width PASS 3/3 59.502s
+rate_window PASS 4/4 30.957s
+DONE opencode rate_window PASS 4/4 30.957s
+DONE latch rate_window PASS 4/4 19.618s
+FINISHED 50 attempts /home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/summary.json

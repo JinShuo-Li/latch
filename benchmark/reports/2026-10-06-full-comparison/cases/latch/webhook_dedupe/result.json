@@ -1,0 +1,119 @@
+{
+  "case_id": "webhook_dedupe",
+  "tier": "hard",
+  "title": "Idempotent webhook delivery with durable claims",
+  "case_sha256": "2940ba8691d0f0ef57f5ffcfb396ae31d93092891743c86b496c83a37b6a2a32",
+  "baseline_commit": "88f46643843253352e7b70e270ddc83bb540e426",
+  "passed": true,
+  "baseline_checks": [
+    {
+      "name": "handler_failure_retry",
+      "passed": false,
+      "detail": "Traceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAssertionError\n"
+    },
+    {
+      "name": "duplicate_only_once",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "durable_across_connection",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "final_checks": [
+    {
+      "name": "handler_failure_retry",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "duplicate_only_once",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "durable_across_connection",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "checks_passed": 3,
+  "checks_total": 3,
+  "cli_exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 55.605,
+  "status": "completed",
+  "completion": "verified",
+  "session_id": "f0157c8b-3178-4dbb-b5b6-447869c09788",
+  "profile": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "effort": "provider_default"
+  },
+  "usage": {
+    "input_tokens": 109508,
+    "output_tokens": 5417,
+    "cache_read_tokens": 98688,
+    "cache_write_tokens": null,
+    "cache_read_fraction": 0.9012,
+    "estimated_cost_usd": null
+  },
+  "event_counts": {
+    "model_turns": 12,
+    "tool_calls": 13,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "git_status": [
+    " M test_webhook.py",
+    " M webhook.py"
+  ],
+  "workspace": "/home/lijs/work/latch/benchmark/runs/comparison-20261006T060117Z-77350/latch/webhook_dedupe/workspace",
+  "agent": "latch",
+  "attempt_total_seconds": 55.806,
+  "resources": {
+    "cpu_user_seconds": 0.21,
+    "cpu_system_seconds": 0.15,
+    "max_rss_kib": 16036,
+    "major_page_faults": 0,
+    "measurement": "GNU time -v; maximum child RSS, not simultaneous tree RSS"
+  },
+  "root_event_counts": {
+    "model_turns": 12,
+    "tool_calls": 13,
+    "validation_passes": 1,
+    "validation_failures": 0
+  },
+  "cost_scenarios": {
+    "USD": {
+      "peak": {
+        "input_miss": 0.003246,
+        "input_hit": 0.000592128,
+        "output": 0.0065004,
+        "total": 0.010338528
+      },
+      "off_peak": {
+        "input_miss": 0.001623,
+        "input_hit": 0.000296064,
+        "output": 0.0032502,
+        "total": 0.005169264
+      }
+    },
+    "CNY": {
+      "peak": {
+        "input_miss": 0.02164,
+        "input_hit": 0.00394752,
+        "output": 0.043336,
+        "total": 0.06892352
+      },
+      "off_peak": {
+        "input_miss": 0.01082,
+        "input_hit": 0.00197376,
+        "output": 0.021668,
+        "total": 0.03446176
+      }
+    }
+  }
+}
