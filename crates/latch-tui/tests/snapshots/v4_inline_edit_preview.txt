@@ -1,6 +1,6 @@
-› Fix the calculation.                                                                              
                                                                                                     
-✓ Updated 2 files                                                                                   
+                                                                                                    
+• Edited 2 files                                                                                    
   └ M src/calc.rs  +1 −1                                                                            
     @@ -1,4 +1,4 @@                                                                                 
      pub fn add(a: i32, b: i32) -> i32 {                                                            
@@ -14,11 +14,11 @@
     +fn subtracts() {}                                                                              
                                                                                                     
                                                                                                     
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
 › Ask Latch…                                                                                        
+                                                                                                    
+                                                                                                    
+                                                                                                    
   WORK · deepseek-flash/low · main · std · ask                                                 ready
+                                                                                                    
+enter send  ctrl+j newline  ctrl+p commands                                                         
+/tmp/latch-ui                                                                           latch v0.2.3

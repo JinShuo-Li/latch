@@ -385,8 +385,6 @@ struct App {
     input: Composer,
     palette: Palette,
     presentation: PresentationModel,
-    /// Ephemeral animation frame; never written to durable history.
-    activity_frame: usize,
     items: Vec<TranscriptItem>,
     streaming: Option<String>,
     mode: Mode,
@@ -437,7 +435,7 @@ struct App {
     viewport_rows: usize,
     /// Authoritative observability state derived from durable events.
     sidebar: SidebarModel,
-    /// Explicit user override for sidebar visibility; hidden until toggled.
+    /// Explicit user override for sidebar visibility; `None` follows width.
     sidebar_override: Option<bool>,
     /// Last rendered terminal width, so key handling can toggle responsively.
     last_width: u16,
@@ -532,7 +530,6 @@ impl Default for App {
             input: Composer::new(),
             palette: Palette::new(),
             presentation: PresentationModel::default(),
-            activity_frame: 0,
             items: Vec::new(),
             streaming: None,
             mode: Mode::default(),
@@ -1843,10 +1840,14 @@ impl App {
     }
 }
 
-/// Whether the sidebar inspector has been explicitly opened.
+/// Below this width the sidebar auto-collapses; narrower terminals stay clean
+/// unless the user explicitly toggles it.
+pub const SIDEBAR_MIN_AUTO_WIDTH: u16 = 110;
+
+/// Whether the sidebar should be shown, honoring an explicit user override.
 #[must_use]
-pub fn sidebar_visible(_width: u16, override_state: Option<bool>) -> bool {
-    override_state.unwrap_or(false)
+pub fn sidebar_visible(width: u16, override_state: Option<bool>) -> bool {
+    override_state.unwrap_or(width >= SIDEBAR_MIN_AUTO_WIDTH)
 }
 
 /// Responsive sidebar width in columns. Never a fixed third of the terminal:

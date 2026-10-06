@@ -1,23 +1,15 @@
-                                                                                                                        
-Latch                                                                                                                   
-a quiet terminal coding agent                                                                                           
-                                                                                                                        
-Type a request · /help for commands                                                                                     
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
+                                                                                            │                           
+Latch                                                                                       │WORK · 0 turns             
+a quiet terminal coding agent                                                               │                           
+                                                                                            │TASK                       
+Type a request · /help for commands                                                         │InProgress                 
+                                                                                            │Implementation unchanged   
+                                                                                            │Validation pending         
+                                                                                            │                           
+                                                                                            │CONTEXT                    
+                                                                                            │                           
+                                                                                            │                           
+                                                                                            │                           
                                                                                                                         
   Setup · OpenAI · Save                                                                                                 
                                                                                                                         
@@ -30,5 +22,13 @@ Type a request · /help for commands
   Default    gpt-5.5                                                                                                    
                                                                                                                         
   ↑↓ select · enter choose · esc back                                                                                   
+                                                                                                                        
+                                                                                                                        
 › Ask Latch…                                                                                                            
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
   WORK · std · ask                                                                                                 ready
+                                                                                                                        
+enter send  ctrl+j newline  ctrl+p commands                                                                             
+.                                                                                                           latch v0.2.3

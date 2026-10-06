@@ -1,23 +1,79 @@
 //! Frame composition: transcript viewport, composer, overlays, palette,
 //! and the welcome/footer chrome.
 
-use super::transcript::{notice_style, running_cell, semantic_visual_height, transcript_lines};
+use super::transcript::{notice_style, semantic_visual_height, transcript_lines};
 use super::*;
 
-/// The editor grows with input while leaving the transcript room to breathe.
+/// Responsive chrome rows around the composer.
+///
+/// Rows are dropped in priority order as the terminal shrinks: footer, top
+/// spacer, hints, gap, then the metadata row. The rounded frame and the editor
+/// body are only ever reduced to a single row, never removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct ComposerChrome {
+    pub(super) spacer: u16,
+    pub(super) top: u16,
     pub(super) body: u16,
+    pub(super) gap: u16,
     pub(super) meta: u16,
+    pub(super) rule: u16,
+    pub(super) hints: u16,
+    pub(super) footer: u16,
 }
 
 impl ComposerChrome {
+    fn total(self) -> u16 {
+        self.spacer
+            + self.top
+            + self.body
+            + self.gap
+            + self.meta
+            + self.rule
+            + self.hints
+            + self.footer
+    }
+
+    /// The editor keeps at least this many rows on terminals tall enough for
+    /// it, so the idle screen opens with a roomy input box instead of a
+    /// single hairline row. Heights that cannot afford it fall back to a
+    /// smaller body.
+    const MIN_BODY: u16 = 3;
+
     pub(super) fn responsive(height: u16, content_rows: usize) -> Self {
-        let max_body = (u32::from(height) * 2 / 5).clamp(1, 12) as u16;
-        Self {
-            body: (content_rows.max(1) as u16).min(max_body),
-            meta: u16::from(height >= 5),
+        if height < 3 {
+            return Self {
+                body: 1,
+                ..Self::default()
+            };
         }
+        let max_body = (u32::from(height) * 2 / 5).saturating_sub(4).clamp(1, 16) as u16;
+        let mut chrome = Self {
+            spacer: u16::from(height >= 14),
+            top: 1,
+            body: (content_rows.max(1) as u16)
+                .max(Self::MIN_BODY)
+                .min(max_body),
+            gap: u16::from(height >= 9),
+            meta: 1,
+            rule: 1,
+            hints: u16::from(height >= 10),
+            footer: u16::from(height >= 16),
+        };
+        let floor = if height >= 10 { 3 } else { 1 };
+        for optional in ["footer", "spacer", "hints", "gap", "meta"] {
+            if height.saturating_sub(chrome.total()) >= floor {
+                break;
+            }
+            match optional {
+                "footer" => chrome.footer = 0,
+                "spacer" => chrome.spacer = 0,
+                "hints" => chrome.hints = 0,
+                "gap" => chrome.gap = 0,
+                "meta" => chrome.meta = 0,
+                _ => {}
+            }
+        }
+        chrome
     }
 }
 
@@ -57,7 +113,7 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
         .cells()
         .iter()
         .rev()
-        .find(|cell| running_cell(cell))
+        .find(|cell| cell_is_running(cell))
     {
         let (text, subject) = running_cell_status(cell);
         label = Some(text);
@@ -103,15 +159,9 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
             Style::default().add_modifier(Modifier::BOLD),
         )
     };
-    const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let marker = if attention {
-        "!"
-    } else {
-        SPINNER[app.activity_frame % SPINNER.len()]
-    };
     let mut spans = vec![
         Span::raw("  "),
-        Span::styled(format!("{marker} "), marker_style),
+        Span::styled("• ", marker_style),
         Span::styled(label, label_style),
     ];
     if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
@@ -119,6 +169,24 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
         spans.push(Span::styled(detail, notice_style()));
     }
     Some(Line::from(spans))
+}
+
+fn cell_is_running(cell: &Cell) -> bool {
+    match cell {
+        Cell::Exploration { operations } => operations
+            .iter()
+            .any(|operation| operation.status == CellStatus::Running),
+        Cell::Command { status, .. }
+        | Cell::Validation { status, .. }
+        | Cell::Diff { status, .. }
+        | Cell::AgentTask { status, .. } => *status == CellStatus::Running,
+        Cell::Patch { files } => files.iter().any(|file| file.status == CellStatus::Running),
+        Cell::User { .. }
+        | Cell::Assistant { .. }
+        | Cell::AgentReport { .. }
+        | Cell::Notice { .. }
+        | Cell::Error { .. } => false,
+    }
 }
 
 fn running_cell_status(cell: &Cell) -> (String, Option<String>) {
@@ -167,6 +235,21 @@ fn command_activity(command: &str) -> &'static str {
     } else {
         "Running command"
     }
+}
+
+pub(super) fn hint_spans(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (index, (key, label)) in hints.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled("  ", notice_style()));
+        }
+        spans.push(Span::styled(
+            (*key).to_owned(),
+            Style::default().fg(Color::Gray),
+        ));
+        spans.push(Span::styled(format!(" {label}"), notice_style()));
+    }
+    spans
 }
 
 /// A restrained selector and approval surface, rendered directly above the
@@ -719,6 +802,79 @@ pub(super) fn draw_welcome(frame: &mut ratatui::Frame<'_>, area: ratatui::layout
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
+pub(super) fn draw_footer(frame: &mut ratatui::Frame<'_>, app: &App, area: ratatui::layout::Rect) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let width = area.width as usize;
+    let workspace = if app.workspace.is_empty() {
+        ".".to_owned()
+    } else {
+        app.workspace.clone()
+    };
+    let right = format!("latch v{}", env!("CARGO_PKG_VERSION"));
+    let right_width = display_width(&right);
+    let left = sidebar::fit(
+        &workspace,
+        width.saturating_sub(right_width).saturating_sub(1),
+    );
+    let left_width = display_width(&left);
+    let line = if left_width + right_width < width {
+        Line::from(vec![
+            Span::styled(left, muted_style()),
+            Span::raw(" ".repeat(width - left_width - right_width)),
+            Span::styled(right, notice_style()),
+        ])
+    } else {
+        Line::styled(sidebar::fit(&workspace, width), notice_style())
+    };
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+pub(super) fn draw_composer_hints(
+    frame: &mut ratatui::Frame<'_>,
+    app: &App,
+    area: ratatui::layout::Rect,
+) {
+    if area.height == 0 || area.width < 28 {
+        return;
+    }
+    // The approval surface owns the keyboard and carries its own hints; a
+    // contradictory `enter send` row directly beneath it would mislead.
+    if app.permission.is_some() {
+        return;
+    }
+    let width = area.width as usize;
+    // Secondary shortcuts are abbreviated before the row is clipped.
+    let hints: &[(&str, &str)] = if width < 64 {
+        &[("ctrl+p", "commands")]
+    } else {
+        &[
+            ("enter", if app.busy { "steer" } else { "send" }),
+            ("ctrl+j", "newline"),
+            ("ctrl+p", "commands"),
+        ]
+    };
+    let left = hint_spans(hints);
+    let left_width: usize = left.iter().map(|span| display_width(&span.content)).sum();
+    let right = if !app.follow {
+        "shift+pgup/pgdn scroll".to_owned()
+    } else if !app.sidebar_visible_now() && app.last_width >= SIDEBAR_MIN_AUTO_WIDTH {
+        "ctrl+b sidebar".to_owned()
+    } else if app.detail {
+        "detail view".to_owned()
+    } else {
+        String::new()
+    };
+    let right_width = display_width(&right);
+    let mut spans = left;
+    if !right.is_empty() && left_width + right_width + 2 <= width {
+        spans.push(Span::raw(" ".repeat(width - left_width - right_width)));
+        spans.push(Span::styled(right, notice_style()));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 /// Metadata row inside the composer: mode, model, branch on the left; status
 /// and (when the sidebar is hidden) a compact working-set summary on the
 /// right. Secondary detail is dropped before the status.
@@ -851,9 +1007,13 @@ pub(super) fn draw_composer(
     frame: &mut ratatui::Frame<'_>,
     app: &mut App,
     area: ratatui::layout::Rect,
+    hints_area: ratatui::layout::Rect,
+    footer_area: ratatui::layout::Rect,
     chrome: &ComposerChrome,
     sidebar_shown: bool,
 ) {
+    draw_composer_hints(frame, app, hints_area);
+    draw_footer(frame, app, footer_area);
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -901,6 +1061,12 @@ pub(super) fn draw_composer(
     };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    for _ in 0..chrome.spacer {
+        lines.push(Line::from(""));
+    }
+    for _ in 0..chrome.top {
+        lines.push(band(Vec::new(), 0));
+    }
     let body_start = lines.len();
     for offset in 0..body_height {
         let index = viewport + offset;
@@ -942,6 +1108,9 @@ pub(super) fn draw_composer(
         spans.extend(content);
         lines.push(band(spans, 0));
     }
+    for _ in 0..chrome.gap {
+        lines.push(band(Vec::new(), 0));
+    }
     if chrome.meta > 0 {
         let meta = composer_meta_line(
             app,
@@ -949,6 +1118,9 @@ pub(super) fn draw_composer(
             sidebar_shown,
         );
         lines.push(band(meta.spans, GUTTER));
+    }
+    for _ in 0..chrome.rule {
+        lines.push(band(Vec::new(), 0));
     }
     frame.render_widget(Paragraph::new(lines), area);
 
@@ -1087,6 +1259,13 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let attachment_line = app.attachment_summary();
     let attachment_rows = u16::from(attachment_line.is_some());
     let chrome = ComposerChrome::responsive(area.height, content_rows);
+    // The approval surface carries its own hints; drop the composer hint row
+    // so no contradictory shortcut row sits underneath it.
+    let hints_rows = if app.permission.is_some() {
+        0
+    } else {
+        chrome.hints
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1095,7 +1274,11 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             Constraint::Length(palette_rows),
             Constraint::Length(status_rows),
             Constraint::Length(attachment_rows),
-            Constraint::Length(chrome.body + chrome.meta),
+            Constraint::Length(
+                chrome.spacer + chrome.top + chrome.body + chrome.gap + chrome.meta + chrome.rule,
+            ),
+            Constraint::Length(hints_rows),
+            Constraint::Length(chrome.footer),
         ])
         .split(area);
     let transcript_area = chunks[0];
@@ -1104,6 +1287,8 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let status_area = chunks[3];
     let attachment_area = chunks[4];
     let composer_area = chunks[5];
+    let hints_area = chunks[6];
+    let footer_area = chunks[7];
 
     if request_open {
         draw_request_overlay(frame, app, transcript_area);
@@ -1166,7 +1351,15 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         );
     }
     draw_palette(frame, app, palette_area, &candidates);
-    draw_composer(frame, app, composer_area, &chrome, sidebar_shown);
+    draw_composer(
+        frame,
+        app,
+        composer_area,
+        hints_area,
+        footer_area,
+        &chrome,
+        sidebar_shown,
+    );
     if let Some(capture) = &app.capture
         && action_area.height > 3
         && action_area.width > 2

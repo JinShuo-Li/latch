@@ -1,20 +1,20 @@
-                                                                                                                                                                
-Latch                                                                                                                                                           
-a quiet terminal coding agent                                                                                                                                   
-                                                                                                                                                                
-Type a request · /help for commands                                                                                                                             
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
+                                                                                                                    │a-very-long-model-name-that-keeps-going-a… 
+Latch                                                                                                               │WORK · 0 turns                             
+a quiet terminal coding agent                                                                                       │on main                                    
+                                                                                                                    │                                           
+Type a request · /help for commands                                                                                 │TASK                                       
+                                                                                                                    │InProgress                                 
+                                                                                                                    │Implementation unchanged                   
+                                                                                                                    │Validation pending                         
+                                                                                                                    │                                           
+                                                                                                                    │CONTEXT                                    
                                                                                                                                                                 
                                                                                                                                                                 
 › check the long metadata handling                                                                                                                              
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
   WORK · a-very-long-model-name-that-keeps-going-and-going-flash/low · main · std · ask                                                                    ready
+                                                                                                                                                                
+enter send  ctrl+j newline  ctrl+p commands                                                                                                                     
+/home/someone/very/deeply/nested/workspace/path/that/is/long                                                                                        latch v0.2.3

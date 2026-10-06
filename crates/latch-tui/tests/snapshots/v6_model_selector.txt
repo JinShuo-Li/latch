@@ -1,24 +1,16 @@
-                                                                                                                        
-Latch                                                                                                                   
-a quiet terminal coding agent                                                                                           
-                                                                                                                        
-Type a request · /help for commands                                                                                     
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
+                                                                                            │deepseek-v4.1-flash        
+Latch                                                                                       │WORK · 0 turns             
+a quiet terminal coding agent                                                               │on main                    
+                                                                                            │                           
+Type a request · /help for commands                                                         │TASK                       
+                                                                                            │InProgress                 
+                                                                                            │Implementation unchanged   
+                                                                                            │Validation pending         
+                                                                                            │                           
+                                                                                            │CONTEXT                    
+                                                                                            │                           
+                                                                                            │                           
+                                                                                            │                           
                                                                                                                         
   Inference profile · OpenCode Go                                                                                       
                                                                                                                         
@@ -26,5 +18,13 @@ Type a request · /help for commands
     Change provider…                                                                                                    
                                                                                                                         
   ↑↓ select · enter choose · backspace back · esc cancel                                                                
+                                                                                                                        
+                                                                                                                        
 › Ask Latch…                                                                                                            
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
   WORK · deepseek-v4.1-flash/low · main · std · ask                                                                ready
+                                                                                                                        
+enter send  ctrl+j newline  ctrl+p commands                                                                             
+/tmp/latch                                                                                                  latch v0.2.3

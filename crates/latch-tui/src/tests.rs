@@ -1067,11 +1067,11 @@ fn composer_is_a_neutral_band_with_a_prompt_gutter() {
             assert_eq!(cell.style().bg, surface, "composer band is continuous");
         }
     }
-    let body_row = rows[area.y as usize];
+    let body_row = rows[area.y as usize + 1];
     assert!(body_row.starts_with("› "), "{body_row:?}");
     // The empty composer leaves the cursor on the first text cell, directly
     // before the placeholder — never one column inside it.
-    assert_eq!(app.last_cursor, Some((area.x + 2, area.y)));
+    assert_eq!(app.last_cursor, Some((area.x + 2, area.y + 1)));
 }
 
 #[test]
@@ -1179,8 +1179,8 @@ fn render_to_text(app: &mut App, width: u16, height: u16) -> String {
 fn responsive_sidebar_rules_are_clamped_and_not_a_fixed_third() {
     assert!(!sidebar_visible(80, None));
     assert!(!sidebar_visible(100, None));
-    assert!(!sidebar_visible(110, None));
-    assert!(!sidebar_visible(200, None));
+    assert!(sidebar_visible(110, None));
+    assert!(sidebar_visible(200, None));
     // Explicit override wins at any width.
     assert!(sidebar_visible(80, Some(true)));
     assert!(!sidebar_visible(200, Some(false)));
@@ -1201,12 +1201,12 @@ fn ctrl_b_and_slash_sidebar_toggle_agree() {
         last_width: 200,
         ..App::default()
     };
-    assert!(!app.sidebar_visible_now());
-    app.on_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
-    assert_eq!(app.sidebar_override, Some(true));
     assert!(app.sidebar_visible_now());
     app.on_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    assert_eq!(app.sidebar_override, Some(false));
     assert!(!app.sidebar_visible_now());
+    app.on_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    assert!(app.sidebar_visible_now());
     // The slash command goes through the same toggle and never submits.
     for ch in "/sidebar".chars() {
         app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
@@ -1215,7 +1215,7 @@ fn ctrl_b_and_slash_sidebar_toggle_agree() {
         app.on_key(key(KeyCode::Enter, KeyModifiers::NONE))
             .is_none()
     );
-    assert_eq!(app.sidebar_override, Some(true));
+    assert_eq!(app.sidebar_override, Some(false));
     assert!(app.presentation.cells().is_empty());
 }
 
@@ -1296,10 +1296,7 @@ fn draw_never_panics_across_responsive_sizes_and_cjk_goal() {
 
 #[test]
 fn wide_terminal_shows_sidebar_and_narrow_hides_it() {
-    let mut wide = App {
-        sidebar_override: Some(true),
-        ..App::default()
-    };
+    let mut wide = App::default();
     wide.sidebar.apply_event(&latch_protocol::Event {
         id: uuid::Uuid::new_v4(),
         session_id: uuid::Uuid::nil(),
@@ -1323,15 +1320,14 @@ fn wide_terminal_shows_sidebar_and_narrow_hides_it() {
     let mut narrow = App::default();
     let text = render_to_text(&mut narrow, 80, 40);
     assert!(!text.contains("Working set"));
-    // An explicit inspector toggle survives resizing.
+    // Resizing across the threshold recomputes visibility without panics.
     let mut resizing = App {
         last_width: 200,
-        sidebar_override: Some(true),
         ..App::default()
     };
     assert!(resizing.sidebar_visible_now());
     let _ = render_to_text(&mut resizing, 80, 24);
-    assert!(resizing.sidebar_visible_now());
+    assert!(!resizing.sidebar_visible_now());
     let _ = render_to_text(&mut resizing, 200, 24);
     assert!(resizing.sidebar_visible_now());
 }
@@ -1740,7 +1736,7 @@ fn inline_preview_colors_real_removed_and_added_source_lines() {
     let text = lines_text(&lines);
     assert!(text.contains("-    base + a + b"), "{text}");
     assert!(text.contains("+    base + a - b"), "{text}");
-    assert!(text.contains("Updated src/calc.rs  +1 −1"), "{text}");
+    assert!(text.contains("Edited src/calc.rs  +1 −1"), "{text}");
 }
 
 #[test]
@@ -1796,7 +1792,7 @@ fn inline_preview_handles_deleted_files_and_unicode_content() {
         Some(Color::Red)
     );
     let text = lines_text(&lines);
-    assert!(text.contains("Updated 旧.rs  +0 −2"), "{text}");
+    assert!(text.contains("Edited 旧.rs  +0 −2"), "{text}");
     assert!(!text.contains("\n+"), "{text}");
 }
 
@@ -1873,7 +1869,8 @@ fn header_pricing_reaches_the_sidebar() {
 // ---- V4 composer and layout redesign ----
 
 #[test]
-fn user_messages_use_a_gutter_without_a_background_band() {
+fn user_messages_render_on_a_neutral_band_with_a_gutter() {
+    let palette = crate::theme::palette();
     let lines = cell_lines(
         &Cell::User {
             text: "fix the parser".into(),
@@ -1883,41 +1880,63 @@ fn user_messages_use_a_gutter_without_a_background_band() {
         40,
         true,
     );
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].style.bg, None);
-    let text: String = lines[0]
+    // Top pad, one content row, bottom pad.
+    assert_eq!(lines.len(), 3);
+    let band = palette.user_message().bg;
+    assert!(band.is_some(), "user band is painted on rich terminals");
+    for line in &lines {
+        assert_eq!(line.style.bg, band, "every user row keeps the band");
+    }
+    let first: String = lines[1]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(text, "› fix the parser");
+    assert!(first.starts_with("› "), "{first:?}");
+    assert!(first.contains("fix the parser"));
+    // The band reaches the full transcript width.
+    let width: usize = lines[1]
+        .spans
+        .iter()
+        .map(|span| display_width(&span.content))
+        .sum();
+    assert_eq!(width, 40, "band padding covers the row");
 }
 
 #[test]
-fn wrapped_user_messages_keep_the_gutter_without_padding() {
+fn wrapped_user_messages_keep_the_band_on_every_visual_row() {
+    let text = "word ".repeat(30);
     let lines = cell_lines(
         &Cell::User {
-            text: "word ".repeat(30),
+            text,
             media: Vec::new(),
         },
         false,
         24,
         true,
     );
-    assert!(lines.len() > 2);
-    assert_eq!(lines[0].spans[0].content, "› ");
-    for line in &lines[1..] {
-        assert_eq!(line.spans[0].content, "  ");
-    }
+    let band = crate::theme::palette().user_message().bg;
+    assert!(lines.len() > 4, "long text wraps into several rows");
     for line in &lines {
-        assert_eq!(line.style.bg, None);
+        assert_eq!(line.style.bg, band);
         let width: usize = line
             .spans
             .iter()
             .map(|span| display_width(&span.content))
             .sum();
         assert!(width <= 24, "row fits the viewport: {width}");
+        if line.spans.len() > 1 {
+            assert_eq!(width, 24, "content rows are padded to the full width");
+        }
     }
+    // Only the first content row carries the `›` gutter.
+    let text_rows = &lines[1..lines.len() - 1];
+    assert!(text_rows[0].spans[0].content == "› ");
+    assert!(
+        text_rows[1..]
+            .iter()
+            .all(|line| line.spans[0].content == "  ")
+    );
 }
 
 #[test]
@@ -2146,12 +2165,11 @@ fn welcome_is_small_and_terminal_native() {
 }
 
 #[test]
-fn idle_composer_is_compact_and_multiline_stays_bounded() {
-    assert_eq!(ComposerChrome::responsive(30, 1).body, 1);
-    assert_eq!(ComposerChrome::responsive(24, 1).body, 1);
-    assert_eq!(ComposerChrome::responsive(30, 20).body, 12);
+fn idle_composer_body_is_roomier_but_stays_bounded() {
+    assert_eq!(ComposerChrome::responsive(30, 1).body, 3);
+    assert_eq!(ComposerChrome::responsive(24, 1).body, 3);
+    assert_eq!(ComposerChrome::responsive(30, 20).body, 8);
     assert_eq!(ComposerChrome::responsive(12, 1).body, 1);
-    assert_eq!(ComposerChrome::responsive(24, 3).body, 3);
 }
 
 fn markdown_table_fixture(app: &mut App, text: &str) {
@@ -2270,7 +2288,7 @@ fn snapshot_user_and_assistant_message_hierarchy() {
 }
 
 #[test]
-fn snapshot_narrow_user_message_wraps_cleanly() {
+fn snapshot_narrow_user_message_keeps_the_band() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::UserMessage {
@@ -2337,7 +2355,6 @@ fn snapshot_active_running_status() {
 #[test]
 fn snapshot_subagent_status_and_sidebar() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
-    app.sidebar_override = Some(true);
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::ToolRequested {
             call: latch_protocol::ToolCall {
@@ -2450,7 +2467,6 @@ fn snapshot_narrow_terminal() {
 #[test]
 fn snapshot_wide_terminal_with_sidebar() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
-    app.sidebar_override = Some(true);
     app.sidebar.apply_event(&latch_protocol::Event {
         id: uuid::Uuid::new_v4(),
         session_id: uuid::Uuid::nil(),
@@ -2596,7 +2612,7 @@ fn working_and_interrupted_states_are_visible_above_the_composer() {
     let mut working = app_with_header("deepseek-flash", "/tmp/latch-ui");
     working.busy = true;
     let text = render_to_text(&mut working, 100, 20);
-    assert!(text.contains("⠋ Working"), "{text}");
+    assert!(text.contains("• Working"), "{text}");
     let mut interrupted = app_with_header("deepseek-flash", "/tmp/latch-ui");
     interrupted.interrupted = true;
     let text = render_to_text(&mut interrupted, 100, 20);
@@ -2604,7 +2620,7 @@ fn working_and_interrupted_states_are_visible_above_the_composer() {
 }
 
 #[test]
-fn running_tool_is_transient_in_compact_view_and_visible_in_raw_view() {
+fn running_tools_remain_visible_in_both_transcript_views() {
     let running = Cell::Command {
         call_id: "t1".into(),
         command: "cargo test -p latch-tui".into(),
@@ -2613,7 +2629,7 @@ fn running_tool_is_transient_in_compact_view_and_visible_in_raw_view() {
         output: String::new(),
         raw: "requested".into(),
     };
-    assert!(transcript_lines(std::slice::from_ref(&running), None, false, 80, true).is_empty());
+    assert!(!transcript_lines(std::slice::from_ref(&running), None, false, 80, true).is_empty());
     assert!(!transcript_lines(std::slice::from_ref(&running), None, true, 80, true).is_empty());
     let completed = Cell::Command {
         call_id: "t1".into(),
@@ -2654,7 +2670,6 @@ fn active_status_row_reports_semantic_running_state() {
 #[test]
 fn child_agent_activity_reaches_the_status_row_and_sidebar() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
-    app.sidebar_override = Some(true);
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::ToolRequested {
             call: latch_protocol::ToolCall {
@@ -2665,7 +2680,7 @@ fn child_agent_activity_reaches_the_status_row_and_sidebar() {
         },
     ))));
     let text = render_to_text(&mut app, 100, 20);
-    assert!(text.contains("Waiting for child agents"), "{text}");
+    assert!(text.contains("Spawned `audit-locks`"), "{text}");
     assert!(text.contains("child `audit-locks` starting"), "{text}");
 
     app.output(Output::Event(Box::new(presentation_event(

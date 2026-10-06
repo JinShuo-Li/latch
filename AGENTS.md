@@ -100,8 +100,8 @@ bash scripts/release-gate.sh
   charts. Both use recorded results without model calls and require optional
   Matplotlib and actual Times New Roman `times.ttf` / `timesbd.ttf` fonts.
 - Snapshot updates: `LATCH_UPDATE_SNAPSHOTS=1 cargo test -p latch-tui --lib`.
-  Exception: `crates/latch-tui/tests/snapshots/v31_sidebar.txt` is `include_str!`,
-  so edit it by hand and keep `cargo test -p latch-tui --lib` green.
+  Exceptions: `crates/latch-tui/tests/snapshots/{v31_sidebar,v3_semantic}.txt`
+  use `include_str!`; edit them by hand and keep `cargo test -p latch-tui --lib` green.
 - Extension fixture tests need `python3`; the reference TS extension needs
   `node` + `npm ci && npm run build` in `sdk/typescript` and `extensions/example-ts`.
 - Docker dogfood harness (local, not in CI): `./scripts/dogfood.sh "<task>"`

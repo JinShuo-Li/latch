@@ -1294,7 +1294,7 @@ mod tests {
         let rendered = super::super::render_cells_plain(model.cells(), false);
         assert!(rendered.contains("✗ Validation failed"));
         assert!(rendered.contains("cargo test · average_preserves_fraction FAILED · 0.38s"));
-        assert!(rendered.contains("Updated 2 files"));
+        assert!(rendered.contains("Edited 2 files"));
         assert!(rendered.contains("A tests/new.rs"));
         assert!(rendered.contains("M src/lib.rs"));
         assert!(!rendered.contains("abc"));

@@ -97,14 +97,9 @@ pub async fn run(
     app.sidebar = SidebarModel::from_events(session, &replay);
     app.input.seed_history(history);
     let mut events = EventStream::new();
-    let mut activity_tick = tokio::time::interval(std::time::Duration::from_millis(120));
-    activity_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         guard.terminal.draw(|frame| draw(frame, &mut app))?;
         tokio::select! {
-         _ = activity_tick.tick(), if chrome::active_status_line(&app).is_some() => {
-             app.activity_frame = app.activity_frame.wrapping_add(1);
-         }
          Some(out)=output_rx.recv()=>app.output(out),
          maybe=events.next()=>match maybe.transpose()?{
             Some(Event::Key(key)) if key.kind==KeyEventKind::Press => match app.on_key(key) {

@@ -12,13 +12,13 @@ Type a request · /help for commands
                                                                                                     
                                                                                                     
                                                                                                     
-                                                                                                    
-                                                                                                    
-› line one                                                                                          
-  line two                                                                                          
-  line three                                                                                        
+  line three                                                                                      ↑ 
   line four                                                                                         
   line five                                                                                         
   line six                                                                                          
   line seven                                                                                        
+                                                                                                    
   WORK · deepseek-flash/low · main · std · ask                                                 ready
+                                                                                                    
+enter send  ctrl+j newline  ctrl+p commands                                                         
+/tmp/latch-ui                                                                           latch v0.2.3

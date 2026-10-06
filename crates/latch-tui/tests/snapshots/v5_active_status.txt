@@ -1,3 +1,4 @@
+• Running cargo test --workspace                                                                    
                                                                                                     
                                                                                                     
                                                                                                     
@@ -6,15 +7,14 @@
                                                                                                     
                                                                                                     
                                                                                                     
+  • Running tests · cargo test --workspace                                                          
                                                                                                     
                                                                                                     
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-  ⠋ Running tests · cargo test --workspace                                                          
 › Ask Latch…                                                                                        
+                                                                                                    
+                                                                                                    
+                                                                                                    
   WORK · deepseek-flash/low · main · std · ask                                                      
+                                                                                                    
+enter steer  ctrl+j newline  ctrl+p commands                                                        
+/tmp/latch-ui                                                                           latch v0.2.3

@@ -10,11 +10,11 @@ Type a request · /help for commands
                                                                                                     
                                                                                                     
                                                                                                     
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
 › 请 修 复 失 败 的 测 试 并 运 行 验 证                                                                         
+                                                                                                    
+                                                                                                    
+                                                                                                    
   WORK · deepseek-flash/low · main · std · ask                                                 ready
+                                                                                                    
+enter send  ctrl+j newline  ctrl+p commands                                                         
+/tmp/latch-ui                                                                           latch v0.2.3

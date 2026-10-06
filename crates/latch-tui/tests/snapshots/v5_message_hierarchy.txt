@@ -1,4 +1,6 @@
+                                                                                                    
 › Fix the failing test without changing the public API.                                             
+                                                                                                    
                                                                                                     
 • I'll inspect the failing case and patch it.                                                       
                                                                                                     
@@ -12,13 +14,11 @@
                                                                                                     
                                                                                                     
                                                                                                     
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
 › Ask Latch…                                                                                        
+                                                                                                    
+                                                                                                    
+                                                                                                    
   WORK · deepseek-flash/low · main · std · ask                                                 ready
+                                                                                                    
+enter send  ctrl+j newline  ctrl+p commands                                                         
+/tmp/latch-ui                                                                           latch v0.2.3
