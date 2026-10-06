@@ -1,0 +1,50 @@
+[
+  {
+    "name": "two_validations",
+    "exit_code": 0,
+    "status": "completed",
+    "completion": "implemented_not_verified",
+    "requests": 3,
+    "final_x": "original\n"
+  },
+  {
+    "name": "pipeline_false_pass",
+    "exit_code": 0,
+    "status": "completed",
+    "completion": "verified",
+    "requests": 2,
+    "final_x": "original\n"
+  },
+  {
+    "name": "missing_complete",
+    "exit_code": 0,
+    "status": "completed",
+    "completion": "in_progress",
+    "requests": 3,
+    "final_x": "changed"
+  },
+  {
+    "name": "readonly_filter_denied",
+    "exit_code": 3,
+    "status": "permission_denied",
+    "completion": "in_progress",
+    "requests": 2,
+    "final_x": "original\n"
+  },
+  {
+    "name": "readonly_git_external_diff",
+    "exit_code": 0,
+    "status": "completed",
+    "completion": "verified",
+    "requests": 3,
+    "final_x": "written-by-external-diff\n"
+  },
+  {
+    "name": "managed_output_buffer",
+    "exit_code": 0,
+    "status": "completed",
+    "completion": "in_progress",
+    "requests": 2,
+    "final_x": "original\n"
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "benchmark_commit": "10c7b124767d74e3809db197e5b753ea945af145",
+  "latch_sha256": "465ef37972aaa543874ac274a75a07b9bd23cb7db4c44ebc83cfe25954fd9ec1",
+  "provider": "local loopback SSE mock; no live provider calls",
+  "platform": "Linux/Bubblewrap",
+  "product_code_modified": false
+}

@@ -1,0 +1,479 @@
+[
+  {
+    "case_id": "ansi_width",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 296,
+    "required_validations": [
+      "visible tests in test_width.py pass",
+      "display_width handles ANSI, combining marks and East Asian wide characters",
+      "visible tests pass and display_width handles ANSI codes, combining marks and East Asian wide characters"
+    ],
+    "stale_requirements": [
+      "visible tests in test_width.py pass",
+      "display_width handles ANSI, combining marks and East Asian wide characters"
+    ],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 11,
+    "model_turns": 21
+  },
+  {
+    "case_id": "atomic_config",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 370,
+    "required_validations": [
+      "visible tests in test_config_store.py pass",
+      "backup preservation, atomic replace, corrupt-live recovery, and both-copies-bad failure behave as specified",
+      "visible tests in test_config_store.py pass after final edits",
+      "write_config validates input before touching files, preserves the previous valid config as .bak, replaces the live file atomically, recovers from a corrupt live file, and fails when both copies are bad"
+    ],
+    "stale_requirements": [
+      "visible tests in test_config_store.py pass",
+      "backup preservation, atomic replace, corrupt-live recovery, and both-copies-bad failure behave as specified",
+      "visible tests in test_config_store.py pass after final edits"
+    ],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "validate",
+      "complete"
+    ],
+    "validation_passes": 13,
+    "model_turns": 27
+  },
+  {
+    "case_id": "header_merge",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 158,
+    "required_validations": [
+      "visible header tests pass",
+      "set-cookie stays separate and case variants merge",
+      "visible tests plus set-cookie separation and case-insensitive merging",
+      "headers.py normalizes case-insensitively, merges duplicates with ', ', and keeps Set-Cookie separate (visible tests included)"
+    ],
+    "stale_requirements": [
+      "visible header tests pass",
+      "set-cookie stays separate and case variants merge",
+      "visible tests plus set-cookie separation and case-insensitive merging"
+    ],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 8,
+    "model_turns": 12
+  },
+  {
+    "case_id": "http_ranges",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 78,
+    "required_validations": [
+      "serve_range handles inclusive, open-ended, suffix, clamped, 416 and malformed/multi-range cases; existing tests pass"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 1,
+    "model_turns": 7
+  },
+  {
+    "case_id": "incremental_sync",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 150,
+    "required_validations": [
+      "Visible tests plus checks for update/delete/untouched/symlink/manifest-on-failure pass"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 1365,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 2,
+    "model_turns": 13
+  },
+  {
+    "case_id": "retry_policy",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 139,
+    "required_validations": [
+      "existing test suite passes",
+      "retry semantics for methods, Retry-After, backoff, final attempt, last response, max_attempts",
+      "existing test suite passes; retry semantics (GET/HEAD only, Retry-After, 1-2-4 backoff, no final sleep, last response, max_attempts>=1) hold"
+    ],
+    "stale_requirements": [
+      "existing test suite passes",
+      "retry semantics for methods, Retry-After, backoff, final attempt, last response, max_attempts"
+    ],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 7,
+    "model_turns": 11
+  },
+  {
+    "case_id": "spool_recovery",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 251,
+    "required_validations": [
+      "visible spool_recovery tests pass",
+      "spool recovery edge cases: fail-closed checkpoint, no advance on handler failure, atomic commit, at-least-once on crash",
+      "spool_recovery: visible tests pass and edge cases hold (checkpoint beyond/truncated spool fails closed, checkpoint not advanced on handler failure, atomic commit, at-least-once after crash)",
+      "visible spool_recovery tests pass; spool recovery edge cases: fail-closed checkpoint, no advance on handler failure, atomic commit, at-least-once on crash; spool_recovery: visible tests pass and edge cases hold (checkpoint beyond/truncated spool fails closed, checkpoint not advanced on handler failure, atomic commit, at-least-once after crash)"
+    ],
+    "stale_requirements": [
+      "visible spool_recovery tests pass",
+      "spool recovery edge cases: fail-closed checkpoint, no advance on handler failure, atomic commit, at-least-once on crash",
+      "spool_recovery: visible tests pass and edge cases hold (checkpoint beyond/truncated spool fails closed, checkpoint not advanced on handler failure, atomic commit, at-least-once after crash)"
+    ],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 12,
+    "model_turns": 17
+  },
+  {
+    "case_id": "stream_records",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 98,
+    "required_validations": [
+      "visible test suite passes with regression tests"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 745,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 2,
+    "model_turns": 8
+  },
+  {
+    "case_id": "webhook_dedupe",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 69,
+    "required_validations": [
+      "webhook unit tests pass (duplicate suppression, retry after failure, cross-connection durability, sequential and concurrent dedupe)"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 686,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 1,
+    "model_turns": 6
+  },
+  {
+    "case_id": "archive_paths",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 72,
+    "required_validations": [
+      "extract_archive rejects absolute paths, traversal and symlinks before writing anything, preserves nested files, and returns extracted relative paths"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 784,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 1,
+    "model_turns": 6
+  },
+  {
+    "case_id": "cache_stampede",
+    "completion": "in_progress",
+    "implementation_done": false,
+    "generation": 84,
+    "required_validations": [
+      "visible tests pass (test_cache.py: reuse + concurrent single load)"
+    ],
+    "stale_requirements": [
+      "visible tests pass (test_cache.py: reuse + concurrent single load)"
+    ],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "validate",
+      "validate"
+    ],
+    "validation_passes": 1,
+    "model_turns": 7
+  },
+  {
+    "case_id": "csv_chunks",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 182,
+    "required_validations": [
+      "visible tests pass",
+      "parse_chunks handles quoted commas/newlines across arbitrary chunk boundaries and preserves parse_chunks(chunks) signature",
+      "visible tests pass and chunked CSV parsing handles quoted commas/newlines across chunk boundaries"
+    ],
+    "stale_requirements": [
+      "visible tests pass",
+      "parse_chunks handles quoted commas/newlines across arbitrary chunk boundaries and preserves parse_chunks(chunks) signature"
+    ],
+    "final_assistant_text_length": 1485,
+    "final_assistant_tools": [],
+    "validation_passes": 8,
+    "model_turns": 15
+  },
+  {
+    "case_id": "lease_queue",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 128,
+    "required_validations": [
+      "existing unit tests pass (claim/ack, stale ack rejected)",
+      "final queue.py passes lease unit tests and token-guarded ack",
+      "queue lease tests pass on final queue.py (stale ack rejected, attempts increment)"
+    ],
+    "stale_requirements": [
+      "final queue.py passes lease unit tests and token-guarded ack",
+      "queue lease tests pass on final queue.py (stale ack rejected, attempts increment)"
+    ],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 4,
+    "model_turns": 10
+  },
+  {
+    "case_id": "log_rotation",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 281,
+    "required_validations": [
+      "visible test suite passes",
+      "rotation cascade, empty-log, and limit validation behave as specified",
+      "visible test suite passes and rotation cascade, empty-log, and limit validation behave as specified"
+    ],
+    "stale_requirements": [
+      "visible test suite passes",
+      "rotation cascade, empty-log, and limit validation behave as specified"
+    ],
+    "final_assistant_text_length": 1689,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 13,
+    "model_turns": 21
+  },
+  {
+    "case_id": "option_values",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 150,
+    "required_validations": [
+      "visible tests in test_options.py pass",
+      "parse_args matches documented CLI semantics: --label VALUE, --quiet, -- terminator, empty label value preserved",
+      "visible tests pass and parse_args matches documented CLI semantics"
+    ],
+    "stale_requirements": [
+      "parse_args matches documented CLI semantics: --label VALUE, --quiet, -- terminator, empty label value preserved",
+      "visible tests pass and parse_args matches documented CLI semantics"
+    ],
+    "final_assistant_text_length": 1792,
+    "final_assistant_tools": [],
+    "validation_passes": 5,
+    "model_turns": 14
+  },
+  {
+    "case_id": "sqlite_migration",
+    "completion": "in_progress",
+    "implementation_done": false,
+    "generation": 132,
+    "required_validations": [
+      "visible tests pass",
+      "existing rows survive with email NULL and migrate is safe to run twice",
+      "malformed database is rejected instead of silently replaced",
+      "migrate does not close the caller's connection"
+    ],
+    "stale_requirements": [
+      "existing rows survive with email NULL and migrate is safe to run twice",
+      "malformed database is rejected instead of silently replaced",
+      "migrate does not close the caller's connection"
+    ],
+    "final_assistant_text_length": 1189,
+    "final_assistant_tools": [],
+    "validation_passes": 5,
+    "model_turns": 10
+  },
+  {
+    "case_id": "stream_framing",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 82,
+    "required_validations": [
+      "framing tests pass (partial prefix/body buffering, multi-frame chunks, oversized rejection, continuation)"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 680,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 1,
+    "model_turns": 7
+  },
+  {
+    "case_id": "append_index",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 244,
+    "required_validations": [
+      "visible tests in test_event_log.py pass",
+      "append returns UTF-8 byte offset of the record, read_all() hides an unterminated trailing record, rebuild_index() returns byte offsets of complete records, and append repairs instead of writing over a partial tail",
+      "visible tests in test_event_log.py pass; append returns UTF-8 byte offset of the record, read_all() hides an unterminated trailing record, rebuild_index() returns byte offsets of complete records, and append repairs instead of writing over a partial tail"
+    ],
+    "stale_requirements": [
+      "visible tests in test_event_log.py pass",
+      "append returns UTF-8 byte offset of the record, read_all() hides an unterminated trailing record, rebuild_index() returns byte offsets of complete records, and append repairs instead of writing over a partial tail"
+    ],
+    "final_assistant_text_length": 260,
+    "final_assistant_tools": [
+      "task_update",
+      "validate",
+      "complete"
+    ],
+    "validation_passes": 11,
+    "model_turns": 15
+  },
+  {
+    "case_id": "config_layers",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 146,
+    "required_validations": [
+      "visible tests in test_config_layers.py pass",
+      "resolve_config does not mutate caller-owned inputs and applies layer precedence",
+      "visible tests pass and resolve_config deep-merges project config, honors explicit empty-string and non-flag values, and does not mutate caller inputs"
+    ],
+    "stale_requirements": [
+      "visible tests in test_config_layers.py pass",
+      "resolve_config does not mutate caller-owned inputs and applies layer precedence"
+    ],
+    "final_assistant_text_length": 1774,
+    "final_assistant_tools": [],
+    "validation_passes": 6,
+    "model_turns": 13
+  },
+  {
+    "case_id": "dag_scheduler",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 76,
+    "required_validations": [
+      "visible tests pass"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 774,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 2,
+    "model_turns": 6
+  },
+  {
+    "case_id": "duration_units",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 309,
+    "required_validations": [
+      "existing visible unittest suite for the duration parser passes",
+      "parse_duration returns correct integer milliseconds for ms/s/m/h and rejects negative, malformed, trailing-text, and non-string input",
+      "duration parser: visible unittest suite passes and parse_duration returns correct integer ms for ms/s/m/h while rejecting negative, malformed, trailing-text, and non-string input"
+    ],
+    "stale_requirements": [
+      "existing visible unittest suite for the duration parser passes",
+      "parse_duration returns correct integer milliseconds for ms/s/m/h and rejects negative, malformed, trailing-text, and non-string input"
+    ],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "validate",
+      "complete"
+    ],
+    "validation_passes": 12,
+    "model_turns": 22
+  },
+  {
+    "case_id": "pagination_cursor",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 73,
+    "required_validations": [
+      "feed pagination tests pass"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 1,
+    "model_turns": 7
+  },
+  {
+    "case_id": "path_rules",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 57,
+    "required_validations": [
+      "visible tests pass"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 393,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 1,
+    "model_turns": 5
+  },
+  {
+    "case_id": "rate_window",
+    "completion": "implemented_not_verified",
+    "implementation_done": true,
+    "generation": 126,
+    "required_validations": [
+      "visible test suite passes",
+      "boundary, per-tenant quota, deny-no-consume, and nonpositive rejection behave correctly",
+      "visible test suite passes and boundary, per-tenant quota, deny-no-consume, and nonpositive rejection behave correctly"
+    ],
+    "stale_requirements": [
+      "visible test suite passes",
+      "visible test suite passes and boundary, per-tenant quota, deny-no-consume, and nonpositive rejection behave correctly"
+    ],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 5,
+    "model_turns": 10
+  },
+  {
+    "case_id": "transaction_outbox",
+    "completion": "verified",
+    "implementation_done": true,
+    "generation": 88,
+    "required_validations": [
+      "visible tests pass and order/event commit atomically with duplicate rejection, insertion-ordered pending events, exact JSON payload, and nonpositive amount rejection"
+    ],
+    "stale_requirements": [],
+    "final_assistant_text_length": 0,
+    "final_assistant_tools": [
+      "complete"
+    ],
+    "validation_passes": 1,
+    "model_turns": 8
+  }
+]

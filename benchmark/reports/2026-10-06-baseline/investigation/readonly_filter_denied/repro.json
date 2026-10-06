@@ -1,0 +1,339 @@
+{
+  "name": "readonly_filter_denied",
+  "exit_code": 3,
+  "seconds": 0.213,
+  "status": "permission_denied",
+  "task": {
+    "completion": "in_progress",
+    "goal": "Investigate a deterministic isolated fixture.",
+    "evidence_count": 0,
+    "validation": {
+      "passed": 0,
+      "failed": 0,
+      "pending": 0
+    }
+  },
+  "requests": 2,
+  "events": [
+    {
+      "rowid": 1,
+      "sequence": 1,
+      "kind": "git_state_observed",
+      "data": {
+        "head": "10c7b124767d74e3809db197e5b753ea945af145",
+        "dirty_paths": []
+      }
+    },
+    {
+      "rowid": 2,
+      "sequence": 2,
+      "kind": "run_started",
+      "data": {
+        "run_id": "256b3930-9c79-4d14-bc67-6e582f291549",
+        "prompt": "Investigate a deterministic isolated fixture."
+      }
+    },
+    {
+      "rowid": 3,
+      "sequence": 3,
+      "kind": "user_message",
+      "data": {
+        "text": "Investigate a deterministic isolated fixture."
+      }
+    },
+    {
+      "rowid": 4,
+      "sequence": 4,
+      "kind": "task_state_updated",
+      "data": {
+        "state": {
+          "goal": "Investigate a deterministic isolated fixture.",
+          "constraints": [],
+          "decisions": [],
+          "hypotheses": [],
+          "rejected_hypotheses": [],
+          "touched_files": [],
+          "required_validations": [],
+          "implementation_done": false,
+          "open_questions": [],
+          "next_actions": [],
+          "completion_criteria": [],
+          "completion": "in_progress"
+        }
+      }
+    },
+    {
+      "rowid": 5,
+      "sequence": 5,
+      "kind": "kernel_context",
+      "data": {
+        "generation": 0,
+        "revision": 1,
+        "kind": "snapshot",
+        "content": "KERNEL STATE SNAPSHOT (cache epoch 0.1; authoritative current state; supersedes all earlier kernel context)\nCANONICAL TASK STATE\n{\"goal\":\"Investigate a deterministic isolated fixture.\",\"constraints\":[],\"decisions\":[],\"hypotheses\":[],\"rejected_hypotheses\":[],\"touched_files\":[],\"required_validations\":[],\"implementation_done\":false,\"open_questions\":[],\"next_actions\":[],\"completion_criteria\":[],\"completion\":\"in_progress\"}\n\nCURRENT EVIDENCE (kernel-derived; latest observation per claim)\n- none\n\nACTIVE FAILURE LINEAGES\n- none\n\nDURABLE MEMORY (provenance preserved)\n- none\n\nCONVERSATION BRIDGE (navigation only)\n{\"current_topic\":\"Investigate a deterministic isolated fixture.\",\"current_user_intent\":\"Investigate a deterministic isolated fixture.\",\"unresolved_references\":[],\"recent_decisions\":[],\"ongoing_action\":null}"
+      }
+    },
+    {
+      "rowid": 6,
+      "sequence": 6,
+      "kind": "context_memory_recalled",
+      "data": {
+        "query": "Investigate a deterministic isolated fixture.",
+        "memory_ids": [],
+        "event_ids": [
+          "e58c5a4f-4af3-459c-a7ec-c50db81d7b09"
+        ]
+      }
+    },
+    {
+      "rowid": 7,
+      "sequence": 7,
+      "kind": "kernel_context",
+      "data": {
+        "generation": 0,
+        "revision": 2,
+        "kind": "recall",
+        "content": "KERNEL RECALL (cache epoch 0.2; original historical events relevant to the current instruction; not a new request)\nevent e58c5a4f-4af3-459c-a7ec-c50db81d7b09 #2: {\"type\":\"run_started\",\"data\":{\"run_id\":\"256b3930-9c79-4d14-bc67-6e582f291549\",\"prompt\":\"Investigate a deterministic isolated fixture.\"}}\n"
+      }
+    },
+    {
+      "rowid": 8,
+      "sequence": 8,
+      "kind": "context_materialized",
+      "data": {
+        "stats": {
+          "instructions_tokens": 1397,
+          "state_tokens": 334,
+          "recent_tokens": 15,
+          "conversation_tokens": 15,
+          "reasoning_replay_tokens": 0,
+          "tool_arguments_tokens": 0,
+          "tool_result_tokens": 0,
+          "image_count": 0,
+          "image_tokens": 0,
+          "recall_tokens": 149,
+          "episode_tokens": 0,
+          "recent_start_sequence": 1,
+          "recent_evicted_tokens": 0,
+          "cache_epoch": 0,
+          "cache_epoch_tokens": 498,
+          "cache_epoch_turns": 1,
+          "cache_rotation_reason": "",
+          "cache_rotation_retained_tokens": 0,
+          "tools_tokens": 3329,
+          "extension_tokens": 0,
+          "total_tokens": 5224,
+          "request_tokens": 5163,
+          "common_prefix_tokens": 0,
+          "budget_tokens": 243808,
+          "window_tokens": 256000,
+          "reserve_tokens": 12192,
+          "headroom_tokens": 238584,
+          "durable_events": 7,
+          "episodes": 0,
+          "selected_episodes": 0,
+          "estimated": true,
+          "status": "bounded"
+        }
+      }
+    },
+    {
+      "rowid": 9,
+      "sequence": 9,
+      "kind": "model_request_started",
+      "data": {
+        "provider": "mock",
+        "model": "mock-model"
+      }
+    },
+    {
+      "rowid": 10,
+      "sequence": 10,
+      "kind": "assistant_message_completed",
+      "data": {
+        "text": "",
+        "tool_calls": [
+          {
+            "id": "call_0",
+            "name": "shell",
+            "arguments": {
+              "command": "ls -la && find . -type f -name \"*.py\" -o -name \"*.md\" -o -name \"*.toml\" -o -name \"*.cfg\" | grep -v \".git/\" | head -50"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rowid": 11,
+      "sequence": 11,
+      "kind": "model_request_finished",
+      "data": {
+        "stop_reason": "tool_calls"
+      }
+    },
+    {
+      "rowid": 12,
+      "sequence": 12,
+      "kind": "tool_requested",
+      "data": {
+        "call": {
+          "id": "call_0",
+          "name": "shell",
+          "arguments": {
+            "command": "ls -la && find . -type f -name \"*.py\" -o -name \"*.md\" -o -name \"*.toml\" -o -name \"*.cfg\" | grep -v \".git/\" | head -50"
+          }
+        }
+      }
+    },
+    {
+      "rowid": 13,
+      "sequence": 13,
+      "kind": "permission_requested",
+      "data": {
+        "request_id": "2c920a25-5434-456e-85f9-64ec765c3217",
+        "tool": "shell",
+        "arguments": {
+          "command": "ls -la && find . -type f -name \"*.py\" -o -name \"*.md\" -o -name \"*.toml\" -o -name \"*.cfg\" | grep -v \".git/\" | head -50"
+        },
+        "reason": "Git metadata mutation requires explicit approval",
+        "capabilities": [
+          "workspace_read",
+          "workspace_source_write",
+          "build_artifact_write",
+          "git_metadata_write"
+        ]
+      }
+    },
+    {
+      "rowid": 14,
+      "sequence": 14,
+      "kind": "permission_resolved",
+      "data": {
+        "request_id": "2c920a25-5434-456e-85f9-64ec765c3217",
+        "approved": false,
+        "source": "non_interactive"
+      }
+    },
+    {
+      "rowid": 15,
+      "sequence": 15,
+      "kind": "permission_decision",
+      "data": {
+        "tool": "shell",
+        "decision": "policy_denied",
+        "reason": "permission denied: Git metadata mutation requires explicit approval"
+      }
+    },
+    {
+      "rowid": 16,
+      "sequence": 16,
+      "kind": "tool_failed",
+      "data": {
+        "result": {
+          "call_id": "call_0",
+          "name": "shell",
+          "output": "permission denied: Git metadata mutation requires explicit approval",
+          "is_error": true,
+          "artifact_id": null
+        }
+      }
+    },
+    {
+      "rowid": 17,
+      "sequence": 17,
+      "kind": "failure_attempt",
+      "data": {
+        "signature": "ls:permission denied: Git metadata mutation requires explicit approval",
+        "count": 1
+      }
+    },
+    {
+      "rowid": 18,
+      "sequence": 18,
+      "kind": "kernel_context",
+      "data": {
+        "generation": 0,
+        "revision": 3,
+        "kind": "state_update",
+        "content": "KERNEL STATE UPDATE (cache epoch 0.3; authoritative current state; supersedes all earlier kernel context)\nCANONICAL TASK STATE\n{\"goal\":\"Investigate a deterministic isolated fixture.\",\"constraints\":[],\"decisions\":[],\"hypotheses\":[],\"rejected_hypotheses\":[],\"touched_files\":[],\"required_validations\":[],\"implementation_done\":false,\"open_questions\":[],\"next_actions\":[],\"completion_criteria\":[],\"completion\":\"in_progress\"}\n\nCURRENT EVIDENCE (kernel-derived; latest observation per claim)\n- none\n\nACTIVE FAILURE LINEAGES\n- ls -la && find . -type f -name \"*.py\" -o -name \"*.md\" -o -name \"*.toml\" -o -name \"*.cfg\" | grep -v \".git/\" | head -50 ×1\n\nDURABLE MEMORY (provenance preserved)\n- none\n\nCONVERSATION BRIDGE (navigation only)\n{\"current_topic\":\"Investigate a deterministic isolated fixture.\",\"current_user_intent\":\"Investigate a deterministic isolated fixture.\",\"unresolved_references\":[],\"recent_decisions\":[],\"ongoing_action\":null}"
+      }
+    },
+    {
+      "rowid": 19,
+      "sequence": 19,
+      "kind": "context_materialized",
+      "data": {
+        "stats": {
+          "instructions_tokens": 1397,
+          "state_tokens": 715,
+          "recent_tokens": 154,
+          "conversation_tokens": 21,
+          "reasoning_replay_tokens": 0,
+          "tool_arguments_tokens": 54,
+          "tool_result_tokens": 79,
+          "image_count": 0,
+          "image_tokens": 0,
+          "recall_tokens": 149,
+          "episode_tokens": 0,
+          "recent_start_sequence": 1,
+          "recent_evicted_tokens": 0,
+          "cache_epoch": 0,
+          "cache_epoch_tokens": 1018,
+          "cache_epoch_turns": 1,
+          "cache_rotation_reason": "",
+          "cache_rotation_retained_tokens": 0,
+          "tools_tokens": 3329,
+          "extension_tokens": 0,
+          "total_tokens": 5744,
+          "request_tokens": 5553,
+          "common_prefix_tokens": 5400,
+          "budget_tokens": 243808,
+          "window_tokens": 256000,
+          "reserve_tokens": 12192,
+          "headroom_tokens": 238064,
+          "durable_events": 18,
+          "episodes": 0,
+          "selected_episodes": 0,
+          "estimated": true,
+          "status": "bounded"
+        }
+      }
+    },
+    {
+      "rowid": 20,
+      "sequence": 20,
+      "kind": "model_request_started",
+      "data": {
+        "provider": "mock",
+        "model": "mock-model"
+      }
+    },
+    {
+      "rowid": 21,
+      "sequence": 21,
+      "kind": "assistant_message_completed",
+      "data": {
+        "text": "Done; the deterministic checks have finished.",
+        "tool_calls": []
+      }
+    },
+    {
+      "rowid": 22,
+      "sequence": 22,
+      "kind": "model_request_finished",
+      "data": {
+        "stop_reason": "stop"
+      }
+    },
+    {
+      "rowid": 23,
+      "sequence": 23,
+      "kind": "run_completed",
+      "data": {
+        "run_id": "256b3930-9c79-4d14-bc67-6e582f291549",
+        "outcome": "completed"
+      }
+    }
+  ],
+  "final_x": "original\n"
+}
