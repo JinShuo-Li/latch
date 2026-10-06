@@ -85,21 +85,6 @@ averages include failed tasks. Cost estimates apply the dated
 to observed token usage and are not actual OpenCode Go invoices. CPU and memory
 are omitted because whole-agent resource accounting was not comparable.
 
-The charts have transparent backgrounds and use Times New Roman outlines.
-GitHub selects light or dark text to match your theme. Blue is Latch; orange is
-OpenCode. Each task has two bars; hatching marks a failed external acceptance
-check. Tasks are grouped by difficulty and ordered by name within each group.
-Download the [time PDF](benchmark/figures/2026-10-06/task-time-light.pdf),
-[token PDF](benchmark/figures/2026-10-06/task-tokens-light.pdf), or
-[cost PDF](benchmark/figures/2026-10-06/task-cost-light.pdf) for print.
-The detailed [performance table](benchmark/figures/2026-10-06/performance-table.pdf)
-and [cost table](benchmark/figures/2026-10-06/cost-table.pdf) remain available.
-The [full report](benchmark/reports/2026-10-06-full-comparison/README.md)
-contains failure explanations and methodology;
-[per-attempt CSV](benchmark/reports/2026-10-06-full-comparison/per-attempt.csv)
-and [aggregate metrics](benchmark/reports/2026-10-06-full-comparison/metrics.json)
-provide the underlying measurements.
-
 ## For contributors
 
 Run `cargo fmt --all -- --check` and the platform tests before sending changes. The [architecture](docs/ARCHITECTURE.md), [runtime capability model](docs/RUNTIME_CAPABILITY_MODEL.md), [continuity design](docs/CONTINUITY.md), and [repository instructions](AGENTS.md) contain implementation details. Linux release checks are in `scripts/release-gate.sh`; Windows native fixtures and recovery notes are in `native/windows/boundary/`.
