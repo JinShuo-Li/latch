@@ -360,6 +360,10 @@ Inspection shell commands run with enforced read-only filesystem grants even
 in WORK mode. The conservative command classifier does not prove that
 repository-configured helpers cannot write; the execution backend enforces
 the restriction. Explicit metadata/external write grants keep mutation tracking.
+Validation may certify several exact requirements from one proving command;
+the kernel owns every evidence record and its shared workspace generation.
+The existing provider-neutral event vocabulary and narrow context port remain
+unchanged, and subsequent writes invalidate every older pass.
 
 On Windows, `WorkspaceRead` includes listing and traversing workspace
 directories, reading their metadata, and reading files. Ancestors needed to

@@ -406,6 +406,14 @@ derives completion. The model never supplies or sees an internal event id,
 call id, or ledger id. `record_evidence` remains for non-command claims but
 accepts only `pending` and `unavailable`; `passed`/`failed` statuses are
 kernel-owned, so a model cannot self-certify.
+One proving command can cover several named requirements: `requirement` keeps
+its existing primary name, and optional `requirements` lists additional exact
+names that the command proves. The kernel records one ValidationResult and an
+EvidenceCreated for each name at the same workspace generation. This refreshes
+earlier stale requirements together without deleting obligations or weakening
+write invalidation. A failing command fails every named requirement; a pass
+overlapping a writer certifies none. Existing single-requirement calls remain
+valid. Requirement names are nonempty and deduplicated case-insensitively.
 Validation uses the configured `permissions.shell_timeout_seconds` default,
 just like shell execution; an explicit `timeout_seconds` overrides it.
 Linux validation enables Bash `pipefail`, so filtering test output cannot

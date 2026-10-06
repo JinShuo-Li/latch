@@ -110,7 +110,7 @@ impl PromptCompiler {
                 "latch.kernel_truth",
                 110,
                 true,
-                "Validation intent is yours; validation truth is the kernel's. validate runs a proving command, records evidence, and derives completion; a failed requirement that now passes is superseded. record_evidence accepts only pending or unavailable; passed and failed are kernel-owned. Without passing validation, completion stays IMPLEMENTED, NOT VERIFIED. After validation, call complete with implementation_done=true.",
+                "validation truth is the kernel's. validate records evidence and derives completion; a failure is superseded by its new pass. Refresh several requirements in one command with their exact names in requirements. record_evidence accepts only pending or unavailable; passed and failed are kernel-owned. No current passes: IMPLEMENTED, NOT VERIFIED. After validation, call complete with implementation_done=true.",
             ),
             fragment(
                 "latch.context_and_staleness",

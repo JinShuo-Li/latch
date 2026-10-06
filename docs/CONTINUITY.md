@@ -42,6 +42,11 @@ There are no embeddings and no vector database.
 
 ## Port boundary
 
+Validation sets retain one kernel evidence observation per exact requirement,
+all linked to the same proving command and workspace generation. Canonical
+materialization treats each as current only at that generation; later writes
+stale the set together. Replay preserves all prior attempts and obligations.
+
 The engine below is the default implementation of the internal `ContextEngine`
 port (`crates/latch-kernel/src/context.rs`): `materialize(ContextRequest) ->
 ContextView`, with `config`/`set_config`/`set_estimator`/`default_budget`/

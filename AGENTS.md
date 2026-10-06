@@ -227,6 +227,8 @@ Memory/cache invariants (do not violate):
   processes block certification until exit and revalidation.
 - Validation uses the configured shell timeout. Linux proving pipelines use
   Bash `pipefail`; Windows proving commands must run without pipelines.
+  Refresh multiple requirements with one covering `validate` command and its
+  exact-name `requirements` array; do not delete obligations to obtain a pass.
 - Child agents are independent durable sessions. Their task/evidence/continuity
   never becomes root truth; only semantic reports cross the boundary. Agent
   notifications are appended to root history only at safe model boundaries.

@@ -447,6 +447,139 @@ fn freshness_agent(dir: &tempfile::TempDir) -> (EventStore, Uuid, Agent) {
 }
 
 #[tokio::test]
+async fn freshness_validation_set_refreshes_all_requirements_and_survives_resume() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    let command = if cfg!(windows) {
+        "python -B -c \"assert True\""
+    } else {
+        "python3 -B -c \"assert True\""
+    };
+    for requirement in ["A", "B"] {
+        let result = agent
+            .run_validation(requirement, command, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(!result.is_error, "{}", result.output);
+    }
+    freshness_complete(&mut agent);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let result = agent
+        .execute_validate(
+            &ToolCall {
+                id: "set".into(),
+                name: "validate".into(),
+                arguments: json!({"requirement":"A","requirements":["A", " b "],"command":command}),
+            },
+            CancellationToken::new(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", result.output);
+    freshness_complete(&mut agent);
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+    assert_eq!(agent.state().required_validations, ["A", "B"]);
+    let a = agent.evidence().current("A").unwrap();
+    let b = agent.evidence().current("B").unwrap();
+    assert_eq!(a.source_event, b.source_event);
+    assert_eq!(a.workspace_generation, b.workspace_generation);
+
+    let events = store.events(sid).unwrap();
+    let state = events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::TaskStateUpdated { state } => Some(state.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let evidence = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::EvidenceCreated { evidence } => Some(evidence.clone()),
+            _ => None,
+        })
+        .collect();
+    let tools = ToolExecutor::new(
+        dir.path().into(),
+        dir.path().join("art"),
+        store.clone(),
+        sid,
+        PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut resumed = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: Arc::new(FakeProvider::scripted(vec![])),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 3,
+    });
+    resumed.restore_state(state);
+    resumed.restore_evidence(evidence).unwrap();
+    freshness_complete(&mut resumed);
+    assert_eq!(resumed.state().completion, CompletionState::Verified);
+    freshness_tool(
+        &mut resumed,
+        "shell",
+        json!({"command":if cfg!(windows) { "echo new>x.txt" } else { "printf new > x.txt" }}),
+    )
+    .await;
+    freshness_complete(&mut resumed);
+    assert_eq!(
+        resumed.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    for requirement in ["A", "B"] {
+        assert_eq!(resumed.evidence().status_for_completion(requirement), None);
+    }
+}
+
+#[tokio::test]
+async fn validation_set_failure_cannot_certify_any_requirement() {
+    let dir = tempdir().unwrap();
+    let (_, _, mut agent) = freshness_agent(&dir);
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let command = if cfg!(windows) {
+        "python -c \"assert False\""
+    } else {
+        "python3 -c \"assert False\""
+    };
+    let result = agent
+        .execute_validate(
+            &ToolCall {
+                id: "failed-set".into(),
+                name: "validate".into(),
+                arguments: json!({"requirement":"A","requirements":["B"],"command":command}),
+            },
+            CancellationToken::new(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    freshness_complete(&mut agent);
+    assert_eq!(
+        agent.state().completion,
+        CompletionState::ImplementedNotVerified
+    );
+    for requirement in ["A", "B"] {
+        assert_eq!(
+            agent.evidence().status_for_completion(requirement),
+            Some(EvidenceStatus::Failed)
+        );
+    }
+}
+
+#[tokio::test]
 async fn validation_pipeline_cannot_certify_a_failed_upstream_check() {
     let dir = tempdir().unwrap();
     let (store, sid, mut agent) = freshness_agent(&dir);

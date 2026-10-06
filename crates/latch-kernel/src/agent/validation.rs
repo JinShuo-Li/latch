@@ -22,21 +22,17 @@ impl Agent {
             },
             sink,
         )?;
-        let requirement = call
-            .arguments
-            .get("requirement")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
+        let requirements = match validation_requirements(&call.arguments) {
+            Ok(requirements) => requirements,
+            Err(message) => return self.reject_validation(call, message, sink),
+        };
         let command = call
             .arguments
             .get("command")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
-        let (Some(requirement), Some(command)) = (requirement, command) else {
-            return Ok(tool_error(
-                call,
-                "requirement and command are required".into(),
-            ));
+        let Some(command) = command.filter(|command| !command.trim().is_empty()) else {
+            return self.reject_validation(call, "a nonempty command is required".into(), sink);
         };
         // Validation runs commands, so it obeys the same policy as shell. An
         // `Ask` here is a real approval request, not a denial.
@@ -123,26 +119,30 @@ impl Agent {
         } else {
             EvidenceStatus::Failed
         };
-        let mut evidence =
-            self.evidence
-                .build_validation(&requirement, validation_event.id, status, detail);
-        if passed && conflicting_mutation {
-            // A pass observed while another writer was active certifies no
-            // stable final workspace. Preserve the result for audit but keep
-            // its earlier generation so it cannot satisfy completion.
-            evidence.workspace_generation = Some(starting_generation);
+        for requirement in &requirements {
+            let mut evidence = self.evidence.build_validation(
+                requirement,
+                validation_event.id,
+                status.clone(),
+                detail.clone(),
+            );
+            if passed && conflicting_mutation {
+                // The entire set certifies no stable workspace if a writer
+                // overlapped execution. Preserve every observation for audit.
+                evidence.workspace_generation = Some(starting_generation);
+            }
+            // Persist before mutating the live ledger; see kernel_tools.
+            self.emit(
+                EventPayload::EvidenceCreated {
+                    evidence: evidence.clone(),
+                },
+                sink,
+            )?;
+            self.evidence.push(evidence);
+            self.state.require_validation(requirement);
         }
-        // Persist before mutating the live ledger; see kernel_tools.
-        self.emit(
-            EventPayload::EvidenceCreated {
-                evidence: evidence.clone(),
-            },
-            sink,
-        )?;
-        self.evidence.push(evidence);
         // 3. Kernel bookkeeping: the validated requirement becomes required
         //    and completion is derived.
-        self.state.require_validation(&requirement);
         self.sync_completion(sink)?;
         self.emit(
             EventPayload::TaskStateUpdated {
@@ -161,7 +161,8 @@ impl Agent {
         // signature source shared with replayed history — stays deterministic
         // across runs of the same command.
         let mut body = format!(
-            "{verdict} requirement `{requirement}`: {command}\n{}\nCompletion: {completion:?}\n",
+            "{verdict} requirements `{}`: {command}\n{}\nCompletion: {completion:?}\n",
+            requirements.join("`, `"),
             output.status_line,
         );
         let preview: String = output.text.chars().take(2000).collect();
@@ -179,10 +180,12 @@ impl Agent {
         // 4. The validation's own failure lineage is supervised against the
         //    result body, the exact text a resumed session replays — so live
         //    and restored supervision count identically.
-        if passed {
-            self.failures.resolve(&requirement);
-        } else {
-            let decision = self.failures.record(&requirement, &result.output);
+        for requirement in &requirements {
+            if passed {
+                self.failures.resolve(requirement);
+                continue;
+            }
+            let decision = self.failures.record(requirement, &result.output);
             self.emit(
                 EventPayload::FailureAttempt {
                     signature: decision.signature,
@@ -211,6 +214,51 @@ impl Agent {
         self.emit(payload, sink)?;
         Ok(result)
     }
+
+    fn reject_validation(
+        &mut self,
+        call: &ToolCall,
+        message: String,
+        sink: &AgentEventSink,
+    ) -> Result<ToolResult> {
+        let result = tool_error(call, message);
+        self.emit(
+            EventPayload::ToolFailed {
+                result: result.clone(),
+            },
+            sink,
+        )?;
+        Ok(result)
+    }
+}
+
+fn validation_requirements(
+    arguments: &serde_json::Value,
+) -> std::result::Result<Vec<String>, String> {
+    let primary = arguments
+        .get("requirement")
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| "a nonempty requirement is required".to_owned())?;
+    let mut requirements = vec![primary.trim().to_owned()];
+    if let Some(additional) = arguments.get("requirements") {
+        let names = additional
+            .as_array()
+            .ok_or_else(|| "requirements must be an array of nonempty names".to_owned())?;
+        for name in names {
+            let name = name
+                .as_str()
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| "requirements must contain only nonempty names".to_owned())?;
+            if !requirements
+                .iter()
+                .any(|existing| crate::state::same_text(existing, name))
+            {
+                requirements.push(name.trim().to_owned());
+            }
+        }
+    }
+    Ok(requirements)
 }
 
 fn validation_timeout_seconds(arguments: &serde_json::Value, default: u64) -> u64 {
@@ -222,8 +270,25 @@ fn validation_timeout_seconds(arguments: &serde_json::Value, default: u64) -> u6
 
 #[cfg(test)]
 mod tests {
-    use super::validation_timeout_seconds;
+    use super::{validation_requirements, validation_timeout_seconds};
     use serde_json::json;
+
+    #[test]
+    fn validation_set_rejects_invalid_names_and_deduplicates_exact_requirements() {
+        assert_eq!(
+            validation_requirements(&json!({"requirement":" A ","requirements":["a", "B"]}))
+                .unwrap(),
+            ["A", "B"]
+        );
+        for arguments in [
+            json!({"requirement":""}),
+            json!({"requirement":"A","requirements":"B"}),
+            json!({"requirement":"A","requirements":[""]}),
+            json!({"requirement":"A","requirements":[false]}),
+        ] {
+            assert!(validation_requirements(&arguments).is_err(), "{arguments}");
+        }
+    }
 
     #[test]
     fn validation_timeout_uses_shell_default_for_missing_or_invalid_values() {

@@ -39,6 +39,8 @@ latch -p "Explain this repository"
 Resume a session with `latch --resume`. For scripts, use `latch run --workspace ./project --prompt "Fix the failing test" --output json`; `latch sessions list` shows saved sessions. Run `latch --help` for all options.
 Latch asks the model to include its final summary when it marks a task complete;
 the recorded validation determines whether that task is verified.
+When several requirements need fresh evidence, one validation command can
+prove them together; older passes remain historical after later writes.
 Linux validation preserves failures through output-filtering pipelines. On
 Windows, run validation checks separately or redirect output instead of piping it.
 
