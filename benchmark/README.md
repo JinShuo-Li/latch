@@ -161,3 +161,19 @@ statistics and per-attempt CSV data. These estimates apply direct DeepSeek API
 prices to observed OpenCode Go usage and are not actual Go invoices. Keep
 original configs and SQLite databases private; the exporter checks credential
 values before publishing compressed event records and logs.
+
+### Publication tables
+
+`benchmark/render_tables.py` renders the recorded 6 October 2026 comparison
+from its committed `metrics.json` into Times New Roman tables. It makes no
+provider requests. Install Matplotlib in a separate environment, then run:
+
+```sh
+python benchmark/render_tables.py --font-dir /path/to/Times-New-Roman-fonts
+```
+
+The font directory must contain actual Times New Roman `times.ttf` and
+`timesbd.ttf`; on WSL the default is `/mnt/c/Windows/Fonts`. Fonts are not
+distributed in this repository. Outputs in `benchmark/figures/2026-10-06/`
+include SVG with outlined text for GitHub display, PDF with embedded font
+subsets for print, and 240-dpi PNG. The root README embeds the SVG tables.

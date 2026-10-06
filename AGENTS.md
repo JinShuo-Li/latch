@@ -95,6 +95,9 @@ bash scripts/release-gate.sh
   --jobs 3` additionally requires GNU `/usr/bin/time`; one global cap covers
   both agents. `benchmark/report_comparison.py` exports performance and dated
   DeepSeek price scenarios without configs, credentials or databases.
+- Publication tables: `python3 benchmark/render_tables.py --font-dir <fonts>`
+  renders the recorded comparison without model calls; requires optional
+  Matplotlib and actual Times New Roman `times.ttf` / `timesbd.ttf` fonts.
 - Snapshot updates: `LATCH_UPDATE_SNAPSHOTS=1 cargo test -p latch-tui --lib`.
   Exception: `crates/latch-tui/tests/snapshots/v31_sidebar.txt` is `include_str!`,
   so edit it by hand and keep `cargo test -p latch-tui --lib` green.

@@ -56,6 +56,33 @@ The transcript is a compact work log. Ctrl+B opens or closes the session inspect
 
 On Windows, use a focused checkout owned by your account. Existing files whose ACLs you cannot edit may prevent temporary sandbox access even when you can read them. Very large or actively changing workspaces, especially your whole home directory, can start slowly or fail closed. For a local clone, `git clone --no-hardlinks` avoids links to files outside the workspace. See the [Windows boundary status](native/windows/boundary/CURRENT_STATE.md) and [open issues](https://github.com/JinShuo-Li/latch/issues) for current limits.
 
+## Benchmark results
+
+The following tables report the 6 October 2026 local comparison of Latch and
+OpenCode v2.0.22 on 25 candidate coding tasks each, using the same DeepSeek
+V4.1 Flash model, credential, prompts, timeouts and independent acceptance checks.
+Each task has one attempt per agent, with at most three attempts running globally.
+This is an exploratory comparison; it does not establish statistical significance.
+
+![Table 1. Task quality and execution efficiency: Latch passed 23 of 25 tasks versus OpenCode's 22, with mean wall times of 34.78 and 49.92 seconds.](benchmark/figures/2026-10-06/performance-table.svg)
+
+![Table 2. Estimated direct DeepSeek API expenditure: mean off-peak cost per task is CNY 0.026200 for Latch and CNY 0.030119 for OpenCode.](benchmark/figures/2026-10-06/cost-table.svg)
+
+Input includes cache-hit tokens; output includes reasoning tokens. All-attempt
+averages include failed tasks. Cost estimates apply the dated
+[DeepSeek price list](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)
+to observed token usage and are not actual OpenCode Go invoices. CPU and memory
+are omitted because whole-agent resource accounting was not comparable.
+
+The tables use Times New Roman, rendered as SVG outlines for consistent display.
+Download the [performance PDF](benchmark/figures/2026-10-06/performance-table.pdf)
+or [cost PDF](benchmark/figures/2026-10-06/cost-table.pdf) for print.
+The [full report](benchmark/reports/2026-10-06-full-comparison/README.md)
+contains failure explanations and methodology;
+[per-attempt CSV](benchmark/reports/2026-10-06-full-comparison/per-attempt.csv)
+and [aggregate metrics](benchmark/reports/2026-10-06-full-comparison/metrics.json)
+provide the underlying measurements.
+
 ## For contributors
 
 Run `cargo fmt --all -- --check` and the platform tests before sending changes. The [architecture](docs/ARCHITECTURE.md), [runtime capability model](docs/RUNTIME_CAPABILITY_MODEL.md), [continuity design](docs/CONTINUITY.md), and [repository instructions](AGENTS.md) contain implementation details. Linux release checks are in `scripts/release-gate.sh`; Windows native fixtures and recovery notes are in `native/windows/boundary/`.
