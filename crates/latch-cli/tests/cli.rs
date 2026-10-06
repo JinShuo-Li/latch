@@ -781,9 +781,12 @@ fn jsonl_is_valid_on_every_line_and_ends_with_final() {
     assert_eq!(tool["status"], "ok");
     let final_record = lines.last().unwrap();
     assert_eq!(final_record["result"]["status"], "completed");
-    assert_eq!(final_record["result"]["result"]["text"], "done");
+    // The text-only fixture ignores the kernel's one corrective turn after
+    // editing. Both responses stream, but neither supplies a completion claim.
+    assert_eq!(final_record["result"]["result"]["text"], "donedone");
+    assert_eq!(final_record["result"]["task"]["completion"], "in_progress");
     assert!(fixture.workspace.join("note.txt").exists());
-    assert_eq!(fixture.mock.hits(), 2);
+    assert_eq!(fixture.mock.hits(), 3);
 }
 
 #[test]
