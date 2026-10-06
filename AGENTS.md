@@ -1,7 +1,8 @@
 # AGENTS.md — Latch
 
-Latch is a Linux-first Rust terminal coding agent (v0.2.3). Users drive it through
-the `latch` TUI (`cargo install --path crates/latch-cli` installs it).
+Latch is a Rust terminal coding agent for Linux and Windows (v0.2.3). Users drive
+it through the `latch` TUI. Binary installers are in `scripts/install.{sh,ps1}`;
+`cargo install --path crates/latch-cli --locked` remains the source install path.
 
 ## Hard constraints
 
@@ -156,7 +157,14 @@ Four crates: `latch-protocol` (durable event/model schema shared by all),
 `latch-tui` (Ratatui app), `latch-cli` (wiring and `latch` binary).
 The static GitHub Pages site lives in `site/` and is published by
 `.github/workflows/pages.yml`; its terminal captures come from TUI snapshots.
-Keep its version and install commands aligned with the README.
+Keep its version and install commands aligned with the README. Pages stages
+`scripts/install.sh` and `scripts/install.ps1` alongside `site/`; do not duplicate
+the scripts in `site/`. `.github/workflows/release.yml` builds glibc 2.35+ Linux
+and static-CRT native Windows binaries on matching version tags; manual dispatch
+builds without publishing. See `docs/INSTALL.md` and `docs/RELEASING.md`.
+Installer checks: `python3 scripts/test_install.py`, `shellcheck scripts/install.sh`,
+and `scripts/test-install.ps1` on Windows (PowerShell 5.1 and 7). These offline
+checks are part of default CI and tag-release builds.
 
 Kernel ownership boundaries — put changes in the right child module:
 `agent.rs` keeps the run loop and public facade, with `agent/{steering,request,

@@ -1,0 +1,158 @@
+name: Release
+
+# Cut a release: update workspace.package.version and Cargo.lock, commit, then
+# git tag vX.Y.Z && git push origin vX.Y.Z. Both builds must pass before publishing.
+on:
+  push:
+    tags: ['v*.*.*']
+  # Manual runs build and check both targets; they never publish a release.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version and release tag
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, re, tomllib
+          from pathlib import Path
+          tag = os.environ['RELEASE_TAG']
+          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          if os.environ['EVENT_NAME'] == 'workflow_dispatch':
+              tag = f'v{version}'
+          assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?', tag), f'Invalid release tag: {tag}'
+          assert tag == f'v{version}', f'Tag {tag} does not match workspace version {version}'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'tag={tag}\n')
+          PY
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc 2.35 baseline; bundled SQLite and rustls avoid system DB/TLS deps.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            rustflags: ''
+          # Statically link the Rust C runtime; embedded native helpers use /MT.
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            rustflags: '-C target-feature=+crt-static'
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Linux runtime and installer checks
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap ripgrep
+          cargo test -p latch-kernel --lib sandbox::tests::probe_succeeds_on_this_host --locked --target ${{ matrix.target }}
+          python3 scripts/test_install.py
+      - name: Windows boundary and installer checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked --target ${{ matrix.target }} -- --test-threads=1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & scripts/test-install.ps1
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release --locked -p latch-cli --bin latch --target ${{ matrix.target }}
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        env:
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p package dist
+          install -m 755 "target/$RELEASE_TARGET/release/latch" package/latch
+          strip package/latch
+          test "$(package/latch --version)" = "latch ${RELEASE_TAG#v}"
+          cp LICENSE config.example.toml package/
+          printf 'Version: %s\nTarget: %s\nCommit: %s\n' "$RELEASE_TAG" "$RELEASE_TARGET" "$GITHUB_SHA" > package/BUILD_INFO
+          rustc --version >> package/BUILD_INFO
+          printf '\nInstallation: https://github.com/JinShuo-Li/latch/blob/%s/docs/INSTALL.md\n' "$RELEASE_TAG" >> package/BUILD_INFO
+          tar -czf "dist/latch-$RELEASE_TARGET.tar.gz" -C package latch LICENSE config.example.toml BUILD_INFO
+          cp scripts/install.sh scripts/install.ps1 dist/
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          New-Item -ItemType Directory package, dist | Out-Null
+          Copy-Item "target/$env:RELEASE_TARGET/release/latch.exe" package/latch.exe
+          $version = & package/latch.exe --version
+          if ($LASTEXITCODE -or $version -ne "latch $($env:RELEASE_TAG.Substring(1))") { throw "Unexpected binary version: $version" }
+          Copy-Item LICENSE, config.example.toml package/
+          @("Version: $env:RELEASE_TAG", "Target: $env:RELEASE_TARGET", "Commit: $env:GITHUB_SHA", (rustc --version), "Installation: https://github.com/JinShuo-Li/latch/blob/$env:RELEASE_TAG/docs/INSTALL.md") | Set-Content package/BUILD_INFO -Encoding utf8
+          Compress-Archive -Path package/* -DestinationPath "dist/latch-$env:RELEASE_TARGET.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Check assets and create checksum manifest
+        working-directory: dist
+        run: |
+          test -s latch-x86_64-unknown-linux-gnu.tar.gz
+          test -s latch-x86_64-pc-windows-msvc.zip
+          test -s install.sh
+          test -s install.ps1
+          sha256sum latch-*.tar.gz latch-*.zip install.sh install.ps1 > SHA256SUMS
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          # Draft first: installers must not see a release before uploads finish.
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "Latch $RELEASE_TAG" --generate-notes dist/*
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --latest
+          fi

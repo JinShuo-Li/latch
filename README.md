@@ -6,21 +6,41 @@ Latch is a terminal coding agent for Linux and Windows. It keeps sessions on dis
 
 ## Install
 
-Install stable Rust first. Build from this repository:
+Install the latest precompiled release for x86_64 Linux or Windows; no Rust toolchain is needed.
+
+**Linux (Bash)**
 
 ```sh
+curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://jinshuo-li.github.io/latch/install.ps1 | iex
+```
+
+Both installers require the release's SHA256 checksum and verify it before installing.
+Linux installs to `~/.local/bin`; Windows installs to `%LOCALAPPDATA%\Programs\Latch\bin`.
+Follow the installer's PATH instructions, then open a terminal in your project.
+[Download releases](https://github.com/JinShuo-Li/latch/releases) or see the
+[install guide](docs/INSTALL.md) for version pins, custom directories, and troubleshooting.
+The Linux installer also supports older versioned release archives.
+
+Linux needs glibc 2.35+, `bwrap` (Bubblewrap), `rg` (ripgrep), and Git on `PATH`.
+Windows needs Git for Windows, ripgrep, and a user-owned NTFS workspace.
+The native Windows sandbox is embedded in `latch.exe`; binary installs need no MSVC, WSL, or Git Bash.
+Latch refuses to run commands if its sandbox is unavailable.
+
+**Build from source**
+
+Install stable Rust and a C toolchain. On Windows, also install x64 MSVC C++ Build Tools and the Windows SDK.
+
+```sh
+git clone https://github.com/JinShuo-Li/latch.git
+cd latch
 cargo install --path crates/latch-cli --locked
 ```
-
-Linux also needs `bwrap` (Bubblewrap), `rg` (ripgrep), and Git on `PATH`. Windows needs MSVC C++ Build Tools, the Windows SDK, Git for Windows, ripgrep, and an NTFS workspace. The Windows sandbox runner is built into `latch.exe`; WSL and Git Bash are not required.
-
-Check the installation and configuration:
-
-```sh
-latch doctor
-```
-
-`doctor` reports missing prerequisites without contacting a model provider. Latch refuses to run commands if its sandbox is unavailable.
 
 ## Get started
 
@@ -30,7 +50,7 @@ Open a terminal in your project and run:
 latch
 ```
 
-On first launch, use `/setup` to choose a provider, enter or reference its API key, choose a model, and save. `/model` changes the model for the current session. You can also run one prompt without the TUI:
+On first launch, use `/setup` to choose a provider, enter or reference its API key, choose a model, and save. Run `latch doctor` to check local prerequisites and configuration without contacting a model provider. `/model` changes the model for the current session. You can also run one prompt without the TUI:
 
 ```sh
 latch -p "Explain this repository"
@@ -81,7 +101,7 @@ DeepSeek V4.1 Flash · 6 October 2026 · Single attempt per task ·
 
 ## For contributors
 
-Run `cargo fmt --all -- --check` and the platform tests before sending changes. The [architecture](docs/ARCHITECTURE.md), [runtime capability model](docs/RUNTIME_CAPABILITY_MODEL.md), [continuity design](docs/CONTINUITY.md), and [repository instructions](AGENTS.md) contain implementation details. Linux release checks are in `scripts/release-gate.sh`; Windows native fixtures and recovery notes are in `native/windows/boundary/`.
+Run `cargo fmt --all -- --check` and the platform tests before sending changes. The [architecture](docs/ARCHITECTURE.md), [runtime capability model](docs/RUNTIME_CAPABILITY_MODEL.md), [continuity design](docs/CONTINUITY.md), and [repository instructions](AGENTS.md) contain implementation details. Tag-triggered binary publishing is documented in the [release guide](docs/RELEASING.md). Linux release checks are in `scripts/release-gate.sh`; Windows native fixtures and recovery notes are in `native/windows/boundary/`.
 The [Linux benchmark candidate suite](benchmark/README.md) runs isolated CLI coding tasks
 against DeepSeek v4.1 Flash and records independent checks, tokens, cache reads,
 and wall time. It is opt-in and uses a real provider credential.

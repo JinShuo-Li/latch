@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - site/**
+      - scripts/install.sh
+      - scripts/install.ps1
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -20,10 +22,15 @@ jobs:
       pages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Stage static site and official installers
+        run: |
+          mkdir -p _site
+          cp -R site/. _site/
+          cp scripts/install.sh scripts/install.ps1 _site/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: site
+          path: _site
 
   deploy:
     needs: build

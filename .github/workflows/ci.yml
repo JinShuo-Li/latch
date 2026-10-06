@@ -13,7 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install runtime prerequisites
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep shellcheck
+      - name: Check Linux installer
+        run: |
+          shellcheck scripts/install.sh
+          python3 scripts/test_install.py
       - name: Enable Bubblewrap user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - uses: dtolnay/rust-toolchain@stable
@@ -36,6 +40,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Check Windows installer (PowerShell 7 and Windows PowerShell 5.1)
+        shell: pwsh
+        run: |
+          & scripts/test-install.ps1
+          powershell -NoProfile -File scripts/test-install.ps1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Verify embedded native boundary
         shell: pwsh
         run: |
