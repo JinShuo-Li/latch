@@ -24,7 +24,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check version and release tag
         id: version
         env:
@@ -62,7 +62,7 @@ jobs:
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -116,7 +116,7 @@ jobs:
           Copy-Item LICENSE, config.example.toml package/
           @("Version: $env:RELEASE_TAG", "Target: $env:RELEASE_TARGET", "Commit: $env:GITHUB_SHA", (rustc --version), "Installation: https://github.com/JinShuo-Li/latch/blob/$env:RELEASE_TAG/docs/INSTALL.md") | Set-Content package/BUILD_INFO -Encoding utf8
           Compress-Archive -Path package/* -DestinationPath "dist/latch-$env:RELEASE_TARGET.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: dist/*
@@ -130,7 +130,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: dist

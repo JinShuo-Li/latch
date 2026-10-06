@@ -32,7 +32,7 @@ function New-Fixture($entryName = 'latch.exe') {
     $digest = (Get-FileHash $archive -Algorithm SHA256).Hash
     "$digest  latch-x86_64-pc-windows-msvc.zip" | Set-Content (Join-Path $root 'SHA256SUMS')
 }
-function Run-Case($name, $arguments = @{}, $expectError = $null) {
+function Run-Case($name, $arguments = @{}, $expectError = $null, $piped = $false) {
     $destination = Join-Path $root 'user bin'
     New-Item -ItemType Directory $destination -Force | Out-Null
     $binary = Join-Path $destination 'latch.exe'
@@ -40,7 +40,13 @@ function Run-Case($name, $arguments = @{}, $expectError = $null) {
     $global:LatchRequests = @()
     $errorMessage = $null
     $before = @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'latch-install-*' | ForEach-Object { $_.FullName })
-    try { & $installer -InstallDir $destination @arguments } catch { $errorMessage = $_.Exception.Message }
+    try {
+        if ($piped) {
+            $env:LATCH_INSTALL_DIR = $destination
+            try { Invoke-Expression (Get-Content -LiteralPath $installer -Raw) }
+            finally { $env:LATCH_INSTALL_DIR = '' }
+        } else { & $installer -InstallDir $destination @arguments }
+    } catch { $errorMessage = $_.Exception.Message }
     if ($expectError) {
         Assert-True ($errorMessage -and $errorMessage.Contains($expectError)) "$name did not fail as expected: $errorMessage"
         Assert-True ((Get-Content $binary -Raw) -eq 'existing installation') "$name changed an existing binary on failure"
@@ -63,6 +69,7 @@ try {
     New-Fixture
     Run-Case 'latest / upgrade'
     Assert-True ($global:LatchRequests.Count -eq 3) 'Latest should resolve once and download two files'
+    Run-Case 'one-liner / environment install directory' @{} $null $true
     Run-Case 'pinned version' @{ Version = '9.8.7' }
     Assert-True ($global:LatchRequests.Count -eq 2) 'Pinned version must not query latest'
     $env:LATCH_VERSION = 'v9.8.7'

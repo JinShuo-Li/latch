@@ -22,7 +22,7 @@ function Install-Latch {
         # Windows PowerShell 5.1 may otherwise negotiate obsolete TLS versions.
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         if ($Version -eq 'latest') {
-            Write-Host 'Resolving the latest Latch release…'
+            Write-Host 'Resolving the latest Latch release...'
             $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/JinShuo-Li/latch/releases/latest' -Headers @{ 'User-Agent' = 'Latch-installer' } -TimeoutSec 120
             $Version = $release.tag_name
             if (-not $Version) { throw 'GitHub did not return a release tag.' }
@@ -33,7 +33,7 @@ function Install-Latch {
         $base = "$repo/releases/download/$Version"
         $work = Join-Path ([IO.Path]::GetTempPath()) ('latch-install-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $work | Out-Null
-        Write-Host "Downloading Latch $Version for x86_64 Windows…"
+        Write-Host "Downloading Latch $Version for x86_64 Windows..."
         $archive = Join-Path $work $asset
         Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile $archive -TimeoutSec 300
         $manifest = Join-Path $work 'SHA256SUMS'
@@ -58,7 +58,7 @@ function Install-Latch {
         $staged = Join-Path $InstallDir ('.latch-install-' + [Guid]::NewGuid().ToString('N') + '.exe')
         Copy-Item -LiteralPath $binary -Destination $staged
         # Replacement leaves an existing binary intact if Windows has it open.
-        if (Test-Path -LiteralPath $destination) { [IO.File]::Replace($staged, $destination, $null) }
+        if (Test-Path -LiteralPath $destination) { [IO.File]::Replace($staged, $destination, [NullString]::Value) }
         else { [IO.File]::Move($staged, $destination) }
         $staged = $null
         Write-Host "Installed Latch $Version to $destination (SHA256 verified)."

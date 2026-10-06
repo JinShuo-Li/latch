@@ -21,7 +21,7 @@ jobs:
       contents: read
       pages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Stage static site and official installers
         run: |
           mkdir -p _site
