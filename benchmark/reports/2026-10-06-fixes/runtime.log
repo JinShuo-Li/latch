@@ -1,0 +1,8 @@
+validation_set exit 0 status completed completion verified x 'original\n'
+pipeline_failure exit 0 status completed completion implemented_not_verified x 'original\n'
+missing_completion_claim exit 0 status completed completion verified x 'changed'
+readonly_filter exit 0 status completed completion in_progress x 'original\n'
+readonly_git_external_diff exit 0 status completed completion verified x 'original\n'
+configured_validation_timeout exit 0 status completed completion implemented_not_verified x 'original\n'
+empty_completion_summary exit 0 status completed completion verified x 'changed'
+ALL SEVEN REGRESSIONS PASSED

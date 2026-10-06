@@ -1,0 +1,135 @@
+[
+  {
+    "name": "validation_set",
+    "exit_code": 0,
+    "seconds": 0.478,
+    "status": "completed",
+    "task": {
+      "completion": "verified",
+      "goal": "Investigate a deterministic isolated fixture.",
+      "evidence_count": 4,
+      "validation": {
+        "passed": 2,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    "requests": 4,
+    "final_x": "original\n",
+    "text": "Kernel completion report\nCompletion: Verified.\nChanged files this run: none recorded.\nValidation status:\n- A: passed\n- B: passed"
+  },
+  {
+    "name": "pipeline_failure",
+    "exit_code": 0,
+    "seconds": 0.332,
+    "status": "completed",
+    "task": {
+      "completion": "implemented_not_verified",
+      "goal": "Investigate a deterministic isolated fixture.",
+      "evidence_count": 1,
+      "validation": {
+        "passed": 0,
+        "failed": 1,
+        "pending": 0
+      }
+    },
+    "requests": 2,
+    "final_x": "original\n",
+    "text": "Kernel completion report\nCompletion: ImplementedNotVerified.\nChanged files this run: none recorded.\nValidation status:\n- check: failed"
+  },
+  {
+    "name": "missing_completion_claim",
+    "exit_code": 0,
+    "seconds": 0.42,
+    "status": "completed",
+    "task": {
+      "completion": "verified",
+      "goal": "Investigate a deterministic isolated fixture.",
+      "evidence_count": 1,
+      "validation": {
+        "passed": 1,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    "requests": 4,
+    "final_x": "changed",
+    "text": "Done\n\nKernel completion report\nCompletion: Verified.\nChanged files this run: x.txt.\nValidation status:\n- check: passed"
+  },
+  {
+    "name": "readonly_filter",
+    "exit_code": 0,
+    "seconds": 0.322,
+    "status": "completed",
+    "task": {
+      "completion": "in_progress",
+      "goal": "Investigate a deterministic isolated fixture.",
+      "evidence_count": 0,
+      "validation": {
+        "passed": 0,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    "requests": 2,
+    "final_x": "original\n",
+    "text": "Done"
+  },
+  {
+    "name": "readonly_git_external_diff",
+    "exit_code": 0,
+    "seconds": 0.384,
+    "status": "completed",
+    "task": {
+      "completion": "verified",
+      "goal": "Investigate a deterministic isolated fixture.",
+      "evidence_count": 1,
+      "validation": {
+        "passed": 1,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    "requests": 3,
+    "final_x": "original\n",
+    "text": "Kernel completion report\nCompletion: Verified.\nChanged files this run: none recorded.\nValidation status:\n- check: passed"
+  },
+  {
+    "name": "configured_validation_timeout",
+    "exit_code": 0,
+    "seconds": 1.317,
+    "status": "completed",
+    "task": {
+      "completion": "implemented_not_verified",
+      "goal": "Investigate a deterministic isolated fixture.",
+      "evidence_count": 0,
+      "validation": {
+        "passed": 0,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    "requests": 2,
+    "final_x": "original\n",
+    "text": "Kernel completion report\nCompletion: ImplementedNotVerified.\nChanged files this run: none recorded.\nValidation: no required validations."
+  },
+  {
+    "name": "empty_completion_summary",
+    "exit_code": 0,
+    "seconds": 0.354,
+    "status": "completed",
+    "task": {
+      "completion": "verified",
+      "goal": "Investigate a deterministic isolated fixture.",
+      "evidence_count": 1,
+      "validation": {
+        "passed": 1,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    "requests": 3,
+    "final_x": "changed",
+    "text": "Kernel completion report\nCompletion: Verified.\nChanged files this run: x.txt.\nValidation status:\n- check: passed"
+  }
+]

@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/latch_kernel-a99092a4745da087)
+
+running 14 tests
+test continuity::tests::episodes_align_with_user_intents_and_carry_structure ... ok
+test continuity::tests::render_event_prices_reasoning_and_tool_arguments ... ok
+test continuity::tests::recent_selection_never_splits_assistant_from_results ... ok
+test continuity::tests::recent_selection_keeps_tool_transactions_atomic ... ok
+test continuity::tests::canonical_budget_drops_notes_before_core ... ok
+test continuity::tests::manual_compact_retains_raw_events ... ok
+test continuity::tests::compact_resets_working_memory_and_ignores_legacy_epoch_boundaries ... ok
+test continuity::tests::recall_prefers_later_revision_across_topics_after_compact_and_resume ... ok
+test continuity::tests::cache_epochs_append_between_rotations_and_rotate_with_hysteresis ... ok
+test continuity::tests::episode_index_is_incrementally_equivalent_to_a_full_rebuild ... ok
+cache measurement: turns=48 rotations=3 new_mean=0.94 old_mean=0.30 new_median=1.00 old_median=0.01 new_high_reuse=94% old_high_reuse=30% worst=0.00
+test continuity::tests::cache_epochs_beat_per_turn_sliding_suffix_on_prefix_reuse ... ok
+test continuity::tests::continuity_stress_preserves_truth_without_auto_compact ... ok
+test continuity::tests::materialized_context_is_bounded_under_thousands_of_events ... ok
+test continuity::tests::long_history_turns_index_only_the_delta ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 389 filtered out; finished in 1.45s
+

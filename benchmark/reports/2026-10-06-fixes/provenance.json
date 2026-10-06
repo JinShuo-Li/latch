@@ -1,0 +1,8 @@
+{
+  "source_revision": "ada709656d5f434e1a6b044f4eb5f645404a146e",
+  "release_sha256": "aaaf98791fc68e5108d7115d14f02a77df1daa6426d698793595d51f084fbdba",
+  "runtime_source": "benchmark/runs/investigation-1791264776855696200",
+  "release_gate_exit_code": 0,
+  "continuity_exit_code": 0,
+  "runtime_exit_code": 0
+}
