@@ -167,6 +167,8 @@ builds without publishing. See `docs/INSTALL.md` and `docs/RELEASING.md`.
 Installer checks: `python3 scripts/test_install.py`, `shellcheck scripts/install.sh`,
 and `scripts/test-install.ps1` on Windows (PowerShell 5.1 and 7). These offline
 checks are part of default CI and tag-release builds.
+Resolve latest installer versions through GitHub's public release redirect,
+not its rate-limited unauthenticated API; keep both PowerShell response shapes covered.
 
 Kernel ownership boundaries — put changes in the right child module:
 `agent.rs` keeps the run loop and public facade, with `agent/{steering,request,

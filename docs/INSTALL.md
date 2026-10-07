@@ -8,6 +8,9 @@ The binary is named `latch` on Linux and `latch.exe` on Windows.
 
 The installers download the latest stable GitHub Release, require its
 `SHA256SUMS`, and verify the archive before replacing an existing installation.
+Latest-release lookup follows GitHub's public release redirect, without using
+the GitHub API or requiring a token. The one-line commands work without pinning
+a version, including on networks that have exhausted the unauthenticated API quota.
 No root or administrator access is required. Review the scripts by downloading
 [install.sh](../scripts/install.sh) or [install.ps1](../scripts/install.ps1)
 first if you prefer to inspect them before running.

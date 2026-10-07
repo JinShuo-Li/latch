@@ -21,6 +21,7 @@ irm https://jinshuo-li.github.io/latch/install.ps1 | iex
 ```
 
 Both installers require the release's SHA256 checksum and verify it before installing.
+Latest-release lookup uses GitHub's public redirect; no API token is needed.
 Linux installs to `~/.local/bin`; Windows installs to `%LOCALAPPDATA%\Programs\Latch\bin`.
 Follow the installer's PATH instructions, then open a terminal in your project.
 [Download releases](https://github.com/JinShuo-Li/latch/releases) or see the

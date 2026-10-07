@@ -9,17 +9,25 @@ $originalInstallDir = $env:LATCH_INSTALL_DIR
 $originalPath = $env:PATH
 $global:LatchFixture = $root
 $global:LatchRequests = @()
+$global:LatchReleaseUrl = 'https://github.com/JinShuo-Li/latch/releases/tag/v9.8.7'
+$global:LatchResponseStyle = 'WindowsPowerShell'
 
 function global:Invoke-RestMethod {
     param($Uri, $Headers, $TimeoutSec)
-    if ($Uri -ne 'https://api.github.com/repos/JinShuo-Li/latch/releases/latest') { throw "Unexpected URL: $Uri" }
-    $global:LatchRequests += $Uri
-    return @{ tag_name = 'v9.8.7' }
+    throw 'GitHub API rate limit exceeded: installer must not use the API'
 }
 function global:Invoke-WebRequest {
-    param([switch]$UseBasicParsing, $Uri, $OutFile, $TimeoutSec)
-    if (-not $Uri.StartsWith('https://github.com/JinShuo-Li/latch/releases/download/v9.8.7/')) { throw "Unexpected URL: $Uri" }
+    param([switch]$UseBasicParsing, $Method, $Uri, $OutFile, $TimeoutSec)
     $global:LatchRequests += $Uri
+    if ($Uri -eq 'https://github.com/JinShuo-Li/latch/releases/latest') {
+        if ($Method -ne 'Head') { throw 'Release lookup must use HEAD' }
+        $redirectUri = if ($global:LatchReleaseUrl) { [uri]$global:LatchReleaseUrl } else { $null }
+        if ($global:LatchResponseStyle -eq 'WindowsPowerShell') {
+            return @{ BaseResponse = @{ ResponseUri = $redirectUri } }
+        }
+        return @{ BaseResponse = @{ RequestMessage = @{ RequestUri = $redirectUri } } }
+    }
+    if (-not $Uri.StartsWith('https://github.com/JinShuo-Li/latch/releases/download/v9.8.7/')) { throw "Unexpected URL: $Uri" }
     Copy-Item -LiteralPath (Join-Path $global:LatchFixture ($Uri.Split('/')[-1])) -Destination $OutFile
 }
 function Assert-True($condition, $message) { if (-not $condition) { throw $message } }
@@ -70,6 +78,19 @@ try {
     Run-Case 'latest / upgrade'
     Assert-True ($global:LatchRequests.Count -eq 3) 'Latest should resolve once and download two files'
     Run-Case 'one-liner / environment install directory' @{} $null $true
+    Assert-True ($global:LatchRequests[0] -eq 'https://github.com/JinShuo-Li/latch/releases/latest') 'One-liner must use the public release redirect'
+    $global:LatchResponseStyle = 'PowerShell7'
+    Run-Case 'PowerShell 7 release redirect' @{} $null $true
+    $global:LatchResponseStyle = 'WindowsPowerShell'
+    foreach ($url in @('https://example.com/releases/tag/v9.8.7', 'https://github.com/JinShuo-Li/latch/releases', '')) {
+        $global:LatchReleaseUrl = $url
+        Run-Case 'unexpected release redirect' @{} 'GitHub did not return a release tag'
+        Assert-True ($global:LatchRequests.Count -eq 1) 'Invalid redirect must not download assets'
+    }
+    $global:LatchReleaseUrl = 'https://github.com/JinShuo-Li/latch/releases/tag/invalid'
+    Run-Case 'invalid release tag' @{} 'Invalid version'
+    Assert-True ($global:LatchRequests.Count -eq 1) 'Invalid release tag must not download assets'
+    $global:LatchReleaseUrl = 'https://github.com/JinShuo-Li/latch/releases/tag/v9.8.7'
     Run-Case 'pinned version' @{ Version = '9.8.7' }
     Assert-True ($global:LatchRequests.Count -eq 2) 'Pinned version must not query latest'
     $env:LATCH_VERSION = 'v9.8.7'
@@ -103,6 +124,6 @@ try {
     $env:LATCH_VERSION = $originalVersion
     $env:LATCH_INSTALL_DIR = $originalInstallDir
     Remove-Item Function:\Invoke-RestMethod, Function:\Invoke-WebRequest
-    Remove-Variable LatchFixture, LatchRequests -Scope Global
+    Remove-Variable LatchFixture, LatchRequests, LatchReleaseUrl, LatchResponseStyle -Scope Global
     if (Test-Path $root) { Remove-Item $root -Recurse -Force }
 }

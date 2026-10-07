@@ -23,9 +23,17 @@ function Install-Latch {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         if ($Version -eq 'latest') {
             Write-Host 'Resolving the latest Latch release...'
-            $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/JinShuo-Li/latch/releases/latest' -Headers @{ 'User-Agent' = 'Latch-installer' } -TimeoutSec 120
-            $Version = $release.tag_name
-            if (-not $Version) { throw 'GitHub did not return a release tag.' }
+            # Follow the public release redirect, avoiding the unauthenticated API quota.
+            $release = Invoke-WebRequest -UseBasicParsing -Method Head -Uri "$repo/releases/latest" -TimeoutSec 120
+            # Windows PowerShell 5.1 uses HttpWebResponse; PowerShell 7 uses HttpResponseMessage.
+            $releaseUri = if ($release.BaseResponse.ResponseUri) { $release.BaseResponse.ResponseUri }
+                          else { $release.BaseResponse.RequestMessage.RequestUri }
+            $releaseUrl = [string]$releaseUri
+            $tagPrefix = "$repo/releases/tag/"
+            if (-not $releaseUrl.StartsWith($tagPrefix, [StringComparison]::Ordinal)) {
+                throw 'GitHub did not return a release tag. Try setting LATCH_VERSION to vX.Y.Z.'
+            }
+            $Version = $releaseUrl.Substring($tagPrefix.Length)
         }
         if (-not $Version.StartsWith('v')) { $Version = "v$Version" }
         if ($Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { throw "Invalid version: $Version. Expected vX.Y.Z (or a prerelease tag)." }
