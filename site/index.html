@@ -99,6 +99,10 @@ enter send  ctrl+j newline  ctrl+p commands
           <div class="command"><pre id="windows-code">irm https://jinshuo-li.github.io/latch/install.ps1 | iex</pre><button type="button" data-copy="windows-code" aria-label="Copy Windows install command">Copy</button></div>
           <p class="install-detail">Installs to <code>%LOCALAPPDATA%\Programs\Latch\bin</code>. Requires Git, ripgrep, and a user-owned NTFS workspace.</p>
           <p class="platform-note">Native sandbox included. No WSL or compiler needed.</p>
+          <p class="install-detail">The installer leaves PATH unchanged. For the default install directory, run this in the current PowerShell terminal:</p>
+          <div class="command"><pre id="windows-path-code">$env:PATH = "$env:LOCALAPPDATA\Programs\Latch\bin;$env:PATH"
+latch --version</pre><button type="button" data-copy="windows-path-code" aria-label="Copy Windows PATH setup and version check">Copy</button></div>
+          <p class="install-detail">For future terminals, add <code>%LOCALAPPDATA%\Programs\Latch\bin</code> to your <strong>user Path</strong> in Windows Environment Variables, then reopen PowerShell. Use your chosen directory if you customized the install location.</p>
         </article>
       </div>
       <div class="first-run"><span class="step-number">NEXT /</span><p>Run <code>latch</code>, use <code>/setup</code> to choose a provider and model, then run <code>latch doctor</code> to check your configuration.</p><a class="text-link" href="https://github.com/JinShuo-Li/latch/blob/main/docs/INSTALL.md">Install guide &amp; source builds <span aria-hidden="true">↗</span></a></div>

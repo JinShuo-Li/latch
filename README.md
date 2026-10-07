@@ -20,6 +20,18 @@ curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
 irm https://jinshuo-li.github.io/latch/install.ps1 | iex
 ```
 
+The Windows installer leaves PATH unchanged. For the default install directory,
+make `latch` available in the current PowerShell terminal and verify it:
+
+```powershell
+$env:PATH = "$env:LOCALAPPDATA\Programs\Latch\bin;$env:PATH"
+latch --version
+```
+
+For future terminals, add `%LOCALAPPDATA%\Programs\Latch\bin` to your **user Path**
+in Windows Environment Variables, then reopen PowerShell. Use your chosen
+directory instead if you customized the install location.
+
 Both installers require the release's SHA256 checksum and verify it before installing.
 Latest-release lookup uses GitHub's public redirect; no API token is needed.
 Linux installs to `~/.local/bin`; Windows installs to `%LOCALAPPDATA%\Programs\Latch\bin`.
