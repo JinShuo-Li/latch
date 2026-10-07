@@ -79,6 +79,14 @@ try {
     Assert-True ($global:LatchRequests.Count -eq 3) 'Latest should resolve once and download two files'
     Run-Case 'one-liner / environment install directory' @{} $null $true
     Assert-True ($global:LatchRequests[0] -eq 'https://github.com/JinShuo-Li/latch/releases/latest') 'One-liner must use the public release redirect'
+    # Verify the printed current-terminal PATH guidance makes the installed command discoverable.
+    $installedBin = Join-Path $root 'user bin'
+    try {
+        $env:PATH = "$installedBin;$originalPath"
+        $command = Get-Command latch -CommandType Application -ErrorAction Stop
+        Assert-True ($command.Source -eq (Join-Path $installedBin 'latch.exe')) 'PATH guidance did not resolve the installed binary'
+        Write-Host 'PASS: installed latch command lookup after current-terminal PATH setup'
+    } finally { $env:PATH = $originalPath }
     $global:LatchResponseStyle = 'PowerShell7'
     Run-Case 'PowerShell 7 release redirect' @{} $null $true
     $global:LatchResponseStyle = 'WindowsPowerShell'

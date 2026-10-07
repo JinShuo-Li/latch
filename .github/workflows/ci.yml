@@ -58,3 +58,10 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & target/debug/latch.exe --version
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $latchBinaryDir = (Resolve-Path target/debug).Path
+          $env:PATH = "$latchBinaryDir;$env:PATH"
+          if ((Get-Command latch -CommandType Application).Source -ne (Join-Path $latchBinaryDir 'latch.exe')) {
+            throw 'PowerShell did not resolve the expected latch.exe after PATH setup'
+          }
+          latch --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
