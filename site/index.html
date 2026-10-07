@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#121413">
+  <meta name="theme-color" content="#f5f3ed">
   <meta name="description" content="Latch is a terminal coding agent for Linux and Windows. Mandatory sandboxing, durable sessions, and validation tied to the code it checked. Install a precompiled binary.">
   <meta property="og:title" content="Latch — a coding agent with a paper trail">
   <meta property="og:description" content="Work in your terminal. Resume from durable history. Know what was actually verified. Built in Rust for Linux and Windows.">
@@ -21,38 +21,68 @@
   <header class="site-header" id="top">
     <a class="wordmark" href="#top" aria-label="Latch home">latch<span aria-hidden="true">/</span></a>
     <nav aria-label="Main navigation">
-      <a href="#model">Why Latch</a>
-      <a href="#interface">Interface</a>
+      <a href="#interface">Terminal</a><a href="#execution">How it works</a>
       <a href="https://github.com/JinShuo-Li/latch">GitHub <span aria-hidden="true">↗</span></a>
-      <a class="nav-install" href="#install">Install <span aria-hidden="true">↓</span></a>
+      <a href="#install">Install <span aria-hidden="true">↓</span></a>
     </nav>
   </header>
-
   <main id="main">
     <section class="hero" aria-labelledby="hero-title">
-      <div class="hero-copy">
-        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> TERMINAL CODING AGENT <span>/</span> V0.2.3</p>
-        <h1 id="hero-title">A coding agent.<br>With a <em>paper trail.</em></h1>
-        <p class="lede">Ship code with a record of what happened. Latch keeps sessions durable, commands sandboxed, and validation tied to the code it checked.</p>
-        <div class="hero-links">
-          <a class="button primary" href="#install">Install Latch <span aria-hidden="true">↓</span></a>
-          <a class="button secondary" href="https://github.com/JinShuo-Li/latch">View on GitHub <span aria-hidden="true">↗</span></a>
-        </div>
-        <p class="hero-meta">Rust <span>·</span> Linux + Windows <span>·</span> MIT licensed</p>
+      <p class="hero-meta">Terminal coding agent / v0.2.3</p>
+      <h1 id="hero-title">A coding agent.<br>With a <em>paper trail.</em></h1>
+      <div class="hero-bottom">
+        <p class="lede">Work in your terminal. Keep the record.<br>Latch writes code, runs commands in a sandbox, and tracks what was actually checked.</p>
+        <div class="hero-aside"><a class="text-link" href="#install">Install Latch <span aria-hidden="true">↓</span></a><p>Built in Rust.<br>Linux + Windows. MIT licensed.</p></div>
       </div>
-      <aside class="contract" aria-label="Latch execution contract">
-        <div class="contract-head"><span>THE EXECUTION CONTRACT</span><span aria-hidden="true">[ L ]</span></div>
-        <div class="contract-row"><span class="contract-index">01</span><div><h2>Every command, contained.</h2><p>Bubblewrap on Linux.<br>Native AppContainer on Windows.</p></div><span class="contract-tag">SANDBOX</span></div>
-        <div class="contract-row"><span class="contract-index">02</span><div><h2>Every session, recorded.</h2><p>Append-only history.<br>Resume where the work left off.</p></div><span class="contract-tag">DURABLE</span></div>
-        <div class="contract-row"><span class="contract-index">03</span><div><h2>Every pass, scoped.</h2><p>Evidence belongs to a workspace state.<br>Change the code, revalidate.</p></div><span class="contract-tag">EVIDENCE</span></div>
-        <div class="contract-foot"><span aria-hidden="true">↳</span> Inspectable by design.</div>
-      </aside>
+    </section>
+    <section class="interface-section" id="interface" aria-labelledby="interface-title">
+      <div class="interface-heading"><h2 id="interface-title">The work, in view.</h2><p>Conversation, tool activity, and task state in one terminal.<br>Choose Ask, Plan, or Work. Steer a turn while it runs.</p></div>
+      <div class="terminal">
+        <div class="terminal-head">
+          <span class="terminal-label"><span class="status-dot" aria-hidden="true"></span> LATCH / TUI</span>
+          <div class="capture-tabs" role="tablist" aria-label="TUI capture">
+            <button type="button" role="tab" id="tab-welcome" aria-controls="capture-panel" aria-selected="false" tabindex="-1" data-capture="welcome">Welcome</button>
+            <button type="button" role="tab" id="tab-session" aria-controls="capture-panel" aria-selected="true" tabindex="0" data-capture="session">Session</button>
+            <button type="button" role="tab" id="tab-working" aria-controls="capture-panel" aria-selected="false" tabindex="-1" data-capture="working">Running</button>
+          </div>
+        </div>
+        <div class="terminal-body" id="capture-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-session"><pre id="tui-capture">
+› Fix the failing test without changing the public API.
+
+
+• I'll inspect the failing case and patch it.
+
+  • read the parser
+  • keep the API stable
+
+
+
+
+
+
+
+
+› Ask Latch…
+
+
+
+  WORK · deepseek-flash/low · main · std · ask                                                 ready
+
+enter send  ctrl+j newline  ctrl+p commands
+/tmp/latch-ui                                                                           latch v0.2.3
+</pre><noscript><p>View the <a href="./captures/session.txt">session capture</a> as plain text.</p></noscript></div>
+      </div>
+      <p class="capture-note">Actual TUI fixtures from the repository. Scroll the terminal horizontally on smaller screens.</p>
+      <div class="command-list">
+        <div><code>latch</code><span>Open the interactive TUI</span></div>
+        <div><code>latch -p "Fix the failing test"</code><span>Send one prompt from the shell</span></div>
+        <div><code>latch --resume --latest</code><span>Resume the newest workspace session</span></div>
+      </div>
     </section>
 
-    <section class="section install-section" id="install" aria-labelledby="install-title">
-      <div class="section-head">
-        <p class="section-index">01 / GET STARTED</p>
-        <h2 id="install-title">Your terminal.<br>Ready for work.</h2>
+    <section class="install-section" id="install" aria-labelledby="install-title">
+      <div class="install-heading">
+        <h2 id="install-title">Install. Then open a terminal.</h2>
         <p>Download a precompiled binary. No Rust toolchain needed. The installer checks SHA256 before installing.</p>
       </div>
       <div class="install-grid">
@@ -75,50 +105,25 @@
       <p class="release-note">Installers download the latest published binary release. <a href="https://github.com/JinShuo-Li/latch/releases">Browse releases or pin a version ↗</a></p>
     </section>
 
-    <section class="section model-section" id="model" aria-labelledby="model-title">
-      <div class="section-head">
-        <p class="section-index">02 / WHY LATCH</p>
-        <h2 id="model-title">Trust the record.<br>Inspect the work.</h2>
-        <p>Long-running coding work needs more than a chat transcript. Latch makes state, execution, and evidence explicit.</p>
-      </div>
-      <div class="principles">
-        <article class="principle"><span class="principle-number">01 / MEMORY</span><h3>Durable state</h3><p>An append-only event log preserves task state, tool results, and evidence. Resume a session without losing the record of how you got there.</p></article>
-        <article class="principle"><span class="principle-number">02 / EXECUTION</span><h3>Mandatory sandbox</h3><p>Every command runs inside the platform sandbox. Inspection commands have read-only filesystem access. If the boundary is unavailable, execution stops.</p></article>
-        <article class="principle"><span class="principle-number">03 / CORRECTNESS</span><h3>Evidence-bound validation</h3><p>A pass certifies the workspace state it checked. Later writes make that evidence stale. Completion is grounded in recorded validation.</p></article>
-        <article class="principle"><span class="principle-number">04 / CONTROL</span><h3>Terminal-native control</h3><p>Inspect tool activity, steer a running turn, and choose Ask, Plan, or Work. Use the TUI interactively or the machine CLI in scripts.</p></article>
-      </div>
-      <a class="text-link section-link" href="https://github.com/JinShuo-Li/latch/blob/main/docs/ARCHITECTURE.md">Read the architecture <span aria-hidden="true">↗</span></a>
-    </section>
-
-    <section class="section interface-section" id="interface" aria-labelledby="interface-title">
-      <div class="section-head">
-        <p class="section-index">03 / IN THE TERMINAL</p>
-        <h2 id="interface-title">Stay close<br>to the work.</h2>
-        <p>A focused interface for the conversation, tools, and task state. These are actual captures from Latch’s TUI fixtures.</p>
-      </div>
-      <div class="terminal">
-        <div class="terminal-head">
-          <span class="terminal-label"><span class="status-dot" aria-hidden="true"></span> LATCH / TUI</span>
-          <div class="capture-tabs" role="tablist" aria-label="TUI capture">
-            <button type="button" role="tab" id="tab-welcome" aria-controls="capture-panel" aria-selected="false" tabindex="-1" data-capture="welcome">Welcome</button>
-            <button type="button" role="tab" id="tab-session" aria-controls="capture-panel" aria-selected="true" tabindex="0" data-capture="session">Session</button>
-            <button type="button" role="tab" id="tab-working" aria-controls="capture-panel" aria-selected="false" tabindex="-1" data-capture="working">Running</button>
-          </div>
-        </div>
-        <div class="terminal-body" id="capture-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-session"><pre id="tui-capture">Opening TUI capture…</pre><noscript><p>View the <a href="./captures/session.txt">session capture</a> as plain text.</p></noscript></div>
-      </div>
-      <p class="capture-note">Repository snapshots · no live credentials · scroll horizontally on smaller screens</p>
-      <div class="command-list">
-        <div><code>latch</code><span>Open the interactive TUI</span></div>
-        <div><code>latch -p "Fix the failing test"</code><span>Send one prompt from the shell</span></div>
-        <div><code>latch --resume --latest</code><span>Resume the newest workspace session</span></div>
+    <section class="execution-section" id="execution" aria-labelledby="execution-title">
+      <div class="execution-intro"><p class="section-label">How Latch works</p><h2 id="execution-title">A prompt becomes<br>a change.<br>The record stays.</h2><a class="text-link" href="https://github.com/JinShuo-Li/latch/blob/main/docs/ARCHITECTURE.md">Read the architecture <span aria-hidden="true">↗</span></a></div>
+      <div class="execution-mechanism">
+        <ol class="flow" aria-label="Execution sequence"><li>prompt</li><li>tool call</li><li>sandbox</li><li>workspace change</li><li>validation</li><li>record</li></ol>
+        <div class="flow-notes"><p>Commands run inside a sandbox.</p><p>Every action is written to the session record.</p><p>Validation belongs to the exact workspace state it checked.</p></div>
       </div>
     </section>
-
-    <section class="section benchmark-section" id="benchmark" aria-labelledby="benchmark-title">
-      <div class="section-head">
-        <p class="section-index">04 / MEASURED WORK</p>
-        <h2 id="benchmark-title">Results you<br>can inspect.</h2>
+    <section class="guarantees-section" aria-labelledby="guarantees-title">
+      <div class="guarantees-heading"><h2 id="guarantees-title">What execution<br>commits to.</h2><p>The boundary is part of the tool.<br>So is the evidence.</p></div>
+      <dl class="guarantees">
+        <div><dt>No sandbox, no command.</dt><dd>Bubblewrap on Linux. Native AppContainer on Windows. Inspection commands have read-only filesystem access. If the boundary is unavailable, execution stops.</dd></div>
+        <div><dt>Resume with the history intact.</dt><dd>The append-only session log keeps task state, tool results, and evidence. Pick up the work without losing how you got there.</dd></div>
+        <div><dt>Change the code, check it again.</dt><dd>A validation pass belongs to the workspace state it checked. Later writes make it stale. Running managed processes block certification until they exit and the work is revalidated.</dd></div>
+      </dl>
+    </section>
+    <section class="benchmark-section" id="benchmark" aria-labelledby="benchmark-title">
+      <div class="benchmark-heading">
+        <p class="section-label">From the benchmark</p>
+        <h2 id="benchmark-title">25 tasks.<br>A report, not a promise.</h2>
         <p>25 coding tasks. The same host, model, prompts, and independent acceptance checks for both agents.</p>
       </div>
       <div class="benchmark-layout">
@@ -133,13 +138,9 @@
       <div class="benchmark-source"><p>DeepSeek V4.1 Flash · 6 October 2026 · One attempt per task.<br>An exploratory run; outcomes vary with sampling and provider load. Recorded validation covers declared checks, not the hidden acceptance suite.</p><a class="text-link" href="https://github.com/JinShuo-Li/latch/blob/main/benchmark/reports/2026-10-06-full-comparison/README.md">Full report, charts &amp; methodology <span aria-hidden="true">↗</span></a></div>
     </section>
 
-    <section class="closing" aria-labelledby="closing-title"><div><p class="eyebrow">BUILD. CHECK. PICK IT UP AGAIN.</p><h2 id="closing-title">Give your work a record.</h2></div><a class="button primary" href="#install">Install Latch <span aria-hidden="true">↑</span></a></section>
+    <section class="docs-section" aria-labelledby="docs-title"><div><p class="section-label">Keep reading</p><h2 id="docs-title">The details are open.</h2><p>Source, runtime boundaries, and recorded results.<br>Read them. Run Latch. Inspect the work.</p></div><nav aria-label="Documentation"><a href="https://github.com/JinShuo-Li/latch/blob/main/README.md">Documentation <span aria-hidden="true">↗</span></a><a href="https://github.com/JinShuo-Li/latch/blob/main/docs/ARCHITECTURE.md">Architecture <span aria-hidden="true">↗</span></a><a href="https://github.com/JinShuo-Li/latch">Source on GitHub <span aria-hidden="true">↗</span></a></nav></section>
   </main>
-  <footer class="site-footer">
-    <div><a class="wordmark" href="#top">latch<span aria-hidden="true">/</span></a><p>Rust · Linux + Windows · v0.2.3</p></div>
-    <span>Durable state. Bounded execution. Recorded evidence.</span>
-    <nav aria-label="Footer navigation"><a href="https://github.com/JinShuo-Li/latch">GitHub ↗</a><a href="https://github.com/JinShuo-Li/latch/blob/main/README.md">Docs ↗</a><a href="https://github.com/JinShuo-Li/latch/issues">Issues ↗</a><a href="https://github.com/JinShuo-Li/latch/blob/main/LICENSE">MIT license ↗</a></nav>
-  </footer>
+  <footer class="site-footer"><div><a class="wordmark" href="#top">latch<span aria-hidden="true">/</span></a><p>Rust · Linux + Windows · v0.2.3</p></div><p>A coding agent. With a paper trail.</p><nav aria-label="Footer navigation"><a href="https://github.com/JinShuo-Li/latch/issues">Issues ↗</a><a href="https://github.com/JinShuo-Li/latch/blob/main/LICENSE">MIT license ↗</a><a href="#top">Back to top ↑</a></nav></footer>
 </div>
 <p class="sr-only" id="copy-feedback" role="status"></p>
 </body>

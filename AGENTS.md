@@ -157,7 +157,9 @@ Four crates: `latch-protocol` (durable event/model schema shared by all),
 `latch-tui` (Ratatui app), `latch-cli` (wiring and `latch` binary).
 The static GitHub Pages site lives in `site/` and is published by
 `.github/workflows/pages.yml`; its terminal captures come from TUI snapshots.
-Keep its version and install commands aligned with the README. Pages stages
+Keep its version and install commands aligned with the README; keep the inline
+session capture in `site/index.html` aligned with `site/captures/session.txt`.
+Pages stages
 `scripts/install.sh` and `scripts/install.ps1` alongside `site/`; do not duplicate
 the scripts in `site/`. `.github/workflows/release.yml` builds glibc 2.35+ Linux
 and static-CRT native Windows binaries on matching version tags; manual dispatch

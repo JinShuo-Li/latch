@@ -12,7 +12,7 @@ async function showCapture(name) {
     tab.tabIndex = active ? 0 : -1;
     if (active) capturePanel.setAttribute("aria-labelledby", tab.id);
   }
-  captureOutput.textContent = "Opening TUI capture…";
+  capturePanel.setAttribute("aria-busy", "true");
   try {
     const response = await fetch(new URL("./captures/" + name + ".txt", document.baseURI));
     if (!response.ok) throw new Error("Capture unavailable");
@@ -22,6 +22,8 @@ async function showCapture(name) {
     if (request === captureRequest) {
       captureOutput.textContent = "Capture unavailable. See the TUI snapshots in the repository.";
     }
+  } finally {
+    if (request === captureRequest) capturePanel.removeAttribute("aria-busy");
   }
 }
 

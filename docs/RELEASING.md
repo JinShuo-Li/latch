@@ -83,5 +83,7 @@ python3 -m http.server 8000 --directory target/site-preview
 
 The site uses system fonts, CSS, and a small vanilla JavaScript file. No frontend
 build step or package installation is needed. The TUI captures remain copied
-from deterministic repository fixtures, and benchmark values come from the
+from deterministic repository fixtures; keep the inline session fallback in
+`site/index.html` aligned with `site/captures/session.txt`. Benchmark values come
+from the
 [recorded 25-case comparison](../benchmark/reports/2026-10-06-full-comparison/README.md).
