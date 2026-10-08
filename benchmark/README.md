@@ -8,6 +8,10 @@ focus on debugging rather than downloading dependencies. Difficulty labels
 describe the intended reasoning and state surface; they have not yet been
 calibrated by repeated model runs.
 
+The separate [supervised pytest #14998 case study](reports/2026-10-08-pytest-14998/README.md)
+records a real upstream repair, repeated exploration at a 12k history budget,
+and a 128k CLI rerun with independent compatibility checks.
+
 | Tier | Case | User situation | Independent acceptance |
 | --- | --- | --- | --- |
 | Easy | `stream_records` | A log collector receives UTF-8 JSON lines in arbitrary network byte chunks. | Every byte boundary, multiple records, final line and empty reads. |

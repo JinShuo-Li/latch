@@ -1,0 +1,137 @@
+{
+  "original_12k": {
+    "session_id": "bf609f09-8b33-473a-b71f-adf3986a9b81",
+    "duration_seconds": 1390.921,
+    "outcome": "completed",
+    "first_edit_seconds": 1130.742,
+    "tool_calls": 254,
+    "model_requests": 143,
+    "epochs": 48,
+    "reads": 124,
+    "exact_duplicate_reads_same_output": 70,
+    "tools": {
+      "read_file": 124,
+      "git_status": 4,
+      "git_diff": 4,
+      "shell": 70,
+      "search": 23,
+      "exec_start": 3,
+      "exec_poll": 3,
+      "validate": 13,
+      "patch": 5,
+      "write": 1,
+      "complete": 2,
+      "record_evidence": 2
+    },
+    "read_paths": {
+      ".case/TASK.md": 17,
+      "CONTRIBUTING.rst": 2,
+      ".case/verify.py": 21,
+      ".case/test_scenarios.py": 19,
+      "src/_pytest/tmpdir.py": 39,
+      "testing/test_tmpdir.py": 23,
+      "src/_pytest/stash.py": 3
+    },
+    "usage": {
+      "input_tokens": 1755495,
+      "output_tokens": 142461,
+      "cache_read_tokens": 1284224,
+      "cache_miss_tokens": 471271,
+      "reasoning_tokens": 123774
+    },
+    "permission_requests": 3,
+    "started_processes": 3,
+    "exited_processes": 2,
+    "model_request_interval_sum_seconds": 1306.837,
+    "model_request_interval_max_seconds": 62.485
+  },
+  "fixed_12k": {
+    "session_id": "f35f8d10-a386-4adb-92e6-369ae64b8881",
+    "duration_seconds": 522.072,
+    "outcome": "cancelled",
+    "first_edit_seconds": null,
+    "tool_calls": 112,
+    "model_requests": 56,
+    "epochs": 18,
+    "reads": 60,
+    "exact_duplicate_reads_same_output": 29,
+    "tools": {
+      "read_file": 60,
+      "shell": 25,
+      "search": 15,
+      "git_status": 7,
+      "exec_start": 2,
+      "exec_poll": 1,
+      "git_diff": 2
+    },
+    "read_paths": {
+      ".case/TASK.md": 8,
+      ".case/verify.py": 9,
+      ".case/test_scenarios.py": 8,
+      ".case/pytest.ini": 3,
+      "src/_pytest/tmpdir.py": 22,
+      "src/_pytest/runner.py": 3,
+      "testing/test_tmpdir.py": 5,
+      "src/_pytest/pathlib.py": 1,
+      "src/_pytest/reports.py": 1
+    },
+    "usage": {
+      "input_tokens": 622601,
+      "output_tokens": 48737,
+      "cache_read_tokens": 398464,
+      "cache_miss_tokens": 224137,
+      "reasoning_tokens": 42685
+    },
+    "permission_requests": 1,
+    "started_processes": 2,
+    "exited_processes": 2,
+    "model_request_interval_sum_seconds": 513.112,
+    "model_request_interval_max_seconds": 51.722
+  },
+  "fixed_128k": {
+    "session_id": "de3b0042-9c95-4812-9a85-3f822d17851e",
+    "duration_seconds": 1527.47,
+    "outcome": "completed",
+    "first_edit_seconds": 339.416,
+    "tool_calls": 63,
+    "model_requests": 48,
+    "epochs": 0,
+    "reads": 15,
+    "exact_duplicate_reads_same_output": 0,
+    "tools": {
+      "read_file": 15,
+      "shell": 22,
+      "search": 5,
+      "patch": 7,
+      "write": 1,
+      "validate": 4,
+      "exec_start": 2,
+      "exec_poll": 5,
+      "git_status": 1,
+      "complete": 1
+    },
+    "read_paths": {
+      ".case/TASK.md": 1,
+      ".case/verify.py": 1,
+      ".case/test_scenarios.py": 1,
+      "src/_pytest/tmpdir.py": 4,
+      "src/_pytest/runner.py": 3,
+      "src/_pytest/pathlib.py": 2,
+      "testing/test_tmpdir.py": 1,
+      "src/_pytest/stash.py": 1,
+      "/tmp/latch_tmpdir_fixed.py": 1
+    },
+    "usage": {
+      "input_tokens": 2609049,
+      "output_tokens": 51824,
+      "cache_read_tokens": 2518144,
+      "cache_miss_tokens": 90905,
+      "reasoning_tokens": 44056
+    },
+    "permission_requests": 0,
+    "started_processes": 2,
+    "exited_processes": 2,
+    "model_request_interval_sum_seconds": 1397.605,
+    "model_request_interval_max_seconds": 207.813
+  }
+}

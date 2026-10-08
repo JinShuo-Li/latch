@@ -1,0 +1,64 @@
+{
+  "kernel": {
+    "status": "completed",
+    "completion": "verified",
+    "validation": {
+      "passed": 3,
+      "failed": 0,
+      "pending": 0
+    }
+  },
+  "independent": {
+    "policy_acceptance_exit": 0,
+    "case_materials_unchanged": true,
+    "targeted_tests": {
+      "exit": 0,
+      "passed": 223,
+      "skipped": 1,
+      "xfailed": 1
+    },
+    "ruff_check_exit": 0,
+    "ruff_format_exit": 0,
+    "regression_fails_original": true,
+    "edge_retained_labels": [
+      "early",
+      "late",
+      "legacy_setup",
+      "legacy_teardown",
+      "multiple_errors",
+      "skip_error"
+    ],
+    "compatibility_accepted": false,
+    "call_skip": {
+      "original": {
+        "pytest_exit": 0,
+        "retained": [
+          "call_skip"
+        ]
+      },
+      "patched": {
+        "pytest_exit": 0,
+        "retained": []
+      }
+    }
+  },
+  "agent_full_suite": {
+    "passed": 4554,
+    "failed": 1,
+    "skipped": 50,
+    "xfailed": 15,
+    "xpassed": 5,
+    "duration_seconds": 161.12,
+    "failure_node": "testing/test_helpconfig.py::test_version_verbose",
+    "pipeline_exit": 0,
+    "tail_pipeline_masks_pytest_exit": true
+  },
+  "isolated_failure_check": {
+    "original_exit": 0,
+    "patched_exit": 0,
+    "collection": "testing/",
+    "selection": "test_version_verbose",
+    "full_original_suite_control": false,
+    "attribution": "unresolved"
+  }
+}
