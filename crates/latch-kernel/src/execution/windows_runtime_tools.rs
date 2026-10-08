@@ -168,6 +168,26 @@ impl StagedTools {
                 .arg("--deny-write")
                 .arg(root);
         }
+        // PowerShell 7 loads its engine and built-in modules from the install
+        // directory. Grant only that standard Program Files subtree, read
+        // only, rather than an arbitrary user-owned executable directory.
+        if program
+            .file_stem()
+            .is_some_and(|stem| stem.eq_ignore_ascii_case("pwsh"))
+            && let (Some(root), Some(program_files)) = (
+                program.parent(),
+                std::env::var_os("ProgramFiles").map(PathBuf::from),
+            )
+        {
+            let powershell_install = program_files.join("PowerShell");
+            if root.starts_with(&powershell_install) {
+                process
+                    .arg("--read-root")
+                    .arg(root)
+                    .arg("--deny-write")
+                    .arg(root);
+            }
+        }
         Ok(())
     }
 
