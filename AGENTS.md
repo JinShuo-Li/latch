@@ -161,6 +161,9 @@ the product site and Rust runtime. From the repository root, preview with
 It uses illustrative fixtures and never executes tools or calls providers;
 `latch --web` is not implemented yet. The intended Web UI shares the kernel
 and fixes its workspace to the launch directory. See `web/prototype/README.md`.
+The agreed integration plan is `docs/WEB_UI_PLAN.md`: Linux Web server with
+local/SSH access; no Windows Web implementation or dedicated qualification.
+Preserve existing Windows CLI/TUI behavior and keep the default CI intact.
 The static GitHub Pages site lives in `site/` and is published by
 `.github/workflows/pages.yml`; its terminal captures come from TUI snapshots.
 Keep its version and install commands aligned with the README; keep the inline
