@@ -944,6 +944,21 @@ base64 text length).
 ## TUI state surfaces
 
 The transcript explains activity; a responsive right sidebar explains state.
+Terminal layout stays in `latch-tui::markdown` and `latch-tui::transcript`:
+styled text wraps by grapheme display width before gutters are added, with
+continuations aligned to the body column after each bullet, number or status
+marker. List paragraphs and nested items retain their own body columns.
+Top-level points have one blank row between them; headings have two preceding
+blank rows and one following row. Transcript cells use one blank separator.
+The viewport renders these physical rows directly and uses their count for
+scrolling, recomputing at the current width after resize or sidebar changes.
+The sidebar divider is drawn separately with one glyph and explicit style
+across every row, clearing any inherited emphasis or background.
+Command labels are bounded by the viewport and 96 display cells; successful
+output previews use at most three visual rows. Ctrl+T shows the complete
+command and retained output with hanging prefixes. These are presentation-only
+views of the same live/replayed cells; durable history and shared reducers do
+not change.
 The sidebar reducer (`latch-tui::sidebar`) consumes the same durable events as
 the semantic transcript, so live and resumed sessions agree: `ContextStats`
 for the bounded working set, `TaskStateUpdated`/`EvidenceCreated` for

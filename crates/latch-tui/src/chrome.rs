@@ -1323,7 +1323,6 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
                 viewport.width as usize,
                 true,
             ))
-            .wrap(Wrap { trim: false })
             .scroll((offset, 0));
             frame.render_widget(paragraph, viewport);
         }
@@ -1331,12 +1330,22 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             let sidebar_area = panes[1];
             let inner_width = sidebar_area.width.saturating_sub(2);
             let lines = app.sidebar.render_lines(inner_width, sidebar_area.height);
-            let sidebar = Paragraph::new(lines).block(
-                Block::default()
-                    .borders(Borders::LEFT)
-                    .border_style(notice_style()),
-            );
-            frame.render_widget(sidebar, sidebar_area);
+            let content_area = ratatui::layout::Rect {
+                x: sidebar_area.x + 1,
+                width: sidebar_area.width.saturating_sub(1),
+                ..sidebar_area
+            };
+            frame.render_widget(Paragraph::new(lines), content_area);
+            // Draw the divider last with one explicit style. It must not
+            // inherit bold/italic/background from either pane's content.
+            let divider_style = notice_style()
+                .remove_modifier(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED);
+            for y in sidebar_area.top()..sidebar_area.bottom() {
+                frame.buffer_mut()[(sidebar_area.x, y)].reset();
+                frame.buffer_mut()[(sidebar_area.x, y)]
+                    .set_symbol("│")
+                    .set_style(divider_style);
+            }
         }
     }
     if !action_lines.is_empty() {

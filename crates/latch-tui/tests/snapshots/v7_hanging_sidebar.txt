@@ -1,0 +1,56 @@
+• 工 作 习 惯                                                                                              │deepseek-flash                      
+                                                                                                       │WORK · 0 turns · 0s                 
+  9. Stable body column                                                                                │on main                             
+     English and 中 文 混 排  stay together when a long paragraph wraps across several rows.               │                                    
+                                                                                                       │ACTIVITY                            
+     A second paragraph stays inside this numbered item.                                               │Preparing request                   
+     • Nested point with styled_code and enough text to wrap.                                          │0s in phase · 0s quiet              
+                                                                                                       │                                    
+  10. 编 号 变 宽                                                                                          │TASK                                
+      正 文 和 续 行 必 须 对 齐 编 号 后 面 的 第 一 个 字 符 ， 窗 口 变 窄 以 后 也 不 能 退 回 左 侧 。                              │InProgress                          
+                                                                                                       │Implementation unchanged            
+                                                                                                       │Validation pending                  
+  Checks                                                                                               │                                    
+                                                                                                       │CONTEXT                             
+  • Keep wrapped lines together and put a blank row between distinct points.                           │                                    
+                                                                                                       │                                    
+  • Keep complete commands and output available in the detail view.                                    │                                    
+                                                                                                       │                                    
+✗ Ran cargo test --workspace --locked && python3 scripts/check_layout.py --language 中 文  --includ …    │                                    
+  └ exit code 1                                                                                        │                                    
+                                                                                                       │                                    
+    exit code 1                                                                                        │                                    
+    Layout check failed: 续 行 需 要 对 齐 正 文 列 ， 不 能 回 到 编 号 或 者  bullet 下 方 。                             │                                    
+    Complete diagnostic remains available for inspection.                                              │                                    
+    Ctrl+T · full command and output                                                                   │                                    
+                                                                                                       │                                    
+• Ran echo layout                                                                                      │                                    
+  └ 正 文 列 对 齐                                                                                          │                                    
+    English output stays subordinate.                                                                  │                                    
+    Third row.                                                                                         │                                    
+    … more output · Ctrl+T                                                                             │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                       │                                    
+                                                                                                                                            
+                                                                                                                                            
+› Ask Latch…                                                                                                                                
+                                                                                                                                            
+                                                                                                                                            
+                                                                                                                                            
+  WORK · deepseek-flash/low · main · std · ask                                                                                         ready
+                                                                                                                                            
+enter send  ctrl+j newline  ctrl+p commands                                                                                                 
+/tmp/latch-ui                                                                                                                   latch v0.2.3

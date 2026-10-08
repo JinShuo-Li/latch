@@ -243,6 +243,8 @@ Web emits five-second connection heartbeats. Silence never proves thinking,
 failure or completion; replayed unfinished activity is interrupted.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,configuration_center}.rs` and existing siblings.
+`markdown`/`transcript` own display-cell hanging wraps and physical row counts;
+chrome renders those rows directly. Ctrl+T retains full command/output details.
 Mouse capture defaults on to prevent wheel-to-arrow history navigation;
 `LATCH_MOUSE_CAPTURE=0` opts out. Keep terminal mouse cleanup symmetric.
 

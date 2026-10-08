@@ -7,7 +7,7 @@
 //! background with a faint `• ` gutter and clean Markdown. Tool lifecycle rows
 //! remain ambient: markers and structure carry meaning, color stays semantic.
 
-use super::markdown::{MARKDOWN_DEFAULT_WIDTH, render_markdown_at};
+use super::markdown::{MARKDOWN_DEFAULT_WIDTH, render_markdown_at, wrap_hanging};
 use super::*;
 use crate::presentation::AgentOperation;
 
@@ -54,14 +54,17 @@ pub(super) fn cell_lines(
         return cell
             .raw_text()
             .lines()
-            .map(|line| Line::styled(line.to_owned(), notice_style()))
+            .flat_map(|text| {
+                let origin = raw_origin(text);
+                wrap_hanging(Line::styled(text.to_owned(), notice_style()), width, origin)
+            })
             .collect();
     }
-    match cell {
-        Cell::User { text, media } => user_lines(text, media, width, band),
+    let lines = match cell {
+        Cell::User { text, media } => return user_lines(text, media, width, band),
         Cell::Assistant { text } => {
             let body = render_markdown_at(text, width.saturating_sub(MESSAGE_GUTTER).max(1));
-            prefix_message_lines(body)
+            return prefix_message_lines(body);
         }
         Cell::Exploration { operations } => exploration_lines(operations),
         Cell::Command {
@@ -69,18 +72,25 @@ pub(super) fn cell_lines(
             status,
             summary,
             output,
+            raw,
             ..
-        } => activity_lines(
-            *status,
-            if *status == CellStatus::Running {
-                "Running"
-            } else {
-                "Ran"
-            },
-            command,
-            summary,
-            output,
-        ),
+        } => {
+            let mut lines = activity_lines(
+                *status,
+                if *status == CellStatus::Running {
+                    "Running"
+                } else {
+                    "Ran"
+                },
+                &compact_command(command, width.saturating_sub(10).clamp(8, 96)),
+                summary,
+                output,
+            );
+            if *status == CellStatus::Passed && summary.is_empty() && !raw.is_empty() {
+                lines.extend(command_output_preview(raw, width));
+            }
+            lines
+        }
         Cell::Validation {
             command,
             status,
@@ -93,7 +103,13 @@ pub(super) fn cell_lines(
                 CellStatus::Passed => "Verified",
                 CellStatus::Failed => "Validation failed",
             };
-            validation_lines(*status, title, command, summary, output)
+            validation_lines(
+                *status,
+                title,
+                &compact_command(command, width.saturating_sub(4).clamp(8, 96)),
+                summary,
+                output,
+            )
         }
         Cell::Patch { files } => patch_lines(files),
         Cell::Diff {
@@ -120,7 +136,107 @@ pub(super) fn cell_lines(
             .split('\n')
             .map(|segment| Line::styled(format!("✗ {segment}"), Style::default().fg(Color::Red)))
             .collect(),
+    };
+    let mut lines: Vec<_> = lines
+        .into_iter()
+        .flat_map(|line| {
+            let text: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            wrap_hanging(line, width, entry_origin(&text))
+        })
+        .collect();
+    let shortened = match cell {
+        Cell::Command { command, .. } => {
+            compact_command(command, width.saturating_sub(10).clamp(8, 96)) != *command
+        }
+        Cell::Validation { command, .. } => {
+            compact_command(command, width.saturating_sub(4).clamp(8, 96)) != *command
+        }
+        _ => false,
+    };
+    if shortened {
+        lines.extend(wrap_hanging(
+            Line::styled("    Ctrl+T · full command and output", notice_style()),
+            width,
+            4,
+        ));
     }
+    lines
+}
+
+/// Keep successful command output subordinate and bounded in visual rows.
+fn command_output_preview(raw: &str, width: usize) -> Vec<Line<'static>> {
+    let mut rows = Vec::new();
+    for (index, text) in raw.lines().enumerate() {
+        let prefix = if index == 0 { "  └ " } else { "    " };
+        rows.extend(wrap_hanging(
+            Line::styled(format!("{prefix}{text}"), notice_style()),
+            width,
+            4,
+        ));
+        if rows.len() > 3 {
+            break;
+        }
+    }
+    if rows.len() > 3 {
+        rows.truncate(3);
+        rows.extend(wrap_hanging(
+            Line::styled("    … more output · Ctrl+T", notice_style()),
+            width,
+            4,
+        ));
+    }
+    rows
+}
+
+/// Presentation-only command summary; the cell retains the complete command.
+fn compact_command(command: &str, width: usize) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
+    let first = command.lines().next().unwrap_or_default();
+    if command.lines().count() <= 1 && display_width(first) <= width {
+        return command.to_owned();
+    }
+    let mut summary = String::new();
+    let mut used = 0;
+    for grapheme in first.graphemes(true) {
+        let cells = display_width(grapheme);
+        if used + cells > width.saturating_sub(2) {
+            break;
+        }
+        summary.push_str(grapheme);
+        used += cells;
+    }
+    format!("{} …", summary.trim_end())
+}
+
+fn entry_origin(text: &str) -> usize {
+    let body = text.trim_start();
+    let indent = display_width(&text[..text.len() - body.len()]);
+    if ["• ", "✓ ", "✗ ", "· ", "└ ", "+ ", "− "]
+        .iter()
+        .any(|prefix| body.starts_with(prefix))
+    {
+        indent + 2
+    } else {
+        indent
+    }
+}
+
+fn raw_origin(text: &str) -> usize {
+    for prefix in ["user: ", "assistant: ", "$ "] {
+        if text.starts_with(prefix) {
+            return display_width(prefix);
+        }
+    }
+    if text.starts_with("validate ")
+        && let Some((prefix, _)) = text.split_once(": ")
+    {
+        return display_width(prefix) + 2;
+    }
+    entry_origin(text)
 }
 
 pub(super) fn status_marker(status: CellStatus) -> (&'static str, Style) {
@@ -238,7 +354,7 @@ fn wrap_message_row(line: &str, width: usize) -> Vec<String> {
 }
 
 /// Prefixes rendered message lines with the assistant `• ` gutter. The first
-/// row carries the bullet; continuations align under it.
+/// row carries the bullet; continuations align under the body.
 pub(super) fn prefix_message_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
     let gutter = notice_style().add_modifier(Modifier::BOLD);
     lines
@@ -248,7 +364,7 @@ pub(super) fn prefix_message_lines(lines: Vec<Line<'static>>) -> Vec<Line<'stati
             let prefix = if index == 0 { "• " } else { "  " };
             let mut spans = vec![Span::styled(prefix.to_owned(), gutter)];
             spans.extend(line.spans);
-            Line::from(spans)
+            Line::from(spans).style(line.style)
         })
         .collect()
 }
@@ -656,15 +772,7 @@ pub(super) fn semantic_visual_height(
     if width == 0 {
         return 0;
     }
-    Paragraph::new(transcript_lines(
-        cells,
-        streaming,
-        detail,
-        width as usize,
-        true,
-    ))
-    .wrap(Wrap { trim: false })
-    .line_count(width)
+    transcript_lines(cells, streaming, detail, width as usize, true).len()
 }
 
 #[cfg(test)]

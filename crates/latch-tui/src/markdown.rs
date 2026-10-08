@@ -20,78 +20,116 @@ pub(super) fn render_markdown_at(text: &str, width: usize) -> Vec<Line<'static>>
     let raw_lines: Vec<&str> = text.split('\n').collect();
     let mut out = Vec::new();
     let mut in_code = false;
+    let mut code_indent = 0;
+    // Source marker column and rendered body column for each open list item.
+    let mut items: Vec<(usize, usize)> = Vec::new();
+    let mut after_blank = false;
     let mut index = 0;
     while index < raw_lines.len() {
         let raw = raw_lines[index];
         let trimmed = raw.trim_end();
-        if let Some(rest) = trimmed.trim().strip_prefix("```") {
-            let _ = rest;
+        let body = trimmed.trim_start();
+        let indent = display_width(&trimmed[..trimmed.len() - body.len()]);
+        if body.starts_with("```") {
+            if !in_code {
+                while items.last().is_some_and(|item| indent < item.1) {
+                    items.pop();
+                }
+                code_indent = items.last().map_or(0, |item| item.1);
+            }
             in_code = !in_code;
             index += 1;
             continue;
         }
         if in_code {
-            out.push(Line::styled(
-                format!("  │ {trimmed}"),
-                crate::theme::palette().accent_plain(),
+            let content = trimmed
+                .strip_prefix(&" ".repeat(code_indent))
+                .unwrap_or(trimmed);
+            let prefix = format!("{}  │ ", " ".repeat(code_indent));
+            out.extend(wrap_hanging(
+                Line::styled(
+                    format!("{prefix}{content}"),
+                    crate::theme::palette().accent_plain(),
+                ),
+                width,
+                display_width(&prefix),
             ));
             index += 1;
             continue;
         }
-        let indent = trimmed.len() - trimmed.trim_start().len();
-        let body = trimmed.trim_start();
+        if body.is_empty() {
+            separate(&mut out, 1);
+            after_blank = true;
+            index += 1;
+            continue;
+        }
+        let marker = list_marker(body);
+        if let Some((prefix, rest)) = marker {
+            while items.last().is_some_and(|item| item.0 >= indent) {
+                items.pop();
+            }
+            if items.is_empty() {
+                separate(&mut out, 1);
+            }
+            let prefix = format!("{}{prefix}", " ".repeat(indent));
+            let origin = display_width(&prefix);
+            items.push((indent, origin));
+            let mut spans = vec![Span::styled(prefix, notice_style())];
+            spans.extend(inline_spans(rest, assistant_style()));
+            out.extend(wrap_hanging(Line::from(spans), width, origin));
+            after_blank = false;
+            index += 1;
+            continue;
+        }
+        // An unindented line directly after an item is a lazy continuation.
+        // After a blank, only an explicitly indented paragraph belongs to it.
+        if after_blank {
+            while items.last().is_some_and(|item| indent < item.1) {
+                items.pop();
+            }
+        } else if indent > 0 {
+            while items.len() > 1 && items.last().is_some_and(|item| indent < item.1) {
+                items.pop();
+            }
+        }
+        if body.starts_with('#') {
+            while items.last().is_some_and(|item| indent < item.1) {
+                items.pop();
+            }
+        }
+        let origin = items.last().map_or(indent, |item| item.1.max(indent));
+        after_blank = false;
         if let Some(rest) = body.strip_prefix('#') {
-            let level = rest.chars().take_while(|c| *c == '#').count();
+            let level = 1 + rest.chars().take_while(|c| *c == '#').count();
             let heading = rest.trim_start_matches('#').trim_start();
             let style = if level <= 2 {
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::UNDERLINED)
+                Style::default().bold().underlined()
             } else {
-                Style::default().add_modifier(Modifier::BOLD)
+                Style::default().bold()
             };
-            out.push(Line::styled(heading.to_owned(), style));
-            index += 1;
-            continue;
-        }
-        if let Some(rest) = body.strip_prefix("- ").or_else(|| body.strip_prefix("* ")) {
-            let mut spans = vec![Span::styled(
-                format!("{}• ", " ".repeat(indent)),
-                notice_style(),
-            )];
-            spans.extend(inline_spans(rest, assistant_style()));
-            out.push(Line::from(spans));
-            index += 1;
-            continue;
-        }
-        let numbered = body.split_once(". ").is_some_and(|(marker, _)| {
-            !marker.is_empty() && marker.chars().all(|c| c.is_ascii_digit())
-        });
-        if numbered {
-            let (marker, rest) = body.split_once(". ").expect("checked above");
-            let mut spans = vec![Span::styled(
-                format!("{}{marker}.", " ".repeat(indent)),
-                notice_style(),
-            )];
-            spans.push(Span::raw(" "));
-            spans.extend(inline_spans(rest, assistant_style()));
-            out.push(Line::from(spans));
-            index += 1;
-            continue;
-        }
-        if body.is_empty() {
-            out.push(Line::from(String::new()));
+            separate(&mut out, 2);
+            out.extend(wrap_hanging(
+                Line::styled(format!("{}{heading}", " ".repeat(origin)), style),
+                width,
+                origin,
+            ));
+            separate(&mut out, 1);
             index += 1;
             continue;
         }
         if body.contains('|') {
-            if let Some((consumed, table)) = render_table_block(&raw_lines[index..], width) {
-                out.extend(table);
+            if let Some((consumed, table)) =
+                render_table_block(&raw_lines[index..], width.saturating_sub(origin))
+            {
+                out.extend(table.into_iter().map(|mut line| {
+                    if origin > 0 {
+                        line.spans.insert(0, Span::raw(" ".repeat(origin)));
+                    }
+                    line
+                }));
                 index += consumed;
                 continue;
             }
-            // Pipe content that is not an ordinary table keeps the previous
-            // single-line treatment; separator rows are still never literal.
             let cells = body
                 .trim_matches('|')
                 .split('|')
@@ -103,7 +141,10 @@ pub(super) fn render_markdown_at(text: &str, width: usize) -> Vec<Line<'static>>
                 index += 1;
                 continue;
             }
-            let mut spans = vec![Span::styled("│ ", notice_style())];
+            let mut spans = vec![Span::styled(
+                format!("{}│ ", " ".repeat(origin)),
+                notice_style(),
+            )];
             for (cell_index, cell) in cells.iter().enumerate() {
                 if cell_index > 0 {
                     spans.push(Span::styled(" │ ", notice_style()));
@@ -111,14 +152,110 @@ pub(super) fn render_markdown_at(text: &str, width: usize) -> Vec<Line<'static>>
                 spans.extend(inline_spans(cell, assistant_style()));
             }
             spans.push(Span::styled(" │", notice_style()));
-            out.push(Line::from(spans));
+            out.extend(wrap_hanging(Line::from(spans), width, origin + 2));
             index += 1;
             continue;
         }
-        out.push(Line::from(inline_spans(body, assistant_style())));
+        let mut spans = vec![Span::raw(" ".repeat(origin))];
+        spans.extend(inline_spans(body, assistant_style()));
+        out.extend(wrap_hanging(Line::from(spans), width, origin));
         index += 1;
     }
+    while out.last().is_some_and(|line| line.width() == 0) {
+        out.pop();
+    }
     out
+}
+
+fn list_marker(body: &str) -> Option<(String, &str)> {
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = body.strip_prefix(marker) {
+            return Some(("• ".into(), rest));
+        }
+    }
+    let end = body.find(['.', ')'])?;
+    let digits = &body[..end];
+    if digits.is_empty() || !digits.bytes().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let rest = body[end + 1..].strip_prefix(' ')?;
+    Some((format!("{} ", &body[..=end]), rest))
+}
+
+/// Deliberate block separation, independent of source blank-line count.
+fn separate(out: &mut Vec<Line<'static>>, rows: usize) {
+    if out.is_empty() {
+        return;
+    }
+    let existing = out
+        .iter()
+        .rev()
+        .take_while(|line| line.width() == 0)
+        .count();
+    for _ in existing..rows {
+        out.push(Line::from(""));
+    }
+}
+
+/// Wrap styled text by display cells, retaining its body origin on every row.
+/// Graphemes and inline styles survive both word and hard breaks. Spaces at a
+/// word break remain at the preceding row so the raw view loses no characters.
+pub(super) fn wrap_hanging(line: Line<'static>, width: usize, origin: usize) -> Vec<Line<'static>> {
+    use unicode_segmentation::UnicodeSegmentation;
+    if width == 0 {
+        return Vec::new();
+    }
+    let origin = origin.min(width.saturating_sub(2));
+    let units: Vec<_> = line
+        .spans
+        .iter()
+        .flat_map(|span| {
+            span.content
+                .graphemes(true)
+                .map(move |text| (text.to_owned(), span.style))
+        })
+        .collect();
+    if units.is_empty() {
+        return vec![line];
+    }
+    let mut rows = Vec::new();
+    let mut start = 0;
+    while start < units.len() {
+        let padding = if start == 0 { 0 } else { origin };
+        let mut used = padding;
+        let mut end = start;
+        let mut space = None;
+        while end < units.len() {
+            let cells = display_width(&units[end].0);
+            if used + cells > width && end > start {
+                break;
+            }
+            used += cells;
+            end += 1;
+            if units[end - 1].0.chars().all(char::is_whitespace) && used > origin {
+                space = Some(end);
+            }
+        }
+        if end < units.len()
+            && let Some(boundary) = space
+        {
+            end = boundary;
+        }
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        if padding > 0 {
+            spans.push(Span::raw(" ".repeat(padding)));
+        }
+        for (text, style) in &units[start..end] {
+            if let Some(last) = spans.last_mut().filter(|span| span.style == *style) {
+                last.content.to_mut().push_str(text);
+            } else {
+                spans.push(Span::styled(text.clone(), *style));
+            }
+        }
+        rows.push(Line::from(spans).style(line.style));
+        start = end;
+    }
+    rows
 }
 
 /// Splits one Markdown table row into trimmed cells, honoring `\|` escapes.

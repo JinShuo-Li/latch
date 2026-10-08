@@ -264,8 +264,9 @@ fn markdown_renders_headings_bullets_and_code() {
     assert!(rendered[2].contains("• bullet"));
     assert!(rendered[2].contains("code"));
     assert_eq!(rendered[3], "  │ x = 1");
-    assert!(rendered[4].contains("1. first"));
-    assert!(rendered[5].contains("plain"));
+    assert_eq!(rendered[4], "");
+    assert!(rendered[5].contains("1. first"));
+    assert!(rendered[6].starts_with("   plain"));
     // Heading and code carry their own styles at the line level.
     assert!(lines[0].style.add_modifier.contains(Modifier::BOLD));
     assert_eq!(lines[3].style.fg, Some(Color::Cyan));
@@ -3382,4 +3383,366 @@ fn sidebar_reports_real_reasoning_and_keeps_elapsed_time_during_silence() {
     assert!(render_to_text(&mut app, 200, 40).contains("Writing response"));
     app.output(Output::Cancelling);
     assert!(render_to_text(&mut app, 200, 40).contains("Stopping"));
+}
+
+// Issue #9: body columns must survive wrapping, list blocks and resizing.
+#[test]
+fn hanging_bullets_wrap_english_chinese_and_mixed_text() {
+    for body in [
+        "Every continuation must start under the first body character, even on a narrow terminal.",
+        "每个续行都应该对齐正文的起始列，不能退回到项目符号下方，也不能按字节计算宽度。",
+        "检查 Rust agent 的 layout，中文和 English continuation 都保持同一列。",
+    ] {
+        for width in [18, 31, 60] {
+            let lines = render_markdown_at(&format!("- {body}"), width);
+            let rendered = lines_text(&lines);
+            assert!(lines.len() > 1, "fixture must wrap at {width}: {rendered}");
+            assert!(rendered.starts_with("• "));
+            let mut restored = String::new();
+            for (index, row) in rendered.lines().enumerate() {
+                assert!(display_width(row) <= width, "{width}: {row}");
+                if index == 0 {
+                    restored.push_str(row.strip_prefix("• ").unwrap());
+                } else {
+                    restored.push_str(row.strip_prefix("  ").unwrap());
+                    assert!(!row.starts_with("   "), "body drift: {row}");
+                }
+            }
+            assert_eq!(restored, body);
+        }
+    }
+}
+
+#[test]
+fn hanging_numbered_items_derive_the_body_column_from_the_marker() {
+    for marker in ["9.", "10.", "123)"] {
+        let body = "A long numbered item with 中文文字 and enough content to wrap several times.";
+        for width in [18, 32, 64] {
+            let lines = render_markdown_at(&format!("{marker} {body}"), width);
+            let rendered = lines_text(&lines);
+            let origin = display_width(marker) + 1;
+            assert!(lines.len() > 1);
+            let prefix = " ".repeat(origin);
+            for row in rendered.lines().skip(1) {
+                assert!(row.starts_with(&prefix), "{marker}: {row}");
+                assert!(!row.starts_with(&format!("{prefix} ")), "{marker}: {row}");
+                assert!(display_width(row) <= width);
+            }
+        }
+    }
+}
+
+#[test]
+fn hanging_list_paragraphs_and_nested_items_keep_their_own_columns() {
+    let text = "9. Title\nLazy continuation with enough words to wrap onto several lines.\n\n   Another paragraph with 中文 and enough words for a continuation.\n   - Nested title\n     Nested paragraph with enough words to wrap onto several lines.\n\n   Back to the parent paragraph with enough words to wrap again.\n10. Next title\n    Ten's paragraph with enough words to wrap onto several lines.\n\nOutside the list.";
+    let lines = render_markdown_at(text, 26);
+    let rendered = lines_text(&lines);
+    let mut origin = 3;
+    for row in rendered.lines().filter(|row| !row.is_empty()) {
+        if row == "9. Title" {
+            continue;
+        }
+        if row == "   • Nested title" {
+            origin = 5;
+            continue;
+        }
+        if row.starts_with("   Back") {
+            origin = 3;
+        }
+        if row == "10. Next title" {
+            origin = 4;
+            continue;
+        }
+        if row == "Outside the list." {
+            continue;
+        }
+        let padding = " ".repeat(origin);
+        assert!(
+            row.starts_with(&padding),
+            "expected {origin} cells: {row}\n{rendered}"
+        );
+        assert!(
+            !row.starts_with(&format!("{padding} ")),
+            "unexpected drift: {row}"
+        );
+        assert!(display_width(row) <= 26);
+    }
+    assert!(rendered.contains("\n\n10. Next title"));
+    assert!(rendered.ends_with("\n\nOutside the list."));
+}
+
+#[test]
+fn hanging_styled_spans_and_graphemes_keep_width_and_style() {
+    let lines = render_markdown_at(
+        "- English **粗体中文跨越边界** and `code_very_long_identifier` with e\u{301} 👩‍💻 end.",
+        19,
+    );
+    assert!(lines.len() > 4);
+    let mut bold = String::new();
+    let mut code = String::new();
+    for line in &lines {
+        assert!(line.width() <= 19);
+        for span in &line.spans {
+            if span.style.add_modifier.contains(Modifier::BOLD) {
+                bold.push_str(&span.content);
+            }
+            if span.style.fg == Some(Color::Cyan) {
+                code.push_str(&span.content);
+            }
+        }
+    }
+    assert_eq!(bold, "粗体中文跨越边界");
+    assert_eq!(code, "code_very_long_identifier");
+    let rendered = lines_text(&lines);
+    assert!(rendered.contains("e\u{301}"));
+    assert!(rendered.contains("👩‍💻"));
+    let assistant = cell_lines(
+        &Cell::Assistant {
+            text: "## Heading".into(),
+        },
+        false,
+        24,
+        false,
+    );
+    assert!(
+        assistant[0]
+            .style
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
+    );
+}
+
+#[test]
+fn hanging_layout_separates_points_and_sections_without_spacing_wrapped_rows() {
+    let lines = render_markdown_at(
+        "- First point takes several lines at this width.\n- Second point.\n\n\n## Section\nSection body.",
+        22,
+    );
+    let rendered = lines_text(&lines);
+    assert!(rendered.contains("\n\n• Second point."));
+    assert!(rendered.contains("Second point.\n\n\nSection\n\nSection body."));
+    let first_point = rendered.split("\n\n• Second").next().unwrap();
+    assert!(!first_point.contains("\n\n"));
+}
+
+#[test]
+fn hanging_tool_summaries_and_diagnostics_use_subordinate_columns() {
+    let cells = [
+        Cell::Command {
+            call_id: "c".into(),
+            command: "cargo test".into(),
+            status: CellStatus::Failed,
+            summary: "Long error summary with 中文 and English words to wrap".into(),
+            output: "Diagnostic details with enough words to wrap several times".into(),
+            raw: "complete output".into(),
+        },
+        Cell::Validation {
+            call_id: "v".into(),
+            command: "cargo test".into(),
+            requirement: "tests".into(),
+            status: CellStatus::Failed,
+            summary: "Long validation summary that also wraps at narrow widths".into(),
+            output: "Diagnostic details with enough words to wrap several times".into(),
+            raw: "complete output".into(),
+        },
+        Cell::Notice {
+            text: "A long notice with 中文 and English text that wraps across several rows".into(),
+        },
+        Cell::Error {
+            text: "A long error with 中文 and English text that wraps across several rows".into(),
+        },
+    ];
+    for cell in &cells {
+        for width in [20, 33] {
+            let rendered = lines_text(&cell_lines(cell, false, width, false));
+            let mut origin = 2;
+            for row in rendered.lines().skip(1).filter(|row| !row.is_empty()) {
+                if row.starts_with("  └ ") {
+                    assert!(display_width(row) <= width);
+                    origin = 4;
+                    continue;
+                }
+                if row.starts_with("    Diagnostic") {
+                    origin = 4;
+                }
+                assert!(row.starts_with(&" ".repeat(origin)), "{rendered}");
+                assert!(display_width(row) <= width, "{rendered}");
+            }
+        }
+    }
+}
+
+fn hanging_layout_events() -> Vec<latch_protocol::Event> {
+    use latch_protocol::{EventPayload, ToolCall};
+    vec![
+        presentation_event(EventPayload::AssistantMessageCompleted {
+            text: "## 工作习惯\n9. **Stable body column**\n   English and 中文混排 stay together when a long paragraph wraps across several rows.\n\n   A second paragraph stays inside this numbered item.\n   - Nested point with `styled_code` and enough text to wrap.\n10. **编号变宽**\n    正文和续行必须对齐编号后面的第一个字符，窗口变窄以后也不能退回左侧。\n\n## Checks\n- Keep wrapped lines together and put a blank row between distinct points.\n- Keep complete commands and output available in the detail view.".into(),
+            tool_calls: vec![], reasoning_content: None, reasoning: vec![],
+        }),
+        presentation_event(EventPayload::ToolRequested { call: ToolCall {
+            id: "long".into(), name: "shell".into(), arguments: serde_json::json!({"command": "cargo test --workspace --locked && python3 scripts/check_layout.py --language 中文 --include very_long_argument_for_inspecting_the_terminal_layout"}),
+        }}),
+        presentation_event(EventPayload::ToolFailed { result: ToolResult {
+            call_id: "long".into(), name: "shell".into(), output: "exit code 1\nLayout check failed: 续行需要对齐正文列，不能回到编号或者 bullet 下方。\nComplete diagnostic remains available for inspection.".into(), is_error: true,
+            artifact_id: None, media: vec![],
+        }}),
+        presentation_event(EventPayload::ToolRequested { call: ToolCall {
+            id: "output".into(), name: "shell".into(), arguments: serde_json::json!({"command": "echo layout"}),
+        }}),
+        presentation_event(EventPayload::ToolCompleted { result: ToolResult {
+            call_id: "output".into(), name: "shell".into(), output: "正文列对齐\nEnglish output stays subordinate.\nThird row.\nFourth row retained in details.".into(), is_error: false,
+            artifact_id: None, media: vec![],
+        }}),
+    ]
+}
+
+#[test]
+fn hanging_long_commands_stay_compact_and_raw_details_are_complete() {
+    let events = hanging_layout_events();
+    let model = PresentationModel::from_events(&events);
+    for width in [20, 48, 100, 160] {
+        let command = &model.cells()[1];
+        let normal = cell_lines(command, false, width, false);
+        assert!(normal[0].width() <= width);
+        assert!(lines_text(&normal).contains("Ctrl+T"));
+        assert!(!lines_text(&normal).contains("very_long_argument"));
+        let raw = cell_lines(command, true, width, false);
+        let mut restored = String::new();
+        for row in lines_text(&raw).lines() {
+            assert!(display_width(row) <= width);
+            if restored.starts_with("$ ") && !restored.contains("terminal_layout") {
+                restored.push_str(row.strip_prefix("  ").unwrap());
+            } else {
+                restored.push_str(row);
+            }
+        }
+        assert!(restored.contains("very_long_argument_for_inspecting_the_terminal_layout"));
+        assert!(restored.contains("Complete diagnostic remains available for inspection."));
+    }
+    let success = cell_lines(&model.cells()[2], false, 48, false);
+    let rendered = lines_text(&success);
+    assert!(rendered.contains("  └ 正文列对齐"));
+    assert!(!rendered.contains("Fourth row retained"));
+    assert!(rendered.contains("more output · Ctrl+T"));
+    assert!(render_cells_plain(model.cells(), true).contains("Fourth row retained in details."));
+}
+
+#[test]
+fn hanging_live_replay_and_streaming_use_identical_layout() {
+    let events = hanging_layout_events();
+    let mut live = App::default();
+    for event in &events {
+        live.output(Output::Event(Box::new(event.clone())));
+    }
+    let replay = PresentationModel::from_events(&events);
+    for width in [24, 48, 96, 140] {
+        for detail in [false, true] {
+            assert_eq!(
+                transcript_lines(live.presentation.cells(), None, detail, width, false),
+                transcript_lines(replay.cells(), None, detail, width, false)
+            );
+        }
+        let Cell::Assistant { text } = &replay.cells()[0] else {
+            panic!("assistant fixture");
+        };
+        assert_eq!(
+            transcript_lines(&[], Some(text), false, width, false),
+            transcript_lines(&replay.cells()[..1], None, false, width, false)
+        );
+    }
+}
+
+#[test]
+fn snapshot_hanging_layout_at_narrow_wide_and_sidebar_widths() {
+    for (name, width, sidebar) in [
+        ("v7_hanging_narrow.txt", 48, false),
+        ("v7_hanging_wide.txt", 100, false),
+        ("v7_hanging_sidebar.txt", 140, true),
+    ] {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        for event in hanging_layout_events() {
+            app.output(Output::Event(Box::new(event)));
+        }
+        app.sidebar_override = Some(sidebar);
+        app.follow = false;
+        assert_snapshot(name, &render_to_text(&mut app, width, 56));
+    }
+}
+
+#[test]
+fn hanging_resize_and_sidebar_toggle_recompute_actual_visual_rows() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    for event in hanging_layout_events() {
+        app.output(Output::Event(Box::new(event)));
+    }
+    for (width, sidebar) in [
+        (140, true),
+        (48, false),
+        (100, true),
+        (100, false),
+        (140, true),
+    ] {
+        app.sidebar_override = Some(sidebar);
+        let _ = render_to_text(&mut app, width, 28);
+        let viewport = width - sidebar_width(width, sidebar);
+        let lines = transcript_lines(
+            app.presentation.cells(),
+            None,
+            app.detail,
+            viewport as usize,
+            true,
+        );
+        assert_eq!(app.content_rows, lines.len());
+        assert!(lines.iter().all(|line| line.width() <= viewport as usize));
+        assert_eq!(
+            app.scroll,
+            app.content_rows.saturating_sub(app.viewport_rows)
+        );
+    }
+    // The same raw prefixes obey body columns after Ctrl+T and another resize.
+    app.on_key(key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(app.detail);
+    app.sidebar_override = Some(false);
+    let _ = render_to_text(&mut app, 48, 28);
+    assert_eq!(
+        app.content_rows,
+        semantic_visual_height(app.presentation.cells(), None, true, 48)
+    );
+    assert!(app.scroll <= app.content_rows.saturating_sub(app.viewport_rows));
+}
+
+#[test]
+fn sidebar_divider_is_one_glyph_and_style_across_content_and_resize() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    for event in hanging_layout_events() {
+        app.output(Output::Event(Box::new(event)));
+    }
+    app.sidebar_override = Some(true);
+    for width in [110, 140, 200] {
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(width, 56)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let x = width - sidebar_width(width, true);
+        let first = buffer.cell((x, 0)).unwrap();
+        let mut count = 0;
+        for y in 0..56 {
+            let cell = buffer.cell((x, y)).unwrap();
+            if cell.symbol() != "│" {
+                break;
+            }
+            count += 1;
+            assert_eq!(
+                cell.style(),
+                first.style(),
+                "divider style changed at row {y}"
+            );
+            assert!(
+                !cell
+                    .modifier
+                    .intersects(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED)
+            );
+            assert_eq!(cell.bg, Color::Reset);
+        }
+        assert!(count >= 40, "divider must span the complete transcript");
+    }
 }

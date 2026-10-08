@@ -5,8 +5,8 @@
 • I'll inspect the failing case and patch it.                                                       
                                                                                                     
   • read the parser                                                                                 
-  • keep the API stable                                                                             
                                                                                                     
+  • keep the API stable                                                                             
                                                                                                     
                                                                                                     
                                                                                                     
