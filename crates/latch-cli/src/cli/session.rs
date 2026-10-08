@@ -18,9 +18,9 @@ use latch_kernel::{
     session,
 };
 use latch_protocol::{EventPayload, InferenceProfile, MediaRef, Mode, ProviderId, ReasoningEffort};
-use latch_tui::EffortMapEdit;
-use latch_tui::configuration_center::{ProviderModelSummary, ProviderStatus, ProviderSummary};
-use latch_tui::{CatalogModel, CatalogProvider, InferenceCatalog, SetupKind};
+use latch_ui::EffortMapEdit;
+use latch_ui::configuration::{ProviderModelSummary, ProviderStatus, ProviderSummary};
+use latch_ui::{CatalogModel, CatalogProvider, InferenceCatalog, SetupKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;

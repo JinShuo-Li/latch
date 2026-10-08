@@ -100,6 +100,8 @@ keep the startup workspace fixed, and support local access and SSH forwarding.
 `latch --web`, `--web-port <PORT>`, and `--ssh <REMOTE_WEB_PORT>` are planned
 options, not available in v0.2.3. See the [implementation plan](docs/WEB_UI_PLAN.md)
 for the proposed commands and integration details.
+The shared interactive controller and interface contracts are extracted;
+the browser still uses the standalone prototype until transport integration.
 
 ## Working safely
 

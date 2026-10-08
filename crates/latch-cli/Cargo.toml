@@ -15,6 +15,7 @@ chrono.workspace = true
 clap.workspace = true
 latch-kernel = { path = "../latch-kernel" }
 latch-protocol = { path = "../latch-protocol" }
+latch-ui = { path = "../latch-ui" }
 latch-tui = { path = "../latch-tui" }
 reqwest.workspace = true
 serde.workspace = true

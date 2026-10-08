@@ -152,9 +152,12 @@ must never override long-horizon correctness.
 
 ## Architecture map
 
-Four crates: `latch-protocol` (durable event/model schema shared by all),
+Five crates: `latch-protocol` (durable event/model schema shared by all),
 `latch-kernel` (agent loop, providers, tools, sandbox, continuity, SQLite store),
+`latch-ui` (interface-neutral contracts and slash catalog),
 `latch-tui` (Ratatui app), `latch-cli` (wiring and `latch` binary).
+The shared interactive controller is `latch-cli/src/cli/interactive.rs`;
+terminal rendering stays in the TUI, persistence and execution stay in the kernel.
 The English, dark-default Web UI review prototype lives in `web/prototype/`, separate from
 the product site and Rust runtime. From the repository root, preview with
 `python3 web/prototype/serve.py --port 6006` (loopback only, Python 3 required).

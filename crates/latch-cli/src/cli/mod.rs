@@ -7,6 +7,7 @@
 pub mod command;
 pub mod discovery;
 pub mod doctor;
+pub mod interactive;
 pub mod machine;
 pub mod output;
 pub mod session;

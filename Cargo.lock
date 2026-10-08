@@ -1145,6 +1145,7 @@ dependencies = [
  "latch-kernel",
  "latch-protocol",
  "latch-tui",
+ "latch-ui",
  "reqwest",
  "serde",
  "serde_json",
@@ -1206,12 +1207,22 @@ dependencies = [
  "crossterm",
  "futures",
  "latch-protocol",
+ "latch-ui",
  "ratatui",
  "serde",
  "serde_json",
  "tokio",
  "unicode-segmentation",
  "unicode-width",
+ "uuid",
+]
+
+[[package]]
+name = "latch-ui"
+version = "0.2.3"
+dependencies = [
+ "latch-protocol",
+ "serde",
  "uuid",
 ]
 

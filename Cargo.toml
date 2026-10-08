@@ -3,6 +3,7 @@ members = [
   "crates/latch-protocol",
   "crates/latch-kernel",
   "crates/latch-tui",
+  "crates/latch-ui",
   "crates/latch-cli",
 ]
 resolver = "2"
