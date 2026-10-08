@@ -175,6 +175,8 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
 }
 async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<RpcMessage> {
     let mut length = None;
+    let mut header_lines = 0;
+    let mut first_header_codepoints = Vec::new();
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line).await? == 0 {
@@ -183,11 +185,21 @@ async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<RpcMessag
         if line == "\r\n" || line == "\n" {
             break;
         }
+        header_lines += 1;
+        if header_lines == 1 {
+            first_header_codepoints.extend(line.chars().take(4).map(|ch| ch as u32));
+        }
         if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
             length = Some(v.trim().parse::<usize>()?);
         }
     }
-    let n = length.ok_or_else(|| anyhow!("missing Content-Length"))?;
+    let n = length.ok_or_else(|| {
+        anyhow!(
+            "missing Content-Length ({} header lines; first code points: {:?})",
+            header_lines,
+            first_header_codepoints
+        )
+    })?;
     if n > MAX_MESSAGE {
         bail!("extension frame exceeds {MAX_MESSAGE} bytes");
     }

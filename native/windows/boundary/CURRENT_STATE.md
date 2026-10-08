@@ -157,10 +157,14 @@ handle open for every file in a large workspace.
 `native/windows/boundary/scale.ps1` adds a synthetic 4,096-file workspace case
 that creates host files while grants are live, mutates files inside the
 AppContainer, and checks exact restoration for pre-existing objects plus grant
-removal from new objects. It is wired into manual Full validation. These new
-measurements and acceptance checks have not been run in this environment, and
-they do not change the existing whole-home support limit or implement a grant
-lease.
+removal from new objects. The hosted Windows Full validation run
+[37749704283](https://github.com/JinShuo-Li/latch/actions/runs/37749704283)
+passed with 4,129 initial objects, 512 concurrent host files, and 256 sandbox
+mutations. It restored every checked ACL and removed the recovery journal. The
+measured phases were 185 ms preflight, 6.95 s grant walk, 18.73 s journal,
+370 ms ACL application, and 18.72 s rollback. These measurements qualify this
+synthetic scale only; they do not change the whole-home support limit or
+implement a reusable grant lease.
 
 `native/windows/boundary/network.ps1` now specifies the loopback policy through
 client and listener fixtures. It probes an external DNS name when the host can
@@ -170,13 +174,24 @@ qualification. Sandbox commands retain Windows' default
 loopback isolation; the runner does not edit the AppContainer exemption list
 or firewall. The documented Windows API is a debugging exemption list whose
 existing entries must be preserved, and the documented inbound development
-path remains active while the listener is running. A narrow local endpoint
-relay remains a separate design. The fixture has not yet been run here.
+path remains active while the listener is running. The same hosted run passed
+DNS for `example.com`, verified that IPv4 and available IPv6 loopback client
+connections remain denied both with and without network capability, and
+verified that the host cannot reach sandboxed loopback listeners. No remote
+private-LAN endpoint was supplied. A narrow local endpoint relay remains a
+separate design; this run qualifies the current deny policy and does not add
+local development-server access.
 
 `lifecycle.ps1` probes an x86 top-level command and a direct x86 child on
-WOW64 hosts. A started child must remain in the AppContainer job; an explicit
-creation refusal is accepted and cleanup is checked in either case. Deeper x86
-descendants and descendants that bypass compatibility injection remain
-unqualified. Python and Windows PowerShell 5.1 extension round-trip tests are
-now in the Windows Full validation matrix; neither has run here. Physical
-power-loss recovery and hostile rename/reparse/hardlink races remain open.
+WOW64 hosts. In the hosted run, top-level x86 startup failed closed because the
+release runner has no x86 compatibility DLL, and the direct x86 descendant was
+explicitly rejected with `ERROR_NOT_SUPPORTED` before cross-bitness injection;
+cleanup passed in both cases. Deeper x86 descendants and descendants that
+bypass compatibility injection remain unqualified. Python extension round-trip
+passed. The PowerShell 7 extension round-trip still fails initialization with
+a missing `Content-Length` response, including after granting the standard
+PowerShell 7 installation read-only access; see hosted run
+[37750252797](https://github.com/JinShuo-Li/latch/actions/runs/37750252797).
+The parser now reports a bounded header shape (line count and first code
+points, without header text) for the next diagnosis. Physical power-loss
+recovery and hostile rename/reparse/hardlink races remain open.
