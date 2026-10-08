@@ -120,6 +120,8 @@ copies them. Config example is `config.example.toml`. Docker (or a
 compatible CLI via `DOCKER=…`) is required only for the optional dogfood harness,
 never by Latch itself.
 
+Windows diagnostic evidence and native Web/status qualification are in
+`docs/WINDOWS_DIAGNOSTICS.md`; keep qualification gaps distinct from proven bugs.
 On Windows, existing workspace objects must permit the current user to change
 their ACLs for temporary AppContainer grants; a readable foreign-owned object
 without `WRITE_DAC` makes execution fail closed. Prefer a focused user-owned

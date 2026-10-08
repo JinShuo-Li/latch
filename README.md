@@ -43,6 +43,7 @@ The Linux installer also supports older versioned release archives.
 Linux needs glibc 2.35+, `bwrap` (Bubblewrap), `rg` (ripgrep), and Git on `PATH`.
 Windows needs Git for Windows, ripgrep, and a user-owned NTFS workspace.
 The native Windows sandbox is embedded in `latch.exe`; binary installs need no MSVC, WSL, or Git Bash.
+See [Windows findings and current limits](docs/WINDOWS_DIAGNOSTICS.md) for workspace ACL, startup cost and local-server issues.
 Latch refuses to run commands if its sandbox is unavailable.
 
 **Build from source**
