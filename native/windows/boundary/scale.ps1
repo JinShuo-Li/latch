@@ -63,13 +63,19 @@ foreach ($key in @('LATCH_RECOVERY_ROOT','LATCH_RECOVERY_PAUSE','LATCH_BOUNDARY_
 $env:LATCH_RECOVERY_ROOT = $journal
 $env:LATCH_RECOVERY_PAUSE = 'all-grants'
 $env:LATCH_BOUNDARY_TIMING = '1'
+$info.EnvironmentVariables['LATCH_RECOVERY_ROOT'] = $journal
+$info.EnvironmentVariables['LATCH_RECOVERY_PAUSE'] = 'all-grants'
+$info.EnvironmentVariables['LATCH_BOUNDARY_TIMING'] = '1'
 $process = [Diagnostics.Process]::Start($info)
 $hostFiles = @()
 try {
   $pauseFile = Join-Path $journal 'pause.pid'
   $deadline = [DateTime]::UtcNow.AddMinutes(30)
   while (!(Test-Path -LiteralPath $pauseFile)) {
-    if ($process.HasExited -or [DateTime]::UtcNow -gt $deadline) {
+    if ($process.HasExited) {
+      throw "Large-workspace runner exited before the post-grant checkpoint (exit $($process.ExitCode))"
+    }
+    if ([DateTime]::UtcNow -gt $deadline) {
       throw 'Large-workspace runner did not reach the post-grant checkpoint'
     }
     Start-Sleep -Milliseconds 50
