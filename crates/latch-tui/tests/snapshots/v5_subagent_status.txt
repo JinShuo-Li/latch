@@ -3,8 +3,8 @@
                                                                                                                                                             │on main                                    
 • Child agent `audit-locks` completed                                                                                                                       │                                           
   └ Found two unsynchronized locks.                                                                                                                         │ACTIVITY                                   
-                                                                                                                                                            │Preparing request                          
-                                                                                                                                                            │0s in phase · 0s quiet                     
+                                                                                                                                                            │• Preparing request                        
+                                                                                                                                                            │  0s in phase · 0s quiet                   
                                                                                                                                                             │                                           
                                                                                                                                                             │TASK                                       
                                                                                                                                                             │InProgress                                 

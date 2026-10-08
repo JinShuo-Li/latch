@@ -132,6 +132,14 @@ impl Palette {
         }
     }
 
+    /// Activity indicators share a blue dot, separate from tool result colors.
+    #[must_use]
+    pub fn activity(self) -> Style {
+        Style::default()
+            .fg(Color::Blue)
+            .add_modifier(Modifier::BOLD)
+    }
+
     /// Secondary labels (key hints, metadata values).
     #[must_use]
     pub fn muted(self) -> Style {

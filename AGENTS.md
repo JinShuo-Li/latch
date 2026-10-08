@@ -239,8 +239,10 @@ Native ownership is split into runner/token/AppContainer/ACL/recovery/desktop/
 job/process modules; Win32 complexity stays outside the safe Rust kernel.
 `latch-ui/src/activity.rs` owns the shared activity reducer; provider stream
 signals are transient and contain no reasoning text. TUI refreshes every 400ms;
-pending tool dots blink yellow, success/failure stay green/red. Web emits
-five-second connection heartbeats. Silence never proves thinking,
+pending tool dots blink yellow, success/failure stay green/red. Activity
+indicators in the sidebar and above the composer use steady blue dots with a
+two-cell gutter matching transcript tool rows. Web emits five-second connection
+heartbeats. Silence never proves thinking,
 failure or completion; replayed unfinished activity is interrupted.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,configuration_center}.rs` and existing siblings.

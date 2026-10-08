@@ -18,7 +18,7 @@ Type a request · /help for commands
                                                                                                     
   enter confirm · y approve · n deny · ctrl+o full request · esc deny                               
                                                                                                     
-  • Waiting for approval                                                                            
+• Waiting for approval                                                                              
                                                                                                     
                                                                                                     
 › Ask Latch…                                                                                        

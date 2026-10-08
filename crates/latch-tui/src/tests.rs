@@ -3366,6 +3366,7 @@ fn user_transcript_renders_compact_attachment_metadata_without_bytes() {
 #[test]
 fn sidebar_reports_real_reasoning_and_keeps_elapsed_time_during_silence() {
     let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.busy = true;
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::ModelRequestStarted {
             provider: "test".into(),
@@ -3382,6 +3383,19 @@ fn sidebar_reports_real_reasoning_and_keeps_elapsed_time_during_silence() {
     let silent = render_to_text(&mut app, 200, 40);
     assert!(silent.contains("Thinking") && silent.contains("s in phase"));
     assert!(silent.contains("No new activity; Ctrl+C stops"));
+    let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(200, 40)).unwrap();
+    terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let mut indicators = Vec::new();
+    for (y, row) in buffer_text(buffer).lines().enumerate() {
+        for (x, _) in row.match_indices("• Thinking") {
+            let x = display_width(&row[..x]) as u16;
+            indicators.push(x);
+            assert_eq!(buffer.cell((x, y as u16)).unwrap().fg, Color::Blue);
+            assert_eq!(buffer.cell((x + 2, y as u16)).unwrap().symbol(), "T");
+        }
+    }
+    assert_eq!(indicators, vec![200 - sidebar_width(200, true) + 1, 0]);
     app.output(Output::AssistantDelta("Public response".into()));
     assert!(render_to_text(&mut app, 200, 40).contains("Writing response"));
     app.output(Output::Cancelling);
@@ -3800,7 +3814,7 @@ fn tool_dots_blink_every_400ms_and_complete_green_or_red() {
 }
 
 #[test]
-fn running_tool_and_activity_dots_share_the_phase_without_blinking_prose() {
+fn activity_dot_is_blue_and_aligned_while_tool_dots_blink() {
     let mut app = App::default();
     app.output(Output::Event(Box::new(presentation_event(
         latch_protocol::EventPayload::ToolRequested {
@@ -3814,11 +3828,37 @@ fn running_tool_and_activity_dots_share_the_phase_without_blinking_prose() {
     let visible = active_status_line(&app).unwrap();
     app.tool_dot_visible = false;
     let hidden = active_status_line(&app).unwrap();
-    assert_eq!(visible.spans[1].content, "• ");
-    assert_eq!(visible.spans[1].style.fg, Some(Color::Yellow));
-    assert_eq!(hidden.spans[1].content, "  ");
-    assert_eq!(visible.width(), hidden.width());
-    assert_eq!(visible.spans[2..], hidden.spans[2..]);
+    assert_eq!(visible.spans[0].content, "• ");
+    assert_eq!(visible.spans[0].style.fg, Some(Color::Blue));
+    assert_eq!(visible, hidden, "activity remains steady during tool blink");
+    let mut tool = cell_lines(&app.presentation.cells()[0], false, 80, false);
+    assert_eq!(tool[0].spans[0].content, visible.spans[0].content);
+    assert_eq!(tool[0].spans[0].width(), visible.spans[0].width());
+    assert_eq!(tool[0].spans[0].style.fg, Some(Color::Yellow));
+    blink_tool_markers(&mut tool, false);
+    assert_eq!(tool[0].spans[0].content, "  ");
+    for (width, sidebar) in [(60, false), (160, true)] {
+        app.sidebar_override = Some(sidebar);
+        app.tool_dot_visible = true;
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        let mut labels = 0;
+        for (y, row) in text.lines().enumerate() {
+            for (label, color) in [
+                ("• Running cargo check", Color::Yellow),
+                ("• Building", Color::Blue),
+            ] {
+                if row.starts_with(label) {
+                    labels += 1;
+                    assert_eq!(buffer.cell((0, y as u16)).unwrap().fg, color);
+                    assert_ne!(buffer.cell((2, y as u16)).unwrap().symbol(), " ");
+                }
+            }
+        }
+        assert_eq!(labels, 2, "{text}");
+    }
     let mut assistant = cell_lines(
         &Cell::Assistant {
             text: "Prose is not a pending tool.".into(),

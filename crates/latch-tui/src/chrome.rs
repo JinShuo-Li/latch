@@ -2,7 +2,7 @@
 //! and the welcome/footer chrome.
 
 use super::transcript::{
-    blink_tool_markers, notice_style, semantic_visual_height, status_marker, transcript_lines,
+    blink_tool_markers, notice_style, semantic_visual_height, transcript_lines,
 };
 use super::*;
 
@@ -154,35 +154,23 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
     }
 
     let label = label?;
-    // Waiting states are attention (yellow where the theme allows); ordinary
-    // work stays quiet with an accent marker.
+    // Activity shares the transcript's marker/body columns and a steady blue
+    // dot. Pending tool dots animate independently in the transcript.
     let attention = matches!(label.as_str(), "Waiting for approval" | "Interrupted");
-    let running_tool = app.presentation.cells().iter().any(cell_is_running);
-    let (marker_style, label_style) = if running_tool && !attention {
-        (
-            status_marker(CellStatus::Running).1,
-            Style::default().bold(),
-        )
-    } else if attention {
-        (palette.attention(), palette.attention())
+    let label_style = if attention {
+        palette.attention()
     } else {
-        (
-            palette.accent(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )
+        Style::default().bold()
     };
     let mut spans = vec![
-        Span::raw("  "),
-        Span::styled("• ", marker_style),
+        Span::styled("• ", palette.activity()),
         Span::styled(label, label_style),
     ];
     if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
         spans.push(Span::styled(" · ", notice_style()));
         spans.push(Span::styled(detail, notice_style()));
     }
-    let mut lines = [Line::from(spans)];
-    blink_tool_markers(&mut lines, app.tool_dot_visible);
-    Some(lines.into_iter().next().expect("one activity row"))
+    Some(Line::from(spans))
 }
 
 fn cell_is_running(cell: &Cell) -> bool {

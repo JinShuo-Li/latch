@@ -3,8 +3,8 @@
                                                                                                                                                             │on main                                    
                                                                                                                                                             │                                           
 • Failed cargo test                                                                                                                                         │ACTIVITY                                   
-  └ exit code 1                                                                                                                                             │Preparing request                          
-                                                                                                                                                            │0s in phase · 0s quiet                     
+  └ exit code 1                                                                                                                                             │• Preparing request                        
+                                                                                                                                                            │  0s in phase · 0s quiet                   
     exit code 1                                                                                                                                             │                                           
     assertion failed                                                                                                                                        │CURRENT REQUEST                            
                                                                                                                                                             │Fix the failing test.                      

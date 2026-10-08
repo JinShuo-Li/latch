@@ -111,22 +111,32 @@ impl SidebarModel {
         now: chrono::DateTime<chrono::Utc>,
     ) -> Vec<Line<'static>> {
         let a = &self.activity;
+        let body_width = width.saturating_sub(2);
         let mut lines = vec![
             section_title("ACTIVITY"),
-            Line::styled(fit(a.phase.label(), width), cyan()),
+            Line::from(vec![
+                Span::styled("• ", crate::theme::palette().activity()),
+                Span::styled(fit(a.phase.label(), body_width), Style::default().bold()),
+            ]),
         ];
         if let Some(subject) = &a.subject {
-            lines.push(Line::styled(fit(subject, width), dim()));
+            lines.push(Line::styled(
+                format!("  {}", fit(subject, body_width)),
+                dim(),
+            ));
         }
         if a.phase.active() {
             lines.push(Line::styled(
-                fit(
-                    &format!(
-                        "{}s in phase · {}s quiet",
-                        a.elapsed_seconds(now),
-                        a.quiet_seconds(now)
-                    ),
-                    width,
+                format!(
+                    "  {}",
+                    fit(
+                        &format!(
+                            "{}s in phase · {}s quiet",
+                            a.elapsed_seconds(now),
+                            a.quiet_seconds(now)
+                        ),
+                        body_width,
+                    )
                 ),
                 dim(),
             ));
@@ -134,7 +144,7 @@ impl SidebarModel {
                 && a.phase != latch_ui::activity::ActivityPhase::WaitingApproval
             {
                 lines.push(Line::styled(
-                    fit("No new activity; Ctrl+C stops", width),
+                    format!("  {}", fit("No new activity; Ctrl+C stops", body_width)),
                     yellow(),
                 ));
             }

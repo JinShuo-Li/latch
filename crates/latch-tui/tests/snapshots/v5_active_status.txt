@@ -7,7 +7,7 @@
                                                                                                     
                                                                                                     
                                                                                                     
-  • Running tests · cargo test --workspace                                                          
+• Running tests · cargo test --workspace                                                            
                                                                                                     
                                                                                                     
 › Ask Latch…                                                                                        

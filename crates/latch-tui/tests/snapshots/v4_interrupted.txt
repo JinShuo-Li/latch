@@ -7,7 +7,7 @@ Type a request · /help for commands
                                                                                                     
                                                                                                     
                                                                                                     
-  • Interrupted                                                                                     
+• Interrupted                                                                                       
                                                                                                     
                                                                                                     
 › Ask Latch…                                                                                        
