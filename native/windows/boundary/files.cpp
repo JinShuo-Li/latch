@@ -151,22 +151,66 @@ int wmain(int argc, wchar_t** argv) {
     std::puts("PASS existing file rename");
     return 0;
   }
-  if (operation == L"network-deny" || operation == L"network-allow") {
+  if (operation == L"network-resolve") {
+    if (argc != 3) return 2;
     WSADATA data{};
     if (WSAStartup(MAKEWORD(2, 2), &data)) return 3;
-    SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    int error = WSAGetLastError();
+    ADDRINFOW hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    ADDRINFOW* addresses = nullptr;
+    const int error = GetAddrInfoW(argv[2], nullptr, &hints, &addresses);
+    if (error) {
+      WSACleanup();
+      std::fwprintf(stderr, L"FAIL resolve %ls error=%d\n", argv[2], error);
+      return 1;
+    }
+    unsigned count = 0;
+    for (const auto* address = addresses; address;
+         address = address->ai_next)
+      ++count;
+    FreeAddrInfoW(addresses);
+    WSACleanup();
+    std::fwprintf(stdout, L"resolved host=%ls addresses=%u\n", argv[2], count);
+    return count ? 0 : 1;
+  }
+  if (operation == L"network-deny" || operation == L"network-allow") {
+    if (argc != 3 && argc != 4) return 2;
+    WSADATA data{};
+    if (WSAStartup(MAKEWORD(2, 2), &data)) return 3;
+    const wchar_t* host = argc == 4 ? argv[3] : L"127.0.0.1";
+    ADDRINFOW hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    ADDRINFOW* addresses = nullptr;
+    const int resolve_error = GetAddrInfoW(host, argv[2], &hints, &addresses);
+    if (resolve_error) {
+      WSACleanup();
+      std::fwprintf(stderr, L"FAIL resolve %ls error=%d\n", host,
+                    resolve_error);
+      return 7;
+    }
+    int error = WSAENETUNREACH;
     bool connected = false;
-    if (socket != INVALID_SOCKET) {
-      sockaddr_in target{};
-      target.sin_family = AF_INET;
-      target.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-      if (argc == 4 && InetPtonW(AF_INET, argv[3], &target.sin_addr) != 1) return 4;
-      target.sin_port = htons(static_cast<u_short>(_wtoi(argv[2])));
+    for (const auto* address = addresses; address;
+         address = address->ai_next) {
+      SOCKET socket = ::socket(address->ai_family, address->ai_socktype,
+                               address->ai_protocol);
+      if (socket == INVALID_SOCKET) {
+        error = WSAGetLastError();
+        continue;
+      }
       u_long nonblocking = 1;
-      if (ioctlsocket(socket, FIONBIO, &nonblocking)) return 5;
-      connected = connect(socket, reinterpret_cast<sockaddr*>(&target), sizeof(target)) == 0;
-      error = WSAGetLastError();
+      if (ioctlsocket(socket, FIONBIO, &nonblocking)) {
+        error = WSAGetLastError();
+        closesocket(socket);
+        continue;
+      }
+      connected = connect(socket, address->ai_addr,
+                          static_cast<int>(address->ai_addrlen)) == 0;
+      error = connected ? 0 : WSAGetLastError();
       if (!connected && error == WSAEWOULDBLOCK) {
         fd_set writable, errors;
         FD_ZERO(&writable); FD_ZERO(&errors);
@@ -175,16 +219,169 @@ int wmain(int argc, wchar_t** argv) {
         const int ready = select(0, nullptr, &writable, &errors, &timeout);
         if (ready > 0) {
           int size = sizeof(error);
-          if (getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &size)) return 6;
+          if (getsockopt(socket, SOL_SOCKET, SO_ERROR,
+                         reinterpret_cast<char*>(&error), &size))
+            error = WSAGetLastError();
           connected = error == 0;
         } else error = ready == 0 ? WSAETIMEDOUT : WSAGetLastError();
       }
       closesocket(socket);
+      if (connected) break;
     }
+    FreeAddrInfoW(addresses);
     WSACleanup();
-    std::printf("network connected=%d error=%d\n", connected, error);
-    return operation == L"network-allow" ? (connected ? 0 : 1) :
-        (!connected && (error == WSAEACCES || error == WSAETIMEDOUT) ? 0 : 1);
+    std::fwprintf(stdout, L"network host=%ls connected=%d error=%d\n", host,
+                  connected, error);
+    const bool denied =
+        !connected &&
+        (error == WSAEACCES || error == WSAETIMEDOUT ||
+         error == WSAECONNREFUSED || error == WSAENETUNREACH ||
+         error == WSAEHOSTUNREACH);
+    return operation == L"network-allow" ? (connected ? 0 : 1)
+                                         : (denied ? 0 : 1);
+  }
+  if (operation == L"network-listen") {
+    if (argc != 4 && argc != 5) return 2;
+    const int hold_ms = _wtoi(argv[3]);
+    if (hold_ms < 1 || hold_ms > 15000) return 2;
+    const bool ipv6 = argc == 5 && std::wcscmp(argv[4], L"ipv6") == 0;
+    if (argc == 5 && !ipv6) return 2;
+    WSADATA data{};
+    if (WSAStartup(MAKEWORD(2, 2), &data)) return 3;
+    SOCKET listener = ::socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM,
+                               IPPROTO_TCP);
+    int error = listener == INVALID_SOCKET ? WSAGetLastError() : 0;
+    sockaddr_storage address{};
+    int address_size = 0;
+    if (ipv6) {
+      DWORD only_v6 = 1;
+      if (!error && setsockopt(listener, IPPROTO_IPV6, IPV6_V6ONLY,
+                               reinterpret_cast<const char*>(&only_v6),
+                               sizeof(only_v6)))
+        error = WSAGetLastError();
+      auto* target = reinterpret_cast<sockaddr_in6*>(&address);
+      target->sin6_family = AF_INET6;
+      target->sin6_addr = in6addr_loopback;
+      address_size = sizeof(sockaddr_in6);
+    } else {
+      auto* target = reinterpret_cast<sockaddr_in*>(&address);
+      target->sin_family = AF_INET;
+      target->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      address_size = sizeof(sockaddr_in);
+    }
+    if (!error && bind(listener, reinterpret_cast<sockaddr*>(&address),
+                       address_size))
+      error = WSAGetLastError();
+    if (!error && listen(listener, 1)) error = WSAGetLastError();
+    int length = sizeof(address);
+    if (!error && getsockname(listener, reinterpret_cast<sockaddr*>(&address),
+                              &length))
+      error = WSAGetLastError();
+    const auto port = ipv6
+                          ? ntohs(reinterpret_cast<sockaddr_in6*>(&address)
+                                      ->sin6_port)
+                          : ntohs(reinterpret_cast<sockaddr_in*>(&address)
+                                      ->sin_port);
+    const std::string status = error
+                                   ? "BLOCKED " + std::to_string(error)
+                                   : (ipv6 ? "LISTEN6 " : "LISTEN ") +
+                                         std::to_string(port);
+    HANDLE marker = CreateFileW(argv[2], GENERIC_WRITE, FILE_SHARE_READ,
+                                nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                                nullptr);
+    if (marker == INVALID_HANDLE_VALUE) {
+      if (listener != INVALID_SOCKET) closesocket(listener);
+      WSACleanup();
+      return 4;
+    }
+    DWORD written = 0;
+    const BOOL stored = WriteFile(marker, status.data(),
+                                 static_cast<DWORD>(status.size()), &written,
+                                 nullptr);
+    CloseHandle(marker);
+    if (!stored || written != status.size()) {
+      if (listener != INVALID_SOCKET) closesocket(listener);
+      WSACleanup();
+      return 5;
+    }
+    if (!error) Sleep(static_cast<DWORD>(hold_ms));
+    if (listener != INVALID_SOCKET) closesocket(listener);
+    WSACleanup();
+    std::printf("%s\n", status.c_str());
+    return error == WSAEACCES || !error ? 0 : 6;
+  }
+  if (operation == L"spawn-x86") {
+    if (argc != 3) return 2;
+    std::wstring command = L"\"" + std::wstring(argv[2]) +
+                           L"\" /d /c exit 0";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    if (!CreateProcessW(argv[2], command.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &child)) {
+      std::printf("X86_DESCENDANT_REFUSED error=%lu\n", GetLastError());
+      return 10;
+    }
+    BOOL in_job = FALSE;
+    HANDLE token = nullptr;
+    DWORD app_container = 0;
+    DWORD returned = 0;
+    const bool isolated =
+        IsProcessInJob(child.hProcess, nullptr, &in_job) && in_job &&
+        OpenProcessToken(child.hProcess, TOKEN_QUERY, &token) &&
+        GetTokenInformation(token, TokenIsAppContainer, &app_container,
+                            sizeof(app_container), &returned) &&
+        app_container != 0;
+    if (token) CloseHandle(token);
+    if (!isolated) {
+      TerminateProcess(child.hProcess, 125);
+      WaitForSingleObject(child.hProcess, 5000);
+      CloseHandle(child.hThread);
+      CloseHandle(child.hProcess);
+      std::puts("FAIL x86 descendant escaped its AppContainer job");
+      return 1;
+    }
+    const DWORD wait = WaitForSingleObject(child.hProcess, 5000);
+    DWORD exit_code = 0;
+    const bool exited = wait == WAIT_OBJECT_0 &&
+                        GetExitCodeProcess(child.hProcess, &exit_code) &&
+                        exit_code == 0;
+    if (!exited) TerminateProcess(child.hProcess, 125);
+    if (!exited) WaitForSingleObject(child.hProcess, 5000);
+    CloseHandle(child.hThread);
+    CloseHandle(child.hProcess);
+    if (!exited) {
+      std::puts("FAIL x86 descendant did not exit cleanly");
+      return 1;
+    }
+    std::puts("X86_DESCENDANT_STARTED appcontainer=1 job=1 exit=0");
+    return 0;
+  }
+  if (operation == L"bulk-mutate") {
+    if (argc != 4) return 2;
+    const int count = _wtoi(argv[3]);
+    if (count < 1 || count > 10000) return 2;
+    for (int i = 0; i < count; ++i) {
+      const std::wstring path = std::wstring(argv[2]) + L"\\sandbox-" +
+                                std::to_wstring(i) + L".txt";
+      HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                                CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (file == INVALID_HANDLE_VALUE) return 3;
+      constexpr char content[] = "sandbox mutation";
+      DWORD written = 0;
+      const BOOL stored = WriteFile(file, content, sizeof(content) - 1,
+                                    &written, nullptr);
+      CloseHandle(file);
+      if (!stored || written != sizeof(content) - 1) return 4;
+      if (i % 2 == 0) {
+        const std::wstring renamed = path + L".renamed";
+        if (!MoveFileExW(path.c_str(), renamed.c_str(), MOVEFILE_WRITE_THROUGH))
+          return 5;
+      }
+      if (i % 4 == 1 && !DeleteFileW(path.c_str())) return 6;
+    }
+    std::printf("Created and mutated %d workspace entries\n", count);
+    return 0;
   }
   if (operation == L"privilege-deny") {
     HANDLE token = nullptr;

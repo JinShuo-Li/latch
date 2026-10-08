@@ -21,9 +21,16 @@ precedence over older validation results below.
   Ancestor compatibility handles expose metadata only, including for paths
   with a trailing separator; they do not enumerate a parent. A workspace that
   contains the trusted recovery journal excludes that protected subtree.
-- Existing hardlinks are enumerated before write grants; aliases outside the
-  approved roots cause refusal before any workspace grant. Handles without
-  delete sharing pin scanned objects through grant setup.
+- Existing hardlinks are enumerated across every workspace, write and read
+  root before any ACL grant; aliases outside those roots cause refusal without
+  a partial grant.
+  Preflight keeps NTFS identities and relative paths in a compact plan instead
+  of retaining a handle for every file. The grant pass reopens each target,
+  rechecks identity and hardlinks, and retains at most 32 target handles while
+  its ACL batch is journaled and applied. This bounds handle use and journal
+  flushes while retaining one exact rollback intent per object. Read-only roots
+  grant only the AppContainer SID; workspace and write roots also grant the
+  write-restrictor SID.
 - Sensitive trees have package-authority allow ACEs removed and inheritance
   sealed, preserving ordinary host ACEs. These changes are now journaled
   and restored exactly during normal or stale recovery. Per-package deny ACEs alone were insufficient against
@@ -44,6 +51,10 @@ precedence over older validation results below.
 - Missing top-level .git is reserved by a temporary delete-on-close file.
 - Native cmd.exe shell and direct executable/argv inspection are exercised
   by a Rust test. Git Bash/MSYS is not supported by this candidate.
+- Internet and private-network capabilities do not enable AppContainer
+  loopback. The runner keeps Windows' default loopback isolation and does not
+  edit the AppContainer loopback configuration or firewall. The manual
+  `network.ps1` fixture qualifies sandbox-client and sandbox-listener paths.
 - Native helpers build from the Windows Cargo build script with MSVC and are
   embedded in the production Windows runtime module. No unsafe Rust was introduced.
 - No account provisioning, firewall changes, WSL, or unrestricted retry.
@@ -82,9 +93,9 @@ program. Production Windows entry points now use the same embedded runner.
 - TCP handshake to example.com: ordinary host baseline succeeded; no network
   capability returned WSAEACCES (10013); explicit internet/private-network
   capabilities succeeded. No application payload was sent.
-- Loopback connections timed out both with and without network capabilities.
-  AppContainer loopback exemptions were not configured. Do not claim localhost
-  development-server connectivity works.
+- Historical loopback probes timed out both with and without network
+  capabilities. No exemption is configured. Localhost development-server
+  connectivity remains unavailable to sandboxed tools.
 - Final cleanup verification: native C++ compilation with /W4 /WX;
   `cargo fmt --all -- --check`; `git diff --check`;
   `cargo clippy -p latch-kernel --all-targets --locked -- -D warnings`;
@@ -142,17 +153,45 @@ Prerequisites: x64 MSVC Rust, Visual Studio C++ Build Tools and Windows SDK,
 CMake 3.25+, Git for Windows. Run CMake from an x64 developer command prompt:
 
 ```text
-cmake -S native/windows/boundary -B target/windows-boundary -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake -S native/windows/boundary -B target/windows-boundary -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DLATCH_RECOVERY_TESTING=ON
 cmake --build target/windows-boundary
 cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked -- --nocapture
 cargo clippy -p latch-kernel --all-targets --locked -- -D warnings
 ```
 
-Run `test.ps1`, `adversarial.ps1`, and `lifecycle.ps1` in this directory,
+Run `test.ps1`, `adversarial.ps1`, `lifecycle.ps1`, `network.ps1`, and `scale.ps1` in this directory,
 each with `-Binaries <absolute build/bin>` and
 `-FixtureRoot <new absolute disposable directory>`.
-The scripts refuse an existing fixture directory. Fixtures contain synthetic
-credentials only; do not point them at actual credential or state directories.
+`scale.ps1` defaults to 4,096 existing files, creates host files while
+temporary grants are active, and mutates another batch inside the AppContainer.
+Set `LATCH_BOUNDARY_TIMING=1` to report preflight scan, grant walk, durable
+journal, ACL application, and rollback durations separately. The manual Full
+validation workflow includes the new network and scale fixtures. They do not
+qualify a whole home directory or a reusable grant lease. The scripts refuse
+an existing fixture directory. Fixtures contain synthetic data only; do not
+point them at actual credential or state directories.
+
+## Loopback policy
+
+Windows loopback remains unavailable to sandboxed commands. The documented
+`NetworkIsolationSetAppContainerConfig` API manages an AppContainer SID list
+for debugging loopback traffic and requires callers to preserve the existing
+list. Microsoft's local IPC guidance describes `CheckNetIsolation` exemptions
+as a sideload/debug path; inbound listener exemptions must remain active while
+the listener is running. Latch does not change that shared OS configuration or
+add firewall rules. See [NetworkIsolationSetAppContainerConfig](https://learn.microsoft.com/en-us/windows/win32/api/netfw/nf-netfw-networkisolationsetappcontainerconfig),
+[Windows interprocess communication](https://learn.microsoft.com/en-us/windows/apps/develop/communication/interprocess-communication),
+and [UWP loopback troubleshooting](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/troubleshooting-uwp-firewall).
+
+`network.ps1` checks external DNS resolution (default `example.com`, skipped
+when the host cannot resolve it), resolves `localhost` through Winsock, and
+checks IPv4 and available IPv6 loopback against live host listeners, both with
+and without the network capability. It also starts sandboxed listeners and
+attempts host connections. A successful loopback connection is a policy
+failure. A reachable remote private-LAN endpoint can be supplied with
+`-PrivateLanAddress` and `-PrivateLanPort` to qualify that capability
+separately. This fixture keeps the current loopback boundary; it does not add
+local development-server support.
 
 ## Recovery/refactor follow-up (2026-09-27)
 
@@ -202,12 +241,14 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
   of persistent ACL hardening. NULL/unsupported sensitive DACLs fail closed.
 - **Processes:** Latch managed-process durability and cancellation paths;
   forced runner death at every startup phase; all handle inheritance modes;
-  32-bit children; descendants bypassing compatibility injection; resource
+  deeper x86 descendants after the direct child probe; descendants bypassing
+  compatibility injection; resource
   exhaustion; recovery after cleanup-owner termination or machine crashes.
   Public-launcher termination cleanup is covered by the follow-up tests.
 - **Network:** DNS, UDP, IPv6, private LAN, listening servers, proxies, named
   pipes and other IPC. TCP evidence is limited to the tested endpoint and host.
-- **Compatibility:** PowerShell, Python extensions, full repository Cargo
+- **Compatibility:** Python and Windows PowerShell 5.1 extension round-trip
+  tests are in manual Full validation but remain unrun; full repository Cargo
   builds under the boundary, VS discovery without an
   explicit developer environment, non-English/Unicode runtime installation
   paths, and KsecDD handle exposure review.

@@ -100,6 +100,10 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
                               2))
     creation_flags &= ~CREATE_NO_WINDOW;
 #endif
+  // Profiling belongs to the trusted helper and must not be inherited by the
+  // sandboxed command.
+  if (boundary_timing().enabled)
+    SetEnvironmentVariableW(L"LATCH_BOUNDARY_TIMING", nullptr);
   if (!CreateProcessAsUserW(
           restricted, argv[2], line.data(), nullptr, nullptr, TRUE,
           creation_flags,

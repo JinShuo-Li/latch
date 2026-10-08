@@ -1,5 +1,103 @@
 #include "filesystem_acl.h"
+
+#include <limits>
 namespace latch {
+namespace {
+struct FindNameHandle {
+  HANDLE value = INVALID_HANDLE_VALUE;
+  ~FindNameHandle() {
+    if (value != INVALID_HANDLE_VALUE) FindClose(value);
+  }
+};
+
+void capture_grant_identity(HANDLE object, GrantTarget& target) {
+  FILE_BASIC_INFO basic{};
+  if (!GetFileInformationByHandleEx(object, FileIdInfo, &target.file_id,
+                                    sizeof(target.file_id)) ||
+      !GetFileInformationByHandleEx(object, FileBasicInfo, &basic,
+                                    sizeof(basic)))
+    fail(L"capture grant identity");
+  target.creation_time = basic.CreationTime.QuadPart;
+}
+
+void verify_grant_identity(HANDLE object, const GrantTarget& target) {
+  FILE_ID_INFO file_id{};
+  FILE_BASIC_INFO basic{};
+  FILE_ATTRIBUTE_TAG_INFO tag{};
+  if (!GetFileInformationByHandleEx(object, FileIdInfo, &file_id,
+                                    sizeof(file_id)) ||
+      !GetFileInformationByHandleEx(object, FileBasicInfo, &basic,
+                                    sizeof(basic)) ||
+      !GetFileInformationByHandleEx(object, FileAttributeTagInfo, &tag,
+                                    sizeof(tag)))
+    fail(L"verify grant identity");
+  require(file_id.VolumeSerialNumber == target.file_id.VolumeSerialNumber &&
+              std::memcmp(file_id.FileId.Identifier,
+                          target.file_id.FileId.Identifier,
+                          sizeof(file_id.FileId.Identifier)) == 0 &&
+              basic.CreationTime.QuadPart == target.creation_time &&
+              ((tag.FileAttributes ^ target.attributes) &
+               FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+              !(tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT),
+          L"grant target was renamed, replaced, or changed type");
+}
+
+bool path_in_root(const std::wstring& path, const std::wstring& root) {
+  if (_wcsicmp(path.c_str(), root.c_str()) == 0) return true;
+  return path.size() > root.size() &&
+         _wcsnicmp(path.c_str(), root.c_str(), root.size()) == 0 &&
+         std::filesystem::path::preferred_separator == path[root.size()];
+}
+
+bool validate_hardlinks(const std::filesystem::path& path,
+                        const std::vector<std::wstring>& allowed,
+                        const std::wstring& current_root, DWORD link_count,
+                        const Recovery& recovery) {
+  if (link_count <= 1) return true;
+  wchar_t volume[32768]{};
+  if (!GetVolumePathNameW(path.c_str(), volume, 32768))
+    fail(L"hardlink volume");
+  std::vector<wchar_t> name(32768);
+  DWORD length = static_cast<DWORD>(name.size());
+  FindNameHandle iterator{
+      FindFirstFileNameW(path.c_str(), 0, &length, name.data())};
+  if (iterator.value == INVALID_HANDLE_VALUE) fail(L"enumerate hardlinks");
+  bool safe = true;
+  bool current_root_link = false;
+  std::wstring representative;
+  DWORD error = ERROR_SUCCESS;
+  do {
+    auto link = std::filesystem::path(volume) /
+                std::filesystem::path(name.data()).relative_path();
+    const auto canonical = std::filesystem::canonical(link).wstring();
+    if (recovery.protected_journal_path(canonical)) {
+      safe = false;
+      break;
+    }
+    safe = std::any_of(allowed.begin(), allowed.end(),
+                       [&](const std::wstring& root) {
+                         return path_in_root(canonical, root);
+                       });
+    if (!safe) break;
+    if (path_in_root(canonical, current_root) &&
+        (!current_root_link || _wcsicmp(canonical.c_str(),
+                                        representative.c_str()) < 0)) {
+      representative = canonical;
+      current_root_link = true;
+    }
+    length = static_cast<DWORD>(name.size());
+  } while (FindNextFileNameW(iterator.value, &length, name.data()));
+  if (safe) error = GetLastError();
+  if (!safe)
+    fail(L"write root contains an outside hardlink", ERROR_ACCESS_DENIED);
+  if (error != ERROR_HANDLE_EOF)
+    fail(L"enumerate remaining hardlinks", error);
+  require(current_root_link, L"hardlink has no path in its grant root");
+  const auto canonical_current = std::filesystem::canonical(path).wstring();
+  return _wcsicmp(representative.c_str(), canonical_current.c_str()) == 0;
+}
+}  // namespace
+
 DWORD update_acl(const std::wstring& path, PSID sid, ACCESS_MODE mode,
                  DWORD rights, DWORD inheritance, const Cancellation& cancel,
                  Recovery& recovery) {
@@ -59,15 +157,14 @@ DWORD update_acl(const std::wstring& path, PSID sid, ACCESS_MODE mode,
   return ERROR_SUCCESS;
 }
 
-DWORD update_acl_pair(const std::wstring& path, PSID first_sid,
-                      PSID second_sid, DWORD rights, DWORD inheritance,
+DWORD update_acl_pair(PinnedObject& pinned, PSID first_sid, PSID second_sid,
+                      DWORD rights, DWORD inheritance,
                       const Cancellation& cancel, Recovery& recovery) {
   // Shared roots need both identities. Apply them in one journaled mutation so
   // a crash can restore the exact original descriptor with one record.
   cancel.check();
   PACL old_acl = nullptr;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
-  PinnedObject pinned(path);
   const auto before = pinned.state();
   DWORD code = GetSecurityInfo(pinned.object.value, SE_FILE_OBJECT,
                                DACL_SECURITY_INFORMATION, nullptr, nullptr,
@@ -92,59 +189,101 @@ DWORD update_acl_pair(const std::wstring& path, PSID first_sid,
   return ERROR_SUCCESS;
 }
 
-// A write grant changes an NTFS object's ACL, which is shared by all hardlinks.
-// Validate every link before granting a root; a name outside the approved roots
-// must never obtain a write grant through an alias in the workspace.
-void validate_write_tree(const std::filesystem::path& path,
-                         const std::vector<std::wstring>& allowed,
-                         std::vector<Handle>& locks, const Cancellation& cancel,
-                         Recovery& recovery) {
+bool prepare_acl_pair(PinnedObject& pinned, PSID first_sid, PSID second_sid,
+                      DWORD rights, DWORD inheritance,
+                      const Cancellation& cancel, AclChange& change) {
   cancel.check();
-  if (recovery.protected_journal_path(path)) return;
-  Handle object(CreateFileW(
-      path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
-      nullptr, OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-  if (object.value == INVALID_HANDLE_VALUE) fail(L"open write-grant object");
-  BY_HANDLE_FILE_INFORMATION information{};
-  if (!GetFileInformationByHandle(object.value, &information))
-    fail(L"write-grant identity");
-  locks.push_back(std::move(object));
-  if (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return;
-  if (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-    for (const auto& child : std::filesystem::directory_iterator(path))
-      validate_write_tree(child.path(), allowed, locks, cancel, recovery);
-    return;
+  PACL old_acl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  const auto before = pinned.state();
+  const DWORD code = GetSecurityInfo(
+      pinned.object.value, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+      nullptr, nullptr, &old_acl, nullptr, &descriptor);
+  Local descriptor_owner(descriptor);
+  if (code != ERROR_SUCCESS) fail(L"read ACL for grant", code);
+  EXPLICIT_ACCESSW entries[2]{};
+  PSID sids[2] = {first_sid, second_sid};
+  const size_t entry_count = second_sid ? 2 : 1;
+  for (size_t i = 0; i < entry_count; ++i) {
+    entries[i].grfAccessPermissions = rights;
+    entries[i].grfAccessMode = GRANT_ACCESS;
+    entries[i].grfInheritance = inheritance;
+    entries[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entries[i].Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+    entries[i].Trustee.ptstrName = static_cast<LPWSTR>(sids[i]);
   }
-  if (information.nNumberOfLinks <= 1) return;
-  wchar_t volume[32768]{};
-  if (!GetVolumePathNameW(path.c_str(), volume, 32768))
-    fail(L"hardlink volume");
-  std::vector<wchar_t> name(32768);
-  DWORD length = static_cast<DWORD>(name.size());
-  HANDLE iterator = FindFirstFileNameW(path.c_str(), 0, &length, name.data());
-  if (iterator == INVALID_HANDLE_VALUE) fail(L"enumerate hardlinks");
-  bool safe = true;
-  DWORD error = ERROR_SUCCESS;
-  do {
-    auto link = std::filesystem::path(volume) /
-                std::filesystem::path(name.data()).relative_path();
-    const auto canonical = std::filesystem::canonical(link).wstring();
-    safe = std::any_of(
-        allowed.begin(), allowed.end(), [&](const std::wstring& root) {
-          return canonical.size() > root.size() &&
-                 _wcsnicmp(canonical.c_str(), root.c_str(), root.size()) == 0 &&
-                 std::filesystem::path::preferred_separator ==
-                     canonical[root.size()];
-        });
-    if (!safe) break;
-    length = static_cast<DWORD>(name.size());
-  } while (FindNextFileNameW(iterator, &length, name.data()));
-  if (safe) error = GetLastError();
-  FindClose(iterator);
-  if (!safe)
-    fail(L"write root contains an outside hardlink", ERROR_ACCESS_DENIED);
-  if (error != ERROR_HANDLE_EOF) fail(L"enumerate remaining hardlinks", error);
+  PACL new_acl = nullptr;
+  const DWORD acl_code = SetEntriesInAclW(static_cast<ULONG>(entry_count),
+                                          entries, old_acl, &new_acl);
+  Local new_acl_owner(new_acl);
+  if (acl_code != ERROR_SUCCESS) fail(L"prepare grant ACL", acl_code);
+  change.pinned = &pinned;
+  change.before = before;
+  change.after = changed_dacl(before.security, new_acl, false);
+  return change.before.security != change.after;
+}
+
+DWORD update_acl_pair(const std::wstring& path, PSID first_sid,
+                      PSID second_sid, DWORD rights, DWORD inheritance,
+                      const Cancellation& cancel, Recovery& recovery) {
+  PinnedObject pinned(path);
+  return update_acl_pair(pinned, first_sid, second_sid, rights, inheritance,
+                         cancel, recovery);
+}
+
+// ACL grants mutate the NTFS object shared by all hardlinks. Validate every
+// link in every approved root before any grant is applied. Keep only compact
+// identity records and a flat path arena, not one open handle per file.
+void validate_grant_tree(const std::filesystem::path& path,
+                         const std::vector<std::wstring>& allowed,
+                         GrantPlan& plan, const Cancellation& cancel,
+                         Recovery& recovery) {
+  plan.root = path;
+  const auto visit = [&](const auto& self,
+                         const std::filesystem::path& current) -> void {
+    cancel.check();
+    if (recovery.protected_journal_path(current)) return;
+    Handle object(CreateFileW(
+        current.c_str(), READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (object.value == INVALID_HANDLE_VALUE) fail(L"open grant object");
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!GetFileInformationByHandle(object.value, &information))
+      fail(L"grant object identity");
+    const DWORD attributes = information.dwFileAttributes;
+    if (attributes & FILE_ATTRIBUTE_REPARSE_POINT) return;
+    if (attributes & FILE_ATTRIBUTE_DIRECTORY) {
+      for (const auto& child : std::filesystem::directory_iterator(current))
+        self(self, child.path());
+    } else if (!validate_hardlinks(current, allowed, plan.root.wstring(),
+                                   information.nNumberOfLinks, recovery)) {
+      return;
+    }
+    const auto relative_path = current.lexically_relative(plan.root);
+    require(!relative_path.empty() ||
+                _wcsicmp(current.c_str(), plan.root.c_str()) == 0,
+            L"grant target escaped its root");
+    require(!relative_path.is_absolute(), L"absolute grant-relative path");
+    for (const auto& component : relative_path)
+      require(component != L"..", L"grant target escaped its root");
+    auto relative = relative_path.wstring();
+    if (relative == L".") relative.clear();
+    require(relative.size() <= std::numeric_limits<uint16_t>::max(),
+            L"grant path exceeds supported length");
+    require(plan.relative_paths.size() <=
+                std::numeric_limits<uint32_t>::max() - relative.size(),
+            L"grant path index exceeds supported size");
+    GrantTarget target;
+    target.relative_path_offset =
+        static_cast<uint32_t>(plan.relative_paths.size());
+    target.relative_path_length = static_cast<uint16_t>(relative.size());
+    target.attributes = attributes;
+    capture_grant_identity(object.value, target);
+    plan.relative_paths.append(relative);
+    plan.targets.push_back(target);
+  };
+  visit(visit, path);
 }
 
 void protect_sensitive_tree(const std::filesystem::path& input,
@@ -239,6 +378,49 @@ void Grants::add_pair(const std::wstring& path, PSID other_sid, DWORD rights) {
   const DWORD code = update_acl_pair(path, sid_, other_sid, rights, inheritance,
                                      cancel, recovery);
   if (code != ERROR_SUCCESS) fail(L"paired grant ACL", code);
+}
+void Grants::add_plan(GrantPlan& plan,
+                      const std::vector<std::wstring>& allowed,
+                      PSID other_sid, DWORD rights) {
+  constexpr size_t batch_size = 32;
+  std::vector<PinnedObject> pins;
+  std::vector<AclChange> changes;
+  pins.reserve(batch_size);
+  changes.reserve(batch_size);
+  const auto apply_batch = [&] {
+    if (!changes.empty()) recovery.change_batch(changes);
+    changes.clear();
+    pins.clear();
+  };
+  for (const auto& target : plan.targets) {
+    require(target.relative_path_offset <= plan.relative_paths.size() &&
+                target.relative_path_length <=
+                    plan.relative_paths.size() - target.relative_path_offset,
+            L"invalid grant path index");
+    std::filesystem::path path = plan.root;
+    if (target.relative_path_length) {
+      const auto* first = plan.relative_paths.data() +
+                          target.relative_path_offset;
+      path /= std::wstring(first, target.relative_path_length);
+    }
+    pins.emplace_back(path);
+    auto& pinned = pins.back();
+    verify_grant_identity(pinned.object.value, target);
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!GetFileInformationByHandle(pinned.object.value, &information))
+      fail(L"read current grant links");
+    validate_hardlinks(path, allowed, plan.root.wstring(),
+                       information.nNumberOfLinks, recovery);
+    const DWORD inheritance = (target.attributes & FILE_ATTRIBUTE_DIRECTORY)
+                                  ? SUB_CONTAINERS_AND_OBJECTS_INHERIT
+                                  : NO_INHERITANCE;
+    AclChange change;
+    if (prepare_acl_pair(pinned, sid_, other_sid, rights, inheritance,
+                         cancel, change))
+      changes.push_back(std::move(change));
+    if (pins.size() == batch_size) apply_batch();
+  }
+  apply_batch();
 }
 void Grants::add_one(const std::wstring& path, ACCESS_MODE mode, DWORD rights) {
   const DWORD attributes = GetFileAttributesW(path.c_str());

@@ -86,8 +86,7 @@ async fn loop_executes_multiple_read_tools() {
     );
 }
 
-#[tokio::test]
-async fn loop_executes_registered_extension_tool() {
+async fn extension_tool_roundtrip(command: &str, args: &[String]) {
     let d = tempdir().unwrap();
     let store = EventStore::open_memory().unwrap();
     let sid = store.create_session(d.path()).unwrap();
@@ -133,7 +132,6 @@ async fn loop_executes_registered_extension_tool() {
         continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
         retry_budget: 2,
     });
-    let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
     #[cfg(windows)]
     agent.set_extension_lifecycle(crate::extension::ExtensionLifecycle {
         initialize: std::time::Duration::from_secs(40),
@@ -142,8 +140,8 @@ async fn loop_executes_registered_extension_tool() {
     agent
         .load_extension(
             "fixture".into(),
-            "python3",
-            &[fixture],
+            command,
+            args,
             &CancellationToken::new(),
         )
         .await
@@ -158,6 +156,37 @@ async fn loop_executes_registered_extension_tool() {
         .unwrap();
     assert!(store.events(sid).unwrap().iter().any(|event| matches!(&event.payload, EventPayload::ToolCompleted { result } if result.name == "fixture.echo" && result.output.contains("through-agent"))));
     agent.shutdown_extensions().await.unwrap();
+}
+
+#[tokio::test]
+async fn loop_executes_registered_extension_tool() {
+    let fixture = format!("{}/tests/fixtures/extension.py", env!("CARGO_MANIFEST_DIR"));
+    let args = vec![fixture];
+    #[cfg(windows)]
+    let python = "python";
+    #[cfg(not(windows))]
+    let python = "python3";
+    extension_tool_roundtrip(python, &args).await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn loop_executes_registered_powershell_extension_tool() {
+    let system_root = std::env::var("SystemRoot").expect("SystemRoot is set on Windows");
+    let powershell = format!(
+        r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe"
+    );
+    let fixture = format!("{}/tests/fixtures/extension.ps1", env!("CARGO_MANIFEST_DIR"));
+    let args = vec![
+        "-NoLogo".into(),
+        "-NoProfile".into(),
+        "-NonInteractive".into(),
+        "-ExecutionPolicy".into(),
+        "Bypass".into(),
+        "-File".into(),
+        fixture,
+    ];
+    extension_tool_roundtrip(&powershell, &args).await;
 }
 
 #[tokio::test]

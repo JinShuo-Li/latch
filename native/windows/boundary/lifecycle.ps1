@@ -16,6 +16,13 @@ $runner = Join-Path $runtime 'latch-boundary-probe.exe'
 $fixture = Join-Path $runtime 'latch-boundary-files.exe'
 $baselineWorkspace = (Get-Acl -LiteralPath $workspace).Sddl
 $baselineRuntime = (Get-Acl -LiteralPath $runtime).Sddl
+$mappingRoot = 'HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings'
+$knownMappings = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+if (Test-Path -LiteralPath $mappingRoot) {
+  foreach ($mapping in Get-ChildItem -LiteralPath $mappingRoot) {
+    [void]$knownMappings.Add($mapping.PSChildName)
+  }
+}
 function Assert-Cleanup([string]$packageSid = '', [string]$packageName = '') {
   $deadline = [DateTime]::UtcNow.AddSeconds(15)
   do {
@@ -33,6 +40,25 @@ function Assert-Cleanup([string]$packageSid = '', [string]$packageName = '') {
     Start-Sleep -Milliseconds 20
   } while ([DateTime]::UtcNow -lt $deadline)
   throw 'Temporary grants, .git reservation, or AppContainer profile survived cleanup'
+}
+function Assert-NoNewLatchProfiles {
+  $deadline = [DateTime]::UtcNow.AddSeconds(15)
+  do {
+    $leftovers = @()
+    if (Test-Path -LiteralPath $mappingRoot) {
+      foreach ($mapping in Get-ChildItem -LiteralPath $mappingRoot) {
+        if ($knownMappings.Contains($mapping.PSChildName)) { continue }
+        $properties = Get-ItemProperty -LiteralPath $mapping.PSPath
+        if ($properties.PSObject.Properties['Moniker'] -and
+            $properties.Moniker -like 'LatchProbe.*') {
+          $leftovers += $mapping.PSChildName
+        }
+      }
+    }
+    if (!$leftovers.Count) { return }
+    Start-Sleep -Milliseconds 20
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw 'A newly created Latch AppContainer profile survived cleanup'
 }
 foreach ($mode in @('timeout','parent-exit','drop')) {
   $marker = Join-Path $workspace $mode
@@ -88,4 +114,29 @@ foreach ($mode in @('timeout','parent-exit','drop')) {
 if ($LASTEXITCODE -ne 125) { throw 'Missing executable did not fail closed' }
 Assert-Cleanup
 Write-Output 'PASS failed-create ACL/reservation cleanup'
+
+# The release runner is x64 and carries an x64 compatibility DLL. Probe a
+# 32-bit top-level process when WOW64 is present; either successful execution
+# or a fail-closed startup refusal is acceptable, but ACL/profile cleanup is
+# required in both cases.
+$x86Cmd = Join-Path $env:SystemRoot 'SysWOW64/cmd.exe'
+if (Test-Path -LiteralPath $x86Cmd) {
+  & $runner $workspace $x86Cmd '/d /c exit 0' read --read-root $runtime
+  if ($LASTEXITCODE -notin @(0,125)) { throw "Unexpected 32-bit process result: $LASTEXITCODE" }
+  $x86Result = $LASTEXITCODE
+  Assert-Cleanup
+  Assert-NoNewLatchProfiles
+  Write-Output "PASS 32-bit process startup probe (exit $x86Result) and cleanup"
+
+  & $runner $workspace $fixture ('spawn-x86 "'+$x86Cmd+'"') write --read-root $runtime --timeout-ms 8000
+  if ($LASTEXITCODE -notin @(0,10)) { throw "Unexpected 32-bit descendant result: $LASTEXITCODE" }
+  $x86DescendantResult = $LASTEXITCODE
+  Assert-Cleanup
+  Assert-NoNewLatchProfiles
+  if ($x86DescendantResult -eq 10) {
+    Write-Output 'PASS 32-bit descendant refused without escaping the boundary'
+  } else {
+    Write-Output 'PASS 32-bit descendant exited inside its AppContainer job'
+  }
+}
 $global:LASTEXITCODE=0

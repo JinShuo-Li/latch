@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -74,5 +75,37 @@ class Cancellation {
  private:
   HANDLE handle_;
 };
+
+// Opt-in profiling for native Windows boundary acceptance fixtures. Grant
+// walk includes ACL updates and journal writes; both are also reported
+// separately so large-workspace cost can be attributed.
+struct BoundaryTiming {
+  bool enabled = false;
+  std::chrono::nanoseconds preflight_scan{};
+  std::chrono::nanoseconds grant_walk{};
+  std::chrono::nanoseconds journal{};
+  std::chrono::nanoseconds acl_apply{};
+  std::chrono::nanoseconds rollback{};
+  uint64_t journal_records = 0;
+  uint64_t acl_mutations = 0;
+};
+
+BoundaryTiming& boundary_timing();
+void configure_boundary_timing();
+void report_boundary_timing();
+
+class TimingScope {
+ public:
+  explicit TimingScope(std::chrono::nanoseconds& total);
+  ~TimingScope();
+  TimingScope(const TimingScope&) = delete;
+  TimingScope& operator=(const TimingScope&) = delete;
+  void stop();
+
+ private:
+  std::chrono::nanoseconds* total_;
+  std::chrono::steady_clock::time_point started_;
+};
+
 std::wstring quote(const std::wstring& value);
 }  // namespace latch

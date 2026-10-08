@@ -59,19 +59,25 @@ performance and churn limit for per-object grants; it is **not** counted as
 successful whole-home dogfood. Use a smaller stable workspace such as
 `Desktop\work\school` until that scale case is designed and qualified.
 
-The full validation run used a temporary push trigger to exercise this branch
-while the `workflow_dispatch` workflow was absent from the default branch.
-That trigger was removed after the green run; default push CI remains light.
-The final follow-up commit changes only workflow triggering and documentation.
+The earlier full validation run used a temporary push trigger to exercise its
+branch while the `workflow_dispatch` workflow was absent from the default
+branch. That trigger was removed after the green run; default push CI remains
+light. At that point, the final follow-up commit changed only workflow
+triggering and documentation.
 
 ## Large-workspace design assessment
 
-The per-command boundary traverses each write root to validate hardlink
-aliases, then grants and journals ACL changes on existing objects for both the
-AppContainer SID and the write-restrictor SID. Shared grant roots now apply both
-SIDs in one ACL mutation and one durable intent per object, avoiding a second
-grant walk and flush. Sensitive-path exclusions and rollback still add per-object
-work. A root-only inherited ACE is not a safe
+The per-command boundary traverses each workspace, write and read root once to
+validate hardlink aliases and records file identities and relative paths in a
+compact plan. It
+does not retain a handle for every object. Before applying each ACL batch, it
+reopens the target through checked path components, compares its NTFS identity,
+and checks hardlinks again; at most 32 object handles are held for a batch.
+Workspace and write-root changes grant both the AppContainer SID and
+write-restrictor SID; read-only roots grant the AppContainer SID. All retain
+one exact recovery intent and ACL mutation per object, with up to 32 intents
+published in one bounded, checksummed record before those mutations begin.
+Sensitive path exclusions and rollback still add per-object work. A root-only inherited ACE is not a safe
 drop-in optimization: Windows can propagate it to existing children, while
 protected or explicit child ACLs and sensitive exclusions still need individual
 handling. The current recovery journal must be able to undo every changed ACL
@@ -88,19 +94,20 @@ and adversarial fixtures exist, use focused, stable workspaces rather than an
 entire live home directory. This is a known scale limit, not a passed
 whole-home test.
 
-Multiple threads are not the first optimization. The hardlink preflight is
-read-only and could use bounded parallelism after profiling, but it currently
-pins every object until grants finish. Each ACL mutation then writes and flushes
-an ordered recovery intent before changing the object. Parallel ACL mutation
-would require a thread-safe, ordered journal and new crash/recovery proofs; it
-would also increase contention and in-flight host changes. Measure scan,
-journal, grant, and rollback time separately before considering that change.
+Multiple threads are not the first optimization. Each ACL mutation still
+requires a durable exact intent and a verified write, while rollback checks
+the entire transaction before restoring it. Parallel ACL mutation would
+require a thread-safe, ordered journal and new crash/recovery proofs; it would
+also increase contention and in-flight host changes. Measure scan, journal,
+grant, and rollback time separately before considering that change.
 
-The paired-grant change passed the local MSVC `/W4 /WX` native build, all six
-native suites (including exact restoration of a protected workspace child ACL),
-Windows formatting, full workspace Clippy and tests, and a locked release build.
-It reduces grant walks and durable ACL intents on shared roots; no whole-home
-startup timing or whole-home success is claimed.
+The earlier paired-SID grant change passed the local MSVC `/W4 /WX` native
+build, all six native suites (including exact restoration of a protected
+workspace child ACL), Windows formatting, full workspace Clippy and tests, and
+a locked release build. The current compact-plan, identity-revalidation,
+batched-journal changes and new fixtures have not run on Windows yet. Journal
+batching reduces write-through flushes but keeps the per-object intent and ACL
+mutation. No whole-home startup timing or whole-home success is claimed.
 
 ## Existing-workspace ACL blocker (2026-09-28)
 
@@ -128,3 +135,48 @@ clone; no real provider or credential was used.
 Supporting arbitrary host-readable but ACL-unmodifiable objects needs a
 separately verified read broker or other Windows boundary design; changing
 their owners or granting broad host ACLs is not an acceptable automatic fix.
+
+## Follow-up fixtures (2026-10-08)
+
+The native runner now supports opt-in phase timings with
+`LATCH_BOUNDARY_TIMING=1`: grant-root preflight scan, grant traversal, durable
+journal writes, ACL application, and rollback are reported independently.
+For workspace, write and read roots, preflight stores compact NTFS identities
+and a flat arena of relative paths instead of keeping every file handle open.
+All roots complete
+hardlink preflight before any grant. The grant pass reopens and revalidates each
+object, while holding no more than 32 target handles per ACL batch. Each batch
+is durably published before changes are applied; recovery accepts either the
+original or granted descriptor for every entry in an interrupted batch. The
+existing per-object intent and ACL update remain in place, while journal
+flushes are grouped. Recovery also preflights journaled file identities one at
+a time, then reopens and rechecks each ACL immediately before restoration.
+During descendant cleanup it retains handles only for changed directories,
+which can pass temporary inherited ACEs to new children; it does not keep a
+handle open for every file in a large workspace.
+`native/windows/boundary/scale.ps1` adds a synthetic 4,096-file workspace case
+that creates host files while grants are live, mutates files inside the
+AppContainer, and checks exact restoration for pre-existing objects plus grant
+removal from new objects. It is wired into manual Full validation. These new
+measurements and acceptance checks have not been run in this environment, and
+they do not change the existing whole-home support limit or implement a grant
+lease.
+
+`native/windows/boundary/network.ps1` now specifies the loopback policy through
+client and listener fixtures. It probes an external DNS name when the host can
+resolve it, `localhost` resolution, IPv4, available IPv6, and accepts an
+optional reachable private-LAN endpoint for separate capability
+qualification. Sandbox commands retain Windows' default
+loopback isolation; the runner does not edit the AppContainer exemption list
+or firewall. The documented Windows API is a debugging exemption list whose
+existing entries must be preserved, and the documented inbound development
+path remains active while the listener is running. A narrow local endpoint
+relay remains a separate design. The fixture has not yet been run here.
+
+`lifecycle.ps1` probes an x86 top-level command and a direct x86 child on
+WOW64 hosts. A started child must remain in the AppContainer job; an explicit
+creation refusal is accepted and cleanup is checked in either case. Deeper x86
+descendants and descendants that bypass compatibility injection remain
+unqualified. Python and Windows PowerShell 5.1 extension round-trip tests are
+now in the Windows Full validation matrix; neither has run here. Physical
+power-loss recovery and hostile rename/reparse/hardlink races remain open.
