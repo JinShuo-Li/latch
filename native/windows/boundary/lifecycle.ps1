@@ -116,9 +116,9 @@ Assert-Cleanup
 Write-Output 'PASS failed-create ACL/reservation cleanup'
 
 # The release runner is x64 and carries an x64 compatibility DLL. Probe a
-# 32-bit top-level process when WOW64 is present; either successful execution
-# or a fail-closed startup refusal is acceptable, but ACL/profile cleanup is
-# required in both cases.
+# 32-bit top-level process when WOW64 is present. Direct 32-bit descendants
+# must be refused before cross-bitness injection, and ACL/profile cleanup is
+# required after either probe.
 $x86Cmd = Join-Path $env:SystemRoot 'SysWOW64/cmd.exe'
 if (Test-Path -LiteralPath $x86Cmd) {
   & $runner $workspace $x86Cmd '/d /c exit 0' read --read-root $runtime
@@ -129,7 +129,7 @@ if (Test-Path -LiteralPath $x86Cmd) {
   Write-Output "PASS 32-bit process startup probe (exit $x86Result) and cleanup"
 
   & $runner $workspace $fixture ('spawn-x86 "'+$x86Cmd+'"') write --read-root $runtime --timeout-ms 8000
-  if ($LASTEXITCODE -notin @(0,10)) { throw "Unexpected 32-bit descendant result: $LASTEXITCODE" }
+  if ($LASTEXITCODE -ne 10) { throw "Unexpected 32-bit descendant result: $LASTEXITCODE" }
   $x86DescendantResult = $LASTEXITCODE
   Assert-Cleanup
   Assert-NoNewLatchProfiles

@@ -184,7 +184,7 @@ async fn loop_executes_registered_powershell_extension_tool() {
         "-File".into(),
         fixture,
     ];
-    extension_tool_roundtrip(&powershell, &args).await;
+    extension_tool_roundtrip(powershell, &args).await;
 }
 
 #[tokio::test]
