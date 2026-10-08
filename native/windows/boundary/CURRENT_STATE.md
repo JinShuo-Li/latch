@@ -188,10 +188,12 @@ release runner has no x86 compatibility DLL, and the direct x86 descendant was
 explicitly rejected with `ERROR_NOT_SUPPORTED` before cross-bitness injection;
 cleanup passed in both cases. Deeper x86 descendants and descendants that
 bypass compatibility injection remain unqualified. Python extension round-trip
-passed. The PowerShell 7 extension round-trip still fails initialization with
-a missing `Content-Length` response, including after granting the standard
-PowerShell 7 installation read-only access; see hosted run
-[37750252797](https://github.com/JinShuo-Li/latch/actions/runs/37750252797).
-The parser now reports a bounded header shape (line count and first code
-points, without header text) for the next diagnosis. Physical power-loss
-recovery and hostile rename/reparse/hardlink races remain open.
+passed. The PowerShell 7 extension round-trip remains unqualified: hosted run
+[37750252797](https://github.com/JinShuo-Li/latch/actions/runs/37750252797)
+reported a missing `Content-Length` response after a read-only install grant;
+the follow-up [37750837949](https://github.com/JinShuo-Li/latch/actions/runs/37750837949)
+timed out after 40 seconds without an initialize response. The experimental
+install grant was removed because it did not resolve the failure. For future
+malformed frames, the parser reports a bounded header shape (line count and
+first code points, without header text). Physical power-loss recovery and
+hostile rename/reparse/hardlink races remain open.
