@@ -159,6 +159,15 @@ NTSTATUS NTAPI open(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES attri
 BOOL WINAPI spawn(LPCWSTR app, LPWSTR command, LPSECURITY_ATTRIBUTES process_attributes,
     LPSECURITY_ATTRIBUTES thread_attributes, BOOL inherit, DWORD flags,
     LPVOID environment, LPCWSTR cwd, LPSTARTUPINFOW startup, LPPROCESS_INFORMATION process) {
+  // This compatibility DLL is built for the current (x64) process. Detours
+  // cannot inject it into a WOW64 child; reject that child before attempting
+  // cross-bitness injection, which can otherwise leave CreateProcess waiting.
+  DWORD binary_type = 0;
+  if (app && GetBinaryTypeW(app, &binary_type) &&
+      binary_type == SCS_32BIT_BINARY) {
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+  }
   STARTUPINFOW inherited_startup{};
   GetStartupInfoW(&inherited_startup);
   LPWSTR original_desktop = startup->lpDesktop;
