@@ -257,3 +257,14 @@ small, fast architectural invariant tier in
 cache epochs, canonical authority, resume equivalence, kernel-owned evidence,
 safety hard-deny, steering protocol correctness, deterministic serialization,
 and cache-accounting semantics.
+
+## Browser observation and reconnect
+
+The Linux Web adapter observes the same durable events as the terminal adapter.
+Shared semantic reducers reconstruct transcript/task/evidence/usage state on
+resume; HTTP/SSE sequences and command receipts are transient transport state,
+not memory or cache epochs. A browser reconnect obtains a current snapshot;
+closing a page or losing an SSH tunnel does not cancel execution. Uncommitted
+assistant deltas remain transient, and a server restart reconstructs committed
+history rather than inventing completion for an interrupted turn. See
+[WEB_UI.md](WEB_UI.md) for the connection lifecycle.

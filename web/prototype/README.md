@@ -2,7 +2,8 @@
 
 An English, conversation-first interface with a dark default theme for review
 before kernel integration. Workspace paths use the interface's sans-serif font.
-This is a standalone prototype, not an implementation of `latch --web`.
+This frozen design example remains separate from the connected `latch --web`
+interface. See [the Web guide](../../docs/WEB_UI.md) for production use.
 All conversations, approval requests, tool output, diffs, and agent activity
 are illustrative fixtures. Sending messages never contacts a model, executes
 commands, changes configuration, or edits workspace files. Preview state lasts

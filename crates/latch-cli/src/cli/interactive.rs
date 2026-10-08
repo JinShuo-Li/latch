@@ -146,10 +146,19 @@ pub async fn run_session(
     'session: loop {
         let input = match carry.take() {
             Some((text, media)) => Input::Submit { text, media },
-            None => match input_rx.recv().await {
-                Some(input) => input,
-                None => break,
-            },
+            None => {
+                output_tx.send(Output::Ready).await?;
+                match input_rx.recv().await {
+                    Some(input) => {
+                        if matches!(&input, Input::Submit {text,..} if !is_slash_command_input(text))
+                        {
+                            output_tx.send(Output::InputReceived).await?;
+                        }
+                        input
+                    }
+                    None => break,
+                }
+            }
         };
         match input {
             Input::Quit => break,
@@ -164,20 +173,28 @@ pub async fn run_session(
             } => {
                 broker.resolve(request_id, approved).await;
             }
-            Input::SetSafety(safety) => {
-                agent.set_safety(safety)?;
-                output_tx.send(Output::Safety(safety)).await?;
-            }
-            Input::SetPermissions(mode) => {
-                agent.set_permissions(mode)?;
-                output_tx.send(Output::Permissions(mode)).await?;
-            }
+            Input::SetSafety(safety) => match agent.set_safety(safety) {
+                Ok(()) => output_tx.send(Output::Safety(safety)).await?,
+                Err(error) => {
+                    output_tx
+                        .send(Output::Notice(format!("error: {error:#}")))
+                        .await?
+                }
+            },
+            Input::SetPermissions(mode) => match agent.set_permissions(mode) {
+                Ok(()) => output_tx.send(Output::Permissions(mode)).await?,
+                Err(error) => {
+                    output_tx
+                        .send(Output::Notice(format!("error: {error:#}")))
+                        .await?
+                }
+            },
             Input::SetInferenceProfile {
                 provider,
                 model,
                 effort,
             } => {
-                apply_live_profile(
+                if let Err(error) = apply_live_profile(
                     &mut agent,
                     &context,
                     InferenceProfile::new(provider, model, effort),
@@ -185,10 +202,15 @@ pub async fn run_session(
                     &workspace,
                     resumed,
                 )
-                .await?;
+                .await
+                {
+                    output_tx
+                        .send(Output::Notice(format!("error: {error:#}")))
+                        .await?;
+                }
             }
             Input::SetupApply(plan) => {
-                apply_setup(
+                if let Err(error) = apply_setup(
                     &mut agent,
                     &mut context,
                     plan,
@@ -196,7 +218,12 @@ pub async fn run_session(
                     &workspace,
                     resumed,
                 )
-                .await?;
+                .await
+                {
+                    output_tx
+                        .send(Output::Notice(format!("error: {error:#}")))
+                        .await?;
+                }
             }
             Input::DiscoverModels { provider } => {
                 let cache_root =
@@ -251,11 +278,34 @@ pub async fn run_session(
             }
             Input::Submit { text, media } => {
                 if is_slash_command_input(&text) {
-                    handle_command(&mut agent, &text, &output_tx).await?;
+                    if let Err(error) = handle_command(&mut agent, &text, &output_tx).await {
+                        output_tx
+                            .send(Output::Notice(format!("error: {error:#}")))
+                            .await?;
+                    }
                     continue;
                 }
                 let active = CancellationToken::new();
+                // Synchronous kernel sinks cannot await a bounded channel.
+                // Relay in order rather than silently dropping durable events
+                // when the interface channel is temporarily full.
+                let (relay_tx, mut relay_rx) = mpsc::unbounded_channel();
                 let tx = output_tx.clone();
+                let relay = tokio::spawn(async move {
+                    while let Some(item) = relay_rx.recv().await {
+                        match item {
+                            Relay::Output(output) => {
+                                if tx.send(*output).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Relay::Barrier(reply) => {
+                                let _ = reply.send(());
+                            }
+                        }
+                    }
+                });
+                let sink_tx = relay_tx.clone();
                 let sink = Arc::new(move |event: AgentOutput| {
                     let outputs: Vec<Output> = match event {
                         AgentOutput::Transient(StreamEvent::TextDelta(t)) => {
@@ -270,7 +320,7 @@ pub async fn run_session(
                         _ => vec![],
                     };
                     for output in outputs {
-                        let _ = tx.try_send(output);
+                        let _ = sink_tx.send(Relay::Output(Box::new(output)));
                     }
                 });
                 let running = agent.run(UserInput::new(text, media), active.clone(), sink);
@@ -278,6 +328,7 @@ pub async fn run_session(
                 loop {
                     tokio::select! {
                         result = &mut running => {
+                            flush_relay(&relay_tx).await;
                             match result {
                                 Ok(_) => output_tx.send(Output::AssistantDone).await?,
                                 Err(error) => output_tx.send(Output::Notice(format!("error: {error:#}"))).await?,
@@ -287,7 +338,7 @@ pub async fn run_session(
                         next = input_rx.recv() => match next {
                             Some(Input::Cancel) => active.cancel(),
                             Some(Input::Permission { request_id, approved }) => { broker.resolve(request_id, approved).await; }
-                            Some(Input::Quit) | None => { active.cancel(); let _ = (&mut running).await; break 'session; }
+                            Some(Input::Quit) | None => { active.cancel(); let _ = (&mut running).await; flush_relay(&relay_tx).await; relay.abort(); break 'session; }
                             Some(Input::Resume) => { output_tx.send(Output::Notice("cancel the active turn before resuming another session".into())).await?; }
                             Some(Input::SetSafety(_)) | Some(Input::SetPermissions(_)) | Some(Input::SetInferenceProfile { .. }) | Some(Input::SetupApply(_)) | Some(Input::DiscoverModels { .. }) => {
                                 output_tx.send(Output::Notice("finish or cancel the active turn before changing the inference profile".into())).await?;
@@ -305,6 +356,7 @@ pub async fn run_session(
                                 }
                             }
                             Some(Input::Submit { text, media }) => {
+                                if !is_slash_command_input(&text) { output_tx.send(Output::InputReceived).await?; }
                                 if is_slash_command_input(&text) {
                                     output_tx.send(Output::Notice("finish or cancel the active turn before running commands".into())).await?;
                                 } else {
@@ -333,6 +385,17 @@ pub async fn run_session(
     drop(output_tx);
     agent.shutdown_extensions().await?;
     Ok(outcome)
+}
+
+enum Relay {
+    Output(Box<Output>),
+    Barrier(tokio::sync::oneshot::Sender<()>),
+}
+async fn flush_relay(tx: &mpsc::UnboundedSender<Relay>) {
+    let (reply, wait) = tokio::sync::oneshot::channel();
+    if tx.send(Relay::Barrier(reply)).is_ok() {
+        let _ = wait.await;
+    }
 }
 
 /// Resolves and applies a live profile change, then refreshes the chrome.
@@ -1166,21 +1229,29 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
 }
 async fn send_tool(agent: &mut Agent, name: &str, tx: &mpsc::Sender<Output>) -> Result<()> {
     let event_tx = tx.clone();
+    let (relay_tx, mut receive) = mpsc::unbounded_channel();
+    let relay = tokio::spawn(async move {
+        while let Some(output) = receive.recv().await {
+            if event_tx.send(output).await.is_err() {
+                break;
+            }
+        }
+    });
     let sink: latch_kernel::AgentEventSink = Arc::new(move |event| {
         if let latch_kernel::agent::AgentOutput::Durable(event) = event {
-            let _ = event_tx.try_send(Output::Event(event));
+            let _ = relay_tx.send(Output::Event(event));
         }
     });
     let r = agent
         .builtin_tool_streamed(name, CancellationToken::new(), &sink)
         .await;
+    drop(sink);
+    relay.await?;
     if name == "git_diff" {
         // The transcript keeps a compact semantic diff cell; the inspector
         // opens full-width with its own scrolling and raw toggle.
         tx.send(Output::ToolResult(r.clone())).await?;
-        if !r.output.trim().is_empty() {
-            tx.send(Output::Diff(r.output)).await?;
-        }
+        tx.send(Output::Diff(r.output)).await?;
         return Ok(());
     }
     tx.send(Output::ToolResult(r)).await?;

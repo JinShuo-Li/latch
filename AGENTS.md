@@ -158,15 +158,19 @@ Five crates: `latch-protocol` (durable event/model schema shared by all),
 `latch-tui` (Ratatui app), `latch-cli` (wiring and `latch` binary).
 The shared interactive controller is `latch-cli/src/cli/interactive.rs`;
 terminal rendering stays in the TUI, persistence and execution stay in the kernel.
-The English, dark-default Web UI review prototype lives in `web/prototype/`, separate from
-the product site and Rust runtime. From the repository root, preview with
-`python3 web/prototype/serve.py --port 6006` (loopback only, Python 3 required).
-It uses illustrative fixtures and never executes tools or calls providers;
-`latch --web` is not implemented yet. The intended Web UI shares the kernel
-and fixes its workspace to the launch directory. See `web/prototype/README.md`.
-The agreed integration plan is `docs/WEB_UI_PLAN.md`: Linux Web server with
-local/SSH access; no Windows Web implementation or dedicated qualification.
-Preserve existing Windows CLI/TUI behavior and keep the default CI intact.
+The Linux Web adapter is `latch-cli/src/web/{mod,actor,http,state}.rs`; production
+assets in `web/app/` are embedded. `latch --web` binds loopback port 6006;
+`--web-port <PORT>` selects a local port and `--ssh <REMOTE_WEB_PORT>` suppresses
+browser launch and prints SSH forwarding instructions. The workspace is the
+canonical launch directory. HTTP/SSE and browser projections never own durable
+truth, execution or approvals. See `docs/WEB_UI.md`; the original agreed plan
+is `docs/WEB_UI_PLAN.md`. Linux Web transport tests reuse the CLI's isolated
+mock provider: `cargo test -p latch-cli --test cli web_transport --locked`.
+No Windows Web implementation or dedicated qualification; preserve existing
+Windows CLI/TUI behavior and default CI.
+The reviewed English, dark-default example remains separate in `web/prototype/`:
+`python3 web/prototype/serve.py --port 6006` (loopback, Python 3, illustrative
+fixtures only). It never executes tools or calls providers; see its README.
 The static GitHub Pages site lives in `site/` and is published by
 `.github/workflows/pages.yml`; its terminal captures come from TUI snapshots.
 Keep its version and install commands aligned with the README; keep the inline
@@ -232,7 +236,7 @@ live home directory is not yet qualified at scale; see
 Native ownership is split into runner/token/AppContainer/ACL/recovery/desktop/
 job/process modules; Win32 complexity stays outside the safe Rust kernel.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
-theme,runtime,agents,group,configuration_center}.rs` and existing siblings.
+theme,runtime,agents,configuration_center}.rs` and existing siblings.
 Mouse capture defaults on to prevent wheel-to-arrow history navigation;
 `LATCH_MOUSE_CAPTURE=0` opts out. Keep terminal mouse cleanup symmetric.
 

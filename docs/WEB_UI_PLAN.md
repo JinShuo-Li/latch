@@ -1,7 +1,9 @@
 # Web UI implementation plan
 
-Status: approved interface prototype; kernel integration is not implemented.
-The CLI does not yet accept the Web flags described below.
+Status: Linux integration implemented. The original agreed plan below records
+the design and implementation hints; [WEB_UI.md](WEB_UI.md) documents the
+current commands, controls, trust boundary and verification. The reviewed
+prototype remains separate from the embedded production assets.
 
 ## Agreed scope
 
@@ -20,7 +22,7 @@ The CLI does not yet accept the Web flags described below.
 - Leave computer use for a later plugin. Establish reusable event and media
   transport without designing or implementing desktop control now.
 
-## Proposed CLI contract
+## Agreed CLI contract
 
 ```sh
 # Local use: loopback port 6006, open the browser and print the access URL.
@@ -205,5 +207,5 @@ bash scripts/release-gate.sh
 Use relevant continuity/long-session tests if shared event or context behavior
 changes. Test desktop/mobile layouts and core flows in a real browser. Update
 `docs/ARCHITECTURE.md`, affected runtime/continuity documentation, README, and
-AGENTS.md when implementation changes their contracts or ownership. The current
-document is a plan and does not establish new runtime behavior.
+AGENTS.md when implementation changes their contracts or ownership. This document records the agreed plan; the Web guide describes implemented
+runtime behavior.

@@ -81,27 +81,28 @@ prove them together; older passes remain historical after later writes.
 Linux validation preserves failures through output-filtering pipelines. On
 Windows, run validation checks separately or redirect output instead of piping it.
 
-## Web UI preview
+## Web UI (Linux)
 
-A browser interface is in development, with an English, dark-by-default
-conversation view, tool details, diffs, and a collapsible task panel.
-Try the [interactive prototype](web/prototype/README.md) from the repository root
-(Python 3 required):
+Use the English, dark-by-default browser interface with the same kernel,
+durable sessions, tools, approvals, and sandbox as the TUI:
 
 ```sh
-python3 web/prototype/serve.py --port 6006
+cd /path/to/project
+latch --web                       # localhost:6006; opens the browser
+latch --web --web-port 6007       # choose a local listener port
+latch --web --ssh 6006            # remote listener; prints SSH instructions
 ```
 
-Open <http://localhost:6006>. The preview uses example data; it does not call
-models, execute commands, or change workspace files.
+The workspace stays fixed to the launch directory. Conversations, streaming,
+steering, model/settings controls, images, diffs and task details are connected
+to Latch. For remote use, forward with
+`ssh -N -L 7000:127.0.0.1:6006 user@remote-host`, open `http://localhost:7000`,
+and enter the token printed by the remote process.
 
-The planned Linux Web server will share the TUI's kernel and durable sessions,
-keep the startup workspace fixed, and support local access and SSH forwarding.
-`latch --web`, `--web-port <PORT>`, and `--ssh <REMOTE_WEB_PORT>` are planned
-options, not available in v0.2.3. See the [implementation plan](docs/WEB_UI_PLAN.md)
-for the proposed commands and integration details.
-The shared interactive controller and interface contracts are extracted;
-the browser still uses the standalone prototype until transport integration.
+Web support is available in source builds from current main; published v0.2.3
+binaries predate it. See the [Web guide](docs/WEB_UI.md) for resume, controls and
+connection details. The [review prototype](web/prototype/README.md) remains a
+standalone example; the [integration plan](docs/WEB_UI_PLAN.md) records the scope.
 
 ## Working safely
 

@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+#[cfg(target_os = "linux")]
+mod web;
 
 use anyhow::{Result, anyhow, bail};
 use clap::Parser;
@@ -26,12 +28,16 @@ async fn main() -> ExitCode {
         .init();
     let mut args = Args::parse();
     if args.command.is_some()
-        && (args.resume || args.latest || args.session.is_some() || args.prompt.is_some())
+        && (args.web
+            || args.resume
+            || args.latest
+            || args.session.is_some()
+            || args.prompt.is_some())
     {
         // The top-level one-shot/resume flags describe the compatibility path;
         // mixing them with an explicit machine command is ambiguous.
         eprintln!(
-            "error: --resume/--session/--latest/-p apply to the interactive path; \
+            "error: --web/--resume/--session/--latest/-p apply to the interactive path; \
              use `latch run` or `latch resume` for machine commands"
         );
         return ExitCode::from(2);
@@ -87,6 +93,12 @@ fn debug_dispatch(args: &Args, command: DebugCommand) -> Result<ExitCode> {
 }
 
 async fn run_legacy(args: Args) -> Result<ExitCode> {
+    if args.web {
+        #[cfg(target_os = "linux")]
+        return web::run(args).await;
+        #[cfg(not(target_os = "linux"))]
+        bail!("the Web server currently supports Linux; use the TUI on this platform");
+    }
     if let Some(prompt) = args.prompt.clone() {
         // Compatibility path into the machine run implementation: one prompt,
         // streamed as text, with the same session/provider construction.

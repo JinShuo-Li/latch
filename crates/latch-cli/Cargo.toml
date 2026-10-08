@@ -28,6 +28,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+futures.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 

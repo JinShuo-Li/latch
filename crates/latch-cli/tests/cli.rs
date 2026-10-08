@@ -1476,3 +1476,7 @@ fn extension_initialization_failure_is_a_runtime_failure() {
         "initialization fails before any model request"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[path = "web/mod.rs"]
+mod web_transport;

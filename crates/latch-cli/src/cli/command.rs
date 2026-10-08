@@ -23,6 +23,15 @@ use std::str::FromStr;
     about = "A quiet, programmable terminal coding agent"
 )]
 pub struct Args {
+    /// Open the browser interface (Linux server; workspace stays fixed).
+    #[arg(long, conflicts_with = "prompt")]
+    pub web: bool,
+    /// Local Web listener port (default: 6006). Requires --web.
+    #[arg(long, requires = "web", conflicts_with = "ssh", value_parser = clap::value_parser!(u16).range(1..))]
+    pub web_port: Option<u16>,
+    /// Serve Web UI for SSH forwarding on REMOTE_WEB_PORT; do not open a browser.
+    #[arg(long, requires = "web", value_name = "REMOTE_WEB_PORT", value_parser = clap::value_parser!(u16).range(1..))]
+    pub ssh: Option<u16>,
     /// Continue the latest session for this workspace: visible transcript,
     /// effective mode, task state, evidence, failures, and change ownership.
     #[arg(long)]
