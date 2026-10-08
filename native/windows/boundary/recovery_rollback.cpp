@@ -207,6 +207,13 @@ void Recovery::recover_pending() {
   std::sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) {
     return a->original.path.size() < b->original.path.size();
   });
+  const auto path_key = [](const std::filesystem::path& path) {
+    auto value = path.lexically_normal().wstring();
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](wchar_t ch) { return std::towlower(ch); });
+    return value;
+  };
+  std::set<std::wstring> touched_paths, affected_paths;
   // Changed directories can pass transaction-owned inherited ACEs to new
   // children. Pin only those directory identities through the descendant
   // cleanup scan; retaining every regular-file handle exhausts process handle
@@ -245,11 +252,25 @@ void Recovery::recover_pending() {
           rollback.original.path.c_str(), pending_.c_str());
       fail(L"recovery refuses unrelated ACL changes", ERROR_REVISION_MISMATCH);
     }
+    // A durable batch can contain intents whose ACL writes had not happened
+    // when the process stopped. Only an observed non-original descriptor can
+    // have granted access or passed an inherited ACE to newly created children.
+    if (now.security != rollback.original.security) {
+      auto path = std::filesystem::path(rollback.original.path);
+      touched_paths.insert(path_key(path));
+      for (;;) {
+        affected_paths.insert(path_key(path));
+        const auto parent = path.parent_path();
+        if (parent.empty() || parent == path) break;
+        path = parent;
+      }
+    }
     FILE_ATTRIBUTE_TAG_INFO tag{};
     if (!GetFileInformationByHandleEx(pinned.object.value,
                                       FileAttributeTagInfo, &tag, sizeof(tag)))
       fail(L"inspect recovery object type");
-    if (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+    if ((tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+        now.security != rollback.original.security)
       directory_pins.try_emplace(rollback.original.identity,
                                  std::move(pinned.object));
   }
@@ -334,24 +355,6 @@ void Recovery::recover_pending() {
   auto package_sid = parse_sid(package_sid_.c_str());
   auto restrictor = parse_sid(write_sid_.c_str());
   std::set<std::wstring> scanned;
-  const auto path_key = [](const std::filesystem::path& path) {
-    auto value = path.lexically_normal().wstring();
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](wchar_t ch) { return std::towlower(ch); });
-    return value;
-  };
-  std::set<std::wstring> touched_paths, affected_paths;
-  for (const auto& [id, rollback] : objects) {
-    (void)id;
-    auto path = std::filesystem::path(rollback.original.path);
-    touched_paths.insert(path_key(path));
-    for (;;) {
-      affected_paths.insert(path_key(path));
-      const auto parent = path.parent_path();
-      if (parent.empty() || parent == path) break;
-      path = parent;
-    }
-  }
   const auto visit = [&](const auto& self,
                          const std::filesystem::path& path,
                          bool inherited_grant) -> void {
