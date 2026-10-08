@@ -81,6 +81,26 @@ prove them together; older passes remain historical after later writes.
 Linux validation preserves failures through output-filtering pipelines. On
 Windows, run validation checks separately or redirect output instead of piping it.
 
+## Web UI preview
+
+A browser interface is in development, with an English, dark-by-default
+conversation view, tool details, diffs, and a collapsible task panel.
+Try the [interactive prototype](web/prototype/README.md) from the repository root
+(Python 3 required):
+
+```sh
+python3 web/prototype/serve.py --port 6006
+```
+
+Open <http://localhost:6006>. The preview uses example data; it does not call
+models, execute commands, or change workspace files.
+
+The planned Linux Web server will share the TUI's kernel and durable sessions,
+keep the startup workspace fixed, and support local access and SSH forwarding.
+`latch --web`, `--web-port <PORT>`, and `--ssh <REMOTE_WEB_PORT>` are planned
+options, not available in v0.2.3. See the [implementation plan](docs/WEB_UI_PLAN.md)
+for the proposed commands and integration details.
+
 ## Working safely
 
 `/mode` selects Ask, Plan, or Work. `/safety` controls which operations need approval; `/permissions` controls how approval requests are handled. Every command still runs inside the platform sandbox. Commands classified as inspection run with read-only filesystem access even in Work mode. `/help` lists TUI controls and commands.
