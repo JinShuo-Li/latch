@@ -1,0 +1,62 @@
+• 1. 项 目 结 构                                                                                                        │deepseek-flash                             
+                                                                                                                    │WORK · 0 turns · 0s                        
+  路 径               角 色                                                                                             │on main                                    
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────│                                           
+                                                                                                                    │TASK                                       
+  edition_active/   唯 一 活 跃 开 发 区 （ 无 版 本 号 ） ， 所 有 新 工 作 都 在 这 里                                                   │InProgress                                 
+                                                                                                                    │Implementation unchanged                   
+  edition_0_head/   Edition 0 的 保 留 起 点 （ 仓 库 根 的 另 一 个  line）                                                      │Validation pending                         
+                                                                                                                    │                                           
+  archive/          16 个 冻 结 快 照 ／ 分 叉 （ edition_0_1、 0_2、 1_3dhead、 6_5_hybridreadout、 maintenance/、 tools/）       │CONTEXT                                    
+                                                                                                                    │                                           
+  experiments/      辅 助 审 计 与 基 线 工 具 ， 命 名  E<line>A<id>-<topic>（ 现 有  E0A1 数 据 审 计 、 E0A2 诊 断 、 E0A3 HaMeR        │                                           
+                    检 测 协 议 评 测 、 E5A1 HOT3D 基 线 ）                                                                  │                                           
+                                                                                                                    │                                           
+  origin/           SAM3 上 游 代 码 （ 含  pyproject.toml、 sam3/）                                                        │                                           
+                                                                                                                    │                                           
+  hamer/            HaMeR 基 线 （ ViTDet／ ViTPose + MANO） ， 用 于 对 照                                                   │                                           
+                                                                                                                    │                                           
+  papers/           论 文  PDF 与  summary.md（ 其 中  summary.md 明 令 禁 止 修 改 ／ 提 交 ）                                     │                                           
+                                                                                                                    │                                           
+  docs/             三 份 稳 定 指 南 ： SERVER_AGENTS_WORKFLOW.md（ 源 码  → release                                         │                                           
+                    工 作 流 ） 、 GPU_USAGE_INSTRUCTION.md（ ACP／ SCO 流 程 ） 、 DETAILS.md（ debug 记 录 与 硬 件 模 型 规 则 ）      │                                           
+                                                                                                                    │                                           
+  根 级  Markdown     README（ 导 航 ） 、 AGENTS.md／ CLAUDE.md（ agent 规 则 ） 、 DATA.md（ 跨 版 数 据 集 参 考 ） 、 RAIN.md（ 入 口 索 引 │                                           
+                    ） 、 WORKSTACK.md（ 当 前 状 态 ） 、 LOG.md（ 历 史 ）                                                     │                                           
+                                                                                                                    │                                           
+  规 模 上 约  909 MB， 表 格 之 外 的 说 明 仍 有 独 立 段 落 间 距 。                                                                  │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                    │                                           
+                                                                                                                                                                
+                                                                                                                                                                
+› Ask Latch…                                                                                                                                                    
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+  WORK · deepseek-flash/low · main · std · ask                                                                                                             ready
+                                                                                                                                                                
+enter send  ctrl+j newline  ctrl+p commands                                                                                                                     
+/tmp/latch-ui                                                                                                                                       latch v0.2.3

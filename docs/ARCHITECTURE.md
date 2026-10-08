@@ -948,6 +948,12 @@ Terminal layout stays in `latch-tui::markdown` and `latch-tui::transcript`:
 styled text wraps by grapheme display width before gutters are added, with
 continuations aligned to the body column after each bullet, number or status
 marker. List paragraphs and nested items retain their own body columns.
+Markdown tables parse inline styles before measuring and wrapping cells, then
+pad the rendered spans for left/center/right alignment. Columns use three-cell
+gutters; short columns retain natural widths and long descriptions share the
+remaining viewport without a fixed width cap. Records have one blank row
+between them, while each record's wrapped lines stay together. Tables also
+keep one blank row before and after surrounding prose.
 Top-level points have one blank row between them; headings have two preceding
 blank rows and one following row. Transcript cells use one blank separator.
 The viewport renders these physical rows directly and uses their count for

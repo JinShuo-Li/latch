@@ -331,7 +331,7 @@ fn markdown_tables_align_columns_and_hide_separators() {
     );
     assert_eq!(
         lines_text(&lines),
-        "Name   Qty\n──────────\napple   12\nkiwi     3"
+        "Name    Qty\n───────────\n\napple    12\n\nkiwi      3"
     );
     // The rule after the header is dim and bold header cells stay bold.
     assert_eq!(lines[0].spans[0].style.add_modifier, Modifier::BOLD);
@@ -358,10 +358,13 @@ fn markdown_tables_wrap_wide_cells_within_the_width() {
 #[test]
 fn markdown_tables_measure_cjk_by_display_width() {
     let lines = render_markdown_at("| 名称 | 数量 |\n|---|---|\n| 苹果 | 12 |", 40);
-    assert_eq!(lines_text(&lines), "名称  数量\n──────────\n苹果  12  ");
+    assert_eq!(
+        lines_text(&lines),
+        "名称   数量\n───────────\n\n苹果   12  "
+    );
     for line in &lines {
         let text = lines_text(std::slice::from_ref(line));
-        assert_eq!(display_width(&text), 10);
+        assert!(text.is_empty() || display_width(&text) == 11);
     }
 }
 
@@ -373,8 +376,8 @@ fn markdown_tables_wrap_cjk_cells_without_splitting_characters() {
         "| 模块 | 职责 |\n|---|---|\n| 编辑器 | 可滚动的多行输入视口 |",
         24,
     );
-    // Header, rule, then the wrapped body cell spans two rows.
-    assert_eq!(lines.len(), 4, "{}", lines_text(&lines));
+    // Header, rule, a blank row, then two tightly grouped body rows.
+    assert_eq!(lines.len(), 5, "{}", lines_text(&lines));
     let rendered = lines_text(&lines);
     assert!(
         !rendered
@@ -3845,4 +3848,192 @@ fn raw_view_list_prefixes_keep_the_actual_marker_width() {
             assert!(display_width(row) <= 24);
         }
     }
+}
+
+const TABLE_DIRECTORY_REVIEW: &str = "## 1. 项目结构\n\n| 路径 | 角色 |\n|:---|:---|\n| `edition_active/` | 唯一活跃开发区（无版本号），所有新工作都在这里 |\n| `edition_0_head/` | Edition 0 的保留起点（仓库根的另一个 line） |\n| `archive/` | 16 个冻结快照／分叉（`edition_0_1`、`0_2`、`1_3dhead`、`6_5_hybridreadout`、`maintenance/`、`tools/`） |\n| `experiments/` | 辅助审计与基线工具，命名 `E<line>A<id>-<topic>`（现有 E0A1 数据审计、E0A2 诊断、E0A3 HaMeR 检测协议评测、E5A1 HOT3D 基线） |\n| `origin/` | SAM3 上游代码（含 `pyproject.toml`、`sam3/`） |\n| `hamer/` | HaMeR 基线（ViTDet／ViTPose + MANO），用于对照 |\n| `papers/` | 论文 PDF 与 `summary.md`（其中 `summary.md` 明令禁止修改／提交） |\n| `docs/` | 三份稳定指南：`SERVER_AGENTS_WORKFLOW.md`（源码 → release 工作流）、`GPU_USAGE_INSTRUCTION.md`（ACP／SCO 流程）、`DETAILS.md`（debug 记录与硬件模型规则） |\n| 根级 Markdown | `README`（导航）、`AGENTS.md`／`CLAUDE.md`（agent 规则）、`DATA.md`（跨版数据集参考）、`RAIN.md`（入口索引）、`WORKSTACK.md`（当前状态）、`LOG.md`（历史） |\n\n规模上约 909 MB，表格之外的说明仍有独立段落间距。";
+
+#[test]
+fn tables_measure_rendered_markdown_and_keep_column_origins() {
+    let lines = render_markdown_at(
+        "| **Path** | Role |\n|---|---|\n| `abc/` | First |\n| `123456/` | Second |\n| plain | Third |",
+        60,
+    );
+    let text = lines_text(&lines);
+    let mut columns = Vec::new();
+    for row in text.lines() {
+        for label in ["Role", "First", "Second", "Third"] {
+            if let Some(offset) = row.find(label) {
+                columns.push(display_width(&row[..offset]));
+            }
+        }
+    }
+    assert_eq!(columns, vec![10; 4], "{text}");
+    assert_eq!(lines[0].width(), 16);
+    assert!(!text.contains('`'));
+    assert!(!text.contains("**"));
+}
+
+#[test]
+fn tables_keep_left_center_and_right_alignment_for_styled_wide_cells() {
+    let lines = render_markdown_at(
+        "| L | Center | Right |\n|:---|:---:|---:|\n| `目录/` | **中** | `12` |\n| plain | EN | **3456** |",
+        60,
+    );
+    let rendered = lines_text(&lines);
+    let rows: Vec<_> = rendered.lines().collect();
+    assert_eq!(display_width(rows[0]), 22);
+    for row in [rows[3], rows[5]] {
+        assert_eq!(display_width(row), 22);
+    }
+    let middle = rows[3].find('中').unwrap();
+    assert_eq!(display_width(&rows[3][..middle]), 10);
+    assert!(rows[3].ends_with("12"));
+    assert!(rows[5].ends_with("3456"));
+    assert!(
+        lines[3]
+            .spans
+            .iter()
+            .any(|span| span.content == "中" && span.style.add_modifier.contains(Modifier::BOLD))
+    );
+    assert!(
+        lines[3]
+            .spans
+            .iter()
+            .any(|span| span.content == "目录/" && span.style.fg == Some(Color::Cyan))
+    );
+}
+
+#[test]
+fn tables_wrap_visible_spans_without_reparsing_fragments() {
+    let source = "| Path | Description |\n|---|---|\n| `long_directory_name/` | **加粗中文需要完整保留跨行样式** and `very_long_code_identifier` with e\u{301} 👩‍💻 |\n| last | [label](https://example.org/path) |";
+    for width in [24, 40, 70] {
+        let lines = render_markdown_at(source, width);
+        assert!(lines.iter().all(|line| line.width() <= width));
+        let mut bold = String::new();
+        let mut code = String::new();
+        for line in &lines[3..] {
+            for span in &line.spans {
+                if span.style.add_modifier.contains(Modifier::BOLD) {
+                    bold.push_str(&span.content);
+                }
+                if span.style.fg == Some(Color::Cyan) {
+                    code.push_str(&span.content);
+                }
+            }
+        }
+        assert_eq!(bold, "加粗中文需要完整保留跨行样式");
+        assert!(
+            code.starts_with("long_directory_name/very_long_code_identifier"),
+            "{code}"
+        );
+        assert!(code.ends_with("(https://example.org/path)"), "{code}");
+        let text = lines_text(&lines);
+        assert!(text.contains("e\u{301}"));
+        assert!(text.contains("👩‍💻"));
+        assert!(!text.contains('`'));
+    }
+}
+
+#[test]
+fn tables_separate_records_but_keep_wrapped_lines_together() {
+    let lines = render_markdown_at(
+        "Before.\n| Key | Body |\n|---|---|\n| first | A description long enough to wrap over several lines. |\n| second | Another description long enough to wrap over several lines. |\nAfter.",
+        28,
+    );
+    let rendered = lines_text(&lines);
+    assert!(rendered.starts_with("Before.\n\nKey"));
+    assert!(rendered.ends_with("\n\nAfter."));
+    let records: Vec<_> = rendered.split("\n\n").collect();
+    assert_eq!(records.len(), 5, "{rendered}");
+    assert!(records[2].starts_with("first"));
+    assert!(records[3].starts_with("second"));
+    for record in &records[2..4] {
+        assert!(record.lines().count() > 1);
+        for row in record.lines().skip(1) {
+            assert!(row.starts_with("         "), "{row}");
+        }
+    }
+}
+
+#[test]
+fn tables_use_available_wide_viewport_for_long_descriptions() {
+    let lines = render_markdown_at(
+        "| Path | Role |\n|---|---|\n| `docs/` | A long description should use the wide terminal instead of being forced to wrap at forty-eight display cells. |",
+        140,
+    );
+    assert_eq!(lines.len(), 4, "{}", lines_text(&lines));
+    assert!(lines[3].width() > 100);
+}
+
+#[test]
+fn snapshot_directory_table_at_narrow_wide_and_sidebar_widths() {
+    for (name, width, sidebar) in [
+        ("v8_table_narrow.txt", 60, false),
+        ("v8_table_wide.txt", 120, false),
+        ("v8_table_sidebar.txt", 160, true),
+    ] {
+        let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+        markdown_table_fixture(&mut app, TABLE_DIRECTORY_REVIEW);
+        app.sidebar_override = Some(sidebar);
+        app.follow = false;
+        assert_snapshot(name, &render_to_text(&mut app, width, 62));
+    }
+}
+
+#[test]
+fn table_resize_sidebar_streaming_and_replay_keep_display_columns_bounded() {
+    let event = presentation_event(latch_protocol::EventPayload::AssistantMessageCompleted {
+        text: TABLE_DIRECTORY_REVIEW.into(),
+        tool_calls: vec![],
+        reasoning_content: None,
+        reasoning: vec![],
+    });
+    let mut app = App::default();
+    app.output(Output::Event(Box::new(event.clone())));
+    let replay = PresentationModel::from_events(&[event]);
+    for (width, sidebar) in [
+        (160, true),
+        (60, false),
+        (100, true),
+        (120, false),
+        (160, true),
+    ] {
+        app.sidebar_override = Some(sidebar);
+        let _ = render_to_text(&mut app, width, 30);
+        let viewport = width - sidebar_width(width, sidebar);
+        let live = transcript_lines(
+            app.presentation.cells(),
+            None,
+            false,
+            viewport as usize,
+            false,
+        );
+        assert!(live.iter().all(|line| line.width() <= viewport as usize));
+        assert_eq!(app.content_rows, live.len());
+        assert_eq!(
+            live,
+            transcript_lines(replay.cells(), None, false, viewport as usize, false)
+        );
+        assert_eq!(
+            live,
+            transcript_lines(
+                &[],
+                Some(TABLE_DIRECTORY_REVIEW),
+                false,
+                viewport as usize,
+                false
+            )
+        );
+    }
+}
+
+#[test]
+fn table_mixed_cjk_does_not_break_at_an_isolated_early_space() {
+    let lines = render_markdown_at(
+        "| Path | Role |\n|---|---|\n| archive/ | 16 个冻结快照与分叉，中文说明需要利用当前列的空间而不是单独显示数字。 |",
+        38,
+    );
+    let text = lines_text(&lines);
+    assert!(text.lines().nth(3).unwrap().contains("16 个冻结"), "{text}");
+    assert!(lines.iter().all(|line| line.width() <= 38));
 }

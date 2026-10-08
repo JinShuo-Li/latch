@@ -121,12 +121,14 @@ pub(super) fn render_markdown_at(text: &str, width: usize) -> Vec<Line<'static>>
             if let Some((consumed, table)) =
                 render_table_block(&raw_lines[index..], width.saturating_sub(origin))
             {
+                separate(&mut out, 1);
                 out.extend(table.into_iter().map(|mut line| {
                     if origin > 0 {
                         line.spans.insert(0, Span::raw(" ".repeat(origin)));
                     }
                     line
                 }));
+                separate(&mut out, 1);
                 index += consumed;
                 continue;
             }
@@ -201,6 +203,15 @@ fn separate(out: &mut Vec<Line<'static>>, rows: usize) {
 /// Graphemes and inline styles survive both word and hard breaks. Spaces at a
 /// word break remain at the preceding row so the raw view loses no characters.
 pub(super) fn wrap_hanging(line: Line<'static>, width: usize, origin: usize) -> Vec<Line<'static>> {
+    wrap_styled(line, width, origin, 0)
+}
+
+fn wrap_styled(
+    line: Line<'static>,
+    width: usize,
+    origin: usize,
+    minimum_word_break: usize,
+) -> Vec<Line<'static>> {
     use unicode_segmentation::UnicodeSegmentation;
     if width == 0 {
         return Vec::new();
@@ -232,7 +243,10 @@ pub(super) fn wrap_hanging(line: Line<'static>, width: usize, origin: usize) -> 
             }
             used += cells;
             end += 1;
-            if units[end - 1].0.chars().all(char::is_whitespace) && used > origin {
+            if units[end - 1].0.chars().all(char::is_whitespace)
+                && used > origin
+                && used >= minimum_word_break
+            {
                 space = Some(end);
             }
         }
@@ -342,72 +356,73 @@ pub(super) fn render_table_block(
     Some((consumed, table))
 }
 
-/// Renders a detected table with proportional column widths and cell wrapping.
-/// `None` means the available width cannot hold readable columns; the caller
-/// then falls back to the raw line treatment.
+/// Parse inline Markdown before measuring, wrapping or aligning cells. Visible
+/// spans, not source delimiters, are the source of truth for every column.
 pub(super) fn table_lines(
     header: &[String],
     aligns: &[TableAlign],
     rows: &[Vec<String>],
     width: usize,
 ) -> Option<Vec<Line<'static>>> {
-    const GAP: usize = 2;
     const MIN_CELL: usize = 3;
-    const MAX_CELL: usize = 48;
     let columns = header.len();
     if columns < 2 || aligns.len() != columns {
         return None;
     }
-    let gap_total = GAP * (columns - 1);
-    if width <= gap_total + columns * MIN_CELL {
+    let gap_total = TABLE_GAP * (columns - 1);
+    if width < gap_total + columns * MIN_CELL {
         return None;
     }
     let available = width - gap_total;
+    let parse = |cells: &[String], base| {
+        cells
+            .iter()
+            .map(|cell| Line::from(inline_spans(cell, base)))
+            .collect::<Vec<_>>()
+    };
+    let header_cells = parse(header, Style::default().bold());
+    let body_cells: Vec<_> = rows
+        .iter()
+        .map(|row| parse(row, assistant_style()))
+        .collect();
     let natural: Vec<usize> = (0..columns)
         .map(|column| {
-            std::iter::once(&header[column])
-                .chain(rows.iter().map(|row| &row[column]))
-                .map(|cell| display_width(cell))
+            std::iter::once(&header_cells[column])
+                .chain(body_cells.iter().filter_map(|row| row.get(column)))
+                .map(Line::width)
                 .max()
                 .unwrap_or(1)
-                .clamp(1, MAX_CELL)
+                .max(1)
         })
         .collect();
+    // Short columns retain their natural width; long descriptions can use the
+    // remaining viewport rather than wrapping at an arbitrary fixed cap.
     let widths = if natural.iter().sum::<usize>() <= available {
         natural
     } else {
         distribute_widths(&natural, available)
     };
     let mut out = Vec::new();
-    let header_style = Style::default().add_modifier(Modifier::BOLD);
-    let header_rows = wrap_row(header, &widths);
+    let header_rows = wrap_row(&header_cells, &widths);
     let header_height = header_rows.iter().map(Vec::len).max().unwrap_or(1);
     for line_index in 0..header_height {
-        out.push(table_row_line(
-            &header_rows,
-            &widths,
-            aligns,
-            line_index,
-            header_style,
-        ));
+        out.push(table_row_line(&header_rows, &widths, aligns, line_index));
     }
-    let total: usize = widths.iter().sum::<usize>() + gap_total;
+    let total = widths.iter().sum::<usize>() + gap_total;
     out.push(Line::styled("─".repeat(total), notice_style()));
-    for row in rows {
+    for row in &body_cells {
+        // Separate logical records, never the wrapped lines inside one record.
+        out.push(Line::from(""));
         let wrapped = wrap_row(row, &widths);
         let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
         for line_index in 0..height {
-            out.push(table_row_line(
-                &wrapped,
-                &widths,
-                aligns,
-                line_index,
-                assistant_style(),
-            ));
+            out.push(table_row_line(&wrapped, &widths, aligns, line_index));
         }
     }
     Some(out)
 }
+
+const TABLE_GAP: usize = 3;
 
 /// Max-min fair column widths: short columns keep their natural width first,
 /// and whatever remains is split evenly among the columns that still need to
@@ -440,72 +455,70 @@ pub(super) fn distribute_widths(natural: &[usize], available: usize) -> Vec<usiz
     widths
 }
 
-pub(super) fn wrap_row(cells: &[String], widths: &[usize]) -> Vec<Vec<String>> {
+fn wrap_row(cells: &[Line<'static>], widths: &[usize]) -> Vec<Vec<Line<'static>>> {
     cells
         .iter()
         .zip(widths)
-        .map(|(cell, width)| wrap_cell(cell, *width))
+        .map(|(cell, width)| {
+            // In mixed CJK/prose cells an early ASCII space (e.g. "16 个…")
+            // must not leave almost an entire row empty. Prefer word breaks
+            // only in the latter half; otherwise use a grapheme boundary.
+            wrap_styled(cell.clone(), *width, 0, width / 2)
+                .into_iter()
+                .map(trim_cell_row)
+                .collect()
+        })
         .collect()
 }
 
-/// One physical line of a table row: each column is wrapped separately, then
-/// padded to its width and joined with a two-space gutter.
-pub(super) fn table_row_line(
-    wrapped: &[Vec<String>],
+/// Remove only wrap-boundary whitespace before aligning the visible spans.
+/// Inline styles stay attached to their text, including across hard breaks.
+fn trim_cell_row(mut line: Line<'static>) -> Line<'static> {
+    for span in &mut line.spans {
+        span.content = span.content.trim_start().to_owned().into();
+        if !span.content.is_empty() {
+            break;
+        }
+    }
+    for span in line.spans.iter_mut().rev() {
+        span.content = span.content.trim_end().to_owned().into();
+        if !span.content.is_empty() {
+            break;
+        }
+    }
+    line.spans.retain(|span| !span.content.is_empty());
+    line
+}
+
+/// Every physical row uses the same column widths and gutters. Padding is
+/// calculated from rendered display cells, including wide and styled text.
+fn table_row_line(
+    wrapped: &[Vec<Line<'static>>],
     widths: &[usize],
     aligns: &[TableAlign],
     line_index: usize,
-    base: Style,
 ) -> Line<'static> {
     let mut spans = Vec::new();
     for (column, cells) in wrapped.iter().enumerate() {
         if column > 0 {
-            spans.push(Span::raw(" ".repeat(2)));
+            spans.push(Span::raw(" ".repeat(TABLE_GAP)));
         }
-        let text = cells.get(line_index).map_or("", String::as_str);
-        let padded = pad_cell(text, widths[column], aligns[column]);
-        spans.extend(inline_spans(&padded, base));
+        let cell = cells.get(line_index).cloned().unwrap_or_default();
+        let padding = widths[column].saturating_sub(cell.width());
+        let left = match aligns[column] {
+            TableAlign::Left => 0,
+            TableAlign::Center => padding / 2,
+            TableAlign::Right => padding,
+        };
+        if left > 0 {
+            spans.push(Span::raw(" ".repeat(left)));
+        }
+        spans.extend(cell.spans);
+        if padding > left {
+            spans.push(Span::raw(" ".repeat(padding - left)));
+        }
     }
     Line::from(spans)
-}
-
-pub(super) fn wrap_cell(text: &str, width: usize) -> Vec<String> {
-    let text = text.trim();
-    if text.is_empty() || width == 0 {
-        return vec![String::new()];
-    }
-    // `wrap_points` returns char offsets (the composer stores them that way in
-    // `VisualRow`); convert them to byte offsets before slicing so CJK and
-    // other multi-byte cells never split inside a character.
-    let mut byte_offsets: Vec<usize> = text.char_indices().map(|(byte, _)| byte).collect();
-    byte_offsets.push(text.len());
-    let char_count = byte_offsets.len() - 1;
-    let points = composer::wrap_points(text, width);
-    let mut rows = Vec::new();
-    for (index, start) in points.iter().enumerate() {
-        let end = points.get(index + 1).copied().unwrap_or(char_count);
-        let (Some(&start), Some(&end)) = (byte_offsets.get(*start), byte_offsets.get(end)) else {
-            continue;
-        };
-        rows.push(text[start..end].trim_end().to_owned());
-    }
-    if rows.is_empty() {
-        rows.push(String::new());
-    }
-    rows
-}
-
-pub(super) fn pad_cell(text: &str, width: usize, align: TableAlign) -> String {
-    let text_width = display_width(text).min(width);
-    let padding = width - text_width;
-    match align {
-        TableAlign::Left => format!("{text}{}", " ".repeat(padding)),
-        TableAlign::Right => format!("{}{text}", " ".repeat(padding)),
-        TableAlign::Center => {
-            let left = padding / 2;
-            format!("{}{text}{}", " ".repeat(left), " ".repeat(padding - left))
-        }
-    }
 }
 
 /// Inline formatting: `` `code` `` → dim cyan, `**bold**` → bold.

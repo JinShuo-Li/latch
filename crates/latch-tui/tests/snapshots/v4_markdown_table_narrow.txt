@@ -1,12 +1,12 @@
-• Module    Responsibility         Notes                
+• Module     Responsibility         Notes               
   ──────────────────────────────────────────────────────
-  composer  scrollable multiline   keeps the cursor     
-            editor viewport        visible while        
-                                   wrapping             
-  sidebar   responsive session     hidden below 110     
-            state                  columns              
                                                         
+  composer   scrollable             keeps the cursor    
+             multiline editor       visible while       
+             viewport               wrapping            
                                                         
+  sidebar    responsive session     hidden below 110    
+             state                  columns             
                                                         
                                                         
                                                         
