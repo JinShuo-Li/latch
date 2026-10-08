@@ -154,7 +154,7 @@ must never override long-horizon correctness.
 
 Five crates: `latch-protocol` (durable event/model schema shared by all),
 `latch-kernel` (agent loop, providers, tools, sandbox, continuity, SQLite store),
-`latch-ui` (interface-neutral contracts and slash catalog),
+`latch-ui` (interface-neutral contracts, slash catalog, semantic reducers),
 `latch-tui` (Ratatui app), `latch-cli` (wiring and `latch` binary).
 The shared interactive controller is `latch-cli/src/cli/interactive.rs`;
 terminal rendering stays in the TUI, persistence and execution stay in the kernel.

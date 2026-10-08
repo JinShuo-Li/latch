@@ -41,7 +41,6 @@ mod agents;
 mod composer;
 pub mod configuration_center;
 mod diff;
-mod group;
 mod presentation;
 mod profile;
 mod session_picker;
@@ -373,6 +372,7 @@ impl App {
 
     fn output(&mut self, out: Output) {
         match out {
+            Output::Ready | Output::InputReceived => {}
             Output::AssistantDelta(t) => {
                 self.streaming.get_or_insert_with(String::new).push_str(&t);
                 if let Some(TranscriptItem::Assistant {

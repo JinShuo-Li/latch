@@ -4,7 +4,7 @@
 |---|---|
 | `latch-protocol` | Events, task/memory/evidence records, provider and extension types, shared display formatting |
 | `latch-kernel` | Store, context-engine port, continuity, prompts, policy, tools, providers, extensions, validation/evidence, failure and progress supervision, permissions, child-agent graph/workers, capability vocabulary, token estimation, loop, session resume |
-| `latch-ui` | Interface-neutral input/output contracts, provider configuration display/edit types, shared slash catalog; no terminal or HTTP dependencies |
+| `latch-ui` | Interface-neutral input/output contracts, provider configuration display/edit types, shared slash catalog, semantic transcript/diff/sidebar/agent/group reducers; no terminal or HTTP dependencies |
 | `latch-tui` | Typed transcript, slash palette, input editor, prompt history, semantic rendering |
 | `latch-cli` | Configuration, resume orchestration, provider setup, slash-command coordination |
 

@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 /// Compact counts for the sidebar block.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GroupCounts {
     pub total: usize,
     pub ready: usize,
@@ -29,7 +29,7 @@ impl GroupCounts {
 }
 
 /// Deterministic group view model for the sidebar.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct GroupModel {
     identity: Option<AgentGroupIdentity>,
     members: BTreeSet<Uuid>,

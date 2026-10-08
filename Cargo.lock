@@ -1221,8 +1221,10 @@ dependencies = [
 name = "latch-ui"
 version = "0.2.3"
 dependencies = [
+ "chrono",
  "latch-protocol",
  "serde",
+ "serde_json",
  "uuid",
 ]
 

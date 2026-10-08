@@ -48,6 +48,11 @@ pub enum Input {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum Output {
+    /// Controller is idle, including after an errored or cancelled turn.
+    Ready,
+    /// An accepted browser submission reached the controller. This is a
+    /// transport coordination receipt, not a durable completion assertion.
+    InputReceived,
     AssistantDelta(String),
     AssistantDone,
     /// One user-visible transcript element from the shared durable-event
@@ -123,3 +128,10 @@ pub struct SetupPaths {
 }
 
 pub mod commands;
+
+pub mod agents;
+pub mod diff;
+pub mod group;
+pub mod presentation;
+
+pub mod sidebar;
