@@ -23,7 +23,9 @@ not runtime requirements. The existing Linux `bwrap` and `rg` requirements apply
 Config/provider/model/effort/mode/attachment overrides remain available. Resume
 with `latch --web --resume --latest` or `--resume --session <ID>`. A bare
 `--resume` opens the browser session picker without a terminal prompt. Only
-sessions in the launch workspace can be selected. Stop the server with Ctrl+C
+sessions in the launch workspace can be selected. CLI `--attach` images are
+retained through the browser picker and applied once to the first selected or
+created session. Stop the server with Ctrl+C
 in the launching terminal, or Settings → General → Stop Web server.
 
 ## SSH forwarding

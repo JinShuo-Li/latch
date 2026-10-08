@@ -137,11 +137,11 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         let _ = tokio::signal::ctrl_c().await;
         shutdown.cancel();
     });
-    let actor = tokio::spawn(actor::run(host.clone(), receive, overrides));
+    let actor = tokio::spawn(actor::run(host.clone(), receive, overrides, args.attach));
     // A bare --resume starts with a browser picker. No terminal is required.
     if (!args.resume || selected.is_some())
         && let Err(error) = host
-            .request(actor::Action::Activate(selected, args.attach))
+            .request(actor::Action::Activate(selected, Vec::new()))
             .await
     {
         host.0.shutdown.cancel();

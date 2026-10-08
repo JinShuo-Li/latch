@@ -48,6 +48,7 @@ pub async fn run(
     host: Host,
     mut requests: mpsc::Receiver<Request>,
     overrides: ProfileOverrides,
+    mut launch_attachments: Vec<PathBuf>,
 ) -> anyhow::Result<()> {
     let mut slot: Option<Slot> = None;
     let mut commands: BTreeMap<Uuid, (u64, Value, std::time::Instant)> = BTreeMap::new();
@@ -59,7 +60,8 @@ pub async fn run(
             request = requests.recv() => match request { Some(r) => r, None => break },
         };
         let result = match request.action {
-            Action::Activate(selected, attachments) => {
+            Action::Activate(selected, mut attachments) => {
+                attachments.extend(launch_attachments.iter().cloned());
                 let busy = {
                     let view = host.0.view.lock().await;
                     view.busy || view.starting
@@ -137,6 +139,7 @@ pub async fn run(
                                     Err(error)
                                 }
                                 Ok(media) => {
+                                    launch_attachments.clear();
                                     let resumed = built.restored.is_some();
                                     let mut view = host.0.view.lock().await;
                                     view.session_id = Some(id);

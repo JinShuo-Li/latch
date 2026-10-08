@@ -4,6 +4,14 @@ use reqwest::{Client, StatusCode};
 use std::process::Child;
 use std::time::{Duration, Instant};
 
+const TINY_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xdd, 0x8d, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
 struct Web {
     child: Child,
     url: String,
@@ -18,6 +26,9 @@ impl Drop for Web {
 }
 impl Web {
     async fn start(f: &Fixture) -> Self {
+        Self::start_with_args(f, &[]).await
+    }
+    async fn start_with_args(f: &Fixture, extra: &[&str]) -> Self {
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -27,6 +38,7 @@ impl Web {
             .current_dir(&f.workspace)
             .env_remove("LATCH_WEB_TEST_MISSING_KEY")
             .args(["--web", "--ssh", &port.to_string()])
+            .args(extra)
             .spawn()
             .unwrap();
         let mut stdout = BufReader::new(child.stdout.take().unwrap());
@@ -331,13 +343,6 @@ async fn cancel_busy_switch_and_pending_approval() {
 
 #[tokio::test]
 async fn image_upload_reconnect_detach_and_session_boundary() {
-    const TINY_PNG: &[u8] = &[
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
-        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
-        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
-        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xdd, 0x8d, 0xb0, 0x00, 0x00, 0x00,
-        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-    ];
     let f = fixture_with_mock(
         MockProvider::start_with_delay(vec![Turn::Text("Image received")], None, Duration::ZERO),
         "standard",
@@ -569,5 +574,48 @@ async fn provider_setup_unlocks_a_missing_credential_session() {
         web.ready().await["state"]["cells"]
             .to_string()
             .contains("Configured response")
+    );
+}
+
+#[tokio::test]
+async fn browser_resume_picker_retains_launch_attachments_once() {
+    let f = fixture(vec![Turn::Text("Prior conversation")], None, "standard");
+    let previous = run_latch_in(&f, &f.workspace, &["-p", "Prior", "--output", "json"]);
+    assert!(previous.status.success());
+    let id = stdout_json(&previous)["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let image = f.root.join("startup.png");
+    std::fs::write(&image, TINY_PNG).unwrap();
+    let web = Web::start_with_args(&f, &["--resume", "--attach", image.to_str().unwrap()]).await;
+    assert!(web.ready().await["state"]["session_id"].is_null());
+    assert_eq!(
+        web.post(&format!("/api/sessions/{id}/activate"), json!({}))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let selected = web.ready().await;
+    assert_eq!(
+        selected["state"]["pending_attachments"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        selected["state"]["pending_attachments"][0]["display_name"],
+        "startup.png"
+    );
+    assert_eq!(
+        web.post("/api/sessions", json!({})).await.status(),
+        StatusCode::OK
+    );
+    assert!(
+        web.ready().await["state"]["pending_attachments"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 }
