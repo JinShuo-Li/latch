@@ -75,7 +75,7 @@ export function renderHeader() {
   const path = state.snapshot?.workspace || '';
   $('#workspace-path').textContent = path;
   $('#workspace-path').title = `${path} · fixed startup directory`;
-  $('#workspace-name').textContent = path.split('/').filter(Boolean).at(-1) || '/';
+  $('#workspace-name').textContent = path.replaceAll('\\','/').split('/').filter(Boolean).at(-1) || '/';
   $('.version').textContent = `v${state.snapshot?.version || '0.2.3'}`;
 }
 export function renderComposer() {

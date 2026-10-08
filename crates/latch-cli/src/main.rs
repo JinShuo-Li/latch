@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod cli;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod web;
 
 use anyhow::{Result, anyhow, bail};
@@ -94,10 +94,10 @@ fn debug_dispatch(args: &Args, command: DebugCommand) -> Result<ExitCode> {
 
 async fn run_legacy(args: Args) -> Result<ExitCode> {
     if args.web {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         return web::run(args).await;
-        #[cfg(not(target_os = "linux"))]
-        bail!("the Web server currently supports Linux; use the TUI on this platform");
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        bail!("the Web server supports Linux and Windows; use the TUI on this platform");
     }
     if let Some(prompt) = args.prompt.clone() {
         // Compatibility path into the machine run implementation: one prompt,

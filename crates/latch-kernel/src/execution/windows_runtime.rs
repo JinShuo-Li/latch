@@ -106,6 +106,9 @@ impl NativeRuntime {
         let mut process = Command::new(self.runtime.join("latch-windows-runner.exe"));
         // The trusted helper must not load DLLs from an untrusted current directory.
         process
+            // Keep the trusted helper from flashing a console over the TUI or
+            // browser. This does not alter its token, grants or cleanup owner.
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .current_dir(&self.runtime)
             .env_clear()
             .stdin(Stdio::null())

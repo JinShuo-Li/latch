@@ -81,7 +81,7 @@ prove them together; older passes remain historical after later writes.
 Linux validation preserves failures through output-filtering pipelines. On
 Windows, run validation checks separately or redirect output instead of piping it.
 
-## Web UI (Linux)
+## Web UI (Linux and Windows)
 
 Use the English, dark-by-default browser interface with the same kernel,
 durable sessions, tools, approvals, and sandbox as the TUI:
@@ -93,7 +93,8 @@ latch --web --web-port 6007       # choose a local listener port
 latch --web --ssh 6006            # remote listener; prints SSH instructions
 ```
 
-The workspace stays fixed to the launch directory. Conversations, streaming,
+The workspace stays fixed to the launch directory. On Windows, start from a
+user-owned NTFS project directory; the embedded sandbox still applies. Conversations, streaming,
 steering, model/settings controls, images, diffs and task details are connected
 to Latch. For remote use, forward with
 `ssh -N -L 7000:127.0.0.1:6006 user@remote-host`, open `http://localhost:7000`,

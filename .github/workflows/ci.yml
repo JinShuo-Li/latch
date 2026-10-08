@@ -51,6 +51,11 @@ jobs:
         run: |
           cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked -- --test-threads=1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Windows Web transport
+        shell: pwsh
+        run: |
+          cargo test -p latch-cli --test cli web_transport --locked -- --test-threads=1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build and start Latch
         shell: pwsh
         run: |

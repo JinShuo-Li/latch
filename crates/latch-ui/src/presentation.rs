@@ -901,6 +901,7 @@ fn sanitize_output(text: &str) -> String {
             continue;
         }
         match ch {
+            '\r' if chars.peek() == Some(&'\n') => {}
             '\r' => {
                 while clean.ends_with(|candidate| candidate != '\n') {
                     clean.pop();
@@ -1241,6 +1242,14 @@ mod tests {
     #[test]
     fn ansi_and_carriage_return_progress_are_sanitized() {
         assert_eq!(sanitize_output("10%\r20%\r\u{1b}[31mdone\u{1b}[0m"), "done");
+    }
+
+    #[test]
+    fn windows_line_endings_preserve_command_output() {
+        assert_eq!(
+            sanitize_output("exit 0\nfirst.txt\r\nsecond.txt\r\n"),
+            "exit 0\nfirst.txt\nsecond.txt"
+        );
     }
 
     #[test]

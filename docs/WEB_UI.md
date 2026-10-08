@@ -1,4 +1,4 @@
-# Linux Web UI
+# Web UI (Linux and Windows)
 
 The browser uses the same interactive controller and kernel as the TUI. It
 starts in English with the approved dark layout. The workspace is fixed to the
@@ -15,10 +15,14 @@ latch --web
 latch --web --web-port 6007
 ```
 
-The server binds only `127.0.0.1`. It prints an access URL and tries `xdg-open`.
+The server binds only `127.0.0.1`. It prints an access URL and opens the default browser with `xdg-open` on Linux
+or the Windows URL handler on Windows.
 If no desktop browser is available, open the printed URL manually. Assets are
 embedded in the binary: Python, Node, npm, and a separate frontend service are
-not runtime requirements. The existing Linux `bwrap` and `rg` requirements apply.
+not runtime requirements. Linux requires `bwrap`; Windows uses the embedded AppContainer runner. Both
+require Git and ripgrep for the corresponding tools. On Windows, use a
+user-owned NTFS checkout whose objects permit temporary ACL grants; starting
+the browser does not prove the workspace is executable.
 
 Config/provider/model/effort/mode/attachment overrides remain available. Resume
 with `latch --web --resume --latest` or `--resume --session <ID>`. A bare
@@ -30,7 +34,7 @@ in the launching terminal, or Settings → General → Stop Web server.
 
 ## SSH forwarding
 
-On the remote Linux host:
+On the remote Linux or Windows host (with an SSH server):
 
 ```sh
 cd /path/to/project

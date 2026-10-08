@@ -1,4 +1,4 @@
-//! Linux Web transport tests run inside cli.rs to reuse its isolated provider.
+//! Linux and Windows Web transport tests run inside cli.rs to reuse its isolated provider.
 use super::*;
 use reqwest::{Client, StatusCode};
 use std::process::Child;
@@ -130,7 +130,11 @@ async fn auth_forwarding_assets_and_command_replay() {
     );
     assert_eq!(
         snapshot["workspace"],
-        f.workspace.to_string_lossy().as_ref()
+        f.workspace
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
     assert!(!snapshot["commands"].as_array().unwrap().is_empty());
     let response = web
@@ -618,4 +622,41 @@ async fn browser_resume_picker_retains_launch_attachments_once() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn web_executes_native_directory_enumeration() {
+    let command = if cfg!(windows) { "dir /b" } else { "ls" };
+    let f = fixture(
+        vec![
+            Turn::ToolCall {
+                name: "shell",
+                arguments: json!({"command":command}),
+            },
+            Turn::Text("Listed workspace"),
+        ],
+        None,
+        "standard",
+    );
+    std::fs::write(f.workspace.join("enumeration-proof.txt"), "fixture").unwrap();
+    let web = Web::start(&f).await;
+    let snapshot = web.ready().await;
+    let id = snapshot["state"]["session_id"].as_str().unwrap();
+    assert_eq!(
+        web.post(
+            &format!("/api/sessions/{id}/commands"),
+            Web::command(
+                &snapshot,
+                json!({"type":"submit","data":{"text":"List this workspace","media":[]}})
+            )
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let done = web.ready().await;
+    let cells = done["state"]["cells"].to_string();
+    assert!(cells.contains("enumeration-proof.txt"), "{cells}");
+    assert!(cells.contains("Listed workspace"), "{cells}");
+    assert!(!cells.contains("error:"), "{cells}");
 }

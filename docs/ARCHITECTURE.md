@@ -6,7 +6,7 @@
 | `latch-kernel` | Store, context-engine port, continuity, prompts, policy, tools, providers, extensions, validation/evidence, failure and progress supervision, permissions, child-agent graph/workers, capability vocabulary, token estimation, loop, session resume |
 | `latch-ui` | Interface-neutral input/output contracts, provider configuration display/edit types, shared slash catalog, semantic transcript/diff/sidebar/agent/group reducers; no terminal or HTTP dependencies |
 | `latch-tui` | Typed transcript, slash palette, input editor, prompt history, semantic rendering |
-| `latch-cli` | Configuration, resume orchestration, provider setup, slash-command coordination, Linux loopback Web adapter |
+| `latch-cli` | Configuration, resume orchestration, provider setup, slash-command coordination, Linux/Windows loopback Web adapter |
 
 `latch-cli/src/cli/interactive.rs` owns the shared interactive session controller,
 including steering, cancellation, human approvals, setup persistence and live
@@ -14,14 +14,15 @@ profile changes. The terminal adapter supplies channels to that controller;
 interface contracts live in `latch-ui` and are re-exported by `latch-tui` for
 compatibility. Durable protocol and provider serialization remain unchanged.
 
-The Linux Web adapter in `latch-cli/src/web/` embeds `web/app/` assets and supplies
+The Linux/Windows Web adapter in `latch-cli/src/web/` embeds `web/app/` assets and supplies
 HTTP input/output channels to the same controller. Its actor owns one active
 session in the canonical launch workspace; its browser projection uses the
 shared `latch-ui` transcript, diff, sidebar, agent and group reducers. SSE
 reconnects reconstruct current state without owning history or cancelling runs.
 Authentication, same-origin checks, command receipts and media routes remain
 transport concerns. See [the Web guide](WEB_UI.md) for contracts and module
-ownership. Windows continues to use the existing CLI/TUI adapters.
+ownership. Windows Web execution uses the same embedded native boundary as
+the CLI and TUI.
 
 The runtime platform model — kernel invariants extensions can never bypass,
 replaceable ports, the capability vocabulary, transport independence, and the

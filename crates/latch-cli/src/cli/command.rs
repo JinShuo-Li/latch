@@ -23,7 +23,7 @@ use std::str::FromStr;
     about = "A quiet, programmable terminal coding agent"
 )]
 pub struct Args {
-    /// Open the browser interface (Linux server; workspace stays fixed).
+    /// Open the browser interface (Linux/Windows server; workspace stays fixed).
     #[arg(long, conflicts_with = "prompt")]
     pub web: bool,
     /// Local Web listener port (default: 6006). Requires --web.

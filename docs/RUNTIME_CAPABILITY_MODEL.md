@@ -229,7 +229,7 @@ loses its invariants.
 |---|---|---|---|
 | **Runtime extension** | an out-of-process program started under the mandatory sandbox, speaking framed JSON-RPC over stdio: tools, commands, observe/transform/guard hooks, context sources | cooperative, below kernel authority | only through `ExtensionRegistry`; tools pass safety classification; observations are non-authoritative context sources; the model never sees raw hook payloads |
 | **Backend** | a replaceable mechanism for a kernel-owned port (context, workspace, executor, computer, browser, service) | trusted, operator-installed, in-process with the kernel | through its port contract; if it appends durable events it does so as structured kernel context, not arbitrary truth |
-| **Client** | a steering/observing surface (the TUI and Linux loopback Web UI today; a remote Feishu/Slack/Telegram adapter later) | authenticated but untrusted with kernel internals | through an app protocol: submit user turns, observe semantic events, resolve pending permissions through kernel-mediated requests |
+| **Client** | a steering/observing surface (the TUI and Linux/Windows loopback Web UI today; a remote Feishu/Slack/Telegram adapter later) | authenticated but untrusted with kernel internals | through an app protocol: submit user turns, observe semantic events, resolve pending permissions through kernel-mediated requests |
 | **MCP** | an external capability integration standard: MCP servers publish tools/resources/prompts | external, own protocol | as a capability source behind the extension/remote-host boundary; MCP is **not** Latch's internal plugin ABI |
 
 Only the kernel appends authoritative events. Extensions, clients, and MCP
@@ -353,7 +353,7 @@ disturb the other.
 | Remote extension transports, authentication, lifecycle | deferred |
 | `WorkspaceBackend`, `ExecutorBackend`, `ComputerBackend`, `BrowserBackend`, `ServiceProvider` traits | deferred; first real implementation introduces its port |
 | `Coordinator` / `PreferenceProvider` port traits | deferred; concrete supervisors and policy already exist |
-| Linux loopback Web client | implemented: shared controller, authenticated HTTP/SSE, fixed launch workspace, SSH local forwarding |
+| Linux/Windows loopback Web client | implemented: shared controller, authenticated HTTP/SSE, fixed launch workspace, SSH local forwarding |
 | App protocol for remote clients (Feishu/Slack/Telegram) | deferred |
 | MCP integration | deferred |
 
@@ -391,7 +391,7 @@ map, [`CONTINUITY.md`](CONTINUITY.md) for the default context engine's memory
 and cache semantics, [`PROTOCOL.md`](PROTOCOL.md) for the extension wire
 format.
 
-### Linux browser client
+### Linux and Windows browser client
 
 `latch --web` is an implemented client adapter, with `--ssh <REMOTE_WEB_PORT>`
 providing the same loopback listener for SSH forwarding. The authenticated

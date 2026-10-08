@@ -1,4 +1,4 @@
-//! Linux loopback Web adapter. Every agent operation uses the shared controller.
+//! Cross-platform loopback Web adapter. Every agent operation uses the shared controller.
 mod actor;
 mod http;
 mod state;
@@ -158,8 +158,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         );
     } else {
         let url = format!("http://localhost:{port}/#token={token}");
-        match tokio::process::Command::new("xdg-open")
-            .arg(&url)
+        match browser_command(&url)?
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -182,4 +181,26 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     actor.await??;
     result?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// The URL is generated locally; no shell script or workspace command is used.
+fn browser_command(url: &str) -> Result<tokio::process::Command> {
+    #[cfg(target_os = "windows")]
+    {
+        let system =
+            std::env::var_os("SystemRoot").context("SystemRoot is required to open a browser")?;
+        let mut command =
+            tokio::process::Command::new(PathBuf::from(system).join("System32/rundll32.exe"));
+        command
+            .arg("url.dll,FileProtocolHandler")
+            .arg(url)
+            .creation_flags(0x08000000);
+        Ok(command)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut command = tokio::process::Command::new("xdg-open");
+        command.arg(url);
+        Ok(command)
+    }
 }

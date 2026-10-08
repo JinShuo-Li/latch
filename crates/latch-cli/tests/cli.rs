@@ -1477,6 +1477,6 @@ fn extension_initialization_failure_is_a_runtime_failure() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "web/mod.rs"]
 mod web_transport;

@@ -1,6 +1,10 @@
 # Web UI implementation plan
 
-Status: Linux integration implemented. The original agreed plan below records
+Status: Linux integration implemented; Windows support added in October 2026.
+The original Linux-only scope below is historical. Windows uses the same
+controller, embedded assets and authenticated loopback transport; native Windows
+Web tests now cover startup, settings, resume, attachments, approval, steering,
+and directory enumeration. The original agreed plan below records
 the design and implementation hints; [WEB_UI.md](WEB_UI.md) documents the
 current commands, controls, trust boundary and verification. The reviewed
 prototype remains separate from the embedded production assets.

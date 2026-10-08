@@ -158,16 +158,16 @@ Five crates: `latch-protocol` (durable event/model schema shared by all),
 `latch-tui` (Ratatui app), `latch-cli` (wiring and `latch` binary).
 The shared interactive controller is `latch-cli/src/cli/interactive.rs`;
 terminal rendering stays in the TUI, persistence and execution stay in the kernel.
-The Linux Web adapter is `latch-cli/src/web/{mod,actor,http,state}.rs`; production
+The Linux/Windows Web adapter is `latch-cli/src/web/{mod,actor,http,state}.rs`; production
 assets in `web/app/` are embedded. `latch --web` binds loopback port 6006;
 `--web-port <PORT>` selects a local port and `--ssh <REMOTE_WEB_PORT>` suppresses
 browser launch and prints SSH forwarding instructions. The workspace is the
 canonical launch directory. HTTP/SSE and browser projections never own durable
 truth, execution or approvals. See `docs/WEB_UI.md`; the original agreed plan
-is `docs/WEB_UI_PLAN.md`. Linux Web transport tests reuse the CLI's isolated
+is `docs/WEB_UI_PLAN.md`. Linux and Windows Web transport tests reuse the CLI's isolated
 mock provider: `cargo test -p latch-cli --test cli web_transport --locked`.
-No Windows Web implementation or dedicated qualification; preserve existing
-Windows CLI/TUI behavior and default CI.
+Run Windows Web transport tests natively with `-- --test-threads=1`; use a
+user-owned NTFS fixture and preserve Windows CLI/TUI behavior and default CI.
 The reviewed English, dark-default example remains separate in `web/prototype/`:
 `python3 web/prototype/serve.py --port 6006` (loopback, Python 3, illustrative
 fixtures only). It never executes tools or calls providers; see its README.
