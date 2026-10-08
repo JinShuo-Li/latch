@@ -167,8 +167,10 @@ async fn loop_executes_registered_extension_tool() {
 #[cfg(windows)]
 #[tokio::test]
 async fn loop_executes_registered_powershell_extension_tool() {
-    let system_root = std::env::var("SystemRoot").expect("SystemRoot is set on Windows");
-    let powershell = format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe");
+    // On the Windows 2025 hosted runner, Windows PowerShell 5.1 reports
+    // "Starting the CLR failed" inside the AppContainer; use the PowerShell 7
+    // host for the extension round-trip check.
+    let powershell = "pwsh";
     let fixture = format!(
         "{}/tests/fixtures/extension.ps1",
         env!("CARGO_MANIFEST_DIR")
