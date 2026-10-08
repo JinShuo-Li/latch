@@ -1,7 +1,9 @@
 //! Frame composition: transcript viewport, composer, overlays, palette,
 //! and the welcome/footer chrome.
 
-use super::transcript::{notice_style, semantic_visual_height, transcript_lines};
+use super::transcript::{
+    blink_tool_markers, notice_style, semantic_visual_height, status_marker, transcript_lines,
+};
 use super::*;
 
 /// Responsive chrome rows around the composer.
@@ -155,7 +157,13 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
     // Waiting states are attention (yellow where the theme allows); ordinary
     // work stays quiet with an accent marker.
     let attention = matches!(label.as_str(), "Waiting for approval" | "Interrupted");
-    let (marker_style, label_style) = if attention {
+    let running_tool = app.presentation.cells().iter().any(cell_is_running);
+    let (marker_style, label_style) = if running_tool && !attention {
+        (
+            status_marker(CellStatus::Running).1,
+            Style::default().bold(),
+        )
+    } else if attention {
         (palette.attention(), palette.attention())
     } else {
         (
@@ -172,7 +180,9 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
         spans.push(Span::styled(" · ", notice_style()));
         spans.push(Span::styled(detail, notice_style()));
     }
-    Some(Line::from(spans))
+    let mut lines = [Line::from(spans)];
+    blink_tool_markers(&mut lines, app.tool_dot_visible);
+    Some(lines.into_iter().next().expect("one activity row"))
 }
 
 fn cell_is_running(cell: &Cell) -> bool {
@@ -1316,14 +1326,15 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             );
             app.sync_viewport(content_rows, viewport.height as usize);
             let offset = app.scroll.min(u16::MAX as usize) as u16;
-            let paragraph = Paragraph::new(transcript_lines(
+            let mut lines = transcript_lines(
                 app.presentation.cells(),
                 app.streaming.as_deref(),
                 app.detail,
                 viewport.width as usize,
                 true,
-            ))
-            .scroll((offset, 0));
+            );
+            blink_tool_markers(&mut lines, app.tool_dot_visible);
+            let paragraph = Paragraph::new(lines).scroll((offset, 0));
             frame.render_widget(paragraph, viewport);
         }
         if sidebar_cols > 0 && panes.len() > 1 {

@@ -135,7 +135,7 @@ mod tests {
             result("b", "patch", "updated src/lib.rs @ def", false),
         ]);
         let rendered = super::super::render_cells_plain(model.cells(), false);
-        assert!(rendered.contains("✗ Validation failed"));
+        assert!(rendered.contains("• Validation failed"));
         assert!(rendered.contains("cargo test · average_preserves_fraction FAILED · 0.38s"));
         assert!(rendered.contains("Edited 2 files"));
         assert!(rendered.contains("A tests/new.rs"));
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(summary, "Found two unsynchronized locks.");
         let rendered = super::super::render_cells_plain(model.cells(), false);
         assert!(
-            rendered.contains("✓ Child agent `audit-locks` completed"),
+            rendered.contains("• Child agent `audit-locks` completed"),
             "{rendered}"
         );
         assert!(

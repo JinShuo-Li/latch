@@ -3746,3 +3746,103 @@ fn sidebar_divider_is_one_glyph_and_style_across_content_and_resize() {
         assert!(count >= 40, "divider must span the complete transcript");
     }
 }
+
+#[test]
+fn tool_dots_blink_every_400ms_and_complete_green_or_red() {
+    assert_eq!(
+        runtime::TOOL_BLINK_INTERVAL,
+        std::time::Duration::from_millis(400)
+    );
+    for (status, color) in [
+        (CellStatus::Running, Color::Yellow),
+        (CellStatus::Passed, Color::Green),
+        (CellStatus::Failed, Color::Red),
+    ] {
+        let cell = Cell::Command {
+            call_id: "blink".into(),
+            command: "cargo check".into(),
+            status,
+            summary: String::new(),
+            output: String::new(),
+            raw: String::new(),
+        };
+        let source = cell_lines(&cell, false, 40, false);
+        assert_eq!(source[0].spans[0].content, "• ");
+        assert_eq!(source[0].spans[0].style.fg, Some(color));
+        let mut visible = source.clone();
+        let mut hidden = source;
+        blink_tool_markers(&mut visible, true);
+        blink_tool_markers(&mut hidden, false);
+        assert_eq!(visible.len(), hidden.len());
+        assert_eq!(visible[0].width(), hidden[0].width());
+        assert!(
+            !visible[0].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::SLOW_BLINK)
+        );
+        assert!(
+            !hidden[0].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::SLOW_BLINK)
+        );
+        if status == CellStatus::Running {
+            assert_eq!(hidden[0].spans[0].content, "  ");
+            assert_eq!(visible[0].spans[1..], hidden[0].spans[1..]);
+        } else {
+            assert_eq!(visible, hidden, "terminal result dots remain steady");
+        }
+    }
+}
+
+#[test]
+fn running_tool_and_activity_dots_share_the_phase_without_blinking_prose() {
+    let mut app = App::default();
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ToolRequested {
+            call: latch_protocol::ToolCall {
+                id: "pending".into(),
+                name: "shell".into(),
+                arguments: serde_json::json!({"command":"cargo check"}),
+            },
+        },
+    ))));
+    let visible = active_status_line(&app).unwrap();
+    app.tool_dot_visible = false;
+    let hidden = active_status_line(&app).unwrap();
+    assert_eq!(visible.spans[1].content, "• ");
+    assert_eq!(visible.spans[1].style.fg, Some(Color::Yellow));
+    assert_eq!(hidden.spans[1].content, "  ");
+    assert_eq!(visible.width(), hidden.width());
+    assert_eq!(visible.spans[2..], hidden.spans[2..]);
+    let mut assistant = cell_lines(
+        &Cell::Assistant {
+            text: "Prose is not a pending tool.".into(),
+        },
+        false,
+        40,
+        false,
+    );
+    let steady = assistant.clone();
+    blink_tool_markers(&mut assistant, false);
+    assert_eq!(steady, assistant);
+}
+
+#[test]
+fn raw_view_list_prefixes_keep_the_actual_marker_width() {
+    for (marker, origin) in [("- ", 2), ("9. ", 3), ("10. ", 4), ("  10) ", 6)] {
+        let cell = Cell::Assistant {
+            text: format!(
+                "Raw details\n{marker}A long item with 中文文字 and a continuation that wraps several times."
+            ),
+        };
+        let lines = cell_lines(&cell, true, 24, false);
+        let rendered = lines_text(&lines);
+        assert!(lines.len() > 3);
+        for row in rendered.lines().skip(2) {
+            assert!(row.starts_with(&" ".repeat(origin)), "{rendered}");
+            assert!(display_width(row) <= 24);
+        }
+    }
+}

@@ -2,7 +2,7 @@
 › Fix the failing test.                                                                                                                                     │WORK · 0 turns · 0s                        
                                                                                                                                                             │on main                                    
                                                                                                                                                             │                                           
-✗ Ran cargo test                                                                                                                                            │ACTIVITY                                   
+• Failed cargo test                                                                                                                                         │ACTIVITY                                   
   └ exit code 1                                                                                                                                             │Preparing request                          
                                                                                                                                                             │0s in phase · 0s quiet                     
     exit code 1                                                                                                                                             │                                           

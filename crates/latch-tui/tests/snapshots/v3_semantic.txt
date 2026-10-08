@@ -3,5 +3,5 @@
 
 • Edited src/lib.rs  +2 −2
 
-✓ Verified
+• Verified
   └ cargo test · 3 tests passed · 0.42s

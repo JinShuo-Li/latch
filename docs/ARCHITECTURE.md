@@ -954,6 +954,9 @@ The viewport renders these physical rows directly and uses their count for
 scrolling, recomputing at the current width after resize or sidebar changes.
 The sidebar divider is drawn separately with one glyph and explicit style
 across every row, clearing any inherited emphasis or background.
+Tool markers blink yellow on a 400ms TUI timer while running, then stay green
+on success or red on failure. The frame alternates marker visibility without
+relying on terminal blink support, changing widths, or writing durable events.
 Command labels are bounded by the viewport and 96 display cells; successful
 output previews use at most three visual rows. Ctrl+T shows the complete
 command and retained output with hanging prefixes. These are presentation-only

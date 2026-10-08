@@ -77,10 +77,10 @@ pub(super) fn cell_lines(
         } => {
             let mut lines = activity_lines(
                 *status,
-                if *status == CellStatus::Running {
-                    "Running"
-                } else {
-                    "Ran"
+                match status {
+                    CellStatus::Running => "Running",
+                    CellStatus::Passed => "Ran",
+                    CellStatus::Failed => "Failed",
                 },
                 &compact_command(command, width.saturating_sub(10).clamp(8, 96)),
                 summary,
@@ -215,11 +215,17 @@ fn compact_command(command: &str, width: usize) -> String {
 fn entry_origin(text: &str) -> usize {
     let body = text.trim_start();
     let indent = display_width(&text[..text.len() - body.len()]);
-    if ["• ", "✓ ", "✗ ", "· ", "└ ", "+ ", "− "]
+    if ["• ", "✓ ", "✗ ", "· ", "└ ", "+ ", "− ", "- ", "* "]
         .iter()
         .any(|prefix| body.starts_with(prefix))
     {
         indent + 2
+    } else if let Some(end) = body.find(['.', ')'])
+        && !body[..end].is_empty()
+        && body[..end].bytes().all(|ch| ch.is_ascii_digit())
+        && body[end + 1..].starts_with(' ')
+    {
+        indent + display_width(&body[..end + 2])
     } else {
         indent
     }
@@ -242,9 +248,28 @@ fn raw_origin(text: &str) -> usize {
 pub(super) fn status_marker(status: CellStatus) -> (&'static str, Style) {
     let palette = crate::theme::palette();
     match status {
-        CellStatus::Running => ("•", palette.accent()),
-        CellStatus::Passed => ("✓", palette.success()),
-        CellStatus::Failed => ("✗", palette.failure()),
+        CellStatus::Running => (
+            "•",
+            palette
+                .attention()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ),
+        CellStatus::Passed => ("•", palette.success()),
+        CellStatus::Failed => ("•", palette.failure()),
+    }
+}
+
+/// SLOW_BLINK tags pending markers internally; the frame owns their animation
+/// rather than relying on optional terminal SGR blink support. Width is stable.
+pub(super) fn blink_tool_markers(lines: &mut [Line<'static>], visible: bool) {
+    for span in lines.iter_mut().flat_map(|line| &mut line.spans) {
+        if span.style.add_modifier.contains(Modifier::SLOW_BLINK) {
+            span.style = span.style.remove_modifier(Modifier::SLOW_BLINK);
+            if !visible {
+                span.content = " ".repeat(display_width(&span.content)).into();
+            }
+        }
     }
 }
 
@@ -256,11 +281,7 @@ pub(super) fn activity_lines(
     output: &str,
 ) -> Vec<Line<'static>> {
     let palette = crate::theme::palette();
-    let (marker, marker_style) = if status == CellStatus::Passed && title == "Ran" {
-        ("•", palette.accent())
-    } else {
-        status_marker(status)
-    };
+    let (marker, marker_style) = status_marker(status);
     let mut lines = vec![Line::from(vec![
         Span::styled(format!("{marker} "), marker_style),
         Span::styled(
@@ -411,10 +432,7 @@ pub(super) fn agent_task_lines(
     diagnostic: &str,
 ) -> Vec<Line<'static>> {
     let palette = crate::theme::palette();
-    let (marker, marker_style) = match status {
-        CellStatus::Failed => ("✗", palette.failure()),
-        _ => ("•", palette.accent()),
-    };
+    let (marker, marker_style) = status_marker(status);
     let title = match operation {
         AgentOperation::Spawn => format!("Spawned `{task_name}`"),
         AgentOperation::Send => format!("Sent input to `{task_name}`"),
@@ -448,8 +466,8 @@ pub(super) fn agent_report_lines(
 ) -> Vec<Line<'static>> {
     let palette = crate::theme::palette();
     let (marker, marker_style) = match status {
-        latch_protocol::AgentStatus::Completed => ("✓", palette.success()),
-        latch_protocol::AgentStatus::Failed => ("✗", palette.failure()),
+        latch_protocol::AgentStatus::Completed => ("•", palette.success()),
+        latch_protocol::AgentStatus::Failed => ("•", palette.failure()),
         latch_protocol::AgentStatus::Interrupted => ("•", palette.attention()),
         _ => ("•", palette.accent()),
     };
@@ -482,11 +500,7 @@ pub(super) fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line
     } else {
         CellStatus::Passed
     };
-    let (marker, style) = if status == CellStatus::Passed {
-        ("•", crate::theme::palette().accent())
-    } else {
-        status_marker(status)
-    };
+    let (marker, style) = status_marker(status);
     let title = if running { "Exploring" } else { "Explored" };
     let mut labels = Vec::new();
     let mut reads = Vec::new();
@@ -543,11 +557,7 @@ pub(super) fn exploration_lines(operations: &[ExplorationOperation]) -> Vec<Line
 /// diff never floods the transcript; `/diff` opens the full inspector.
 pub(super) fn diff_cell_lines(status: CellStatus, document: &DiffDocument) -> Vec<Line<'static>> {
     let palette = crate::theme::palette();
-    let (marker, marker_style) = if status == CellStatus::Passed {
-        ("•", palette.accent())
-    } else {
-        status_marker(status)
-    };
+    let (marker, marker_style) = status_marker(status);
     let title = match status {
         CellStatus::Running => "Diff",
         CellStatus::Passed => "Workspace diff",
@@ -605,11 +615,7 @@ pub(super) fn patch_lines(files: &[PatchFile]) -> Vec<Line<'static>> {
     } else {
         CellStatus::Passed
     };
-    let (marker, style) = if status == CellStatus::Passed {
-        ("•", crate::theme::palette().accent())
-    } else {
-        status_marker(status)
-    };
+    let (marker, style) = status_marker(status);
     let title = if running {
         "Editing"
     } else if failed {

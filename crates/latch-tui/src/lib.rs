@@ -203,6 +203,8 @@ struct App {
     resumed: bool,
     detail: bool,
     busy: bool,
+    /// Presentation-only tool marker phase, toggled every 400ms.
+    tool_dot_visible: bool,
     /// True after a cancelled or errored run, until the next prompt starts.
     interrupted: bool,
     /// Offset from the top of the transcript in visual (wrapped) rows.
@@ -336,6 +338,7 @@ impl Default for App {
             resumed: false,
             detail: false,
             busy: false,
+            tool_dot_visible: true,
             interrupted: false,
             scroll: 0,
             follow: true,

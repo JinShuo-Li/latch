@@ -16,7 +16,7 @@
                                                                                                        │                                    
   • Keep complete commands and output available in the detail view.                                    │                                    
                                                                                                        │                                    
-✗ Ran cargo test --workspace --locked && python3 scripts/check_layout.py --language 中 文  --includ …    │                                    
+• Failed cargo test --workspace --locked && python3 scripts/check_layout.py --language 中 文  --includ … │                                    
   └ exit code 1                                                                                        │                                    
                                                                                                        │                                    
     exit code 1                                                                                        │                                    

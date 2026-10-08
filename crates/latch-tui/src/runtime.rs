@@ -68,6 +68,8 @@ pub(super) fn leave_screen(writer: &mut impl Write, mouse_capture: bool) -> io::
     paste.and(mouse).and(screen)
 }
 
+pub(super) const TOOL_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(400);
+
 pub async fn run(
     input_tx: mpsc::Sender<Input>,
     mut output_rx: mpsc::Receiver<Output>,
@@ -98,12 +100,12 @@ pub async fn run(
     app.sidebar.activity.interrupted(chrono::Utc::now());
     app.input.seed_history(history);
     let mut events = EventStream::new();
-    let mut refresh = tokio::time::interval(std::time::Duration::from_secs(1));
+    let mut refresh = tokio::time::interval(TOOL_BLINK_INTERVAL);
     refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         guard.terminal.draw(|frame| draw(frame, &mut app))?;
         tokio::select! {
-         _ = refresh.tick() => {},
+         _ = refresh.tick() => { app.tool_dot_visible = !app.tool_dot_visible; },
          Some(out)=output_rx.recv()=>app.output(out),
          maybe=events.next()=>match maybe.transpose()?{
             Some(Event::Key(key)) if key.kind==KeyEventKind::Press => match app.on_key(key) {

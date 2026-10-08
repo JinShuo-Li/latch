@@ -22,7 +22,7 @@
   • Keep complete commands and output available 
     in the detail view.                         
                                                 
-✗ Ran cargo test --workspace --locked && p …    
+• Failed cargo test --workspace --locked && p … 
   └ exit code 1                                 
                                                 
     exit code 1                                 
