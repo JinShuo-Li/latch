@@ -102,12 +102,23 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut refresh = tokio::time::interval(TOOL_BLINK_INTERVAL);
     refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Consume input/output independently of drawing, so wheel bursts cannot
+    // queue a full render ahead of every subsequent key.
+    let mut frames = tokio::time::interval(std::time::Duration::from_millis(16));
+    frames.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    guard.terminal.draw(|frame| draw(frame, &mut app))?;
+    let mut dirty = false;
     loop {
-        guard.terminal.draw(|frame| draw(frame, &mut app))?;
         tokio::select! {
-         _ = refresh.tick() => { app.tool_dot_visible = !app.tool_dot_visible; },
-         Some(out)=output_rx.recv()=>app.output(out),
-         maybe=events.next()=>match maybe.transpose()?{
+         _ = frames.tick() => {
+            if dirty {
+                guard.terminal.draw(|frame| draw(frame, &mut app))?;
+                dirty = false;
+            }
+         },
+         _ = refresh.tick() => { app.tool_dot_visible = !app.tool_dot_visible; dirty = true; },
+         Some(out)=output_rx.recv()=>{ app.output(out); dirty = true; },
+         maybe=events.next()=>{ dirty = true; match maybe.transpose()?{
             Some(Event::Key(key)) if key.kind==KeyEventKind::Press => match app.on_key(key) {
                 Some(Action::Submit { text, media }) => {
                     input_tx.send(Input::Submit { text, media }).await?
@@ -171,7 +182,7 @@ pub async fn run(
             Some(Event::Paste(text)) => app.on_paste(&text),
             None=>break,
             _=>{}
-         }
+         }}
         }
     }
     Ok(())

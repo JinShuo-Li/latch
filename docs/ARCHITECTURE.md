@@ -975,7 +975,12 @@ keep one blank row before and after surrounding prose.
 Top-level points have one blank row between them; headings have two preceding
 blank rows and one following row. Transcript cells use one blank separator.
 The viewport renders these physical rows directly and uses their count for
-scrolling, recomputing at the current width after resize or sidebar changes.
+scrolling. The transcript caches physical rows for compact and raw views,
+invalidating them on content changes and recomputing at the current width after
+resize or sidebar changes. Scroll and blink frames clone only visible rows;
+scroll offsets remain full-size even beyond 65,535 rows. Input/output events
+are consumed independently of a 16ms redraw timer, which coalesces bursts
+without dropping wheel or key events.
 The sidebar divider is drawn separately with one glyph and explicit style
 across every row, clearing any inherited emphasis or background.
 Tool markers blink yellow on a 400ms TUI timer while running, then stay green

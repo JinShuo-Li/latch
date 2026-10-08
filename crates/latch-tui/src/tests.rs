@@ -4077,3 +4077,80 @@ fn table_mixed_cjk_does_not_break_at_an_isolated_early_space() {
     assert!(text.lines().nth(3).unwrap().contains("16 个冻结"), "{text}");
     assert!(lines.iter().all(|line| line.width() <= 38));
 }
+
+#[test]
+fn large_tool_details_scroll_and_collapse_without_rebuilding_history() {
+    let mut app = App::default();
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ToolRequested {
+            call: latch_protocol::ToolCall {
+                id: "large".into(),
+                name: "shell".into(),
+                arguments: serde_json::json!({"command": "cargo test"}),
+            },
+        },
+    ))));
+    let raw = (0..70_000)
+        .map(|i| format!("row{i:05}\n"))
+        .collect::<String>();
+    app.output(Output::ToolResult(latch_protocol::ToolResult {
+        call_id: "large".into(),
+        name: "shell".into(),
+        output: raw,
+        is_error: false,
+        artifact_id: None,
+        media: Vec::new(),
+    }));
+    let compact = render_to_text(&mut app, 90, 22);
+    app.on_key(key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    let bottom = render_to_text(&mut app, 90, 22);
+    assert!(app.scroll > u16::MAX as usize);
+    assert!(
+        bottom.contains("row69999"),
+        "tail must remain reachable: {bottom}"
+    );
+    let builds = app.transcript_cache.builds;
+    for _ in 0..32 {
+        app.scroll_up(WHEEL_ROWS);
+        let _ = render_to_text(&mut app, 90, 22);
+        app.tool_dot_visible = !app.tool_dot_visible;
+    }
+    assert_eq!(
+        app.transcript_cache.builds, builds,
+        "wheel/blink only draw visible cached rows"
+    );
+    app.on_key(key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(!app.detail);
+    assert_eq!(render_to_text(&mut app, 90, 22), compact);
+    assert_eq!(
+        app.transcript_cache.builds, builds,
+        "collapse reuses compact layout"
+    );
+}
+
+#[test]
+fn transcript_cache_tracks_live_updates_local_notices_and_width() {
+    let mut app = App::default();
+    app.output(Output::AssistantDelta("first".into()));
+    assert!(render_to_text(&mut app, 90, 22).contains("first"));
+    app.output(Output::AssistantDelta(" second".into()));
+    assert!(render_to_text(&mut app, 90, 22).contains("first second"));
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::AssistantMessageCompleted {
+            text: "final".into(),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            reasoning: Vec::new(),
+        },
+    ))));
+    let final_text = render_to_text(&mut app, 90, 22);
+    assert!(final_text.contains("final"));
+    assert!(!final_text.contains("first second"));
+    app.push_notice("local notice");
+    assert!(render_to_text(&mut app, 90, 22).contains("local notice"));
+    let builds = app.transcript_cache.builds;
+    let _ = render_to_text(&mut app, 48, 22);
+    assert_eq!(app.transcript_cache.builds, builds + 1);
+    app.output(Output::Notice("new notice".into()));
+    assert!(render_to_text(&mut app, 48, 22).contains("new notice"));
+}

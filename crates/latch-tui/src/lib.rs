@@ -202,6 +202,7 @@ struct App {
     branch: String,
     resumed: bool,
     detail: bool,
+    transcript_cache: transcript::TranscriptCache,
     busy: bool,
     /// Presentation-only tool marker phase, toggled every 400ms.
     tool_dot_visible: bool,
@@ -337,6 +338,7 @@ impl Default for App {
             branch: String::new(),
             resumed: false,
             detail: false,
+            transcript_cache: transcript::TranscriptCache::default(),
             busy: false,
             tool_dot_visible: true,
             interrupted: false,
@@ -361,6 +363,11 @@ impl Default for App {
     }
 }
 impl App {
+    fn push_notice(&mut self, text: impl Into<String>) {
+        self.transcript_cache.invalidate();
+        self.presentation.push_notice(text);
+    }
+
     fn on_paste(&mut self, text: &str) {
         if let Some(capture) = self.capture.as_mut() {
             capture.value.push_str(text);
@@ -374,6 +381,16 @@ impl App {
     }
 
     fn output(&mut self, out: Output) {
+        if matches!(
+            &out,
+            Output::AssistantDelta(_)
+                | Output::AssistantDone
+                | Output::Event(_)
+                | Output::ToolResult(_)
+                | Output::Notice(_)
+        ) {
+            self.transcript_cache.invalidate();
+        }
         match out {
             Output::Ready => self.sidebar.activity.interrupted(chrono::Utc::now()),
             Output::InputReceived => {}
@@ -455,7 +472,7 @@ impl App {
                     self.interrupted = true;
                     self.busy = false;
                 }
-                self.presentation.push_notice(text);
+                self.push_notice(text);
             }
             Output::Mode(mode) => {
                 self.mode = mode;
@@ -1027,7 +1044,7 @@ impl App {
             match outcome {
                 Err(()) => {
                     self.profile_selector = None;
-                    self.presentation.push_notice("inference profile unchanged");
+                    self.push_notice("inference profile unchanged");
                 }
                 Ok(Some((provider, model, effort))) => {
                     self.profile_selector = None;
@@ -1476,11 +1493,11 @@ impl App {
                 Some(summary) => format!("pending attachments: {summary}"),
                 None => "no pending attachments".to_owned(),
             };
-            self.presentation.push_notice(message);
+            self.push_notice(message);
             return Some(None);
         }
         if command == "/detach" {
-            self.presentation.push_notice("usage: /detach <index|all>");
+            self.push_notice("usage: /detach <index|all>");
             return Some(None);
         }
         if let Some(argument) = command.strip_prefix("/detach ") {
@@ -1605,7 +1622,7 @@ impl App {
             && !self.attachments.is_empty()
             && self.current_model_supports_images() == Some(false)
         {
-            self.presentation.push_notice(
+            self.push_notice(
                 "Current model does not accept image input. Choose a vision-capable model with /model.",
             );
             return None;

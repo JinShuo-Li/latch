@@ -14,6 +14,45 @@ use crate::presentation::AgentOperation;
 /// Left gutter reserved for user (`› `) and assistant (`• `) message rows.
 const MESSAGE_GUTTER: usize = 2;
 
+/// Physical rows are independent of scroll position and marker blink phase.
+/// Retain both views so returning from raw details needs no history traversal.
+#[derive(Default)]
+pub(super) struct TranscriptCache {
+    views: [Option<(usize, Vec<Line<'static>>)>; 2],
+    #[cfg(test)]
+    pub(super) builds: usize,
+}
+
+impl TranscriptCache {
+    pub(super) fn invalidate(&mut self) {
+        self.views = [None, None];
+    }
+
+    pub(super) fn rows(
+        &mut self,
+        cells: &[Cell],
+        streaming: Option<&str>,
+        detail: bool,
+        width: usize,
+    ) -> &[Line<'static>] {
+        let view = &mut self.views[usize::from(detail)];
+        if view
+            .as_ref()
+            .is_none_or(|(cached_width, _)| *cached_width != width)
+        {
+            *view = Some((
+                width,
+                transcript_lines(cells, streaming, detail, width, true),
+            ));
+            #[cfg(test)]
+            {
+                self.builds += 1;
+            }
+        }
+        &view.as_ref().expect("layout initialized").1
+    }
+}
+
 /// Builds the transcript as Ratatui lines with the item's own styling,
 /// splitting embedded newlines so the wrapper and the scroll calculation agree
 /// on the visual row layout. `band` controls user-message surface padding; the
@@ -769,6 +808,7 @@ pub(super) fn truncate(text: &str, limit: usize) -> String {
 
 /// Number of visual rows the transcript occupies at `width`, using the same
 /// wrapping Ratatui renders with.
+#[cfg(test)]
 pub(super) fn semantic_visual_height(
     cells: &[Cell],
     streaming: Option<&str>,

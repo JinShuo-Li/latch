@@ -1,9 +1,7 @@
 //! Frame composition: transcript viewport, composer, overlays, palette,
 //! and the welcome/footer chrome.
 
-use super::transcript::{
-    blink_tool_markers, notice_style, semantic_visual_height, transcript_lines,
-};
+use super::transcript::{blink_tool_markers, notice_style};
 use super::*;
 
 /// Responsive chrome rows around the composer.
@@ -1306,23 +1304,30 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
             app.sync_viewport(0, viewport.height as usize);
             draw_welcome(frame, viewport);
         } else {
-            let content_rows = semantic_visual_height(
-                app.presentation.cells(),
-                app.streaming.as_deref(),
-                app.detail,
-                viewport.width,
-            );
+            let content_rows = app
+                .transcript_cache
+                .rows(
+                    app.presentation.cells(),
+                    app.streaming.as_deref(),
+                    app.detail,
+                    viewport.width as usize,
+                )
+                .len();
             app.sync_viewport(content_rows, viewport.height as usize);
-            let offset = app.scroll.min(u16::MAX as usize) as u16;
-            let mut lines = transcript_lines(
+            let rows = app.transcript_cache.rows(
                 app.presentation.cells(),
                 app.streaming.as_deref(),
                 app.detail,
                 viewport.width as usize,
-                true,
             );
+            let mut lines = rows
+                .iter()
+                .skip(app.scroll)
+                .take(viewport.height as usize)
+                .cloned()
+                .collect::<Vec<_>>();
             blink_tool_markers(&mut lines, app.tool_dot_visible);
-            let paragraph = Paragraph::new(lines).scroll((offset, 0));
+            let paragraph = Paragraph::new(lines);
             frame.render_widget(paragraph, viewport);
         }
         if sidebar_cols > 0 && panes.len() > 1 {

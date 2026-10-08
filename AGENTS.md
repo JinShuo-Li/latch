@@ -238,7 +238,7 @@ live home directory is not yet qualified at scale; see
 Native ownership is split into runner/token/AppContainer/ACL/recovery/desktop/
 job/process modules; Win32 complexity stays outside the safe Rust kernel.
 `latch-ui/src/activity.rs` owns the shared activity reducer; provider stream
-signals are transient and contain no reasoning text. TUI refreshes every 400ms;
+signals are transient and contain no reasoning text. TUI tool blink ticks every 400ms;
 pending tool dots blink yellow, success/failure stay green/red. Activity
 indicators in the sidebar and above the composer use steady blue dots with a
 two-cell gutter matching transcript tool rows. Web emits five-second connection
@@ -247,7 +247,9 @@ failure or completion; replayed unfinished activity is interrupted.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,configuration_center}.rs` and existing siblings.
 `markdown`/`transcript` own display-cell hanging wraps and physical row counts;
-chrome renders those rows directly. Tables measure styled spans, keep fixed
+transcript caches compact/raw rows until content or width changes; chrome draws
+only visible rows. Runtime coalesces redraws on a 16ms timer while consuming
+all input/output events. Tables measure styled spans, keep fixed
 column origins, and separate records with one blank row. Ctrl+T retains full
 command/output details.
 Mouse capture defaults on to prevent wheel-to-arrow history navigation;
