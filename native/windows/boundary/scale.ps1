@@ -48,6 +48,8 @@ $info = New-Object Diagnostics.ProcessStartInfo
 $info.FileName = $runner
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
+$info.RedirectStandardOutput = $true
+$info.RedirectStandardError = $true
 $escapedCommand = $command.Replace('"','\"')
 $info.Arguments = $q+$workspace+$q+' '+$q+$fixture+$q+' '+$q+$escapedCommand+$q+
   ' write --read-root '+$q+$runtime+$q+' --timeout-ms 120000'
@@ -67,13 +69,16 @@ $info.EnvironmentVariables['LATCH_RECOVERY_ROOT'] = $journal
 $info.EnvironmentVariables['LATCH_RECOVERY_PAUSE'] = 'all-grants'
 $info.EnvironmentVariables['LATCH_BOUNDARY_TIMING'] = '1'
 $process = [Diagnostics.Process]::Start($info)
+$stdoutTask = $process.StandardOutput.ReadToEndAsync()
+$stderrTask = $process.StandardError.ReadToEndAsync()
 $hostFiles = @()
 try {
   $pauseFile = Join-Path $journal 'pause.pid'
   $deadline = [DateTime]::UtcNow.AddMinutes(30)
   while (!(Test-Path -LiteralPath $pauseFile)) {
     if ($process.HasExited) {
-      throw "Large-workspace runner exited before the post-grant checkpoint (exit $($process.ExitCode))"
+      $diagnostics = @($stdoutTask.Result, $stderrTask.Result | Where-Object { $_ }) -join "`n"
+      throw "Large-workspace runner exited before the post-grant checkpoint (exit $($process.ExitCode)); $diagnostics"
     }
     if ([DateTime]::UtcNow -gt $deadline) {
       throw 'Large-workspace runner did not reach the post-grant checkpoint'
@@ -102,6 +107,10 @@ try {
   }
   New-Item -ItemType File -Path (Join-Path $journal 'pause.resume') | Out-Null
   if (!$process.WaitForExit(1800000)) { throw 'Large-workspace runner exceeded 30 minutes' }
+  $stdout = $stdoutTask.Result
+  $stderr = $stderrTask.Result
+  if ($stdout) { Write-Output $stdout }
+  if ($stderr) { Write-Output $stderr }
   if ($process.ExitCode) { throw "Large-workspace command exited $($process.ExitCode)" }
 
   foreach ($path in $originalAcls.Keys) {
