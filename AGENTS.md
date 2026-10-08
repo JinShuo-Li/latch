@@ -155,6 +155,12 @@ must never override long-horizon correctness.
 Four crates: `latch-protocol` (durable event/model schema shared by all),
 `latch-kernel` (agent loop, providers, tools, sandbox, continuity, SQLite store),
 `latch-tui` (Ratatui app), `latch-cli` (wiring and `latch` binary).
+The English, dark-default Web UI review prototype lives in `web/prototype/`, separate from
+the product site and Rust runtime. From the repository root, preview with
+`python3 web/prototype/serve.py --port 6006` (loopback only, Python 3 required).
+It uses illustrative fixtures and never executes tools or calls providers;
+`latch --web` is not implemented yet. The intended Web UI shares the kernel
+and fixes its workspace to the launch directory. See `web/prototype/README.md`.
 The static GitHub Pages site lives in `site/` and is published by
 `.github/workflows/pages.yml`; its terminal captures come from TUI snapshots.
 Keep its version and install commands aligned with the README; keep the inline
