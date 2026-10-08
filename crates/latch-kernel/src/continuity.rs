@@ -1016,7 +1016,14 @@ fn load_epoch_events(
             .into_iter()
             .filter(|event| event.sequence >= epoch_start && is_epoch_visible(event, generation))
             .collect();
-        let tokens = estimated_events_tokens(&visible, estimator);
+        // Kernel snapshots/deltas count toward the request budget, but cannot
+        // trigger conversation rotation. Stopping the scan on their bytes
+        // could hide the epoch start and rotate a small conversation forever.
+        let tokens: usize = visible
+            .iter()
+            .filter(|event| !matches!(event.payload, EventPayload::KernelContext { .. }))
+            .map(|event| event_tokens(event, estimator))
+            .sum();
         let reached_start = exhausted
             || visible
                 .first()
@@ -2196,6 +2203,94 @@ mod tests {
         assert!(
             TokenEstimator::generic().estimate(&rendered) < 30_000,
             "canonical must be capped"
+        );
+    }
+
+    #[tokio::test]
+    async fn kernel_context_bytes_do_not_hide_epoch_start_or_force_rotation() {
+        let store = EventStore::open_memory().unwrap();
+        let sid = store.create_session(Path::new("/tmp")).unwrap();
+        store
+            .append(
+                sid,
+                EventPayload::UserMessage {
+                    text: "keep this task".into(),
+                    media: vec![],
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                sid,
+                EventPayload::ContextEpochStarted {
+                    from_sequence: 1,
+                    generation: 1,
+                    reason: "fixture".into(),
+                    retained_tokens: 0,
+                },
+            )
+            .unwrap();
+        // More than the initial tail page, with enough authoritative bytes to
+        // exceed the conversation high-water mark but not the request budget.
+        for revision in 0..300 {
+            store
+                .append(
+                    sid,
+                    EventPayload::KernelContext {
+                        generation: 1,
+                        revision,
+                        kind: KernelContextKind::StateUpdate,
+                        content: format!("kernel revision {revision}: {}", "state ".repeat(40)),
+                    },
+                )
+                .unwrap();
+        }
+        let (events, reached_start) =
+            load_epoch_events(&store, sid, 1, 1, 1_000, &TokenEstimator::generic()).unwrap();
+        assert!(reached_start);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::UserMessage { .. }))
+        );
+        let engine = ContinuityEngine::new(store.clone(), ContextConfig::default());
+        let budget = MaterializeBudget {
+            request_tokens: 100_000,
+            window_tokens: 128_000,
+            reserve_tokens: 0,
+            recent_tokens: 1_000,
+            reserved_tokens: 0,
+        };
+        let state = TaskStateManager::default();
+        let materialize = || {
+            engine
+                .materialize(
+                    sid,
+                    state.state(),
+                    None,
+                    &EvidenceLedger::default(),
+                    &FailureManager::new(3),
+                    "stable".into(),
+                    &budget,
+                )
+                .unwrap()
+        };
+        let first = materialize();
+        let second = materialize();
+        assert_eq!(first.stats.cache_epoch, 1);
+        assert_eq!(second.stats.cache_epoch, 1);
+        assert_eq!(
+            first.recent, second.recent,
+            "unchanged state must preserve the provider prefix"
+        );
+        assert_eq!(
+            store
+                .events(sid)
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event.payload, EventPayload::ContextEpochStarted { .. }))
+                .count(),
+            1
         );
     }
 

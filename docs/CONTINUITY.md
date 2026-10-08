@@ -24,7 +24,9 @@ workspace; a historical Passed entry
 remains in L3 and is shown as stale in the canonical evidence summary when the
 workspace advances. Only a Passed entry for the current generation can certify
 completion after resume, and an active managed process blocks certification
-until it exits and validation is rerun.
+until it exits and validation is rerun. Natural exits commit without requiring
+model polling. Repeated unchanged writer blockers are supervised as failed
+certification attempts, including across resume, even if their commands pass.
 
 Every child agent has its own complete L0-L3 stack. Parent history does not seed
 a child's active context: it starts from a compact delegation brief and the
@@ -146,7 +148,11 @@ provider-visible, and a durable dedupe marker. It therefore extends the current
 cache epoch normally without rewriting its prefix or exposing child transcripts
 and kernel bookkeeping.
 
-`recent_tokens` is the conversation high-water mark. When an epoch exceeds it,
+`recent_tokens` is the conversation high-water mark. The epoch loader counts
+conversation events for this threshold and continues past arbitrarily many
+kernel-context revisions to find the epoch start. Authoritative kernel bytes
+still count toward the hard request budget; they cannot hide the epoch start
+and cause needless rotations. When an epoch exceeds it,
 one hysteretic rotation retains the newest whole semantic units up to about
 three quarters of the budget and emits a fresh snapshot. The quarter-budget of
 headroom makes rotation occasional rather than per-turn; tool transactions stay
