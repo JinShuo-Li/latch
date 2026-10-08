@@ -357,6 +357,15 @@ impl FailureManager {
     pub fn resolve(&mut self, subject: &str) {
         self.lineages.remove(subject.trim());
     }
+    /// Whether this exact failure already exhausted its re-ground budget.
+    /// A changed blocker or a successful attempt permits execution again.
+    #[must_use]
+    pub fn requires_reground(&self, subject: &str, output: &str) -> bool {
+        self.lineages.get(subject.trim()).is_some_and(|lineage| {
+            lineage.count >= self.retry_budget
+                && lineage.signature == normalize_failure(subject, output)
+        })
+    }
     /// True when the lineage has an active failure streak (used for resume
     /// diagnostics and context summaries).
     #[must_use]

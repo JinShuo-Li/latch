@@ -262,7 +262,8 @@ provider-specific serialization in `provider.rs`.
 Memory/cache invariants (do not violate):
 - Memory decides what the model needs to know. Cache decides how cheaply we can
   send it. Cache epochs are performance boundaries, not memory boundaries, and
-  cache locality must never override long-horizon correctness.
+  cache locality must never override long-horizon correctness. Conversation
+  thresholds exclude kernel-context bytes; the hard request budget includes them.
 - The raw event log is the source of truth and is never deleted or lossily
   summarized; canonical task state is authoritative; archival episodes and FTS
   recall stay independently available.
@@ -280,7 +281,10 @@ Memory/cache invariants (do not violate):
   and write-capable commands from any session sharing the workspace make older
   passes stale; replay must derive the
   same completion state without deleting historical evidence. Active managed
-  processes block certification until exit and revalidation.
+  processes block certification until exit and revalidation. Managed exits commit automatically without model
+  polling; failed exit commits stay retryable. Certification blockers name
+  process ids/owners, and unchanged writer-blocked retries are suppressed after
+  the retry budget without deleting evidence or requirements.
 - Validation uses the configured shell timeout. Linux proving pipelines use
   Bash `pipefail`; Windows proving commands must run without pipelines.
   Refresh multiple requirements with one covering `validate` command and its

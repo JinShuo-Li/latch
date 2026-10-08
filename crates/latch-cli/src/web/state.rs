@@ -63,7 +63,8 @@ impl View {
                     self.media.insert(reference.id.clone(), reference.clone());
                 }
             }
-            EventPayload::AssistantMessageCompleted { .. } => self.streaming.clear(),
+            EventPayload::AssistantMessageCompleted { .. }
+            | EventPayload::CompletionReport { .. } => self.streaming.clear(),
             EventPayload::RunStarted { .. } => self.busy = true,
             EventPayload::RunCompleted { .. } => {
                 self.streaming.clear();
@@ -165,5 +166,49 @@ impl View {
             "media":self.media.values().collect::<Vec<_>>(),"sidebar":self.sidebar,
             "validation_status":self.sidebar.validation_status(),"estimated_cost":self.sidebar.estimated_cost(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completion_report_survives_run_end_and_snapshot_reconstruction() {
+        let report = Event {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
+            payload: EventPayload::CompletionReport {
+                text: "Kernel completion report\nValidation: unverified — active managed process."
+                    .into(),
+            },
+        };
+        let end = Event {
+            sequence: 2,
+            payload: EventPayload::RunCompleted {
+                run_id: Uuid::new_v4(),
+                outcome: "completed".into(),
+            },
+            ..report.clone()
+        };
+        let mut live = View {
+            streaming: "ephemeral output".into(),
+            ..View::default()
+        };
+        live.event(&report);
+        live.event(&end);
+        assert!(live.streaming.is_empty());
+        assert!(
+            live.snapshot()["cells"]
+                .to_string()
+                .contains("active managed process")
+        );
+        let mut replayed = View::default();
+        replayed.event(&report);
+        replayed.event(&end);
+        assert_eq!(live.snapshot()["cells"], replayed.snapshot()["cells"]);
     }
 }

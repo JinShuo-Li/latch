@@ -212,6 +212,9 @@ impl PresentationModel {
             EventPayload::AssistantMessageCompleted { text, .. } if !text.trim().is_empty() => {
                 self.cells.push(Cell::Assistant { text: text.clone() });
             }
+            EventPayload::CompletionReport { text } => {
+                self.cells.push(Cell::Notice { text: text.clone() });
+            }
             EventPayload::ToolRequested { call } => self.begin_tool(call),
             EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } => {
                 self.finish_tool(result)
@@ -1103,6 +1106,20 @@ mod tests {
         assert!(visible.contains("Read Cargo.toml"));
         assert!(visible.contains("Search \\\"normalize\\\" in src/"));
         assert!(!operations.iter().any(|op| op.label.contains("deadbeef")));
+    }
+
+    #[test]
+    fn durable_completion_report_is_identical_live_and_on_replay() {
+        let report = event(EventPayload::CompletionReport {
+            text: "Kernel completion report\nCompletion: ImplementedNotVerified.\nValidation: workspace writer overlapped validation.".into(),
+        });
+        let mut live = PresentationModel::default();
+        live.apply_event(&report);
+        let replayed = PresentationModel::from_events(&[report]);
+        assert_eq!(live.cells(), replayed.cells());
+        assert!(
+            matches!(&live.cells()[0], Cell::Notice { text } if text.contains("writer overlapped"))
+        );
     }
 
     #[test]

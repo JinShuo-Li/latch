@@ -1920,6 +1920,50 @@ async fn bounded_process_drain_never_waits_forever_on_a_held_pipe() {
 }
 
 #[tokio::test]
+async fn managed_process_exit_is_durable_without_poll_and_output_remains_available() {
+    let (_d, executor) = setup(Mode::Work);
+    let started = executor
+        .execute(
+            &call("exec_start", json!({"command":"echo retained-output"})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!started.is_error, "{}", started.output);
+    let id = started.output.split_whitespace().nth(1).unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if executor.store.events(executor.session_id).unwrap().iter().any(|event| {
+                matches!(&event.payload, EventPayload::ProcessExited { id: exited, .. } if exited == id)
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("natural exit must commit without a model polling");
+    let poll = executor
+        .execute(
+            &call("exec_poll", json!({"id":id})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!poll.is_error, "{}", poll.output);
+    assert!(poll.output.contains("retained-output"));
+    assert!(poll.output.contains("exited with code 0"));
+    let terminated = executor
+        .execute(
+            &call("exec_terminate", json!({"id":id})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!terminated.is_error, "{}", terminated.output);
+    assert_eq!(executor.store.events(executor.session_id).unwrap().iter().filter(|event| {
+        matches!(&event.payload, EventPayload::ProcessExited { id: exited, .. } if exited == id)
+    }).count(), 1, "watcher, poll and terminate must not duplicate exit events");
+}
+
+#[tokio::test]
 async fn managed_process_start_poll_and_terminate() {
     let (_d, e) = setup(Mode::Work);
     let started = e

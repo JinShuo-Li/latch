@@ -812,6 +812,7 @@ impl Agent {
             arguments: json!({"requirement": requirement, "command": command}),
         };
         let sink: AgentEventSink = Arc::new(|_| {});
+        self.emit(EventPayload::ToolRequested { call: call.clone() }, &sink)?;
         self.execute_validate(&call, cancel, &sink).await
     }
     /// Records one user turn with normal provenance. Used for the initial
@@ -1281,7 +1282,7 @@ impl Agent {
                             final_text.push_str("\n\n");
                         }
                         final_text.push_str(&report);
-                        sink(AgentOutput::Transient(StreamEvent::TextDelta(report)));
+                        self.emit(EventPayload::CompletionReport { text: report }, &sink)?;
                     }
                     break;
                 }
@@ -1336,11 +1337,11 @@ impl Agent {
         // Tool execution appends durable events (mutations, drift detection,
         // lifecycle) directly to the store. Deliver those to the live sink
         // first so consumers observe the exact durable order that replay sees.
-        self.forward_appended_events(sink)?;
         let event = self.store.append(self.session_id, payload)?;
-        sink(AgentOutput::Durable(Box::new(event.clone())));
-        self.forward_watermark
-            .store(event.sequence, Ordering::Relaxed);
+        // Append first, then forward the contiguous durable suffix. A process
+        // watcher can commit between any two calls: sending this event directly
+        // and jumping the watermark would silently skip that lifecycle event.
+        self.forward_appended_events(sink)?;
         Ok(event)
     }
     /// Forwards durable events appended since the watermark to the live sink.
@@ -1359,8 +1360,9 @@ impl Agent {
         let events = self.store.events_after(self.session_id, watermark)?;
         for event in &events {
             sink(AgentOutput::Durable(Box::new(event.clone())));
+            self.forward_watermark
+                .store(event.sequence, Ordering::Relaxed);
         }
-        self.forward_watermark.store(last, Ordering::Relaxed);
         Ok(())
     }
 }

@@ -11,6 +11,16 @@ use super::*;
 /// available.
 const VERIFICATION_CORRECTION: &str = "Kernel verification check: this run changed the workspace, but its implementation claim or current verification is missing. If implementation is done, run any missing validation (refresh several named requirements with one covering command and requirements), then call complete with implementation_done=true. If verification is unavailable, record_evidence and report why. If no validation is appropriate, explain why and record the implementation claim.";
 
+/// Repeated certification blockers are the same failed attempt even when the
+/// model changes the proving command or its successful output. Use the same
+/// durable diagnostic in live supervision and replay.
+pub(super) fn validation_failure_output(output: &str) -> &str {
+    output
+        .lines()
+        .find(|line| line.starts_with("Certification blocked:"))
+        .unwrap_or(output)
+}
+
 /// True when a durable event records a workspace mutation Latch itself made
 /// during the run: a guarded edit, a mutating shell command, or an extension
 /// write. External edits are somebody else's change and pre-existing dirt was
@@ -222,7 +232,7 @@ impl Agent {
             self.session_id,
             &["tool_requested", "tool_completed", "tool_failed"],
         )?;
-        let mut calls: std::collections::HashMap<String, (String, String)> =
+        let mut calls: std::collections::HashMap<String, (String, Vec<String>)> =
             std::collections::HashMap::new();
         let mut attempts: Vec<(String, bool, String)> = Vec::new();
         for event in &events {
@@ -232,16 +242,30 @@ impl Agent {
                         call.id.clone(),
                         (
                             call.name.clone(),
-                            failure_subject(&call.name, &call.arguments),
+                            if call.name == "validate" {
+                                super::validation::validation_requirements(&call.arguments)
+                                    .unwrap_or_else(|_| {
+                                        vec![failure_subject(&call.name, &call.arguments)]
+                                    })
+                            } else {
+                                vec![failure_subject(&call.name, &call.arguments)]
+                            },
                         ),
                     );
                 }
                 EventPayload::ToolCompleted { result } | EventPayload::ToolFailed { result } => {
-                    if let Some((tool, subject)) = calls.get(&result.call_id)
+                    if let Some((tool, subjects)) = calls.get(&result.call_id)
                         && matches!(tool.as_str(), "shell" | "validate")
                     {
                         let failed = matches!(&event.payload, EventPayload::ToolFailed { .. });
-                        attempts.push((subject.clone(), failed, result.output.clone()));
+                        let output = if tool == "validate" {
+                            validation_failure_output(&result.output)
+                        } else {
+                            &result.output
+                        };
+                        for subject in subjects {
+                            attempts.push((subject.clone(), failed, output.to_owned()));
+                        }
                     }
                 }
                 _ => {}

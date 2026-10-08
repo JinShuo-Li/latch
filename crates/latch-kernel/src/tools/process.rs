@@ -83,8 +83,38 @@ impl ToolExecutor {
                 readers,
                 cursor: 0,
                 artifact_id: None,
+                exit_recorded: false,
             },
         );
+        // A model may never poll this process. Keep only a weak owner reference
+        // so the watcher cannot keep an abandoned executor (and its children)
+        // alive. Lifecycle commits remain serialized with poll/terminate.
+        let processes = Arc::downgrade(&self.processes);
+        let store = self.store.clone();
+        let artifacts = self.artifacts.clone();
+        let session_id = self.session_id;
+        let watched_id = id.clone();
+        tokio::spawn(async move {
+            loop {
+                {
+                    let Some(processes) = processes.upgrade() else {
+                        break;
+                    };
+                    let mut processes = processes.lock().await;
+                    let Some(process) = processes.get_mut(&watched_id) else {
+                        break;
+                    };
+                    // A failed durable commit must remain retryable, never a
+                    // successful in-memory exit with no corresponding event.
+                    let _ =
+                        refresh_process(&store, session_id, &artifacts, &watched_id, process).await;
+                    if process.exit_recorded {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
         let label_suffix = if label.is_empty() {
             String::new()
         } else {
@@ -106,15 +136,7 @@ impl ToolExecutor {
             }
             bail!("unknown process {id}; start one with exec_start");
         };
-        if process.status == ProcessStatus::Running
-            && let Some(child) = process.child.as_mut()
-            && let Some(status) = child.try_wait()?
-        {
-            process.status = ProcessStatus::Exited(status.code().unwrap_or(-1));
-            process.child = None;
-            drain_readers(std::mem::take(&mut process.readers)).await;
-            self.finish_process(id, process).await?;
-        }
+        refresh_process(&self.store, self.session_id, &self.artifacts, id, process).await?;
         let full = process.output.lock().await.clone();
         let new = full.get(process.cursor..).unwrap_or("").to_owned();
         process.cursor = full.len();
@@ -146,49 +168,30 @@ impl ToolExecutor {
             }
             bail!("unknown process {id}");
         };
+        refresh_process(&self.store, self.session_id, &self.artifacts, id, process).await?;
         if process.status == ProcessStatus::Running {
             if let Some(child) = process.child.as_mut() {
                 crate::execution::kill_sandbox_children(child.id());
-                child.kill().await.ok();
-                let _ = child.wait().await;
+                child.kill().await?;
+                child.wait().await?;
             }
             process.status = ProcessStatus::Killed;
             process.child = None;
             drain_readers(std::mem::take(&mut process.readers)).await;
-            self.finish_process(id, process).await?;
         }
+        refresh_process(&self.store, self.session_id, &self.artifacts, id, process).await?;
         Ok((
             format!("[process {id}: {}]", process.status.label()),
             process.artifact_id.clone(),
         ))
     }
-    pub(super) async fn finish_process(
-        &self,
-        id: &str,
-        process: &mut ManagedProcess,
-    ) -> Result<()> {
-        let full = process.output.lock().await.clone();
-        let artifact_id = if full.len() > PROCESS_MAX_BUFFER_BYTES {
-            let name = format!("process-{id}.log");
-            std::fs::write(self.artifacts.join(&name), full.as_bytes())?;
-            process.artifact_id = Some(name.clone());
-            Some(name)
-        } else {
-            process.artifact_id.clone()
-        };
-        let status = match process.status {
-            ProcessStatus::Running => "lost".into(),
-            ProcessStatus::Exited(code) => format!("exit {code}"),
-            ProcessStatus::Killed => "killed".into(),
-        };
-        self.store.append(
-            self.session_id,
-            EventPayload::ProcessExited {
-                id: id.to_owned(),
-                status,
-                artifact_id,
-            },
-        )?;
+    /// Reconcile natural exits before taking a validation snapshot, including
+    /// the interval before the asynchronous watcher gets its next time slice.
+    pub(crate) async fn refresh_managed_processes(&self) -> Result<()> {
+        let mut processes = self.processes.lock().await;
+        for (id, process) in processes.iter_mut() {
+            refresh_process(&self.store, self.session_id, &self.artifacts, id, process).await?;
+        }
         Ok(())
     }
     pub(super) fn process_was_started(&self, id: &str) -> Result<bool> {
@@ -404,6 +407,52 @@ pub(super) struct ManagedProcess {
     /// Byte offset already returned to the model by `exec_poll`.
     cursor: usize,
     artifact_id: Option<String>,
+    /// Set only after the durable exit event commits. Failed commits retry.
+    exit_recorded: bool,
+}
+
+async fn refresh_process(
+    store: &EventStore,
+    session_id: Uuid,
+    artifacts: &Path,
+    id: &str,
+    process: &mut ManagedProcess,
+) -> Result<()> {
+    if process.exit_recorded {
+        return Ok(());
+    }
+    if process.status == ProcessStatus::Running {
+        let Some(child) = process.child.as_mut() else {
+            bail!("running managed process {id} has no child");
+        };
+        let Some(status) = child.try_wait()? else {
+            return Ok(());
+        };
+        process.status = ProcessStatus::Exited(status.code().unwrap_or(-1));
+        process.child = None;
+        drain_readers(std::mem::take(&mut process.readers)).await;
+    }
+    let full = process.output.lock().await.clone();
+    if full.len() > PROCESS_MAX_BUFFER_BYTES {
+        let name = format!("process-{id}.log");
+        std::fs::write(artifacts.join(&name), full.as_bytes())?;
+        process.artifact_id = Some(name);
+    }
+    let status = match process.status {
+        ProcessStatus::Running => unreachable!("running processes are not finalized"),
+        ProcessStatus::Exited(code) => format!("exit {code}"),
+        ProcessStatus::Killed => "killed".into(),
+    };
+    store.append(
+        session_id,
+        EventPayload::ProcessExited {
+            id: id.to_owned(),
+            status,
+            artifact_id: process.artifact_id.clone(),
+        },
+    )?;
+    process.exit_recorded = true;
+    Ok(())
 }
 
 /// Managed process output retained in memory before spilling to an artifact.
@@ -425,4 +474,47 @@ pub(super) fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_exit_commit_is_retryable_and_never_reported_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let session = store.create_session(dir.path()).unwrap();
+        let mut process = ManagedProcess {
+            label: String::new(),
+            status: ProcessStatus::Exited(7),
+            child: None,
+            output: Arc::new(Mutex::new("retained".into())),
+            readers: Vec::new(),
+            cursor: 0,
+            artifact_id: None,
+            exit_recorded: false,
+        };
+        store.fail_appends(true);
+        assert!(
+            refresh_process(&store, session, dir.path(), "fixture", &mut process)
+                .await
+                .is_err()
+        );
+        assert!(!process.exit_recorded);
+        assert!(store.events(session).unwrap().is_empty());
+        store.fail_appends(false);
+        refresh_process(&store, session, dir.path(), "fixture", &mut process)
+            .await
+            .unwrap();
+        refresh_process(&store, session, dir.path(), "fixture", &mut process)
+            .await
+            .unwrap();
+        assert!(process.exit_recorded);
+        assert_eq!(store.events(session).unwrap().len(), 1);
+        assert!(matches!(&store.events(session).unwrap()[0].payload,
+            EventPayload::ProcessExited { status, .. } if status == "exit 7"
+        ));
+        assert_eq!(process.output.lock().await.as_str(), "retained");
+    }
 }

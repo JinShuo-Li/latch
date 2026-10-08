@@ -1046,7 +1046,15 @@ async fn freshness_managed_process_blocks_validation_until_exit_and_revalidation
             },
         )
         .unwrap();
-    freshness_validate(&mut agent).await;
+    let blocked = agent
+        .run_validation("workspace check", "echo checked", CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(blocked.is_error, "{}", blocked.output);
+    assert!(blocked.output.starts_with("BLOCKED"));
+    assert!(blocked.output.contains("proc-test"));
+    assert!(blocked.output.contains(&sid.to_string()));
+    assert!(blocked.output.contains("exec_terminate"));
     assert!(
         agent
             .evidence()
@@ -1078,6 +1086,154 @@ async fn freshness_managed_process_blocks_validation_until_exit_and_revalidation
     freshness_validate(&mut agent).await;
     freshness_complete(&mut agent);
     assert_eq!(agent.state().completion, CompletionState::Verified);
+}
+
+#[tokio::test]
+async fn natural_managed_exit_allows_validation_without_model_poll() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    freshness_tool(
+        &mut agent,
+        "exec_start",
+        json!({"command":"echo finished > process.txt"}),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if store
+                .events(sid)
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::ProcessExited { .. }))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        store.events(sid).unwrap().iter().any(|event| matches!(
+            event.payload,
+            EventPayload::ProcessStarted {
+                may_write_workspace: Some(true),
+                ..
+            }
+        )),
+        "the regression must exercise a write-capable process"
+    );
+    assert!(dir.path().join("process.txt").is_file());
+    freshness_validate(&mut agent).await;
+    freshness_complete(&mut agent);
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+    assert!(agent.active_managed_processes.is_empty());
+    let mut ledger = EvidenceLedger::default();
+    for event in store.events(sid).unwrap() {
+        if let EventPayload::EvidenceCreated { evidence } = event.payload {
+            ledger.push(evidence);
+        }
+    }
+    assert_eq!(ledger.entries(), agent.evidence.entries());
+}
+
+#[tokio::test]
+async fn repeated_writer_blocker_regrounds_and_suppresses_commands_until_exit() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    agent.failures = FailureManager::new(2);
+    let owner = store.create_session(dir.path()).unwrap();
+    store
+        .append(
+            owner,
+            EventPayload::ProcessStarted {
+                id: "proc-peer".into(),
+                command: "writer".into(),
+                label: "peer fixture".into(),
+                may_write_workspace: Some(true),
+                pid: Some(1),
+            },
+        )
+        .unwrap();
+    let sink: AgentEventSink = Arc::new(|_| {});
+    for index in 0..3 {
+        let command = if index == 2 {
+            "echo should-not-run > suppressed.txt"
+        } else {
+            "echo checked"
+        };
+        let call = ToolCall {
+            id: format!("blocked-{index}"),
+            name: "validate".into(),
+            arguments: json!({"requirement":"A", "requirements":["A","B"], "command":command}),
+        };
+        agent
+            .emit(EventPayload::ToolRequested { call: call.clone() }, &sink)
+            .unwrap();
+        let result = agent
+            .execute_batch(vec![call], CancellationToken::new(), &sink)
+            .await
+            .unwrap()
+            .remove(0);
+        assert!(result.is_error, "{}", result.output);
+        assert!(result.output.contains("proc-peer"));
+        assert!(result.output.contains(&owner.to_string()));
+        if index == 2 {
+            assert!(result.output.contains("no command was executed"));
+        }
+    }
+    assert!(!dir.path().join("suppressed.txt").exists());
+    let events = store.events(sid).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::ValidationResult { .. }))
+            .count(),
+        2
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::RegroundRequested { .. }))
+    );
+    let live = agent.failure_lineages();
+    assert_eq!(live, vec![("A".into(), 3), ("B".into(), 3)]);
+    agent.failures = FailureManager::new(2);
+    agent.restore_failures().unwrap();
+    assert_eq!(
+        agent.failure_lineages(),
+        live,
+        "all exact requirements must survive replay"
+    );
+    store
+        .append(
+            owner,
+            EventPayload::ProcessExited {
+                id: "proc-peer".into(),
+                status: "exit 0".into(),
+                artifact_id: None,
+            },
+        )
+        .unwrap();
+    let call = ToolCall {
+        id: "after-exit".into(),
+        name: "validate".into(),
+        arguments: json!({"requirement":"A","requirements":["A","B"],"command":"echo checked"}),
+    };
+    agent
+        .emit(EventPayload::ToolRequested { call: call.clone() }, &sink)
+        .unwrap();
+    let result = agent
+        .execute_batch(vec![call], CancellationToken::new(), &sink)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(!result.is_error, "{}", result.output);
+    assert!(agent.failure_lineages().is_empty());
+    freshness_complete(&mut agent);
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+    agent.restore_failures().unwrap();
+    assert!(agent.failure_lineages().is_empty());
 }
 
 #[test]
@@ -5103,6 +5259,121 @@ fn complete_response(id: &str) -> ModelResponse {
     )
 }
 
+#[test]
+fn concurrent_lifecycle_events_are_forwarded_once_in_durable_order() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = freshness_agent(&dir);
+    agent
+        .forward_watermark
+        .store(store.last_sequence(sid).unwrap(), Ordering::Relaxed);
+    let start = store.last_sequence(sid).unwrap();
+    store
+        .append(
+            sid,
+            EventPayload::ProcessStarted {
+                id: "concurrent-exit".into(),
+                command: "fixture".into(),
+                label: String::new(),
+                may_write_workspace: Some(true),
+                pid: Some(1),
+            },
+        )
+        .unwrap();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = seen.clone();
+    let durable = store.clone();
+    let sink: AgentEventSink = Arc::new(move |output| {
+        if let AgentOutput::Durable(event) = output {
+            observed.lock().unwrap().push(event.sequence);
+            if matches!(event.payload, EventPayload::ProcessStarted { .. }) {
+                durable
+                    .append(
+                        sid,
+                        EventPayload::ProcessExited {
+                            id: "concurrent-exit".into(),
+                            status: "exit 0".into(),
+                            artifact_id: None,
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+    });
+    agent
+        .emit(
+            EventPayload::CompletionReport {
+                text: "first".into(),
+            },
+            &sink,
+        )
+        .unwrap();
+    agent
+        .emit(
+            EventPayload::CompletionReport {
+                text: "second".into(),
+            },
+            &sink,
+        )
+        .unwrap();
+    agent.forward_appended_events(&sink).unwrap();
+    let expected: Vec<_> = store
+        .events_after(sid, start)
+        .unwrap()
+        .iter()
+        .map(|event| event.sequence)
+        .collect();
+    assert_eq!(*seen.lock().unwrap(), expected);
+}
+
+#[tokio::test]
+async fn durable_completion_report_survives_live_projection_and_resume() {
+    let dir = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &dir,
+        PermissionConfig::default(),
+        vec![tool_response(
+            "",
+            "complete",
+            "complete",
+            json!({"implementation_done":true}),
+        )],
+    );
+    let live = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = live.clone();
+    let output = agent
+        .run(
+            "Report completion.",
+            CancellationToken::new(),
+            Arc::new(move |output| {
+                if let AgentOutput::Durable(event) = output {
+                    observed.lock().unwrap().push(*event);
+                }
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(output.contains("Kernel completion report"));
+    let events = store.events(sid).unwrap();
+    let reports = |events: &[Event]| {
+        events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::CompletionReport { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(reports(&events), reports(&live.lock().unwrap()));
+    assert_eq!(reports(&events).len(), 1);
+    assert_eq!(model_request_count(&events), 1);
+    assert!(crate::session::replay_items(&events).iter().any(|item| matches!(item,
+        latch_protocol::DisplayItem::KernelNotice { text } if text.contains("Kernel completion report")
+    )));
+    let encoded = serde_json::to_string(&events).unwrap();
+    let decoded: Vec<Event> = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(reports(&decoded), reports(&events));
+}
+
 #[tokio::test]
 async fn empty_complete_summary_uses_kernel_facts_without_another_model_request() {
     let d = tempdir().unwrap();
@@ -5131,6 +5402,17 @@ async fn empty_complete_summary_uses_kernel_facts_without_another_model_request(
     assert!(output.contains("file exists"), "{output}");
     let events = store.events(sid).unwrap();
     assert_eq!(model_request_count(&events), 3);
+    let reports: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::CompletionReport { .. }))
+        .collect();
+    assert_eq!(reports.len(), 1, "the fallback survives resume");
+    let EventPayload::CompletionReport { text } = &reports[0].payload else {
+        unreachable!()
+    };
+    assert!(text.contains("added.txt"));
+    assert!(text.contains("file exists: passed"));
+    assert!(latch_protocol::display_items(reports[0]).iter().any(|item| matches!(item, latch_protocol::DisplayItem::KernelNotice { text } if text.contains("Verified"))));
     // The report is derived by the kernel, not falsely recorded as a model turn.
     assert_eq!(
         events

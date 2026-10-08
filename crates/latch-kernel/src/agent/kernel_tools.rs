@@ -43,7 +43,29 @@ impl Agent {
                     None => "unverified",
                 };
                 report.push_str(&format!("\n- {requirement}: {status}"));
+                if status != "passed"
+                    && let Some(evidence) = self.evidence.current(requirement)
+                {
+                    report.push_str(&format!(" — {}", evidence.detail));
+                    if evidence.status == EvidenceStatus::Passed {
+                        report.push_str(
+                            " (historical command passed; current workspace is not certified)",
+                        );
+                    }
+                }
             }
+        }
+        if !self.active_managed_processes.is_empty() {
+            let mut writers: Vec<String> = self
+                .active_managed_processes
+                .iter()
+                .map(|(id, session)| format!("{id} (session {session})"))
+                .collect();
+            writers.sort();
+            report.push_str(&format!(
+                "\nActive workspace writers: {}. Wait for exit or terminate through the owning session, then revalidate.",
+                writers.join(", ")
+            ));
         }
         Ok(report)
     }

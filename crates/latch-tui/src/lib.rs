@@ -442,6 +442,7 @@ impl App {
                 if matches!(
                     &event.payload,
                     latch_protocol::EventPayload::AssistantMessageCompleted { .. }
+                        | latch_protocol::EventPayload::CompletionReport { .. }
                 ) {
                     self.streaming = None;
                 }

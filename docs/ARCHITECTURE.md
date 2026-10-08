@@ -472,7 +472,13 @@ write grants retain write tracking. Validation and synchronous shell commands sh
 mutation lock with guarded edits; a pass overlapping an active managed writer
 or another session's mutation remains stale.
 Revalidation after the process exits on the current generation restores
-`Verified` eligibility.
+`Verified` eligibility. Natural managed exits are reaped and committed by a
+weak-owner watcher in `tools/process.rs`, independently of model polling;
+`exec_poll` still returns buffered output. Failed exit commits remain retryable.
+Validation reconciles local process exits before taking its generation snapshot.
+A command that passes while certification is blocked returns `BLOCKED`, the
+process ids and owning sessions, and the recovery action. It remains historical
+Passed evidence, never current certification.
 
 Completion state and loop termination are deliberately separate. A `complete`
 claim sets the terminal flag only so the loop can exit in the same turn; the
@@ -489,11 +495,14 @@ that keeps claiming completion is honored on the next claim and the run still
 ends `ImplementedNotVerified`. A run that mutated nothing exits immediately;
 an empty required-validation set is never by itself a reason to keep going.
 
-If a terminal `complete` response contains no summary text, the kernel streams
-a fallback report with the derived completion state, files changed by Latch,
-shells or extensions during this run, and current required-validation statuses.
-Stale evidence is reported as unverified. This report adds no provider turn or
-fabricated assistant event and does not change completion truth.
+If a terminal `complete` response contains no summary text, the kernel commits
+a `CompletionReport` event with the derived completion state, files changed by
+Latch, shells or extensions during this run, current required-validation
+statuses, and recorded blockers. TUI, Web, machine events and resume all retain
+this kernel notice. Stale evidence is reported as unverified. This report adds
+no provider turn or fabricated assistant event and does not change completion
+truth. Concurrent process events and loop events reach live consumers once in
+durable sequence order.
 
 ## State, memory, and supervision
 
@@ -509,6 +518,13 @@ shell command). Successful inspection tools never reset it; the lineage's own
 validation passing resolves it, and a materially different failure signature
 restarts the count. Streaks replay from durable events, so `--resume` does not
 forget a stalled loop. At the configured budget the kernel requests re-ground.
+A passing command whose certification is blocked does not clear that lineage.
+Its blocker, rather than the command spelling or output, identifies a repeated
+attempt. Once the retry budget is exhausted, validation against the same
+active managed writers returns a suppression diagnostic without executing the
+command or fabricating new evidence. Exited or changed blockers permit another
+attempt; a current passing validation clears the streak. All exact requirements
+in a covering command replay their own lineages.
 
 Progress supervision is separate and deterministic: every read_file,
 read_image, search, read_artifact, git_status, git_diff, and conservative
@@ -641,7 +657,9 @@ older generations stay in the raw log but are not part of the provider-visible
 epoch.
 
 Rotation is deliberate and hysteretic. The `recent_tokens` configuration is
-the conversation high-water mark; when an epoch exceeds it, one rotation keeps
+the conversation high-water mark. Epoch loading scans through kernel context
+messages without charging their bytes to this threshold; they still count
+toward the hard request budget. When an epoch exceeds it, one rotation keeps
 the newest whole semantic units up to roughly three quarters of the budget and
 emits a fresh snapshot, leaving a quarter-budget of growth headroom so a
 saturated session rotates occasionally rather than every turn. Tool

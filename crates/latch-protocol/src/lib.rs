@@ -1064,6 +1064,11 @@ pub enum EventPayload {
         run_id: Uuid,
         outcome: String,
     },
+    /// Kernel-derived fallback when terminal completion has no model prose.
+    /// This is presentation backed by durable facts, never a model response.
+    CompletionReport {
+        text: String,
+    },
     AssistantMessageCompleted {
         text: String,
         tool_calls: Vec<ToolCall>,
@@ -1847,6 +1852,9 @@ pub fn display_items(event: &Event) -> Vec<DisplayItem> {
         }],
         EventPayload::AssistantMessageCompleted { text, .. } => {
             vec![DisplayItem::AssistantMessage { text: text.clone() }]
+        }
+        EventPayload::CompletionReport { text } => {
+            vec![DisplayItem::KernelNotice { text: text.clone() }]
         }
         EventPayload::ToolRequested { call } => vec![DisplayItem::ToolActivity {
             call_id: call.id.clone(),

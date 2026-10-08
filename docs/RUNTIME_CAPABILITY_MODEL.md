@@ -201,6 +201,15 @@ context from an external index) is possible because the contract has no
 `EventStore` dependency; such an engine must still return protocol-valid,
 bounded views and is installed by the operator, not by the model.
 
+Managed process lifecycle remains kernel-owned: a weak-owner watcher reaps
+natural exits and commits `ProcessExited` without a model `exec_poll` call.
+Validation keeps command outcome separate from current certification, reports
+active writer ids and owners, and suppresses retries against an unchanged
+writer blocker after the retry budget. Suppression creates no passing evidence
+and never removes requirements. Durable `CompletionReport` events are kernel
+presentation facts, not provider responses; every UI reconstructs them from
+the same log. These changes add no capability or unsandboxed execution path.
+
 ### Port map: implemented now vs intentionally deferred
 
 | Port | Status | Today's mechanism | Planned contract shape |

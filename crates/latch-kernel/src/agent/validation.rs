@@ -56,10 +56,44 @@ impl Agent {
         }
         let timeout =
             validation_timeout_seconds(&call.arguments, self.tools.shell_timeout_seconds());
+        self.tools.refresh_managed_processes().await?;
         self.refresh_workspace_generation()?;
         let starting_generation = self.evidence.workspace_generation();
         let starting_watermark = self.workspace_generation_watermark;
         let writer_active_at_start = !self.active_managed_processes.is_empty();
+        let mut writers: Vec<String> = self
+            .active_managed_processes
+            .iter()
+            .map(|(id, session)| format!("{id} (session {session})"))
+            .collect();
+        writers.sort();
+        if writer_active_at_start {
+            let diagnostic = format!(
+                "Certification blocked: workspace writer overlapped validation; active managed processes: {}",
+                writers.join(", ")
+            );
+            if requirements
+                .iter()
+                .any(|requirement| self.failures.requires_reground(requirement, &diagnostic))
+            {
+                let result = self.reject_validation(
+                    call,
+                    format!("{diagnostic}\nRepeated validation suppressed; no command was executed. Wait for these processes to exit, or exec_terminate them through their owning session, then rerun the covering validation. Existing evidence and requirements are preserved."),
+                    sink,
+                )?;
+                for requirement in &requirements {
+                    let decision = self.failures.record(requirement, &diagnostic);
+                    self.emit(
+                        EventPayload::FailureAttempt {
+                            signature: decision.signature,
+                            count: decision.count,
+                        },
+                        sink,
+                    )?;
+                }
+                return Ok(result);
+            }
+        }
         let output = match self
             .tools
             .run_validated_command(call, timeout, cancel)
@@ -78,6 +112,7 @@ impl Agent {
             }
         };
         let passed = output.success;
+        self.tools.refresh_managed_processes().await?;
         self.refresh_workspace_generation()?;
         let conflicting_mutation = writer_active_at_start
             || self
@@ -101,8 +136,16 @@ impl Agent {
             output.elapsed,
             output.first_line()
         );
-        if conflicting_mutation {
-            detail.push_str("; workspace writer overlapped validation");
+        let blocker = conflicting_mutation.then(|| {
+            if writers.is_empty() {
+                "workspace writer overlapped validation; another session changed the workspace during validation".to_owned()
+            } else {
+                format!("workspace writer overlapped validation; active managed processes: {}", writers.join(", "))
+            }
+        });
+        if let Some(blocker) = &blocker {
+            detail.push_str("; ");
+            detail.push_str(blocker);
         }
         // 1. Durable ValidationResult…
         let validation_event = self.emit(
@@ -151,7 +194,14 @@ impl Agent {
             sink,
         )?;
         let completion = self.state.state().completion.clone();
-        let verdict = if passed { "PASSED" } else { "FAILED" };
+        let certified = passed && !conflicting_mutation;
+        let verdict = if !passed {
+            "FAILED"
+        } else if certified {
+            "PASSED"
+        } else {
+            "BLOCKED"
+        };
         let artifact_note = output
             .artifact_id
             .as_ref()
@@ -165,6 +215,12 @@ impl Agent {
             requirements.join("`, `"),
             output.status_line,
         );
+        if let Some(blocker) = &blocker {
+            body.push_str(&format!(
+                "Certification blocked: {blocker}\nCommand outcome: {}. This result cannot certify the workspace. Wait for the listed processes to exit (exec_poll retains their output), or use exec_terminate if they should stop. For another session's process, contact its owner. After all writers exit and workspace changes settle, rerun one covering validate command with the exact requirements array. Repeating validation while this blocker remains will not certify it.\n",
+                if passed { "passed" } else { "failed" },
+            ));
+        }
         let preview: String = output.text.chars().take(2000).collect();
         body.push_str(preview.trim_end());
         body.push_str(&format!("\n(elapsed {:.1?})", output.elapsed));
@@ -173,7 +229,7 @@ impl Agent {
             call_id: call.id.clone(),
             name: call.name.clone(),
             output: body,
-            is_error: !passed,
+            is_error: !certified,
             artifact_id: output.artifact_id,
             media: Vec::new(),
         };
@@ -181,11 +237,14 @@ impl Agent {
         //    result body, the exact text a resumed session replays — so live
         //    and restored supervision count identically.
         for requirement in &requirements {
-            if passed {
+            if certified {
                 self.failures.resolve(requirement);
                 continue;
             }
-            let decision = self.failures.record(requirement, &result.output);
+            let decision = self.failures.record(
+                requirement,
+                super::supervision::validation_failure_output(&result.output),
+            );
             self.emit(
                 EventPayload::FailureAttempt {
                     signature: decision.signature,
@@ -232,7 +291,7 @@ impl Agent {
     }
 }
 
-fn validation_requirements(
+pub(super) fn validation_requirements(
     arguments: &serde_json::Value,
 ) -> std::result::Result<Vec<String>, String> {
     let primary = arguments
