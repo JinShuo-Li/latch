@@ -12,7 +12,7 @@ if (Test-Path -LiteralPath $root) { throw 'Use a new disposable fixture director
 $workspace = Join-Path $root 'workspace'
 $runtime = Join-Path $root 'runtime'
 $journal = Join-Path $root 'journal'
-New-Item -ItemType Directory -Path $root,$workspace,$runtime,$journal | Out-Null
+New-Item -ItemType Directory -Path $root,$workspace,$runtime | Out-Null
 foreach ($file in @('latch-boundary-probe.exe','latch-boundary-files.exe','latch-boundary-compat.dll')) {
   Copy-Item -LiteralPath (Join-Path $Binaries $file) -Destination $runtime
 }
