@@ -138,12 +138,7 @@ async fn extension_tool_roundtrip(command: &str, args: &[String]) {
         ..crate::extension::ExtensionLifecycle::default()
     });
     agent
-        .load_extension(
-            "fixture".into(),
-            command,
-            args,
-            &CancellationToken::new(),
-        )
+        .load_extension("fixture".into(), command, args, &CancellationToken::new())
         .await
         .unwrap();
     agent
@@ -173,10 +168,11 @@ async fn loop_executes_registered_extension_tool() {
 #[tokio::test]
 async fn loop_executes_registered_powershell_extension_tool() {
     let system_root = std::env::var("SystemRoot").expect("SystemRoot is set on Windows");
-    let powershell = format!(
-        r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe"
+    let powershell = format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe");
+    let fixture = format!(
+        "{}/tests/fixtures/extension.ps1",
+        env!("CARGO_MANIFEST_DIR")
     );
-    let fixture = format!("{}/tests/fixtures/extension.ps1", env!("CARGO_MANIFEST_DIR"));
     let args = vec![
         "-NoLogo".into(),
         "-NoProfile".into(),
