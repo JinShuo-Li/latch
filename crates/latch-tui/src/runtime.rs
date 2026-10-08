@@ -95,11 +95,15 @@ pub async fn run(
         app.presentation.apply_event(event);
     }
     app.sidebar = SidebarModel::from_events(session, &replay);
+    app.sidebar.activity.interrupted(chrono::Utc::now());
     app.input.seed_history(history);
     let mut events = EventStream::new();
+    let mut refresh = tokio::time::interval(std::time::Duration::from_secs(1));
+    refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         guard.terminal.draw(|frame| draw(frame, &mut app))?;
         tokio::select! {
+         _ = refresh.tick() => {},
          Some(out)=output_rx.recv()=>app.output(out),
          maybe=events.next()=>match maybe.transpose()?{
             Some(Event::Key(key)) if key.kind==KeyEventKind::Press => match app.on_key(key) {

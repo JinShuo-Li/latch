@@ -660,3 +660,78 @@ async fn web_executes_native_directory_enumeration() {
     assert!(cells.contains("Listed workspace"), "{cells}");
     assert!(!cells.contains("error:"), "{cells}");
 }
+
+#[tokio::test]
+async fn activity_distinguishes_provider_silence_from_reasoning_without_exposing_text() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let (reason, receive_reason) = std::sync::mpsc::channel();
+    let (finish, receive_finish) = std::sync::mpsc::channel();
+    let provider_hits = Arc::clone(&hits);
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        read_request_body(&mut stream).unwrap();
+        provider_hits.fetch_add(1, Ordering::SeqCst);
+        receive_reason
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"private-thought-fixture\"},\"finish_reason\":null}]}\n\n").unwrap();
+        stream.flush().unwrap();
+        receive_finish
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        stream.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"Public response\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n").unwrap();
+    });
+    let f = fixture_with_mock(
+        MockProvider {
+            base_url: format!("http://{addr}/v1"),
+            hits,
+            requests,
+        },
+        "standard",
+        "",
+    );
+    let web = Web::start(&f).await;
+    let snapshot = web.ready().await;
+    let id = snapshot["state"]["session_id"].as_str().unwrap();
+    assert_eq!(
+        web.post(
+            &format!("/api/sessions/{id}/commands"),
+            Web::command(
+                &snapshot,
+                json!({"type":"submit","data":{"text":"Check activity","media":[]}})
+            )
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    async fn phase(web: &Web, expected: &str) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let snapshot = web.snapshot().await;
+            if snapshot["state"]["sidebar"]["activity"]["phase"] == expected {
+                return snapshot;
+            }
+            assert!(Instant::now() < deadline, "missing {expected}: {snapshot}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    let waiting = phase(&web, "waiting_model").await;
+    assert!(waiting["state"]["sidebar"]["activity"]["last_provider_activity_at"].is_null());
+    reason.send(()).unwrap();
+    let thinking = phase(&web, "thinking").await;
+    assert!(!thinking.to_string().contains("private-thought-fixture"));
+    assert!(thinking["state"]["sidebar"]["activity"]["last_provider_activity_at"].is_string());
+    finish.send(()).unwrap();
+    let done = web.ready().await;
+    assert_eq!(done["state"]["sidebar"]["activity"]["phase"], "completed");
+    assert!(
+        done["state"]["cells"]
+            .to_string()
+            .contains("Public response")
+    );
+    assert!(!done.to_string().contains("private-thought-fixture"));
+}

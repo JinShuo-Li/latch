@@ -128,3 +128,31 @@ export function showModels() {
   $('#model-list').innerHTML = catalog.length ? `<label class="field-label" for="model-provider">Provider</label><select class="form-input" id="model-provider">${catalog.map(p=>`<option value="${e(p.id)}" ${p.id===provider?.id?'selected':''}>${e(p.display_name)}</option>`).join('')}</select>${(provider?.models || []).map(m=>`<button class="model-choice ${m.id===current.model && provider.id===current.provider_id?'active':''}" data-model="${e(m.id)}" data-provider="${e(provider.id)}"><span>${icon('spark')}</span><div><strong>${e(m.display_name || m.id)}</strong><small>${e(m.id)}${m.input_modalities.includes('image')?' · vision':''}</small></div>${m.id===current.model && provider.id===current.provider_id?icon('check'):''}</button>`).join('')}` : '<p class="settings-note">Configure a provider in Settings to choose a model.</p>';
   if (!$('#model-dialog').open) $('#model-dialog').showModal();
 }
+
+const activityLabels = {idle:'Ready',preparing:'Preparing request',waiting_model:'Waiting for model',thinking:'Thinking',writing:'Writing response',preparing_tool:'Preparing tool',running_tool:'Running tool',waiting_approval:'Waiting for approval',cancelling:'Stopping',completed:'Turn finished',cancelled:'Stopped',error:'Request failed',interrupted:'Interrupted'};
+const activePhases = new Set(['preparing','waiting_model','thinking','writing','preparing_tool','running_tool','waiting_approval','cancelling']);
+function elapsedText(seconds) {seconds=Math.max(0,Math.floor(seconds));return seconds<60?`${seconds}s`:`${Math.floor(seconds/60)}m ${seconds%60}s`;}
+export function renderActivity() {
+  const current=session();const a=current.sidebar?.activity || {};
+  const phase=current.starting?'preparing':a.phase || 'idle';
+  const active=activePhases.has(phase);const now=(state.snapshot?.server_time || Date.now()) + (state.receivedAt?performance.now()-state.receivedAt:0);
+  const since=value=>value?Math.max(0,(now-Date.parse(value))/1000):0;
+  const quiet=since(a.last_activity_at);
+  $('#activity-label').textContent=state.connected?(activityLabels[phase] || 'Working'):'Connection lost';
+  $('#activity-subject').textContent=a.subject || (active?a.model || profile().model || '': '');
+  $('#activity-elapsed').textContent=active && a.phase_since?`${elapsedText(since(a.phase_since))} in this phase`:'';
+  $('#activity-last').textContent=active && a.last_activity_at?`Activity ${elapsedText(quiet)} ago`:'';
+  $('#activity-dot').classList.toggle('active',active && state.connected);
+  $('#activity-dot').classList.toggle('attention',phase==='waiting_approval' || !state.connected);
+  let hint='';
+  if(!state.connected) hint='Reconnecting to Latch. Closing this page does not stop the task.';
+  else if(phase==='waiting_approval') hint='Latch is waiting for your decision.';
+  else if(phase==='thinking') hint='The provider is sending reasoning activity.';
+  else if(phase==='waiting_model') hint=a.signal==='connected'||a.signal==='receiving'?'Provider stream connected. Waiting for response text.':'Request sent. Waiting for provider activity.';
+  else if(phase==='running_tool') hint='The tool is running, including sandbox setup and cleanup.';
+  else if(phase==='cancelling') hint='Cancelling the request and cleaning up processes.';
+  else if(phase==='completed') hint='The turn ended. Task verification is shown in Overview.';
+  else if(phase==='error') hint='Review the error in the conversation before retrying.';
+  if(state.connected && active && quiet>=30 && !['waiting_approval','cancelling'].includes(phase)) hint=`No new activity for ${elapsedText(quiet)}. Latch is connected; the operation is still pending. You can Stop.`;
+  $('#activity-hint').textContent=hint;
+}

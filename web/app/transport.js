@@ -37,7 +37,9 @@ export function subscribe(onSnapshot, onConnection, onError) {
     try { onSnapshot(JSON.parse(event.data)); onConnection(true); }
     catch { onError(new Error('Could not read session state. Reconnect to Latch.')); }
   });
+  events.addEventListener('heartbeat', () => onConnection(true));
   events.addEventListener('changed', () => {
+    onConnection(true);
     if (refreshing) dirty = true;
     else if (!timer) timer = setTimeout(() => { timer = undefined; refresh(); },100);
   });

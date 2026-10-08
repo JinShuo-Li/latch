@@ -121,7 +121,11 @@ pub(super) fn active_status_line(app: &App) -> Option<Line<'static>> {
     } else if app.streaming.is_some() {
         label = Some("Writing response".into());
     } else if app.busy {
-        label = Some("Working".into());
+        label = Some(if app.sidebar.activity.phase.active() {
+            app.sidebar.activity.phase.label().into()
+        } else {
+            "Working".into()
+        });
     } else if app.interrupted {
         label = Some("Interrupted".into());
     }

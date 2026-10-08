@@ -306,18 +306,23 @@ async fn events(
                     .event("snapshot")
                     .data(snapshot.to_string())
             } else {
-                match tokio::select! { _ = host.0.shutdown.cancelled() => return None, result = receiver.recv() => result }
-                {
-                    Ok(sequence) => Event::default()
+                let notification = tokio::select! {
+                    _ = host.0.shutdown.cancelled() => return None,
+                    result = receiver.recv() => Some(result),
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => None,
+                };
+                match notification {
+                    None => Event::default().event("heartbeat").data(json!({"instance_id":host.0.instance,"server_time":chrono::Utc::now().timestamp_millis()}).to_string()),
+                    Some(Ok(sequence)) => Event::default()
                         .event("changed")
                         .id(format!("{}:{sequence}", host.0.instance))
                         .data(
                             json!({"instance_id":host.0.instance,"sequence":sequence}).to_string(),
                         ),
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => Event::default()
+                    Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => Event::default()
                         .event("snapshot")
                         .data(host.snapshot().await.to_string()),
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                    Some(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return None,
                 }
             };
             Some((Ok(event), (host, receiver, initial)))

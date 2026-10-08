@@ -32,6 +32,23 @@ retained through the browser picker and applied once to the first selected or
 created session. Stop the server with Ctrl+C
 in the launching terminal, or Settings → General → Stop Web server.
 
+## Activity
+
+The left sidebar shows request preparation, waiting for model activity,
+provider-reported reasoning, response text, tool preparation/execution, pending
+approval, cancellation and the final turn outcome. It also shows elapsed phase
+time and time since the latest activity. Timers update while no text arrives.
+After 30 seconds without activity it offers a Stop reminder, without declaring
+that the model failed or is thinking. Reasoning text is never sent to this panel.
+A resumed unfinished turn is marked interrupted; replay does not restart it.
+
+The TUI uses the same activity reducer in its sidebar and refreshes once per
+second during silence. The browser also receives a five-second connection
+heartbeat. A connection heartbeat does not reset model/tool activity timers or
+prove model progress. A finished turn is distinct from verified task completion,
+which remains in Overview. Closing the browser or losing the tunnel does not
+cancel execution.
+
 ## SSH forwarding
 
 On the remote Linux or Windows host (with an SSH server):
@@ -119,7 +136,8 @@ command receipt cache refuses new commands if full, rather than forgetting a
 still-valid receipt. These receipts coordinate transport, not durable completion.
 The kernel still owns policy, validation, permissions, execution and persistence.
 
-SSE sends an initial authoritative snapshot and small sequence-change signals.
+SSE sends an initial authoritative snapshot, small sequence-change signals,
+and connection heartbeats.
 The browser coalesces signals and fetches current state. A bounded broadcast
 ring resnapshots lagging observers; reconnect always starts with a full snapshot,
 regardless of Last-Event-ID. Sequence IDs are per server instance and are never

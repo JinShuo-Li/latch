@@ -235,6 +235,10 @@ live home directory is not yet qualified at scale; see
 `native/windows/boundary/CURRENT_STATE.md` before testing one.
 Native ownership is split into runner/token/AppContainer/ACL/recovery/desktop/
 job/process modules; Win32 complexity stays outside the safe Rust kernel.
+`latch-ui/src/activity.rs` owns the shared activity reducer; provider stream
+signals are transient and contain no reasoning text. TUI refreshes every second;
+Web emits five-second connection heartbeats. Silence never proves thinking,
+failure or completion; replayed unfinished activity is interrupted.
 TUI: `lib.rs` is app state/reducer plus `{transcript,markdown,chrome,
 theme,runtime,agents,configuration_center}.rs` and existing siblings.
 Mouse capture defaults on to prevent wheel-to-arrow history navigation;

@@ -156,6 +156,7 @@ pub async fn run(
                                             view.event(event);
                                         }
                                     }
+                                    view.sidebar.activity.interrupted(chrono::Utc::now());
                                     view.busy = false;
                                     view.starting = true;
                                     drop(view);
@@ -376,6 +377,9 @@ async fn submit(
         .try_send(input)
         .map_err(|_| ApiError::conflict("session is unavailable or its input queue is full"))?;
     if begins_turn {
+        if !view.busy {
+            view.sidebar.activity.preparing(chrono::Utc::now());
+        }
         view.busy = true;
         view.queued_inputs += 1;
     }

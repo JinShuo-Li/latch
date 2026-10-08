@@ -1,7 +1,7 @@
 import {api,subscribe} from './transport.js';
 import {state,session,metadata,profile,providers,model,cellParts,cellText,title} from './state.js';
 import {hydrateIcons,icon} from './icons.js';
-import {renderConversation,renderSessions,renderHeader,renderComposer,renderPermission,renderFiles,renderDetails,showDiff,showModels} from './view.js';
+import {renderActivity,renderConversation,renderSessions,renderHeader,renderComposer,renderPermission,renderFiles,renderDetails,showDiff,showModels} from './view.js';
 import {renderSettings,settingsPlan} from './settings.js';
 
 const $ = selector => document.querySelector(selector);
@@ -18,7 +18,7 @@ let setupShown;
 function toast(message) {$('#toast').textContent=message;$('#toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{$('#toast').hidden=true;},4500);}
 async function attempt(action) {try{return await action();}catch(error){if(error.status===401)openAuth();else toast(error.message);return null;}}
 function openAuth() {stopSubscription?.();state.connected=false;renderComposer();$('#connection-state').textContent='DISCONNECTED';if(!$('#auth-dialog').open)$('#auth-dialog').showModal();}
-function setConnection(connected) {state.connected=connected;$('#connection-state').textContent=connected?'CONNECTED':'RECONNECTING';renderComposer();}
+function setConnection(connected) {state.connected=connected;$('#connection-state').textContent=connected?'CONNECTED':'RECONNECTING';renderComposer();renderActivity();}
 async function refreshSessions() {const result=await api('/api/sessions');state.sessions=result.sessions;renderSessions();}
 function applySnapshot(snapshot) {
   if (state.snapshot?.instance_id===snapshot.instance_id && state.snapshot.state.sequence > snapshot.state.sequence) return;
@@ -26,7 +26,7 @@ function applySnapshot(snapshot) {
   state.snapshot=snapshot;state.receivedAt=performance.now();
   if (observedSession!==snapshot.state.session_id) {state.pendingFiles.forEach(f=>{if(f.url)URL.revokeObjectURL(f.url);});state.pendingFiles=[];removedImages=new Set();observedSession=snapshot.state.session_id;state.historyPosition=null;}
   for (const reference of snapshot.state.pending_attachments || []) if (!removedImages.has(reference.id) && !state.pendingFiles.some(f=>f.reference?.id===reference.id)) state.pendingFiles.push({reference,name:reference.display_name || 'Attached image'});
-  renderHeader();renderConversation();renderComposer();renderPermission();renderFiles();
+  renderActivity();renderHeader();renderConversation();renderComposer();renderPermission();renderFiles();
   const setupKey=`${snapshot.instance_id}:${snapshot.state.session_id}`;
   if(metadata().setup_required && !session().starting && setupShown!==setupKey) {setupShown=setupKey;openSettings('providers');}
   if (!$('#details-panel').hidden) renderDetails();
@@ -183,3 +183,5 @@ document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&e
 const fragment=new URLSearchParams(location.hash.slice(1));const token=fragment.get('token');
 if(token){history.replaceState(null,'',location.pathname+location.search);attempt(async()=>{await api('/api/auth',{method:'POST',body:{token}});await connect();});}
 else attempt(connect);
+
+setInterval(renderActivity,1000);

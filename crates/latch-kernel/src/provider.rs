@@ -437,6 +437,9 @@ impl ModelProvider for OpenAiProvider {
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
         };
+        sink(StreamEvent::Activity(
+            latch_protocol::StreamActivity::Connected,
+        ));
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut text = String::new();
@@ -447,7 +450,13 @@ impl ModelProvider for OpenAiProvider {
         loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
             let Some(chunk) = next else { break };
-            for data in decoder.push(&chunk?) {
+            let chunk = chunk?;
+            if !chunk.is_empty() {
+                sink(StreamEvent::Activity(
+                    latch_protocol::StreamActivity::Receiving,
+                ));
+            }
+            for data in decoder.push(&chunk) {
                 if data == "[DONE]" {
                     continue;
                 }
@@ -475,8 +484,18 @@ impl ModelProvider for OpenAiProvider {
                 }
                 if let Some(t) = delta.get("reasoning_content").and_then(Value::as_str) {
                     reasoning.push_str(t);
+                    if !t.is_empty() {
+                        sink(StreamEvent::Activity(
+                            latch_protocol::StreamActivity::Reasoning,
+                        ));
+                    }
                 }
                 if let Some(tc) = delta.get("tool_calls").and_then(Value::as_array) {
+                    if !tc.is_empty() {
+                        sink(StreamEvent::Activity(
+                            latch_protocol::StreamActivity::ToolCall,
+                        ));
+                    }
                     for c in tc {
                         let i = c.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                         let e = calls.entry(i).or_default();
@@ -644,13 +663,22 @@ impl ModelProvider for OpenAiResponsesProvider {
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
         };
+        sink(StreamEvent::Activity(
+            latch_protocol::StreamActivity::Connected,
+        ));
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut state = ResponsesStreamState::default();
         loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
             let Some(chunk) = next else { break };
-            for data in decoder.push(&chunk?) {
+            let chunk = chunk?;
+            if !chunk.is_empty() {
+                sink(StreamEvent::Activity(
+                    latch_protocol::StreamActivity::Receiving,
+                ));
+            }
+            for data in decoder.push(&chunk) {
                 if data == "[DONE]" {
                     continue;
                 }
@@ -659,9 +687,7 @@ impl ModelProvider for OpenAiResponsesProvider {
                     anyhow!("{}", crate::credentials::redact(&error, &[&self.api_key]))
                 })?;
                 for event in events {
-                    if let StreamEvent::TextDelta(delta) = event {
-                        sink(StreamEvent::TextDelta(delta));
-                    }
+                    sink(event);
                 }
             }
         }
@@ -698,6 +724,11 @@ impl ResponsesStreamState {
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 if let Some(delta) = v.get("delta").and_then(Value::as_str) {
                     self.summary.push_str(delta);
+                    if !delta.is_empty() {
+                        return Ok(vec![StreamEvent::Activity(
+                            latch_protocol::StreamActivity::Reasoning,
+                        )]);
+                    }
                 }
             }
             "response.function_call_arguments.delta" => {
@@ -708,6 +739,11 @@ impl ResponsesStreamState {
                     .to_owned();
                 if let Some(delta) = v.get("delta").and_then(Value::as_str) {
                     self.calls.entry(key).or_default().2.push_str(delta);
+                    if !delta.is_empty() {
+                        return Ok(vec![StreamEvent::Activity(
+                            latch_protocol::StreamActivity::ToolCall,
+                        )]);
+                    }
                 }
             }
             "response.output_item.added" | "response.output_item.done" | "response.completed" => {
@@ -1102,6 +1138,9 @@ impl ModelProvider for AnthropicProvider {
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
         };
+        sink(StreamEvent::Activity(
+            latch_protocol::StreamActivity::Connected,
+        ));
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut text = String::new();
@@ -1122,7 +1161,13 @@ impl ModelProvider for AnthropicProvider {
         loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
             let Some(chunk) = next else { break };
-            for data in decoder.push(&chunk?) {
+            let chunk = chunk?;
+            if !chunk.is_empty() {
+                sink(StreamEvent::Activity(
+                    latch_protocol::StreamActivity::Receiving,
+                ));
+            }
+            for data in decoder.push(&chunk) {
                 let v: Value = serde_json::from_str(&data)?;
                 match v.get("type").and_then(Value::as_str) {
                     Some("error") => {
@@ -1150,6 +1195,9 @@ impl ModelProvider for AnthropicProvider {
                         let index = v["index"].as_u64().unwrap_or(0);
                         match v.pointer("/content_block/type").and_then(Value::as_str) {
                             Some("tool_use") => {
+                                sink(StreamEvent::Activity(
+                                    latch_protocol::StreamActivity::ToolCall,
+                                ));
                                 calls.insert(
                                     index,
                                     (
@@ -1166,6 +1214,9 @@ impl ModelProvider for AnthropicProvider {
                                 );
                             }
                             Some("thinking") => {
+                                sink(StreamEvent::Activity(
+                                    latch_protocol::StreamActivity::Reasoning,
+                                ));
                                 thinking.insert(
                                     index,
                                     ThinkingBlock {
@@ -1184,6 +1235,9 @@ impl ModelProvider for AnthropicProvider {
                                 );
                             }
                             Some("redacted_thinking") => {
+                                sink(StreamEvent::Activity(
+                                    latch_protocol::StreamActivity::Reasoning,
+                                ));
                                 thinking.insert(
                                     index,
                                     ThinkingBlock {
@@ -1212,6 +1266,9 @@ impl ModelProvider for AnthropicProvider {
                                 sink(StreamEvent::TextDelta(t.into()));
                             }
                             Some("input_json_delta") => {
+                                sink(StreamEvent::Activity(
+                                    latch_protocol::StreamActivity::ToolCall,
+                                ));
                                 if let Some(c) = calls.get_mut(&v["index"].as_u64().unwrap_or(0)) {
                                     c.2.push_str(
                                         v.pointer("/delta/partial_json")
@@ -1221,6 +1278,9 @@ impl ModelProvider for AnthropicProvider {
                                 }
                             }
                             Some("thinking_delta") => {
+                                sink(StreamEvent::Activity(
+                                    latch_protocol::StreamActivity::Reasoning,
+                                ));
                                 if let Some(block) =
                                     thinking.get_mut(&v["index"].as_u64().unwrap_or(0))
                                 {
@@ -1781,6 +1841,11 @@ impl GeminiStreamState {
             .get("thoughtSignature")
             .and_then(Value::as_str)
             .unwrap_or("");
+        if part.get("functionCall").is_some() {
+            events.push(StreamEvent::Activity(
+                latch_protocol::StreamActivity::ToolCall,
+            ));
+        }
         if let Some(function_call) = part.get("functionCall") {
             let name = function_call
                 .get("name")
@@ -1891,8 +1956,12 @@ impl GeminiStreamState {
         let target = self.parts.last_mut().expect("part pushed above");
         if has_text {
             target.text.push_str(text);
-            if !thought && !text.is_empty() {
-                events.push(StreamEvent::TextDelta(text.to_owned()));
+            if !text.is_empty() {
+                events.push(if thought {
+                    StreamEvent::Activity(latch_protocol::StreamActivity::Reasoning)
+                } else {
+                    StreamEvent::TextDelta(text.to_owned())
+                });
             }
         }
         if !signature.is_empty() {
@@ -2101,13 +2170,22 @@ impl ModelProvider for GeminiProvider {
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
         };
+        sink(StreamEvent::Activity(
+            latch_protocol::StreamActivity::Connected,
+        ));
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut state = GeminiStreamState::default();
         loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
             let Some(chunk) = next else { break };
-            for data in decoder.push(&chunk?) {
+            let chunk = chunk?;
+            if !chunk.is_empty() {
+                sink(StreamEvent::Activity(
+                    latch_protocol::StreamActivity::Receiving,
+                ));
+            }
+            for data in decoder.push(&chunk) {
                 if data == "[DONE]" {
                     continue;
                 }
@@ -4734,7 +4812,11 @@ mod tests {
         assert_eq!(
             deltas,
             vec![
+                StreamEvent::Activity(latch_protocol::StreamActivity::Reasoning),
                 StreamEvent::TextDelta("Checking ".into()),
+                StreamEvent::Activity(latch_protocol::StreamActivity::ToolCall),
+                StreamEvent::Activity(latch_protocol::StreamActivity::ToolCall),
+                StreamEvent::Activity(latch_protocol::StreamActivity::ToolCall),
                 StreamEvent::TextDelta("weather.".into()),
             ],
             "thought text is never emitted as assistant text"

@@ -3358,3 +3358,28 @@ fn user_transcript_renders_compact_attachment_metadata_without_bytes() {
         );
     }
 }
+
+#[test]
+fn sidebar_reports_real_reasoning_and_keeps_elapsed_time_during_silence() {
+    let mut app = app_with_header("deepseek-flash", "/tmp/latch-ui");
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::ModelRequestStarted {
+            provider: "test".into(),
+            model: "deepseek-flash".into(),
+        },
+    ))));
+    let waiting = render_to_text(&mut app, 200, 40);
+    assert!(waiting.contains("ACTIVITY") && waiting.contains("Waiting for model"));
+    app.output(Output::StreamActivity(
+        latch_protocol::StreamActivity::Reasoning,
+    ));
+    app.sidebar.activity.phase_since = Some(chrono::Utc::now() - chrono::Duration::seconds(40));
+    app.sidebar.activity.last_activity_at = app.sidebar.activity.phase_since;
+    let silent = render_to_text(&mut app, 200, 40);
+    assert!(silent.contains("Thinking") && silent.contains("s in phase"));
+    assert!(silent.contains("No new activity; Ctrl+C stops"));
+    app.output(Output::AssistantDelta("Public response".into()));
+    assert!(render_to_text(&mut app, 200, 40).contains("Writing response"));
+    app.output(Output::Cancelling);
+    assert!(render_to_text(&mut app, 200, 40).contains("Stopping"));
+}

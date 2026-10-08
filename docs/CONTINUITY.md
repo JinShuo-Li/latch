@@ -268,3 +268,13 @@ closing a page or losing an SSH tunnel does not cancel execution. Uncommitted
 assistant deltas remain transient, and a server restart reconstructs committed
 history rather than inventing completion for an interrupted turn. See
 [WEB_UI.md](WEB_UI.md) for the connection lifecycle.
+
+## Transient interface activity
+
+Provider activity signals are presentation metadata, not durable memory or
+cache-epoch input. The TUI and Web sidebar combine these signals with durable
+run/request/tool/permission lifecycle events. They expose whether the provider
+has reported reasoning, never reasoning text. Silence and transport heartbeats
+do not establish model progress, failure or completion. On resume an unfinished
+historical phase is shown as interrupted; it does not imply a live provider or
+process. Canonical task state and recorded validation remain authoritative.

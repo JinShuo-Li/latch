@@ -308,6 +308,9 @@ pub async fn run_session(
                 let sink_tx = relay_tx.clone();
                 let sink = Arc::new(move |event: AgentOutput| {
                     let outputs: Vec<Output> = match event {
+                        AgentOutput::Transient(StreamEvent::Activity(activity)) => {
+                            vec![Output::StreamActivity(activity)]
+                        }
                         AgentOutput::Transient(StreamEvent::TextDelta(t)) => {
                             vec![Output::AssistantDelta(t)]
                         }
@@ -331,12 +334,15 @@ pub async fn run_session(
                             flush_relay(&relay_tx).await;
                             match result {
                                 Ok(_) => output_tx.send(Output::AssistantDone).await?,
-                                Err(error) => output_tx.send(Output::Notice(format!("error: {error:#}"))).await?,
+                                Err(error) => {
+                                    output_tx.send(Output::RunFailed).await?;
+                                    output_tx.send(Output::Notice(format!("error: {error:#}"))).await?;
+                                },
                             }
                             break;
                         }
                         next = input_rx.recv() => match next {
-                            Some(Input::Cancel) => active.cancel(),
+                            Some(Input::Cancel) => {active.cancel(); output_tx.send(Output::Cancelling).await?;},
                             Some(Input::Permission { request_id, approved }) => { broker.resolve(request_id, approved).await; }
                             Some(Input::Quit) | None => { active.cancel(); let _ = (&mut running).await; flush_relay(&relay_tx).await; relay.abort(); break 'session; }
                             Some(Input::Resume) => { output_tx.send(Output::Notice("cancel the active turn before resuming another session".into())).await?; }

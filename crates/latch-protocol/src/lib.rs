@@ -1735,9 +1735,20 @@ pub struct ModelResponse {
     pub reasoning: Vec<ReasoningArtifact>,
 }
 
+/// Provider-neutral stream metadata; never reasoning text or durable memory.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamActivity {
+    Connected,
+    Receiving,
+    Reasoning,
+    ToolCall,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum StreamEvent {
+    Activity(StreamActivity),
     TextDelta(String),
     ToolCallDelta(ToolCall),
     Usage(Usage),

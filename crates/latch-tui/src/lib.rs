@@ -372,8 +372,15 @@ impl App {
 
     fn output(&mut self, out: Output) {
         match out {
-            Output::Ready | Output::InputReceived => {}
+            Output::Ready => self.sidebar.activity.interrupted(chrono::Utc::now()),
+            Output::InputReceived => {}
+            Output::StreamActivity(activity) => {
+                self.sidebar.activity.signal(activity, chrono::Utc::now())
+            }
+            Output::RunFailed => self.sidebar.activity.failed(chrono::Utc::now()),
+            Output::Cancelling => self.sidebar.activity.cancelling(chrono::Utc::now()),
             Output::AssistantDelta(t) => {
+                self.sidebar.activity.text(chrono::Utc::now());
                 self.streaming.get_or_insert_with(String::new).push_str(&t);
                 if let Some(TranscriptItem::Assistant {
                     text,

@@ -2,6 +2,10 @@ deepseek-flash
 WORK · 1 turns · 12m
 on main
 
+ACTIVITY
+Waiting for model
+5s in phase · 5s quiet
+
 TASK
 TTL cache implementation
 ● Implementing

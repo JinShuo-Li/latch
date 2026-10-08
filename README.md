@@ -96,7 +96,9 @@ latch --web --ssh 6006            # remote listener; prints SSH instructions
 The workspace stays fixed to the launch directory. On Windows, start from a
 user-owned NTFS project directory; the embedded sandbox still applies. Conversations, streaming,
 steering, model/settings controls, images, diffs and task details are connected
-to Latch. For remote use, forward with
+to Latch. Both interfaces show sidebar activity: waiting for the model,
+reasoning when reported by the provider, writing, tools, approvals and stopping,
+with elapsed time and time since activity. For remote use, forward with
 `ssh -N -L 7000:127.0.0.1:6006 user@remote-host`, open `http://localhost:7000`,
 and enter the token printed by the remote process.
 

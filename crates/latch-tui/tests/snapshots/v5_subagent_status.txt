@@ -2,7 +2,11 @@
   └ child session running                                                                                                                                   │WORK · 0 turns · 0s                        
                                                                                                                                                             │on main                                    
 ✓ Child agent `audit-locks` completed                                                                                                                       │                                           
-  └ Found two unsynchronized locks.                                                                                                                         │TASK                                       
+  └ Found two unsynchronized locks.                                                                                                                         │ACTIVITY                                   
+                                                                                                                                                            │Preparing request                          
+                                                                                                                                                            │0s in phase · 0s quiet                     
+                                                                                                                                                            │                                           
+                                                                                                                                                            │TASK                                       
                                                                                                                                                             │InProgress                                 
                                                                                                                                                             │Implementation unchanged                   
                                                                                                                                                             │Validation pending                         
@@ -13,10 +17,6 @@
                                                                                                                                                             │  Found two unsynchronized locks.          
                                                                                                                                                             │                                           
                                                                                                                                                             │CONTEXT                                    
-                                                                                                                                                            │                                           
-                                                                                                                                                            │                                           
-                                                                                                                                                            │                                           
-                                                                                                                                                            │                                           
                                                                                                                                                             │                                           
                                                                                                                                                                                                         
                                                                                                                                                                                                         

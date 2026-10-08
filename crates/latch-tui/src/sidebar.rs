@@ -56,12 +56,24 @@ impl SidebarModel {
     /// progressively removed (never scrolled) as height shrinks.
     #[must_use]
     pub fn render_lines(&self, width: u16, height: u16) -> Vec<Line<'static>> {
+        self.render_lines_at(width, height, chrono::Utc::now())
+    }
+    fn render_lines_at(
+        &self,
+        width: u16,
+        height: u16,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<Line<'static>> {
         if width == 0 || height == 0 {
             return Vec::new();
         }
         let width = width as usize;
         let height = height as usize;
         let mut out = self.session_lines(width);
+        if self.activity.phase != latch_ui::activity::ActivityPhase::Idle {
+            let activity = self.activity_lines(width, now);
+            push_section(&mut out, height, vec![activity]);
+        }
         for section in [
             self.current_request()
                 .as_ref()
@@ -91,6 +103,43 @@ impl SidebarModel {
         }
         out.truncate(height);
         out
+    }
+
+    fn activity_lines(
+        &self,
+        width: usize,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<Line<'static>> {
+        let a = &self.activity;
+        let mut lines = vec![
+            section_title("ACTIVITY"),
+            Line::styled(fit(a.phase.label(), width), cyan()),
+        ];
+        if let Some(subject) = &a.subject {
+            lines.push(Line::styled(fit(subject, width), dim()));
+        }
+        if a.phase.active() {
+            lines.push(Line::styled(
+                fit(
+                    &format!(
+                        "{}s in phase · {}s quiet",
+                        a.elapsed_seconds(now),
+                        a.quiet_seconds(now)
+                    ),
+                    width,
+                ),
+                dim(),
+            ));
+            if a.quiet_seconds(now) >= 30
+                && a.phase != latch_ui::activity::ActivityPhase::WaitingApproval
+            {
+                lines.push(Line::styled(
+                    fit("No new activity; Ctrl+C stops", width),
+                    yellow(),
+                ));
+            }
+        }
+        lines
     }
 
     #[must_use]
@@ -1927,7 +1976,17 @@ mod tests {
         });
         let model = SidebarModel::from_events(priced, &events);
         assert_eq!(
-            render(&model, 42, 40).trim_end(),
+            model
+                .render_lines_at(42, 40, start + Duration::seconds(755))
+                .into_iter()
+                .map(|line| line
+                    .spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim_end(),
             include_str!("../tests/snapshots/v31_sidebar.txt")
                 .replace("\r\n", "\n")
                 .trim_end()

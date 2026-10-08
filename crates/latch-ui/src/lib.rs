@@ -53,6 +53,9 @@ pub enum Output {
     /// An accepted browser submission reached the controller. This is a
     /// transport coordination receipt, not a durable completion assertion.
     InputReceived,
+    StreamActivity(latch_protocol::StreamActivity),
+    Cancelling,
+    RunFailed,
     AssistantDelta(String),
     AssistantDone,
     /// One user-visible transcript element from the shared durable-event
@@ -135,3 +138,5 @@ pub mod group;
 pub mod presentation;
 
 pub mod sidebar;
+
+pub mod activity;

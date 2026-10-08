@@ -401,6 +401,11 @@ launch. Uploads use kernel media validation; server filesystem paths and
 arbitrary workspace switching are not browser inputs. Observation is a
 replaceable projection, never permission, evidence or completion authority.
 
+Sidebar activity is observational: provider stream signals carry no reasoning
+text and grant no capability. A connection heartbeat certifies only transport
+contact. Elapsed time, silence and a finished turn never certify task validation.
+The TUI and browser share this activity reducer; kernel events remain authoritative.
+
 The HTTP/SSE adapter does not implement a remote extension host or bypass any
 execution boundary. Computer use remains a future plugin with kernel-declared
 capabilities. See [WEB_UI.md](WEB_UI.md) for the implemented client protocol.

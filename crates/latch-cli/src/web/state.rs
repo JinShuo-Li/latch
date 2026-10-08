@@ -87,14 +87,23 @@ impl View {
     pub fn apply(&mut self, output: Output) {
         match output {
             Output::Ready => {
+                self.sidebar.activity.interrupted(chrono::Utc::now());
                 self.starting = false;
                 self.busy = self.queued_inputs > 0;
             }
             Output::InputReceived => {
                 self.queued_inputs = self.queued_inputs.saturating_sub(1);
             }
+            Output::StreamActivity(activity) => {
+                self.sidebar.activity.signal(activity, chrono::Utc::now())
+            }
+            Output::RunFailed => self.sidebar.activity.failed(chrono::Utc::now()),
+            Output::Cancelling => self.sidebar.activity.cancelling(chrono::Utc::now()),
             Output::Event(event) => self.event(&event),
-            Output::AssistantDelta(text) => self.streaming.push_str(&text),
+            Output::AssistantDelta(text) => {
+                self.sidebar.activity.text(chrono::Utc::now());
+                self.streaming.push_str(&text);
+            }
             Output::AssistantDone => {
                 self.streaming.clear();
             }

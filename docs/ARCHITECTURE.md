@@ -24,6 +24,16 @@ transport concerns. See [the Web guide](WEB_UI.md) for contracts and module
 ownership. Windows Web execution uses the same embedded native boundary as
 the CLI and TUI.
 
+`latch-ui/src/activity.rs` reduces durable run, request, tool and permission
+lifecycle events together with transient stream activity into sidebar phases.
+Providers emit connected/receiving/reasoning/tool-call signals through
+`latch-protocol::StreamActivity`; these carry no reasoning text and do not change
+provider request serialization or durable history. The shared controller relays
+these signals and cancellation/run-failure observations to both adapters.
+TUI refresh ticks and Web connection heartbeats update presentation only;
+neither is evidence of provider progress or task completion. Replayed unfinished
+runs are interrupted rather than displayed as a live operation.
+
 The runtime platform model — kernel invariants extensions can never bypass,
 replaceable ports, the capability vocabulary, transport independence, and the
 implemented-versus-deferred port map — is

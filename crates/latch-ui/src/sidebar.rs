@@ -296,6 +296,8 @@ pub struct StagnationView {
 /// Reducer state for the observability sidebar.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct SidebarState {
+    #[serde(default)]
+    pub activity: crate::activity::ActivityState,
     session: SidebarSession,
     started_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
@@ -324,6 +326,7 @@ impl SidebarState {
     #[must_use]
     pub fn new(session: SidebarSession) -> Self {
         Self {
+            activity: crate::activity::ActivityState::default(),
             session,
             started_at: None,
             updated_at: None,
@@ -530,6 +533,7 @@ impl SidebarState {
     }
 
     pub fn apply_event(&mut self, event: &Event) {
+        self.activity.apply_event(event);
         self.subagents.apply_event(event);
         self.group.apply_event(event);
         if self.started_at.is_none() {
