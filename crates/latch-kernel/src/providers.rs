@@ -497,10 +497,9 @@ fn opencode_go_model(
 /// for `opencode-go`, which is the metadata the OpenCode client itself
 /// uses; the Go docs publish transports but not effort sets. DeepSeek
 /// models keep required reasoning replay, and every other family does not
-/// inherit it. Image input stays conservative text-only: the gateway
-/// rejects images for models whose upstream accepts them, so a model that
-/// actually serves vision can be opted in per model with
-/// `input_modalities = ["text", "image"]`.
+/// inherit it. DeepSeek V4.1 Flash inherits documented image input from its
+/// OpenCode catalog base model. Other Go models remain conservative text-only
+/// unless explicitly configured with `input_modalities = ["text", "image"]`.
 fn builtin_opencode_go() -> Vec<BuiltinModel> {
     let chat = TransportKind::ChatCompletions;
     let messages = TransportKind::AnthropicMessages;
@@ -627,15 +626,18 @@ fn builtin_opencode_go() -> Vec<BuiltinModel> {
             &[],
         ),
         // DeepSeek V4.1 Flash
-        opencode_go_model(
-            "deepseek-v4.1-flash",
-            "DeepSeek V4.1 Flash",
-            chat,
-            &[LOW, HIGH, MAX],
-            HIGH,
-            ReasoningReplay::Replay,
-            &[],
-        ),
+        BuiltinModel {
+            image: true,
+            ..opencode_go_model(
+                "deepseek-v4.1-flash",
+                "DeepSeek V4.1 Flash",
+                chat,
+                &[LOW, HIGH, MAX],
+                HIGH,
+                ReasoningReplay::Replay,
+                &[],
+            )
+        },
         // DeepSeek V4 Pro
         opencode_go_model(
             "deepseek-v4-pro",
@@ -2623,15 +2625,12 @@ mod tests {
                 .unwrap()
                 .supports_image_input()
         );
-        // OpenCode Go publishes no per-model modalities and live probing shows
-        // the gateway rejects images even for upstream vision models, so every
-        // Go model stays conservative text-only by default. Explicit user
-        // metadata is the only way to opt a Go model into image input, and the
-        // kernel still fails locally when the endpoint disagrees.
+        // Go inherits image input for this exact documented base model only.
         for model in registry.available_models("opencode-go") {
-            assert!(
-                !model.supports_image_input(),
-                "{} stays text-only by default",
+            assert_eq!(
+                model.supports_image_input(),
+                model.model == "deepseek-v4.1-flash",
+                "unexpected image capability for {}",
                 model.model
             );
         }
@@ -2672,6 +2671,13 @@ mod tests {
 
             [providers.openai.models."gpt-5.5"]
             input_modalities = ["text"]
+
+            [providers.opencode-go]
+            kind = "opencode-go"
+            credential = "env:OPENCODE_GO_API_KEY"
+
+            [providers.opencode-go.models."deepseek-v4.1-flash"]
+            input_modalities = ["text"]
             "#,
         );
         let custom = registry
@@ -2690,6 +2696,10 @@ mod tests {
         assert!(!text_only.supports_image_input());
         // Explicit user metadata wins over the built-in catalog.
         let overridden = registry.model_descriptor("openai", "gpt-5.5").unwrap();
+        assert!(!overridden.supports_image_input());
+        let overridden = registry
+            .model_descriptor("opencode-go", "deepseek-v4.1-flash")
+            .unwrap();
         assert!(!overridden.supports_image_input());
     }
 

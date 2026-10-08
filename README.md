@@ -97,7 +97,8 @@ latch --web --ssh 6006            # remote listener; prints SSH instructions
 The workspace stays fixed to the launch directory. On Windows, start from a
 user-owned NTFS project directory; the embedded sandbox still applies. Conversations, streaming,
 steering, model/settings controls, images, diffs and task details are connected
-to Latch. Both interfaces show sidebar activity: waiting for the model,
+to Latch. OpenCode Go's `deepseek-v4.1-flash` accepts image input by default;
+`/model` labels image-capable models with `vision`. Both interfaces show sidebar activity: waiting for the model,
 reasoning when reported by the provider, writing, tools, approvals and stopping,
 with elapsed time and time since activity. For remote use, forward with
 `ssh -N -L 7000:127.0.0.1:6006 user@remote-host`, open `http://localhost:7000`,

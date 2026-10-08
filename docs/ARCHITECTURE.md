@@ -930,9 +930,10 @@ thinking replay are untouched by image input.
 
 `ModelDescriptor.input_modalities` is the capability authority. Built-in
 catalogs mark only officially documented vision models (the current OpenAI and
-Anthropic catalogs, and DeepSeek Flash). OpenCode Go publishes no per-model
-modalities and live probing shows the gateway rejects images even for upstream
-vision models, so every Go model stays conservative text-only by default.
+Anthropic catalogs, and DeepSeek Flash). OpenCode Go's exact
+`deepseek-v4.1-flash` entry inherits image input from its documented
+[OpenCode catalog base model](https://github.com/anomalyco/models.dev/blob/dev/models/deepseek/deepseek-v4.1-flash.toml). Other Go models stay conservative text-only by default;
+upstream vision support alone does not establish gateway support.
 User `ModelConfig.input_modalities` overrides built-in metadata, and unknown
 models stay text-only. The kernel fails locally before any provider request
 when pending input or replayed history contains an image the effective model

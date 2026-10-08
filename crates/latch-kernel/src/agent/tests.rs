@@ -4508,6 +4508,27 @@ async fn a_text_only_model_switch_rejects_replayed_image_history_locally() {
 
 #[tokio::test]
 async fn read_image_feeds_pixels_into_the_next_request_and_survives_source_deletion() {
+    assert_read_image_roundtrip(vision_descriptor("steering-test")).await;
+}
+
+#[tokio::test]
+async fn opencode_go_flash_read_image_reaches_next_request_and_survives_resume() {
+    let config: crate::config::Config = toml::from_str(
+        r#"
+        [providers.opencode-go]
+        kind = "opencode-go"
+        credential = "env:OPENCODE_GO_API_KEY"
+        "#,
+    )
+    .unwrap();
+    let registry = crate::providers::ProviderRegistry::from_config(&config).unwrap();
+    let descriptor = registry
+        .model_descriptor("opencode-go", "deepseek-v4.1-flash")
+        .unwrap();
+    assert_read_image_roundtrip(descriptor).await;
+}
+
+async fn assert_read_image_roundtrip(descriptor: crate::providers::ModelDescriptor) {
     let d = tempdir().unwrap();
     std::fs::write(d.path().join("shot.png"), TINY_PNG).unwrap();
     let (store, sid, mut agent, provider) = steering_agent(
@@ -4519,11 +4540,15 @@ async fn read_image_feeds_pixels_into_the_next_request_and_survives_source_delet
         vec![],
         0,
     );
-    let profile = agent.profile();
+    let profile = InferenceProfile::new(
+        descriptor.provider.clone(),
+        descriptor.model.clone(),
+        descriptor.default_effort,
+    );
     agent.restore_inference_profile(
         provider.clone(),
         profile.clone(),
-        &vision_descriptor("steering-test"),
+        &descriptor,
         ContextConfig::default(),
     );
     agent
@@ -4571,12 +4596,7 @@ async fn read_image_feeds_pixels_into_the_next_request_and_survives_source_delet
         continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
         retry_budget: 2,
     });
-    resumed.restore_inference_profile(
-        provider2,
-        profile,
-        &vision_descriptor("steering-test"),
-        ContextConfig::default(),
-    );
+    resumed.restore_inference_profile(provider2, profile, &descriptor, ContextConfig::default());
     let ctx = resumed.context(None).unwrap();
     let messages = context_messages(&ctx);
     let replayed = messages
