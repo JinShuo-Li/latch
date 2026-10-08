@@ -9,6 +9,7 @@
 #include "token.h"
 namespace latch {
 int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
+  configure_boundary_timing();
   cancel.check();
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
                SEM_NOOPENFILEERRORBOX);
@@ -30,22 +31,62 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
 
     constexpr DWORD read_rights = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
     constexpr DWORD write_rights = FILE_GENERIC_WRITE | DELETE;
-    const bool writable = std::wcscmp(argv[4], L"write") == 0;
-    std::vector<std::wstring> write_roots;
-    if (writable)
-      write_roots.push_back(std::filesystem::canonical(argv[1]).wstring());
+    bool workspace_writable = std::wcscmp(argv[4], L"write") == 0;
+    std::vector<std::wstring> grant_roots{
+        std::filesystem::canonical(argv[1]).wstring()};
+    std::vector<std::wstring> read_roots;
     for (int i = 5; i < argc; i += 2) {
       if (i + 1 >= argc) fail(L"missing option path", ERROR_INVALID_PARAMETER);
-      if (std::wcscmp(argv[i], L"--write-root") == 0)
-        write_roots.push_back(
-            std::filesystem::canonical(argv[i + 1]).wstring());
+      if (std::wcscmp(argv[i], L"--write-root") == 0) {
+        const auto root = std::filesystem::canonical(argv[i + 1]).wstring();
+        const auto existing = std::find_if(
+            grant_roots.begin(), grant_roots.end(),
+            [&](const std::wstring& value) {
+              return _wcsicmp(value.c_str(), root.c_str()) == 0;
+            });
+        if (existing == grant_roots.begin())
+          workspace_writable = true;
+        else if (existing == grant_roots.end())
+          grant_roots.push_back(root);
+      } else if (std::wcscmp(argv[i], L"--read-root") == 0) {
+        const auto root = std::filesystem::canonical(argv[i + 1]).wstring();
+        const auto already_granted = std::any_of(
+            grant_roots.begin(), grant_roots.end(),
+            [&](const std::wstring& value) {
+              return _wcsicmp(value.c_str(), root.c_str()) == 0;
+            });
+        const auto already_read = std::any_of(
+            read_roots.begin(), read_roots.end(),
+            [&](const std::wstring& value) {
+              return _wcsicmp(value.c_str(), root.c_str()) == 0;
+            });
+        if (!already_granted && !already_read) read_roots.push_back(root);
+      }
     }
-    std::vector<Handle> grant_locks;
-    for (const auto& root : write_roots)
-      validate_write_tree(root, write_roots, grant_locks, cancel, recovery);
-    recovery.track_root(argv[1]);
-    grants.add_pair(argv[1], write_sid.value,
-                    read_rights | (writable ? write_rights : 0));
+    std::vector<std::wstring> allowed_roots = grant_roots;
+    allowed_roots.insert(allowed_roots.end(), read_roots.begin(),
+                         read_roots.end());
+    std::vector<GrantPlan> grant_plans;
+    grant_plans.reserve(allowed_roots.size());
+    {
+      TimingScope timer(boundary_timing().preflight_scan);
+      for (const auto& root : allowed_roots) {
+        grant_plans.emplace_back();
+        validate_grant_tree(root, allowed_roots, grant_plans.back(), cancel,
+                            recovery);
+      }
+    }
+    for (const auto& root : allowed_roots) recovery.track_root(root);
+    TimingScope grant_timer(boundary_timing().grant_walk);
+    for (size_t index = 0; index < grant_roots.size(); ++index) {
+      const DWORD rights =
+          read_rights | ((index == 0 && !workspace_writable) ? 0 : write_rights);
+      grants.add_plan(grant_plans[index], allowed_roots, write_sid.value,
+                      rights);
+    }
+    for (size_t index = 0; index < read_roots.size(); ++index)
+      grants.add_plan(grant_plans[grant_roots.size() + index], allowed_roots,
+                      nullptr, read_rights);
     Attributes attributes(3);
     auto* attrs = attributes.value;
     Local internet = parse_sid(L"S-1-15-3-1");
@@ -83,8 +124,7 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
       const std::wstring option = argv[i++];
       if (i >= argc) fail(L"missing option path", ERROR_INVALID_PARAMETER);
       if (option == L"--read-root") {
-        recovery.track_root(argv[i]);
-        grants.add(argv[i], GRANT_ACCESS, read_rights);
+        // All read roots were tracked and granted before option processing.
       } else if (option == L"--network") {
         if (std::wcscmp(argv[i], L"yes") != 0 &&
             std::wcscmp(argv[i], L"no") != 0)
@@ -98,9 +138,7 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
       } else if (option == L"--protect-git") {
         git_reservation.create(argv[i], recovery);
       } else if (option == L"--write-root") {
-        recovery.track_root(argv[i]);
-        grants.add_pair(argv[i], write_sid.value,
-                        read_rights | write_rights);
+        // All write roots were tracked and granted before option processing.
       } else if (option == L"--deny") {
         protect_sensitive_tree(argv[i], protected_paths, cancel, recovery);
         grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
@@ -115,9 +153,7 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
       } else
         fail(L"invalid option", ERROR_INVALID_PARAMETER);
     }
-    // Existing objects cannot be renamed or hardlinked between validation
-    // and grant propagation. Release these pins before developer commands.
-    grant_locks.clear();
+    grant_timer.stop();
     recovery.pause(L"all-grants");
     Handle restricted = restrict_token(write_sid.value);
     result = execute_target(argv, cancel, restricted.value, write_sid.value,
@@ -129,7 +165,11 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     std::fprintf(stderr, "Windows boundary: %s", e.what());
   }
 
-  recovery.finish();
+  {
+    TimingScope timer(boundary_timing().rollback);
+    recovery.finish();
+  }
+  report_boundary_timing();
   return result;
 }
 
@@ -150,8 +190,14 @@ int wmain(int argc, wchar_t** argv) {
       return run_boundary(argc - 2, argv + 2, cancel);
     }
     if (argc == 2 && std::wcscmp(argv[1], L"--recover-only") == 0) {
+      configure_boundary_timing();
       Cancellation cancel;
       Recovery recovery(cancel);
+      {
+        TimingScope timer(boundary_timing().rollback);
+        recovery.finish();
+      }
+      report_boundary_timing();
       return 0;
     }
     if (argc < 5) return 2;

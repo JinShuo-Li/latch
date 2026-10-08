@@ -6,6 +6,12 @@
 #include "object_security.h"
 
 namespace latch {
+struct AclChange {
+  PinnedObject* pinned = nullptr;
+  ObjectState before;
+  std::wstring after;
+};
+
 class Recovery {
  public:
   explicit Recovery(const Cancellation& cancel);
@@ -17,6 +23,7 @@ class Recovery {
   void finish();
   void change(PinnedObject& pinned, const ObjectState& before, PACL acl,
               bool protect = false);
+  void change_batch(const std::vector<AclChange>& changes);
   void track_root(const std::filesystem::path& path);
   bool protected_journal_path(const std::filesystem::path& path) const;
   Handle reserve_git(const std::filesystem::path& path);
@@ -42,6 +49,7 @@ class Recovery {
   unsigned sequence_ = 0;
   unsigned mutations_ = 0;
   void record(const std::vector<std::wstring>& fields);
+  void record_batch(const std::vector<std::vector<std::wstring>>& rows);
   void recover_pending();
 };
 }  // namespace latch

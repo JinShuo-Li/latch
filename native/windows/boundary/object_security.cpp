@@ -57,6 +57,16 @@ PinnedObject::PinnedObject(const std::filesystem::path& input, DWORD access) {
   }
   if (!object.value) fail(L"cannot mutate a volume root", ERROR_ACCESS_DENIED);
 }
+PinnedObject::PinnedObject(Handle&& pinned) : object(std::move(pinned)) {
+  require(object.value && object.value != INVALID_HANDLE_VALUE,
+          L"invalid grant batch handle");
+  FILE_ATTRIBUTE_TAG_INFO tag{};
+  if (!GetFileInformationByHandleEx(object.value, FileAttributeTagInfo, &tag,
+                                    sizeof(tag)))
+    fail(L"inspect grant batch handle");
+  require(!(tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT),
+          L"grant batch handle became a reparse point");
+}
 PinnedObject::PinnedObject(const ObjectState& original) {
   const auto separator = original.identity.rfind(L':');
   require(separator != std::wstring::npos &&

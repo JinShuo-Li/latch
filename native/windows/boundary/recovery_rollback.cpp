@@ -121,11 +121,12 @@ void Recovery::recover_pending() {
   bool rollback_complete = false;
   bool execution_started = false;
   for (const auto& file : records) {
-    const auto row = read_record(file);
-    if (row == std::vector<std::wstring>{L"rollback-complete"})
-      rollback_complete = true;
-    if (row == std::vector<std::wstring>{L"execution-start"})
-      execution_started = true;
+    for (const auto& row : read_records(file)) {
+      if (row == std::vector<std::wstring>{L"rollback-complete"})
+        rollback_complete = true;
+      if (row == std::vector<std::wstring>{L"execution-start"})
+        execution_started = true;
+    }
   }
   // Unpublished intents cannot have authorized a mutation. Discard torn
   // temporary writes before reusing the next immutable sequence number.
@@ -138,61 +139,63 @@ void Recovery::recover_pending() {
         static_cast<unsigned>(std::stoul(file.filename().wstring()));
     sequence_ = std::max(sequence_, index + 1);
     if (file == records.front()) continue;
-    const auto row = read_record(file);
-    require(!row.empty(), L"empty recovery record");
-    if (row[0] == L"acl") {
-      require(row.size() == 5, L"invalid ACL recovery record");
-      auto [it, inserted] = objects.try_emplace(
-          row[2], AclRollback{{row[1], row[2], row[3]}, {}});
-      (void)inserted;
-      it->second.versions.insert(row[3]);
-      it->second.versions.insert(row[4]);
-      const std::wstring package_prefix =
-          expected_package.wstring() +
-          std::filesystem::path::preferred_separator;
-      const bool owned_package =
-          _wcsicmp(row[1].c_str(), expected_package.c_str()) == 0 ||
-          _wcsnicmp(row[1].c_str(), package_prefix.c_str(),
-                    package_prefix.size()) == 0;
-      if (rollback_complete && owned_package) {
-        objects.erase(row[2]);
-        continue;
-      }
-      // The primary path is pinned in the complete preflight below. A
-      // second hardlink name must still designate the recorded identity.
-      if (!execution_started && !inserted && it->second.original.path != row[1]) {
-        PinnedObject alias(row[1]);
-        require(alias.state().identity == row[2],
-                L"recovery hardlink alias was replaced");
-      }
-    } else if (row[0] == L"root") {
-      require(row.size() == 3, L"invalid grant-root record");
-      roots.emplace_back(row[1], row[2]);
-    } else if (row[0] == L"reservation-intent") {
-      require(row.size() == 3, L"invalid reservation intent");
-      reservation_intents[row[1]] = row[2];
-    } else if (row[0] == L"reservation") {
-      require(row.size() == 3, L"invalid reservation record");
-      reservations.emplace_back(row[1], row[2]);
-    } else if (row[0] == L"package-intent") {
-      require(row.size() == 3 &&
-                  _wcsicmp(row[1].c_str(), expected_package.c_str()) == 0,
-              L"invalid package creation intent");
-      PinnedObject parent(expected_package.parent_path());
-      require(parent.state().identity == row[2],
-              L"package parent was replaced");
-      profile_intent = true;
-    } else if (row[0] == L"package") {
-      require(row.size() == 3 &&
-                  _wcsicmp(row[1].c_str(), expected_package.c_str()) == 0,
-              L"invalid package identity record");
-      package_identity = row[2];
-    } else if (row[0] == L"rollback-complete") {
-      require(row.size() == 1, L"invalid rollback seal");
-    } else if (row[0] == L"execution-start") {
-      require(row.size() == 1, L"invalid execution intent");
-    } else
-      fail(L"unknown recovery record", ERROR_INVALID_DATA);
+    for (const auto& row : read_records(file)) {
+      require(!row.empty(), L"empty recovery record");
+      if (row[0] == L"acl") {
+        require(row.size() == 5, L"invalid ACL recovery record");
+        auto [it, inserted] = objects.try_emplace(
+            row[2], AclRollback{{row[1], row[2], row[3]}, {}});
+        (void)inserted;
+        it->second.versions.insert(row[3]);
+        it->second.versions.insert(row[4]);
+        const std::wstring package_prefix =
+            expected_package.wstring() +
+            std::filesystem::path::preferred_separator;
+        const bool owned_package =
+            _wcsicmp(row[1].c_str(), expected_package.c_str()) == 0 ||
+            _wcsnicmp(row[1].c_str(), package_prefix.c_str(),
+                      package_prefix.size()) == 0;
+        if (rollback_complete && owned_package) {
+          objects.erase(row[2]);
+          continue;
+        }
+        // The primary path is identity-checked in the complete preflight
+        // below. A second hardlink name must also designate that identity.
+        if (!execution_started && !inserted &&
+            it->second.original.path != row[1]) {
+          PinnedObject alias(row[1]);
+          require(alias.state().identity == row[2],
+                  L"recovery hardlink alias was replaced");
+        }
+      } else if (row[0] == L"root") {
+        require(row.size() == 3, L"invalid grant-root record");
+        roots.emplace_back(row[1], row[2]);
+      } else if (row[0] == L"reservation-intent") {
+        require(row.size() == 3, L"invalid reservation intent");
+        reservation_intents[row[1]] = row[2];
+      } else if (row[0] == L"reservation") {
+        require(row.size() == 3, L"invalid reservation record");
+        reservations.emplace_back(row[1], row[2]);
+      } else if (row[0] == L"package-intent") {
+        require(row.size() == 3 &&
+                    _wcsicmp(row[1].c_str(), expected_package.c_str()) == 0,
+                L"invalid package creation intent");
+        PinnedObject parent(expected_package.parent_path());
+        require(parent.state().identity == row[2],
+                L"package parent was replaced");
+        profile_intent = true;
+      } else if (row[0] == L"package") {
+        require(row.size() == 3 &&
+                    _wcsicmp(row[1].c_str(), expected_package.c_str()) == 0,
+                L"invalid package identity record");
+        package_identity = row[2];
+      } else if (row[0] == L"rollback-complete") {
+        require(row.size() == 1, L"invalid rollback seal");
+      } else if (row[0] == L"execution-start") {
+        require(row.size() == 1, L"invalid execution intent");
+      } else
+        fail(L"unknown recovery record", ERROR_INVALID_DATA);
+    }
   }
   // Preflight every existing object before restoring any ACL. A host edit
   // not described by this transaction is a conflict, never an overwrite.
@@ -204,18 +207,18 @@ void Recovery::recover_pending() {
   std::sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) {
     return a->original.path.size() < b->original.path.size();
   });
-  std::vector<PinnedObject> pins;
-  // Each PinnedObject checks every path component. Retain one no-delete-share
-  // handle per ancestor for the entire rollback, not one per file: a large
-  // dependency tree otherwise consumes millions of duplicate handles.
-  std::map<std::wstring, Handle> ancestor_pins;
+  // Changed directories can pass transaction-owned inherited ACEs to new
+  // children. Pin only those directory identities through the descendant
+  // cleanup scan; retaining every regular-file handle exhausts process handle
+  // limits on large workspaces.
+  std::map<std::wstring, Handle> directory_pins;
   for (const auto* entry : ordered) {
     const auto& rollback = *entry;
     // The trusted caller may remove a temporary workspace after a failed
     // launch, even if no child reached execution-start. Reopen by the exact
     // recorded NTFS identity in both phases and verify absence by path below.
-    pins.emplace_back(rollback.original);
-    if (!pins.back().object.value) {
+    PinnedObject pinned(rollback.original);
+    if (!pinned.object.value) {
       std::fwprintf(stderr, L"Recovery cannot reopen recorded object: %ls\n",
                     rollback.original.path.c_str());
       if (!execution_started)
@@ -232,16 +235,7 @@ void Recovery::recover_pending() {
                   PinnedObject(rollback.original.path).state().identity ==
                       rollback.original.identity,
               L"recovery object was renamed or replaced before execution");
-    const auto path = std::filesystem::path(rollback.original.path).lexically_normal();
-    const auto relative = path.relative_path();
-    auto component = relative.begin();
-    auto ancestor_path = path.root_path();
-    for (auto& handle : pins.back().ancestors) {
-      ancestor_path /= *component++;
-      ancestor_pins.try_emplace(ancestor_path.wstring(), std::move(handle));
-    }
-    pins.back().ancestors.clear();
-    const auto now = pins.back().state();
+    const auto now = pinned.state();
     if (now.identity != rollback.original.identity ||
         !rollback.versions.contains(now.security)) {
       std::fwprintf(
@@ -251,6 +245,13 @@ void Recovery::recover_pending() {
           rollback.original.path.c_str(), pending_.c_str());
       fail(L"recovery refuses unrelated ACL changes", ERROR_REVISION_MISMATCH);
     }
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    if (!GetFileInformationByHandleEx(pinned.object.value,
+                                      FileAttributeTagInfo, &tag, sizeof(tag)))
+      fail(L"inspect recovery object type");
+    if (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+      directory_pins.try_emplace(rollback.original.identity,
+                                 std::move(pinned.object));
   }
   std::set<std::wstring> absent_roots;
   for (const auto& [path, id] : roots) {
@@ -428,17 +429,21 @@ void Recovery::recover_pending() {
   size_t index = 0;
   for (const auto* entry : ordered) {
     const auto& rollback = *entry;
-    auto& pinned = pins[index++];
-    if (!pinned.object.value) continue;
-    const auto current = read_security(pinned.object.value);
-    require(rollback.versions.contains(current),
-            L"host ACL changed during recovery");
-    if (current != rollback.original.security)
-      write_security(pinned.object.value, rollback.original.security);
-    if (index == 1) pause(L"cleanup");
+    // Do not retain one kernel handle per file across a large rollback. The
+    // complete conflict preflight above has already checked every object;
+    // reopen each stable NTFS identity here and recheck its ACL immediately
+    // before restoring it. A concurrent edit leaves the journal for retry.
+    PinnedObject pinned(rollback.original);
+    if (pinned.object.value) {
+      const auto current = read_security(pinned.object.value);
+      require(current == rollback.original.security ||
+                  rollback.versions.contains(current),
+              L"host ACL changed during recovery");
+      if (current != rollback.original.security)
+        write_security(pinned.object.value, rollback.original.security);
+    }
+    if (index++ == 0) pause(L"cleanup");
   }
-  pins.clear();
-  ancestor_pins.clear();
   for (const auto& [path, id] : roots) {
     if (absent_roots.contains(path)) continue;
     PinnedObject pin(ObjectState{path, id, L""});
@@ -454,6 +459,7 @@ void Recovery::recover_pending() {
             L"recovery grant root changed during cleanup");
     visit(visit, path, false);
   }
+  directory_pins.clear();
   if (!rollback_complete) record({L"rollback-complete"});
   pause(L"rollback-sealed");
   for (const auto& [path, id] : reservations) {

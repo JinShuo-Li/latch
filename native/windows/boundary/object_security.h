@@ -14,6 +14,9 @@ struct PinnedObject {
   explicit PinnedObject(const std::filesystem::path& path,
                         DWORD access = READ_CONTROL | WRITE_DAC |
                                        FILE_READ_ATTRIBUTES);
+  // Reuse a validated, no-delete-share object handle without reopening its
+  // ancestors. The caller retains its own duplicate through this ACL batch.
+  explicit PinnedObject(Handle&& object);
   // Recovery after execution may reopen a renamed file by exact NTFS ID.
   // A null object means the original ID no longer exists, not a path miss.
   explicit PinnedObject(const ObjectState& original);

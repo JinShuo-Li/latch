@@ -66,12 +66,59 @@ Recovery::Recovery(const Cancellation& cancel) : cancel_(cancel) {
       (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
     fail(L"invalid recovery lock", ERROR_INVALID_DATA);
   pending_ = root_ / L"pending";
-  recover_pending();
+  {
+    TimingScope timer(boundary_timing().rollback);
+    recover_pending();
+  }
 }
 void Recovery::record(const std::vector<std::wstring>& fields) {
   wchar_t name[32]{};
-  swprintf_s(name, L"%08u.rec", sequence_++);
-  durable_record(pending_ / name, fields);
+  swprintf_s(name, L"%08u.rec", sequence_);
+  {
+    TimingScope timer(boundary_timing().journal);
+    durable_record(pending_ / name, fields);
+  }
+  ++sequence_;
+  if (boundary_timing().enabled) ++boundary_timing().journal_records;
+}
+void Recovery::record_batch(
+    const std::vector<std::vector<std::wstring>>& rows) {
+  constexpr size_t max_rows = 32;
+  constexpr size_t max_bytes = 8 * 1024 * 1024;
+  size_t begin = 0;
+  while (begin < rows.size()) {
+    size_t end = begin;
+    size_t bytes = 0;
+    while (end < rows.size() && end - begin < max_rows) {
+      const auto& row = rows[end];
+      require(row.size() == 5 && row[0] == L"acl",
+              L"invalid ACL batch entry");
+      size_t row_bytes = 5 * sizeof(uint32_t);
+      for (const auto& field : row) {
+        require(field.size() <= 1024 * 1024,
+                L"recovery field too large");
+        row_bytes += field.size() * sizeof(wchar_t);
+      }
+      if (end != begin && bytes + row_bytes > max_bytes) break;
+      require(row_bytes <= max_bytes, L"recovery ACL batch too large");
+      bytes += row_bytes;
+      ++end;
+    }
+    std::vector<std::wstring> fields{L"acl-batch-v1",
+                                     std::to_wstring(end - begin)};
+    for (size_t i = begin; i < end; ++i)
+      fields.insert(fields.end(), rows[i].begin(), rows[i].end());
+    wchar_t name[32]{};
+    swprintf_s(name, L"%08u.rec", sequence_);
+    {
+      TimingScope timer(boundary_timing().journal);
+      durable_record(pending_ / name, fields);
+    }
+    ++sequence_;
+    if (boundary_timing().enabled)
+      boundary_timing().journal_records += end - begin;
+    begin = end;
+  }
 }
 void Recovery::begin() {
   profile_ = L"LatchProbe." + unique_sid_string();
@@ -142,8 +189,43 @@ void Recovery::change(PinnedObject& pinned, const ObjectState& before, PACL acl,
   const auto after = changed_dacl(before.security, acl, protect);
   if (before.security == after) return;
   record({L"acl", before.path, before.identity, before.security, after});
-  write_security(pinned.object.value, after);
+  {
+    TimingScope timer(boundary_timing().acl_apply);
+    write_security(pinned.object.value, after);
+  }
+  if (boundary_timing().enabled) ++boundary_timing().acl_mutations;
   if (++mutations_ == 1) pause(L"first-acl");
+}
+void Recovery::change_batch(const std::vector<AclChange>& changes) {
+  std::vector<std::vector<std::wstring>> rows;
+  rows.reserve(changes.size());
+  for (const auto& change : changes) {
+    require(change.pinned != nullptr, L"missing pinned ACL object");
+    cancel_.check();
+    const auto current = change.pinned->state();
+    require(current.identity == change.before.identity &&
+                current.security == change.before.security,
+            L"host object changed while preparing sandbox ACL batch");
+    if (change.before.security != change.after)
+      rows.push_back({L"acl", change.before.path, change.before.identity,
+                      change.before.security, change.after});
+  }
+  if (rows.empty()) return;
+  record_batch(rows);
+  for (const auto& change : changes) {
+    if (change.before.security == change.after) continue;
+    cancel_.check();
+    const auto current = change.pinned->state();
+    require(current.identity == change.before.identity &&
+                current.security == change.before.security,
+            L"host object changed before sandbox ACL batch apply");
+    {
+      TimingScope timer(boundary_timing().acl_apply);
+      write_security(change.pinned->object.value, change.after);
+    }
+    if (boundary_timing().enabled) ++boundary_timing().acl_mutations;
+    if (++mutations_ == 1) pause(L"first-acl");
+  }
 }
 void Recovery::track_root(const std::filesystem::path& path) {
   PinnedObject pinned(path);

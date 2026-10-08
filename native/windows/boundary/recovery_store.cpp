@@ -3,6 +3,8 @@
 #include <objbase.h>
 #include <shlobj.h>
 
+#include <utility>
+
 #include "token.h"
 namespace latch::recovery_store {
 std::wstring current_user() {
@@ -120,7 +122,8 @@ std::vector<std::wstring> read_record(const std::filesystem::path& path) {
     fail(L"corrupt recovery journal; preserve it for repair", ERROR_CRC);
   offset = 0;
   const auto count = number(payload, offset);
-  if (count > 16) fail(L"invalid recovery record fields", ERROR_INVALID_DATA);
+  if (count > 1024)
+    fail(L"invalid recovery record fields", ERROR_INVALID_DATA);
   std::vector<std::wstring> fields;
   for (uint32_t i = 0; i < count; ++i) {
     const auto characters = number(payload, offset);
@@ -138,6 +141,35 @@ std::vector<std::wstring> read_record(const std::filesystem::path& path) {
   if (offset != payload.size())
     fail(L"recovery trailing data", ERROR_INVALID_DATA);
   return fields;
+}
+
+std::vector<std::vector<std::wstring>> read_records(
+    const std::filesystem::path& path) {
+  auto fields = read_record(path);
+  if (fields.empty() || fields.front() != L"acl-batch-v1")
+    return {std::move(fields)};
+  require(fields.size() >= 2, L"invalid ACL batch record");
+  uint32_t count = 0;
+  require(!fields[1].empty(), L"invalid ACL batch record");
+  for (wchar_t character : fields[1]) {
+    require(character >= L'0' && character <= L'9',
+            L"invalid ACL batch record");
+    count = count * 10 + static_cast<uint32_t>(character - L'0');
+    require(count > 0 && count <= 32, L"invalid ACL batch record");
+  }
+  require(fields.size() == 2 + static_cast<size_t>(count) * 5,
+          L"invalid ACL batch record");
+  std::vector<std::vector<std::wstring>> rows;
+  rows.reserve(static_cast<size_t>(count));
+  size_t offset = 2;
+  for (uint32_t i = 0; i < count; ++i) {
+    std::vector<std::wstring> row(fields.begin() + static_cast<ptrdiff_t>(offset),
+                                  fields.begin() + static_cast<ptrdiff_t>(offset + 5));
+    require(row[0] == L"acl", L"invalid ACL batch entry");
+    rows.push_back(std::move(row));
+    offset += 5;
+  }
+  return rows;
 }
 
 }  // namespace latch::recovery_store

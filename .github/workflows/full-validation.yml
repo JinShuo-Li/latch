@@ -59,7 +59,7 @@ jobs:
           # .git reservation is a same-volume atomic rename from the
           # LOCALAPPDATA journal. RUNNER_TEMP may be on a separate drive.
           $fixtureBase = Join-Path $env:USERPROFILE ('LatchBoundaryCI-' + $env:GITHUB_RUN_ID)
-          foreach ($suite in @('test', 'recovery', 'adversarial', 'lifecycle', 'developer', 'deleted_root')) {
+          foreach ($suite in @('test', 'recovery', 'adversarial', 'lifecycle', 'network', 'scale', 'developer', 'deleted_root')) {
             try {
               & "native/windows/boundary/$suite.ps1" -Binaries $binaries -FixtureRoot (Join-Path $fixtureBase "latch-native-$suite")
               if ($LASTEXITCODE) { throw "$suite exited $LASTEXITCODE" }
@@ -73,6 +73,9 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -102,6 +105,8 @@ jobs:
           # platform wiring while the native job covers the full ACL matrix.
           foreach ($test in @(
             'windows_runtime',
+            'loop_executes_registered_extension_tool',
+            'loop_executes_registered_powershell_extension_tool',
             'read_only_shell_classification_is_conservative',
             'search_refuses_and_excludes_the_state_directory',
             'managed_process_start_poll_and_terminate',

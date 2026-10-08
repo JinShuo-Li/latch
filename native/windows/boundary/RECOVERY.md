@@ -131,10 +131,12 @@ an unregistered directory or a mismatched mapping retains the journal.
 4. Active unrelated ACL mutation, hostile same-user processes, cross-volume
    reservation staging, and all rename/reparse race interleavings need further
    review. The journal deliberately retains conflicts.
-5. Large recursive grant roots produce many durable records. Toolchain docs
-   should not be included in focused build fixtures; production performance
-   and root selection need work. Test-only journal overrides must not run
-   overlapping grant roots concurrently; the production root has one lock.
+5. Large recursive grant roots still produce one logical ACL intent and
+   mutation per existing object. Up to 32 exact intents share one durable
+   record, but production performance and whole-home recovery are not yet
+   qualified. Toolchain docs should not be included in focused build fixtures.
+   Test-only journal overrides must not run overlapping grant roots
+   concurrently; the production root has one lock.
 
 ## Module ownership
 
@@ -212,6 +214,46 @@ The mapping-based recovery revision passed the `/W4 /WX` native build and
 27, 2026 (fixtures `target/recovery-mapping-04` and `target/mapping-*`).
 This closes the tested unsealed-creation refusal, but does not itself certify
 the wider production boundary.
+
+## Additional Windows qualification fixtures (2026-10-08)
+
+The current branch adds `network.ps1` for loopback client and listening-server
+policy checks, and `scale.ps1` for a large mutable workspace with concurrent
+host-created files and sandbox-created/renamed/deleted files. The scale fixture
+sets `LATCH_BOUNDARY_TIMING=1` to report preflight, grant walk, journal, ACL
+application, and rollback durations. Both scripts are part of the manual Full
+validation workflow. Their results are pending a Windows run; they are not
+counted as passes in the validation ledger above.
+
+Workspace, write-root and read-root preflight stores compact NTFS identities
+and relative paths rather than retaining every file handle. Every root
+completes hardlink validation before any ACL grant. The grant pass reopens
+objects through checked path components, verifies the saved identity and
+rechecks hardlinks; only a bounded batch of up to 32 target handles stays open
+at once. Workspace and read-root grants publish up to 32 exact ACL intents in
+one checksummed write-through record before applying any ACL in that batch.
+After a crash, recovery accepts either the original or granted descriptor for
+each row, so a partially applied batch can be rolled back without guessing.
+Recovery preflights journaled identities one at a time, then reopens and
+rechecks each object's ACL immediately before restoring it. During descendant
+cleanup it retains handles only for changed directories that can pass a
+temporary inherited ACE to new children, not one open file handle per journal
+row. ACL changes and logical recovery intents remain per object; the scale
+fixture must qualify the change before performance claims are made.
+
+The loopback policy remains default-deny for sandboxed commands. The network
+fixture checks an externally resolvable DNS name, resolves `localhost`, checks
+IPv4 and available IPv6 client/listener paths, and can test a caller-supplied
+reachable private-LAN endpoint. The
+runner does not edit the operating system's AppContainer loopback configuration
+or firewall. The lifetime and preservation requirements for Windows' debugging
+exemption mechanisms are described in the native boundary README. A scoped
+relay remains unimplemented. The lifecycle fixture probes x86 top-level
+startup and one direct x86 child on WOW64; deeper descendants and compatibility
+injection bypasses remain unqualified. Python and Windows PowerShell 5.1
+extension round-trip tests are in the Windows Full validation matrix but have
+not run here. Physical power-loss and hostile rename/reparse/hardlink races
+also remain open.
 
 No physical reboot/power-cut, full native Windows workspace gate, Windows CI,
 production integration, doctor/version changes or NTFS agent dogfood is claimed.
