@@ -73,11 +73,20 @@ impl NativeRuntime {
                 }
             }
         }
+        // Headless PowerShell's default STA apartment needs COM waits that
+        // fail in AppContainer. Keep an explicitly requested apartment intact.
+        let mta = program
+            .file_stem()
+            .is_some_and(|stem| stem.eq_ignore_ascii_case("pwsh"))
+            && !args
+                .iter()
+                .any(|arg| arg.eq_ignore_ascii_case("-sta") || arg.eq_ignore_ascii_case("-mta"));
         let args = args
             .iter()
             .map(|arg| quote(arg))
             .collect::<Result<Vec<_>>>()?
             .join(" ");
+        let args = if mta { format!("-Mta {args}") } else { args };
         self.native_command(profile, &program, &args, &reads)
     }
 

@@ -859,12 +859,17 @@ Fixed Git inspections and extension hosts share `fixed_command`; Linux quotes
 each argument and explicitly execs the program inside Bubblewrap. Windows fixed
 commands quote arguments and run through the same native runner. The Rust
 toolchain grant selection, fixed-program aliases, staged-tool PATH entries,
-and Python/Node/ripgrep read roots live in `execution/windows_runtime_tools.rs`,
+and Python/Node/ripgrep/PowerShell 7 read roots live in `execution/windows_runtime_tools.rs`,
 leaving `windows_runtime.rs` to assemble the capability request. Python,
-Node, and ripgrep runtimes are staged as read-only assets; a Chocolatey
+Node, ripgrep, and PowerShell 7 runtimes are staged as read-only assets; a Chocolatey
 ripgrep shim is resolved to the package's standalone executable before staging.
 Python's standard library is one ZIP archive to avoid thousands of per-command
-ACL changes.
+ACL changes. PowerShell 7 is resolved from a native PATH installation, its
+installed module path, or the standard Program Files location; Store launcher
+aliases are not copied. Its complete runtime is staged under a source/managed-host
+identity, and only staged modules enter `PSModulePath`. Fixed headless PowerShell
+calls default to MTA because STA COM waits fail inside AppContainer; explicit
+`-Sta`/`-Mta` arguments remain authoritative. The boundary still owns execution.
 CLI startup and session Git observations also use `fixed_command`. On Windows,
 the ripgrep prerequisite check uses the same shim resolution as fixed-command
 staging without starting a host process;
