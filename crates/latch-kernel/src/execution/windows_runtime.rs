@@ -539,7 +539,12 @@ mod tests {
             .output()
             .await
             .unwrap();
-        assert!(!denied.status.success());
+        assert!(
+            !denied.status.success(),
+            "sensitive read unexpectedly succeeded: stdout={} stderr={}",
+            String::from_utf8_lossy(&denied.stdout),
+            String::from_utf8_lossy(&denied.stderr)
+        );
         assert!(!String::from_utf8_lossy(&denied.stdout).contains("fixture private"));
         let listed = runtime
             .command(&masked, "dir /a")
