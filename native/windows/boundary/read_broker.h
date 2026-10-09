@@ -3,6 +3,7 @@
 #include <thread>
 #include "common.h"
 #include "object_security.h"
+#include "socket_broker.h"
 
 namespace latch {
 // Read capabilities are mediated at open time. No source ACL is changed, and
@@ -10,7 +11,7 @@ namespace latch {
 class ReadBroker {
  public:
   ReadBroker(HANDLE job, PSID package, const std::vector<std::wstring>& roots,
-             const std::vector<std::wstring>& denied);
+             const std::vector<std::wstring>& denied, bool network);
   ~ReadBroker();
   ReadBroker(const ReadBroker&) = delete;
   ReadBroker& operator=(const ReadBroker&) = delete;
@@ -19,6 +20,7 @@ class ReadBroker {
  private:
   HANDLE job_;
   std::vector<BYTE> package_;
+  SocketBroker sockets_;
   std::vector<std::wstring> roots_, denied_;
   std::vector<PinnedObject> roots_pinned_;
   Handle server_, client_, mutex_;

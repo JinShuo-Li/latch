@@ -39,8 +39,8 @@ precedence over older validation results below.
 - A private desktop on the launcher's current window station permits USER32/GDI
   startup without granting a broad restricting SID or creating a private
   window station. The station name is queried rather than assumed to be WinSta0.
-- A small Detours compatibility DLL forwards only NUL/KsecDD device handles
-  and injects compatibility support into descendants. These hooks are not
+- A small Detours compatibility DLL forwards NUL/KsecDD device handles,
+  requests scoped read/socket capabilities, and injects support into descendants. These hooks are not
   the security boundary; restrictions and job membership are OS properties.
 - Explicit inherited standard-handle allowlist, and atomic creation inside
   a kill-on-close Job Object. A separate trusted cleanup owner holds the
@@ -51,10 +51,11 @@ precedence over older validation results below.
 - Missing top-level .git is reserved by a temporary delete-on-close file.
 - Native cmd.exe shell and direct executable/argv inspection are exercised
   by a Rust test. Git Bash/MSYS is not supported by this candidate.
-- Internet and private-network capabilities do not enable AppContainer
-  loopback. The runner keeps Windows' default loopback isolation and does not
-  edit the AppContainer loopback configuration or firewall. The manual
-  `network.ps1` fixture qualifies sandbox-client and sandbox-listener paths.
+- The explicit network capability enables a per-call socket broker for ordinary
+  IPv4/IPv6 TCP and UDP, including loopback clients and listeners. The broker
+  authenticates the exact job/package and transfers sockets only to those
+  processes; it does not edit loopback exemptions or firewall configuration.
+  `network.ps1` qualifies payload exchange, denials, descendants and teardown.
 - Native helpers build from the Windows Cargo build script with MSVC and are
   embedded in the production Windows runtime module. No unsafe Rust was introduced.
 - No account provisioning, firewall changes, WSL, or unrestricted retry.
@@ -173,25 +174,24 @@ point them at actual credential or state directories.
 
 ## Loopback policy
 
-Windows loopback remains unavailable to sandboxed commands. The documented
-`NetworkIsolationSetAppContainerConfig` API manages an AppContainer SID list
-for debugging loopback traffic and requires callers to preserve the existing
-list. Microsoft's local IPC guidance describes `CheckNetIsolation` exemptions
-as a sideload/debug path; inbound listener exemptions must remain active while
-the listener is running. Latch does not change that shared OS configuration or
-add firewall rules. See [NetworkIsolationSetAppContainerConfig](https://learn.microsoft.com/en-us/windows/win32/api/netfw/nf-netfw-networkisolationsetappcontainerconfig),
-[Windows interprocess communication](https://learn.microsoft.com/en-us/windows/apps/develop/communication/interprocess-communication),
-and [UWP loopback troubleshooting](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/troubleshooting-uwp-firewall).
+Windows' AppContainer loopback policy remains unchanged. With the explicit
+Network capability, `socket_broker.{h,cpp}` creates ordinary TCP/UDP sockets
+and uses [WSADuplicateSocketW](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsaduplicatesocketw)
+to transfer them to an authenticated process in this call's exact Job Object
+and AppContainer. The recipient constructs its own descriptor and acknowledges
+receipt; the host closes its descriptor immediately. Pending transfers are
+bounded to 64, dead recipients are reaped, and all remaining host descriptors
+close during call teardown. Raw sockets, other families/protocols and privileged
+flags are refused. No machine-wide exemption, firewall rule, account or
+unsandboxed child is created. Network permission remains a broad command-level
+capability, rather than an endpoint/port grant.
 
-`network.ps1` checks external DNS resolution (default `example.com`, skipped
-when the host cannot resolve it), resolves `localhost` through Winsock, and
-checks IPv4 and available IPv6 loopback against live host listeners, both with
-and without the network capability. It also starts sandboxed listeners and
-attempts host connections. A successful loopback connection is a policy
-failure. A reachable remote private-LAN endpoint can be supplied with
-`-PrivateLanAddress` and `-PrivateLanPort` to qualify that capability
-separately. This fixture keeps the current loopback boundary; it does not add
-local development-server support.
+`network.ps1` verifies IPv4 and available IPv6 TCP client/listener payloads,
+UDP payloads through ANSI/Wide Winsock entry points, child-shell capability
+propagation, denial without Network, forged callers and raw requests, and
+listener closure/ACL recovery after launcher cancellation. External DNS uses a
+host baseline; private-LAN qualification still requires an explicitly supplied
+reachable remote endpoint. Proxies and other IPC protocols remain unqualified.
 
 ## Recovery/refactor follow-up (2026-09-27)
 
@@ -245,8 +245,9 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
   compatibility injection; resource
   exhaustion; recovery after cleanup-owner termination or machine crashes.
   Public-launcher termination cleanup is covered by the follow-up tests.
-- **Network:** DNS, UDP, IPv6, private LAN, listening servers, proxies, named
-  pipes and other IPC. TCP evidence is limited to the tested endpoint and host.
+- **Network:** Remote private LAN, proxies, named pipes and other IPC.
+  Loopback TCP/UDP IPv4/IPv6 payloads and listener teardown are qualified on
+  the tested host; this does not certify every network service/provider.
 - **Compatibility:** Python and Windows PowerShell 5.1 extension round-trip
   tests are in manual Full validation but remain unrun; full repository Cargo
   builds under the boundary, VS discovery without an

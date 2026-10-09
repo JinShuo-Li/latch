@@ -75,6 +75,7 @@ mod windows {
             "desktop",
             "job",
             "read_broker",
+            "socket_broker",
         ];
         for name in runner {
             compile(name);
@@ -109,6 +110,7 @@ mod windows {
                 "rpcrt4.lib",
                 "ole32.lib",
                 "shell32.lib",
+                "ws2_32.lib",
             ]);
             if dll {
                 command.arg("/EXPORT:DetourFinishHelperProcess,@1,NONAME");

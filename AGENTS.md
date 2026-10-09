@@ -241,7 +241,8 @@ live home directory is not yet qualified at scale; see
 `native/windows/boundary/CURRENT_STATE.md` before testing one.
 Native ownership is split into runner/token/AppContainer/ACL/recovery/desktop/
 job/process modules; Win32 complexity stays outside the safe Rust kernel.
-`read_broker.{h,cpp}` owns scoped read opens; `broker_protocol.h` is its bounded
+`read_broker.{h,cpp}` owns scoped read opens and authenticated capability transport;
+`socket_broker.{h,cpp}` owns Network-authorized TCP/UDP socket transfer/lifetime; `broker_protocol.h` is its bounded
 pipe contract. The broker verifies job/package identity, paths, reparses and
 hardlinks before duplicating a read-only handle. DLL hooks only route requests.
 `read_broker.ps1` tests native enumeration without source `WRITE_DAC` or ACL changes.

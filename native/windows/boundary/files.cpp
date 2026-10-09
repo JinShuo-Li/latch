@@ -38,7 +38,9 @@ int wmain(int argc, wchar_t** argv) {
     return result == 0 && first != EOF ? 0 : 1;
   }
   if (operation == L"broker-read-allow" || operation == L"broker-read-deny" ||
-      operation == L"broker-access-deny" || operation == L"broker-caller-deny") {
+      operation == L"broker-access-deny" || operation == L"broker-caller-deny" ||
+      operation == L"broker-socket-deny" || operation == L"broker-raw-deny" ||
+      operation == L"broker-socket-caller-deny") {
     DWORD size = 0;
     const auto* broker = static_cast<const LatchHandles*>(
         DetourFindPayloadEx(latch_handles_id, &size));
@@ -55,7 +57,15 @@ int wmain(int argc, wchar_t** argv) {
     request.options = 0x20;  // FILE_SYNCHRONOUS_IO_NONALERT
     request.path_length = static_cast<DWORD>(wcslen(argv[2]));
     memcpy(request.path, argv[2], request.path_length * sizeof(wchar_t));
-    if (operation == L"broker-caller-deny" &&
+    if (operation == L"broker-socket-deny" || operation == L"broker-raw-deny" ||
+        operation == L"broker-socket-caller-deny") {
+      request.operation = LatchBrokerOperation::socket_create;
+      request.family = AF_INET;
+      request.socket_type = operation == L"broker-raw-deny" ? SOCK_RAW : SOCK_STREAM;
+      request.protocol = IPPROTO_TCP;
+      request.socket_flags = WSA_FLAG_OVERLAPPED;
+    }
+    if ((operation == L"broker-caller-deny" || operation == L"broker-socket-caller-deny") &&
         !GetNamedPipeServerProcessId(broker->read_broker, &request.process_id)) {
       ReleaseMutex(broker->broker_mutex);
       return 5;
@@ -68,9 +78,13 @@ int wmain(int argc, wchar_t** argv) {
         ReadFile(broker->read_broker, &response, sizeof(response), &bytes, nullptr) &&
         bytes == sizeof(response) && response.request_id == request.request_id;
     ReleaseMutex(broker->broker_mutex);
-    const bool allowed = exchanged && !response.error && response.file;
-    if (allowed) CloseHandle(response.file);
-    if (!exchanged || allowed != (operation == L"broker-read-allow")) return 6;
+    const bool allowed = exchanged && !response.error && (response.file || response.socket_ticket);
+    if (allowed && response.file) CloseHandle(response.file);
+    if (!exchanged || allowed != (operation == L"broker-read-allow")) {
+      std::fwprintf(stderr, L"Direct broker exchanged=%d allowed=%d error=%lu version=%lu id=%llu bytes=%lu win=%lu\n",
+        exchanged, allowed, response.error, response.version, response.request_id, bytes, GetLastError());
+      return 6;
+    }
     std::fwprintf(stdout, L"PASS direct %ls\n", operation.c_str());
     return 0;
   }
@@ -234,7 +248,8 @@ int wmain(int argc, wchar_t** argv) {
     std::fwprintf(stdout, L"resolved host=%ls addresses=%u\n", argv[2], count);
     return count ? 0 : 1;
   }
-  if (operation == L"network-deny" || operation == L"network-allow") {
+  if (operation == L"network-deny" || operation == L"network-allow" ||
+      operation == L"network-echo") {
     if (argc != 3 && argc != 4) return 2;
     WSADATA data{};
     if (WSAStartup(MAKEWORD(2, 2), &data)) return 3;
@@ -284,6 +299,23 @@ int wmain(int argc, wchar_t** argv) {
           connected = error == 0;
         } else error = ready == 0 ? WSAETIMEDOUT : WSAGetLastError();
       }
+      if (connected && operation == L"network-echo") {
+        u_long blocking = 0;
+        DWORD timeout_ms = 3000;
+        ioctlsocket(socket, FIONBIO, &blocking);
+        setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+        const char payload[] = "latch";
+        char reply[sizeof(payload) - 1]{};
+        connected = send(socket, payload, sizeof(payload) - 1, 0) == sizeof(payload) - 1;
+        int received = 0;
+        while (connected && received < static_cast<int>(sizeof(reply))) {
+          const int count = recv(socket, reply + received, sizeof(reply) - received, 0);
+          if (count <= 0) { connected = false; error = WSAGetLastError(); break; }
+          received += count;
+        }
+        connected = connected && memcmp(payload, reply, sizeof(reply)) == 0;
+      }
       closesocket(socket);
       if (connected) break;
     }
@@ -296,10 +328,46 @@ int wmain(int argc, wchar_t** argv) {
         (error == WSAEACCES || error == WSAETIMEDOUT ||
          error == WSAECONNREFUSED || error == WSAENETUNREACH ||
          error == WSAEHOSTUNREACH);
-    return operation == L"network-allow" ? (connected ? 0 : 1)
+    return operation != L"network-deny" ? (connected ? 0 : 1)
                                          : (denied ? 0 : 1);
   }
-  if (operation == L"network-listen") {
+  if (operation == L"network-udp-echo" || operation == L"network-udp-deny") {
+    if (argc != 4) return 2;
+    WSADATA data{};
+    if (WSAStartup(MAKEWORD(2, 2), &data)) return 3;
+    ADDRINFOW hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    ADDRINFOW* addresses = nullptr;
+    if (GetAddrInfoW(argv[3], argv[2], &hints, &addresses)) { WSACleanup(); return 4; }
+    const auto* address = addresses;
+    SOCKET socket = INVALID_SOCKET;
+    if (address->ai_family == AF_INET) {
+      using CreateSocket = SOCKET(WSAAPI*)(int, int, int, LPWSAPROTOCOL_INFOA, GROUP, DWORD);
+      const auto create = reinterpret_cast<CreateSocket>(GetProcAddress(GetModuleHandleW(L"ws2_32.dll"), "WSASocketA"));
+      socket = create(address->ai_family, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    } else {
+      socket = WSASocketW(address->ai_family, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0,
+                         WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+    }
+    bool exchanged = false;
+    if (socket != INVALID_SOCKET) {
+      DWORD timeout = 2000;
+      setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+      char response[5]{};
+      exchanged = sendto(socket, "latch", 5, 0, address->ai_addr,
+                         static_cast<int>(address->ai_addrlen)) == 5 &&
+          recvfrom(socket, response, 5, 0, nullptr, nullptr) == 5 &&
+          memcmp(response, "latch", 5) == 0;
+      closesocket(socket);
+    }
+    FreeAddrInfoW(addresses);
+    WSACleanup();
+    return exchanged == (operation == L"network-udp-echo") ? 0 : 5;
+  }
+  if (operation == L"network-listen" || operation == L"network-listen-echo") {
     if (argc != 4 && argc != 5) return 2;
     const int hold_ms = _wtoi(argv[3]);
     if (hold_ms < 1 || hold_ms > 15000) return 2;
@@ -363,7 +431,29 @@ int wmain(int argc, wchar_t** argv) {
       WSACleanup();
       return 5;
     }
-    if (!error) Sleep(static_cast<DWORD>(hold_ms));
+    if (!error && operation == L"network-listen-echo") {
+      fd_set readable;
+      FD_ZERO(&readable); FD_SET(listener, &readable);
+      timeval timeout{hold_ms / 1000, (hold_ms % 1000) * 1000};
+      if (select(0, &readable, nullptr, nullptr, &timeout) <= 0) error = WSAETIMEDOUT;
+      SOCKET client = !error ? accept(listener, nullptr, nullptr) : INVALID_SOCKET;
+      if (!error && client == INVALID_SOCKET) error = WSAGetLastError();
+      if (client != INVALID_SOCKET) {
+        DWORD io_timeout = 3000;
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&io_timeout), sizeof(io_timeout));
+        char payload[5]{};
+        int received = 0;
+        while (received < sizeof(payload)) {
+          const int count = recv(client, payload + received, sizeof(payload) - received, 0);
+          if (count <= 0) { error = WSAECONNRESET; break; }
+          received += count;
+        }
+        if (!error && (memcmp(payload, "latch", sizeof(payload)) ||
+            send(client, payload, sizeof(payload), 0) != sizeof(payload))) error = WSAECONNRESET;
+        closesocket(client);
+      }
+    } else if (!error) Sleep(static_cast<DWORD>(hold_ms));
     if (listener != INVALID_SOCKET) closesocket(listener);
     WSACleanup();
     std::printf("%s\n", status.c_str());

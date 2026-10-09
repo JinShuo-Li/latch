@@ -33,6 +33,10 @@ auto real_process = CreateProcessW;
 auto real_final_path = GetFinalPathNameByHandleW;
 auto real_attributes = GetFileAttributesW;
 auto real_attributes_ex = GetFileAttributesExW;
+auto real_socket = ::socket;
+auto real_wsa_socket = WSASocketW;
+using WsaSocketA = SOCKET (WSAAPI*)(int, int, int, LPWSAPROTOCOL_INFOA, GROUP, DWORD);
+WsaSocketA real_wsa_socket_a = nullptr;
 std::wstring initial_cwd;
 HANDLE null_handle = nullptr;
 HANDLE ksec_handle = nullptr;
@@ -45,6 +49,68 @@ DWORD ancestor_count = 0;
 ULONGLONG workspace_volume = 0;
 wchar_t workspace_drive = 0;
 char hook_path[MAX_PATH]{};
+
+// All callers hold the inherited transaction mutex across the exchange.
+bool broker_exchange(LatchReadRequest& request, LatchReadResponse& response) {
+  request.version = latch_broker_version;
+  request.process_id = GetCurrentProcessId();
+  request.request_id = ++broker_sequence;
+  DWORD bytes = 0;
+  const DWORD size = latch_read_request_size(request.path_length);
+  if (!WriteFile(read_broker, &request, size, &bytes, nullptr) || bytes != size)
+    return false;
+  for (;;) {
+    if (!ReadFile(read_broker, &response, sizeof(response), &bytes, nullptr) ||
+        bytes != sizeof(response) || response.version != latch_broker_version)
+      return false;
+    if (response.process_id == request.process_id &&
+        response.request_id == request.request_id) return true;
+  }
+}
+
+SOCKET broker_socket(int family, int type, int protocol, DWORD flags) {
+  if (!read_broker || !broker_mutex || using_broker) return INVALID_SOCKET;
+  using_broker = true;
+  struct Reset { ~Reset() { using_broker = false; } } reset;
+  const DWORD waited = WaitForSingleObject(broker_mutex, 10000);
+  if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) return INVALID_SOCKET;
+  struct Unlock { ~Unlock() { ReleaseMutex(broker_mutex); } } unlock;
+  LatchReadRequest request{};
+  request.operation = LatchBrokerOperation::socket_create;
+  request.family = family;
+  request.socket_type = type;
+  request.protocol = protocol;
+  request.socket_flags = flags;
+  LatchReadResponse response{};
+  if (!broker_exchange(request, response) || response.error) return INVALID_SOCKET;
+  const SOCKET socket = real_wsa_socket(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO,
+      FROM_PROTOCOL_INFO, &response.socket_information, 0, flags);
+  const int error = socket == INVALID_SOCKET ? WSAGetLastError() : 0;
+  request.operation = LatchBrokerOperation::socket_release;
+  request.socket_ticket = response.socket_ticket;
+  if (!broker_exchange(request, response) || response.error) {
+    if (socket != INVALID_SOCKET) closesocket(socket);
+    WSASetLastError(WSAEACCES);
+    return INVALID_SOCKET;
+  }
+  if (error) WSASetLastError(error);
+  return socket;
+}
+
+SOCKET WSAAPI socket_open(int family, int type, int protocol) {
+  const SOCKET value = broker_socket(family, type, protocol, WSA_FLAG_OVERLAPPED);
+  return value != INVALID_SOCKET ? value : real_socket(family, type, protocol);
+}
+SOCKET WSAAPI wsa_socket_open(int family, int type, int protocol,
+                            LPWSAPROTOCOL_INFOW info, GROUP group, DWORD flags) {
+  const SOCKET value = !info && !group ? broker_socket(family, type, protocol, flags) : INVALID_SOCKET;
+  return value != INVALID_SOCKET ? value : real_wsa_socket(family, type, protocol, info, group, flags);
+}
+SOCKET WSAAPI wsa_socket_open_a(int family, int type, int protocol,
+                              LPWSAPROTOCOL_INFOA info, GROUP group, DWORD flags) {
+  const SOCKET value = !info && !group ? broker_socket(family, type, protocol, flags) : INVALID_SOCKET;
+  return value != INVALID_SOCKET ? value : real_wsa_socket_a(family, type, protocol, info, group, flags);
+}
 
 bool named(POBJECT_ATTRIBUTES attributes, const wchar_t* expected) {
   if (!attributes || attributes->RootDirectory || !attributes->ObjectName) return false;
@@ -86,33 +152,19 @@ bool broker_read(POBJECT_ATTRIBUTES attributes, ACCESS_MASK access, ULONG share,
   if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) return false;
   struct Unlock { ~Unlock() { ReleaseMutex(broker_mutex); } } unlock;
   LatchReadRequest request{};
-  request.version = latch_broker_version;
-  request.process_id = GetCurrentProcessId();
-  request.request_id = ++broker_sequence;
   request.access = access;
   request.share = share;
   request.options = options;
   request.path_length = static_cast<DWORD>(path.size());
   std::memcpy(request.path, path.data(), path.size() * sizeof(wchar_t));
-  DWORD bytes = 0;
-  const DWORD request_size = latch_read_request_size(request.path_length);
-  if (!WriteFile(read_broker, &request, request_size, &bytes, nullptr) ||
-      bytes != request_size) return false;
   // A process killed while holding the mutex may leave its response queued.
   // Only the matching process/sequence may consume a returned capability.
-  for (;;) {
-    LatchReadResponse response{};
-    if (!ReadFile(read_broker, &response, sizeof(response), &bytes, nullptr) ||
-        bytes != sizeof(response) || response.version != latch_broker_version)
-      return false;
-    if (response.process_id != request.process_id ||
-        response.request_id != request.request_id) continue;
-    if (response.error || !response.file) return false;
-    *handle = response.file;
-    status->Status = 0;
-    status->Information = FILE_OPENED;
-    return true;
-  }
+  LatchReadResponse response{};
+  if (!broker_exchange(request, response) || response.error || !response.file) return false;
+  *handle = response.file;
+  status->Status = 0;
+  status->Information = FILE_OPENED;
+  return true;
 }
 
 HANDLE broker_attributes(LPCWSTR path) {
@@ -486,16 +538,23 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   const DWORD cwd_length = GetCurrentDirectoryW(32768, cwd);
   if (cwd_length && cwd_length < 32768) initial_cwd.assign(cwd, cwd_length);
   const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  real_wsa_socket_a = reinterpret_cast<WsaSocketA>(
+      GetProcAddress(GetModuleHandleW(L"ws2_32.dll"), "WSASocketA"));
   real_open = reinterpret_cast<decltype(real_open)>(GetProcAddress(ntdll, "NtOpenFile"));
   real_create = reinterpret_cast<decltype(real_create)>(GetProcAddress(ntdll, "NtCreateFile"));
   real_query_attributes = reinterpret_cast<QueryAttributes>(GetProcAddress(ntdll, "NtQueryAttributesFile"));
   real_query_full_attributes = reinterpret_cast<QueryFullAttributes>(GetProcAddress(ntdll, "NtQueryFullAttributesFile"));
 
-  if (!real_open || !real_create || !real_query_attributes || !real_query_full_attributes)
+  if (!real_open || !real_create || !real_query_attributes || !real_query_full_attributes ||
+      !real_wsa_socket_a)
     return init_failed("native exports");
   if (!DetourRestoreAfterWith()) return init_failed("restore process image");
   if (DetourTransactionBegin()) return init_failed("begin hooks");
   if (DetourUpdateThread(GetCurrentThread())) return init_failed("update thread");
+  if (DetourAttach(reinterpret_cast<void**>(&real_socket), socket_open) ||
+      DetourAttach(reinterpret_cast<void**>(&real_wsa_socket), wsa_socket_open) ||
+      DetourAttach(reinterpret_cast<void**>(&real_wsa_socket_a), wsa_socket_open_a))
+    return init_failed("network socket hooks");
   if (DetourAttach(reinterpret_cast<void**>(&real_create), create)) return init_failed("NtCreateFile hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_open), open)) return init_failed("NtOpenFile hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_query_attributes), query_attributes)) return init_failed("NtQueryAttributesFile hook");

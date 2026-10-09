@@ -34,13 +34,13 @@ function Invoke-SandboxClientProbe([string]$Operation, [int]$Port,
 }
 
 function Start-SandboxRunner([string]$Command, [string]$Mode,
-                             [string]$Network, [int]$TimeoutMs) {
+                             [string]$Network, [int]$TimeoutMs, [string]$Program=$fixture) {
   $info = New-Object Diagnostics.ProcessStartInfo
   $info.FileName = $runner
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
   $escaped = $Command.Replace('"','\"')
-  $info.Arguments = $q+$workspace+$q+' '+$q+$fixture+$q+' '+$q+$escaped+$q+
+  $info.Arguments = $q+$workspace+$q+' '+$q+$Program+$q+' '+$q+$escaped+$q+
     ' '+$Mode+' --read-root '+$q+$runtime+$q+' --network '+$Network+
     ' --timeout-ms '+$TimeoutMs
   return [Diagnostics.Process]::Start($info)
@@ -81,14 +81,14 @@ if ($dnsBaseline.Count) {
 # localhost forces the native probe through GetAddrInfoW (DNS/name resolution)
 # and tries both returned families. The numeric case checks IPv4 directly.
 foreach ($network in @('no','yes')) {
-  $hostListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-  $hostListener.Start()
+  $udpHostListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+  $udpHostListener.Start()
   try {
-    $port = ([Net.IPEndPoint]$hostListener.LocalEndpoint).Port
-    Invoke-SandboxClientProbe 'network-deny' $port 'localhost' $network
-    Invoke-SandboxClientProbe 'network-deny' $port '127.0.0.1' $network
+    $port = ([Net.IPEndPoint]$udpHostListener.LocalEndpoint).Port
+    Invoke-SandboxClientProbe $(if ($network -eq 'yes') {'network-allow'} else {'network-deny'}) $port 'localhost' $network
+    Invoke-SandboxClientProbe $(if ($network -eq 'yes') {'network-allow'} else {'network-deny'}) $port '127.0.0.1' $network
   } finally {
-    $hostListener.Stop()
+    $udpHostListener.Stop()
   }
 }
 Write-Output 'PASS localhost resolution and IPv4 loopback client policy with and without network capability'
@@ -107,7 +107,7 @@ if ($ipv6Available) {
   try {
     foreach ($network in @('no','yes')) {
       $port = ([Net.IPEndPoint]$ipv6Listener.LocalEndpoint).Port
-      Invoke-SandboxClientProbe 'network-deny' $port '::1' $network
+      Invoke-SandboxClientProbe $(if ($network -eq 'yes') {'network-allow'} else {'network-deny'}) $port '::1' $network
     }
   } finally {
     $ipv6Listener.Stop()
@@ -136,11 +136,12 @@ if ($PrivateLanAddress -or $PrivateLanPort) {
   Write-Output 'SKIP private-LAN policy: supply a reachable remote endpoint to qualify it'
 }
 
-function Test-SandboxListener([bool]$Ipv6) {
-  $marker = Join-Path $workspace $(if ($Ipv6) { 'listener-v6.txt' } else { 'listener-v4.txt' })
-  $command = 'network-listen "' + $marker + '" 5000'
+function Test-SandboxListener([bool]$Ipv6, [string]$Network) {
+  $marker = Join-Path $workspace $(if ($Ipv6) { ('listener-v6-'+$Network+'.txt') } else { ('listener-v4-'+$Network+'.txt') })
+  $operation = if ($Network -eq 'yes') {'network-listen-echo'} else {'network-listen'}
+  $command = $operation+' "' + $marker + '" 5000'
   if ($Ipv6) { $command += ' ipv6' }
-  $process = Start-SandboxRunner $command 'write' 'yes' 8000
+  $process = Start-SandboxRunner $command 'write' $Network 8000
   try {
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     while (!(Test-Path -LiteralPath $marker)) {
@@ -151,7 +152,7 @@ function Test-SandboxListener([bool]$Ipv6) {
     }
     $status = [IO.File]::ReadAllText($marker)
     if ($status -match '^BLOCKED (\d+)$') {
-      if ([int]$Matches[1] -ne 10013) {
+      if ($Network -eq 'yes' -or [int]$Matches[1] -ne 10013) {
         throw "Unexpected loopback bind error: $status"
       }
       Write-Output "PASS sandboxed loopback listener bind is denied (IPv6=$Ipv6)"
@@ -166,18 +167,30 @@ function Test-SandboxListener([bool]$Ipv6) {
       $client = [Net.Sockets.TcpClient]::new($family)
       try {
         $pending = $client.BeginConnect($address, $port, $null, $null)
+        $connected = $false
         if ($pending.AsyncWaitHandle.WaitOne(2000)) {
-          try {
-            $client.EndConnect($pending)
-            throw 'Host connected to sandboxed loopback listener without an explicit exemption'
-          } catch [Net.Sockets.SocketException] {
-            # A reset/refusal is also a denied inbound loopback connection.
+          try { $client.EndConnect($pending); $connected=$true }
+          catch [Net.Sockets.SocketException] { }
+        }
+        if ($connected -ne ($Network -eq 'yes')) { throw "Listener Network capability mismatch: $Network" }
+        if ($connected) {
+          $stream=$client.GetStream()
+          $stream.ReadTimeout=3000
+          $payload=[Text.Encoding]::ASCII.GetBytes('latch')
+          $stream.Write($payload,0,$payload.Length)
+          $reply=[byte[]]::new(5)
+          $offset=0
+          while($offset -lt 5){
+            $count=$stream.Read($reply,$offset,5-$offset)
+            if(!$count){throw 'Sandbox listener closed before replying'}
+            $offset+=$count
           }
+          if([Text.Encoding]::ASCII.GetString($reply) -ne 'latch'){throw 'Sandbox listener returned wrong payload'}
         }
       } finally {
         $client.Close()
       }
-      Write-Output "PASS host cannot reach sandboxed loopback listener (IPv6=$Ipv6)"
+      Write-Output "PASS sandbox listener payload/policy (IPv6=$Ipv6 Network=$Network)"
     } else {
       throw "Unrecognized loopback listener status: $status"
     }
@@ -195,7 +208,112 @@ function Test-SandboxListener([bool]$Ipv6) {
   }
 }
 
-Test-SandboxListener $false
-if ($ipv6Available) { Test-SandboxListener $true }
+foreach ($network in @('no','yes')) {
+  Test-SandboxListener $false $network
+  if ($ipv6Available) { Test-SandboxListener $true $network }
+}
 Write-Output 'PASS client and listening-server loopback policy'
 $global:LASTEXITCODE = 0
+
+# Test the capability protocol directly, bypassing compatibility hooks.
+foreach($case in @(@('broker-socket-deny','no'),@('broker-raw-deny','yes'),@('broker-socket-caller-deny','yes'))) {
+  & $runner $workspace $fixture ($case[0]+' "'+$workspace+'"') read --read-root $runtime --network $case[1] --timeout-ms 10000
+  if($LASTEXITCODE){throw "Socket broker failed to reject $($case[0])"}
+}
+# Complete payload exchange with the sandbox as client (IPv4 and IPv6).
+foreach($descendant in @($false,$true)) {
+foreach($address in @([Net.IPAddress]::Loopback,$(if($ipv6Available){[Net.IPAddress]::IPv6Loopback}))) {
+  if(!$address){continue}
+  $listener=[Net.Sockets.TcpListener]::new($address,0)
+  $listener.Start()
+  $process=$null
+  $client=$null
+  try {
+    $port=([Net.IPEndPoint]$listener.LocalEndpoint).Port
+    $accept=$listener.AcceptTcpClientAsync()
+    $command="network-echo $port $address"
+    if($descendant){
+      $cmd=Join-Path $env:SystemRoot 'System32/cmd.exe'
+      $process=Start-SandboxRunner ('/d /s /c ""'+$fixture+'" '+$command+'"') 'read' 'yes' 10000 $cmd
+    }else{$process=Start-SandboxRunner $command 'read' 'yes' 10000}
+    if(!$accept.Wait(12000)){throw 'Sandbox echo client did not connect'}
+    $client=$accept.GetAwaiter().GetResult()
+    $stream=$client.GetStream()
+    $stream.ReadTimeout=3000
+    $payload=[byte[]]::new(5)
+    $offset=0
+    while($offset -lt 5){
+      $count=$stream.Read($payload,$offset,5-$offset)
+      if(!$count){throw 'Sandbox client closed before sending payload'}
+      $offset+=$count
+    }
+    if([Text.Encoding]::ASCII.GetString($payload) -ne 'latch'){throw 'Sandbox client returned wrong payload'}
+    $stream.Write($payload,0,5)
+    $client.Close()
+    if(!$process.WaitForExit(12000) -or $process.ExitCode){throw 'Sandbox echo client failed'}
+    Write-Output "PASS sandbox TCP client payload exchange: $address descendant=$descendant"
+  }finally{
+    if($client){$client.Close()}
+    $listener.Stop()
+    if($process){if(!$process.HasExited){$process.Kill();$process.WaitForExit()};$process.Dispose()}
+  }
+}
+}
+foreach($address in @([Net.IPAddress]::Loopback,$(if($ipv6Available){[Net.IPAddress]::IPv6Loopback}))) {
+ if(!$address){continue}
+ foreach($network in @('no','yes')) {
+  $udpHost=[Net.Sockets.UdpClient]::new($address.AddressFamily)
+  $udpHost.Client.Bind([Net.IPEndPoint]::new($address,0))
+  $process=$null
+  try {
+    $port=([Net.IPEndPoint]$udpHost.Client.LocalEndPoint).Port
+    $receive=$udpHost.ReceiveAsync()
+    $operation=if($network -eq 'yes'){'network-udp-echo'}else{'network-udp-deny'}
+    $process=Start-SandboxRunner ("$operation $port $address") 'read' $network 10000
+    $arrived=$receive.Wait(5000)
+    if($arrived -ne ($network -eq 'yes')){throw "UDP capability mismatch: $address Network=$network"}
+    if($arrived){
+      $packet=$receive.GetAwaiter().GetResult()
+      if([Text.Encoding]::ASCII.GetString($packet.Buffer) -ne 'latch'){throw 'Wrong UDP payload'}
+      [void]$udpHost.Send($packet.Buffer,$packet.Buffer.Length,$packet.RemoteEndPoint)
+    }
+    if(!$process.WaitForExit(10000) -or $process.ExitCode){throw 'UDP sandbox fixture failed'}
+    Write-Output "PASS UDP payload/policy: $address Network=$network"
+  }finally{
+    $udpHost.Dispose()
+    if($process){if(!$process.HasExited){$process.Kill();$process.WaitForExit()};$process.Dispose()}
+  }
+ }
+}
+$global:LASTEXITCODE=0
+
+# A killed launcher must not leave the transferred listener reachable or a
+# host-held socket alive after the cleanup owner terminates its job.
+$marker=Join-Path $workspace 'cancelled-listener.txt'
+$process=Start-SandboxRunner ('network-listen "'+$marker+'" 15000') 'write' 'yes' 20000
+try {
+  $deadline=[DateTime]::UtcNow.AddSeconds(15)
+  while(!(Test-Path -LiteralPath $marker)) {
+    if($process.HasExited -or [DateTime]::UtcNow -gt $deadline){throw 'Cancellation listener did not start'}
+    Start-Sleep -Milliseconds 25
+  }
+  $status=[IO.File]::ReadAllText($marker)
+  if($status -notmatch '^LISTEN (\d+)$'){throw "Cancellation listener failed: $status"}
+  $port=[int]$Matches[1]
+  if(!(Test-HostTcp ([Net.IPAddress]::Loopback) $port)){throw 'Cancellation listener was never reachable'}
+  $process.Kill()
+  $process.WaitForExit()
+  $deadline=[DateTime]::UtcNow.AddSeconds(15)
+  do {
+    $reachable=Test-HostTcp ([Net.IPAddress]::Loopback) $port
+    if(!$reachable -and (Get-Acl -LiteralPath $workspace).Sddl -eq $baseline){break}
+    if([DateTime]::UtcNow -gt $deadline){throw 'Cancelled socket or workspace grant survived cleanup'}
+    Start-Sleep -Milliseconds 25
+  } while($true)
+  if((Get-Acl -LiteralPath $marker).Sddl -ne $templateAcl){throw 'Cancelled listener marker retained grants'}
+  Write-Output 'PASS transferred listener closes and ACLs recover after launcher cancellation'
+}finally{
+  if(!$process.HasExited){$process.Kill();$process.WaitForExit()}
+  $process.Dispose()
+}
+$global:LASTEXITCODE=0

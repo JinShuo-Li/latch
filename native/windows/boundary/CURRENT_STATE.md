@@ -230,3 +230,14 @@ Read-only runtime preparation now limits ACL changes to the root and immediate
 opened through the broker. The read-broker fixture includes nested runtime data
 without WRITE_DAC and verifies its exact ACL after shell/Git/CRT probes. Writable
 workspace preparation still uses recursive identity/alias checks and grants.
+
+### Network capability socket transfer (2026-10-09)
+
+The historical loopback-denial result above is superseded for explicitly
+Network-authorized calls. A job/package-authenticated per-call socket broker
+transfers ordinary IPv4/IPv6 TCP/UDP sockets into the sandbox and closes its
+source descriptor after acknowledgment. Windows' loopback exemption list and
+firewall are untouched. Real native tests pass TCP client/listener payloads,
+UDP ANSI/Wide entry points, child shells, no-Network/raw/forged-caller denials,
+and listener closure with exact ACL recovery after launcher cancellation.
+Remote private-LAN/proxy/other-IPC qualification remains separate.

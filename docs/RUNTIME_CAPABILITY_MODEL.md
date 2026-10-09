@@ -415,3 +415,12 @@ The TUI and browser share this activity reducer; kernel events remain authoritat
 The HTTP/SSE adapter does not implement a remote extension host or bypass any
 execution boundary. Computer use remains a future plugin with kernel-declared
 capabilities. See [WEB_UI.md](WEB_UI.md) for the implemented client protocol.
+
+Windows Network authorization also enables the per-call socket broker for
+ordinary IPv4/IPv6 TCP/UDP, including loopback clients and listeners. Socket
+transfers validate the exact job/package, target only that process, and retain
+host descriptors only until acknowledgment or teardown. No firewall/loopback
+configuration changes occur. This is the existing broad Network permission,
+not a new endpoint-scoped permission; without it no socket capability is
+transferred. Raw sockets and privileged socket flags are refused. Native
+fixtures cover payloads, descendants, denials and cancellation cleanup.

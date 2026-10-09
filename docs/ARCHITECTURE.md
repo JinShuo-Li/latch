@@ -802,6 +802,16 @@ creation is pre-journaled by a unique name and derived SID; recovery verifies
 the mapping before cleanup. Missing or changed objects fail closed when exact
 recovery cannot be proven.
 
+The same per-call transport mediates ordinary IPv4/IPv6 TCP/UDP sockets only
+when the kernel granted Network. `socket_broker.{h,cpp}` owns socket policy and
+transfer lifetime. Every request is authenticated against the exact Job Object
+and AppContainer SID; Winsock duplication targets only that process. The host
+closes its descriptor after recipient acknowledgment. Pending transfers are
+bounded, dead recipients are reaped, and teardown closes every remaining source
+socket after stopping the job. This enables loopback clients/listeners without
+machine-wide exemptions or firewall changes. Raw sockets and privileged flags
+are refused; Network remains a broad command-level authorization.
+
 Fixed Git inspections and extension hosts share `fixed_command`; Linux quotes
 each argument and explicitly execs the program inside Bubblewrap. Windows fixed
 commands quote arguments and run through the same native runner. The Rust

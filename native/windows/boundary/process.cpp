@@ -13,7 +13,7 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
                    LPPROC_THREAD_ATTRIBUTE_LIST attrs, DWORD timeout_ms,
                    Recovery& recovery,
                    const std::vector<std::wstring>& read_roots,
-                   const std::vector<std::wstring>& denied_roots) {
+                   const std::vector<std::wstring>& denied_roots, bool network) {
   PrivateDesktop desktop;
   desktop.create(write_sid, unique_sid_string());
   desktop.grant_package(sid);
@@ -62,7 +62,7 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
     SetEnvironmentVariableW(L"CARGO_TARGET_DIR", target.c_str());
   }
   Job job(recovery.job_name());
-  ReadBroker broker(job.handle.value, sid, read_roots, denied_roots);
+  ReadBroker broker(job.handle.value, sid, read_roots, denied_roots, network);
   // Assign the child atomically at creation, before any possible runner
   // teardown. No suspended child can be stranded between create and assign.
   bool job_boundary = true;
