@@ -691,7 +691,8 @@ older generations stay in the raw log but are not part of the provider-visible
 epoch.
 
 Rotation is deliberate and hysteretic. The `recent_tokens` configuration is
-the conversation high-water mark. Epoch loading scans through kernel context
+the conversation high-water mark, defaulting to 64,000 tokens and capped by
+the available request budget. Epoch loading scans through kernel context
 messages without charging their bytes to this threshold; they still count
 toward the hard request budget. When an epoch exceeds it, one rotation keeps
 the newest whole semantic units up to roughly three quarters of the budget and

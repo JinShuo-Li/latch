@@ -832,7 +832,7 @@ fn default_model() -> String {
 /// override it per model with `[models.<name>] context_window_tokens = ...`.
 pub const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 256_000;
 fn default_recent_tokens() -> usize {
-    24_000
+    64_000
 }
 fn default_output_reserve_tokens() -> usize {
     8_192
@@ -1163,7 +1163,7 @@ mod tests {
         let config: Config = toml::from_str(include_str!("../../../config.example.toml")).unwrap();
         assert_eq!(config.default_mode, Mode::Work);
         assert_eq!(config.provider.kind, "openai-compatible");
-        assert_eq!(config.context.recent_tokens, 24_000);
+        assert_eq!(config.context.recent_tokens, 64_000);
         assert_eq!(
             config.context_window_for("gpt-5-mini"),
             DEFAULT_CONTEXT_WINDOW_TOKENS

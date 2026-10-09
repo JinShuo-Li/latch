@@ -97,7 +97,7 @@ mode = "human"
 [context]
 # All context budgets are tokens. Bytes remain only for internal file,
 # artifact, log, and I/O limits.
-# recent_tokens = 24000          # verbatim transcript share of the request
+# recent_tokens = 64000          # verbatim transcript share of the request
 # output_reserve_tokens = 8192   # reserved for the model's response
 # reserve_tokens = 4000          # additional safety reserve
 # max_request_tokens = 200000    # explicit cap; defaults to window - reserve

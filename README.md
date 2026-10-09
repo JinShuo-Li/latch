@@ -124,6 +124,8 @@ The transcript shows messages and tool activity, with a session sidebar shown au
 
 On Windows, use a focused checkout owned by your account. Existing files whose ACLs you cannot edit may prevent temporary sandbox access even when you can read them. Very large or actively changing workspaces, especially your whole home directory, can start slowly or fail closed. For a local clone, `git clone --no-hardlinks` avoids links to files outside the workspace. See the [Windows boundary status](native/windows/boundary/CURRENT_STATE.md) and [open issues](https://github.com/JinShuo-Li/latch/issues) for current limits.
 
+Working history rotates at 64,000 conversation tokens by default (`context.recent_tokens`), subject to the model request budget. Rotation preserves durable history; see the [continuity design](docs/CONTINUITY.md).
+
 ## Benchmark results
 
 In this 25-task run, **Latch passed 23/25 tasks** versus OpenCode's **22/25**,

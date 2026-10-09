@@ -153,8 +153,9 @@ provider-visible, and a durable dedupe marker. It therefore extends the current
 cache epoch normally without rewriting its prefix or exposing child transcripts
 and kernel bookkeeping.
 
-`recent_tokens` is the conversation high-water mark. The epoch loader counts
-conversation events for this threshold and continues past arbitrarily many
+`recent_tokens` is the conversation high-water mark, defaulting to 64,000 tokens
+(`context.recent_tokens`). The hard request budget can lower the effective limit.
+The epoch loader counts conversation events for this threshold and continues past arbitrarily many
 kernel-context revisions to find the epoch start. Authoritative kernel bytes
 still count toward the hard request budget; they cannot hide the epoch start
 and cause needless rotations. When an epoch exceeds it,

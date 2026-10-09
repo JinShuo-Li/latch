@@ -290,6 +290,8 @@ Memory/cache invariants (do not violate):
   send it. Cache epochs are performance boundaries, not memory boundaries, and
   cache locality must never override long-horizon correctness. Conversation
   thresholds exclude kernel-context bytes; the hard request budget includes them.
+  Default `context.recent_tokens` is 64,000; rotation retains about three quarters
+  in whole units.
 - The raw event log is the source of truth and is never deleted or lossily
   summarized; canonical task state is authoritative; archival episodes and FTS
   recall stay independently available.
