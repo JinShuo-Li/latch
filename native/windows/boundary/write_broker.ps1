@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath($FixtureRoot)
 if (Test-Path -LiteralPath $root) { throw 'Use a new disposable fixture directory' }
+$env:LATCH_RECOVERY_ROOT = Join-Path $root 'journal'
 $workspace = Join-Path $root 'workspace'
 $runtime = Join-Path $root 'runtime'
 $nested = Join-Path $workspace 'nested'
@@ -129,7 +130,7 @@ try {
 }
 # Hosted runner temporary directories may admit Everyone/Users reads without
 # an All Application Packages ACE. The OS must deny the raw syscall too.
-foreach ($principal in @('S-1-1-0','S-1-5-11','S-1-5-32-545','S-1-15-2-1')) {
+foreach ($principal in @('S-1-1-0','S-1-5-11','S-1-5-32-545','S-1-5-32-544','S-1-15-2-1')) {
   $saved = Get-Acl -LiteralPath $secret
   try {
     $broad = Get-Acl -LiteralPath $secret

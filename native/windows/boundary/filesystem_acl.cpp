@@ -343,8 +343,11 @@ void protect_sensitive_tree(const std::filesystem::path& input,
     if (header->AceType == ACCESS_ALLOWED_ACE_TYPE) {
       const auto* allowed = static_cast<const ACCESS_ALLOWED_ACE*>(ace);
       PSID principal = const_cast<DWORD*>(&allowed->SidStart);
+      // Elevated hosted runners retain their Administrators group for loader
+      // compatibility. It is an ambient read route too, not a private ACL.
       for (const auto kind : {WinWorldSid, WinAuthenticatedUserSid,
-              WinBuiltinUsersSid, WinInteractiveSid, WinAnonymousSid, WinNetworkSid})
+              WinBuiltinUsersSid, WinBuiltinAdministratorsSid, WinInteractiveSid,
+              WinAnonymousSid, WinNetworkSid})
         if (IsWellKnownSid(principal, kind)) broad_grant = true;
       if (std::memcmp(GetSidIdentifierAuthority(principal), &package_authority,
                       sizeof(package_authority)) == 0) {

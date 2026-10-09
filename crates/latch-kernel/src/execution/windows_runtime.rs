@@ -539,9 +539,18 @@ mod tests {
             .output()
             .await
             .unwrap();
+        let sensitive_acl = if denied.status.success() {
+            std::process::Command::new("icacls")
+                .arg(workspace.join(".ssh").join("id_ed25519"))
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         assert!(
             !denied.status.success(),
-            "sensitive read unexpectedly succeeded: stdout={} stderr={}",
+            "sensitive read unexpectedly succeeded: stdout={} stderr={} ACL={sensitive_acl}",
             String::from_utf8_lossy(&denied.stdout),
             String::from_utf8_lossy(&denied.stderr)
         );
