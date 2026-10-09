@@ -181,7 +181,7 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     Handle restricted = restrict_token(write_sid.value);
     result = execute_target(argv, cancel, restricted.value, write_sid.value,
                             sid, attrs, timeout_ms, recovery, allowed_roots,
-                            denied_roots);
+                            denied_roots, caps.CapabilityCount != 0);
 
   } catch (const Error& e) {
     std::fwprintf(stderr, L"%ls: %lu\n", e.api, e.code);

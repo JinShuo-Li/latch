@@ -35,8 +35,8 @@ std::wstring normalize(const std::wstring& input) {
 
 ReadBroker::ReadBroker(HANDLE job, PSID package,
                       const std::vector<std::wstring>& roots,
-                      const std::vector<std::wstring>& denied)
-    : job_(job), package_(GetLengthSid(package)) {
+                      const std::vector<std::wstring>& denied, bool network)
+    : job_(job), package_(GetLengthSid(package)), sockets_(network) {
   if (!CopySid(static_cast<DWORD>(package_.size()), package_.data(), package))
     fail(L"copy broker package identity");
   for (const auto& root : roots) {
@@ -104,6 +104,10 @@ void ReadBroker::check_links(HANDLE file, const std::wstring& path) const {
 }
 
 void ReadBroker::serve() {
+  struct Disconnect {
+    HANDLE pipe;
+    ~Disconnect() { DisconnectNamedPipe(pipe); }
+  } disconnect{server_.value};
   while (!stopping_.load()) {
     LatchReadRequest request{};
     DWORD bytes = 0;
@@ -111,9 +115,18 @@ void ReadBroker::serve() {
     if (bytes < offsetof(LatchReadRequest, path) ||
         request.path_length >= 32768 ||
         bytes != latch_read_request_size(request.path_length) ||
-        request.version != latch_broker_version) break;
-    LatchReadResponse response{latch_broker_version, request.process_id,
-                              request.request_id, ERROR_ACCESS_DENIED, nullptr};
+        request.version != latch_broker_version) {
+#ifdef LATCH_RECOVERY_TESTING
+      std::fwprintf(stderr, L"Malformed broker request bytes=%lu version=%lu path=%lu expected=%lu\n",
+          bytes, request.version, request.path_length, latch_read_request_size(request.path_length));
+#endif
+      break;
+    }
+    LatchReadResponse response{};
+    response.version = latch_broker_version;
+    response.process_id = request.process_id;
+    response.request_id = request.request_id;
+    response.error = ERROR_ACCESS_DENIED;
     try {
       Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION |
                                  PROCESS_DUP_HANDLE, FALSE, request.process_id));
@@ -128,6 +141,13 @@ void ReadBroker::serve() {
       auto* app = reinterpret_cast<TOKEN_APPCONTAINER_INFORMATION*>(info.data());
       if (!app->TokenAppContainer || !EqualSid(app->TokenAppContainer, package_.data()))
         fail(L"broker caller package mismatch", ERROR_ACCESS_DENIED);
+      if (request.operation == LatchBrokerOperation::socket_create) {
+        response.error = sockets_.create(request.process_id, request.family,
+            request.socket_type, request.protocol, request.socket_flags,
+            response.socket_information, response.socket_ticket);
+      } else if (request.operation == LatchBrokerOperation::socket_release) {
+        response.error = sockets_.release(request.process_id, request.socket_ticket);
+      } else if (request.operation == LatchBrokerOperation::read) {
       constexpr ACCESS_MASK reads = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
       GENERIC_MAPPING mapping{FILE_GENERIC_READ, FILE_GENERIC_WRITE,
                               FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
@@ -179,6 +199,7 @@ void ReadBroker::serve() {
                            &response.file, access, FALSE, 0))
         fail(L"broker duplicate read capability");
       response.error = ERROR_SUCCESS;
+      } else fail(L"unknown broker operation", ERROR_INVALID_PARAMETER);
     } catch (const Error& error) {
       response.error = error.code;
 #ifdef LATCH_RECOVERY_TESTING

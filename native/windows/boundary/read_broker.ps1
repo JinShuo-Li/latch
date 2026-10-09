@@ -90,16 +90,16 @@ try {
     @('broker-read-allow',$ordinary), @('broker-read-deny',$secret),
     @('broker-access-deny',$ordinary), @('broker-caller-deny',$ordinary)
   )) {
-    & $runner $workspace $fixture ($case[0]+' "'+$case[1]+'"') read --read-root $runtime --deny $sensitive --protect-git $workspace
+    & $runner $workspace $fixture ($case[0]+' "'+$case[1]+'"') read --read-root $runtime --deny $sensitive --protect-git $workspace --timeout-ms 10000
     if ($LASTEXITCODE) { throw "Read broker assertion failed: $($case[0])" }
   }
   $cmd = Join-Path $env:SystemRoot 'System32/cmd.exe'
   foreach ($command in @('/d /c dir /a /s', '/d /c type nested\readable.txt', '/d /c cmd /d /c dir /b nested')) {
     # Recursive dir reports access denied for the deliberately masked subtree.
-    $text = & $runner $workspace $cmd $command read --read-root $runtime --deny $sensitive --protect-git $workspace
+    $text = & $runner $workspace $cmd $command read --read-root $runtime --deny $sensitive --protect-git $workspace --timeout-ms 10000
     if ($LASTEXITCODE -or ($text -join "`n") -notmatch 'readable') { throw "Native shell broker failed: $command" }
   }
-  $status = & $runner $workspace $git 'status --short' read --read-root $runtime --deny $sensitive --protect-git $workspace
+  $status = & $runner $workspace $git 'status --short' read --read-root $runtime --deny $sensitive --protect-git $workspace --timeout-ms 10000
   if ($LASTEXITCODE -or ($status -join "`n") -notmatch 'nested') { throw 'Read broker Git status failed' }
   foreach ($path in $before.Keys) {
     if ((Get-Acl -LiteralPath $path).Sddl -ne $before[$path]) { throw "Read broker changed source ACL: $path" }
