@@ -1,0 +1,262 @@
+{
+  "runs": [
+    {
+      "attempt_id": "thresholds-20261009T030744Z/128000-trial-1",
+      "threshold": 128000,
+      "wall_seconds": 467.67,
+      "durable_run_seconds": 467.503,
+      "stop_reason": null,
+      "first_edit_seconds": 194.556,
+      "rotations": 0,
+      "repeats_by_tool": {},
+      "pre_edit_repeats_by_tool": {},
+      "usage": {
+        "input_tokens": 3480565,
+        "output_tokens": 36067,
+        "cache_read_tokens": 3356544,
+        "cache_miss_tokens": 124021,
+        "reasoning_tokens": 26566
+      },
+      "checks": {
+        "verify_passed": true,
+        "focused_passed": true,
+        "compatibility_passed": false,
+        "edge_expected": [
+          "call_skip",
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ],
+        "edge_actual": [
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ]
+      },
+      "passed": false,
+      "case_materials_unchanged": true
+    },
+    {
+      "attempt_id": "thresholds-20261009T030744Z/32000-trial-1",
+      "threshold": 32000,
+      "wall_seconds": 532.338,
+      "durable_run_seconds": 532.038,
+      "stop_reason": null,
+      "first_edit_seconds": 256.096,
+      "rotations": 5,
+      "repeats_by_tool": {
+        "read_file": 4
+      },
+      "pre_edit_repeats_by_tool": {
+        "read_file": 4
+      },
+      "usage": {
+        "input_tokens": 1637859,
+        "output_tokens": 49696,
+        "cache_read_tokens": 1471488,
+        "cache_miss_tokens": 166371,
+        "reasoning_tokens": 36945
+      },
+      "checks": {
+        "verify_passed": true,
+        "focused_passed": true,
+        "compatibility_passed": false,
+        "edge_expected": [
+          "call_skip",
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ],
+        "edge_actual": [
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ]
+      },
+      "passed": false,
+      "case_materials_unchanged": true
+    },
+    {
+      "attempt_id": "thresholds-20261009T030744Z/64000-trial-1",
+      "threshold": 64000,
+      "wall_seconds": 485.176,
+      "durable_run_seconds": 484.886,
+      "stop_reason": null,
+      "first_edit_seconds": 128.238,
+      "rotations": 1,
+      "repeats_by_tool": {},
+      "pre_edit_repeats_by_tool": {},
+      "usage": {
+        "input_tokens": 2019212,
+        "output_tokens": 43336,
+        "cache_read_tokens": 1934976,
+        "cache_miss_tokens": 84236,
+        "reasoning_tokens": 35562
+      },
+      "checks": {
+        "verify_passed": true,
+        "focused_passed": true,
+        "compatibility_passed": false,
+        "edge_expected": [
+          "call_skip",
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ],
+        "edge_actual": [
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ]
+      },
+      "passed": false,
+      "case_materials_unchanged": true
+    },
+    {
+      "attempt_id": "thresholds-20261009T030744Z/96000-trial-1",
+      "threshold": 96000,
+      "wall_seconds": 1531.635,
+      "durable_run_seconds": 1531.431,
+      "stop_reason": "input token limit",
+      "first_edit_seconds": 80.741,
+      "rotations": 1,
+      "repeats_by_tool": {
+        "shell": 2
+      },
+      "pre_edit_repeats_by_tool": {},
+      "usage": {
+        "input_tokens": 5057450,
+        "output_tokens": 54817,
+        "cache_read_tokens": 4899328,
+        "cache_miss_tokens": 158122,
+        "reasoning_tokens": 42018
+      },
+      "checks": {
+        "verify_passed": true,
+        "focused_passed": true,
+        "compatibility_passed": false,
+        "edge_expected": [
+          "call_skip",
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ],
+        "edge_actual": [
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ]
+      },
+      "passed": false,
+      "case_materials_unchanged": true
+    },
+    {
+      "attempt_id": "thresholds-20261009T032808Z/64000-trial-1",
+      "threshold": 64000,
+      "wall_seconds": 339.675,
+      "durable_run_seconds": 339.493,
+      "stop_reason": null,
+      "first_edit_seconds": 173.404,
+      "rotations": 2,
+      "repeats_by_tool": {},
+      "pre_edit_repeats_by_tool": {},
+      "usage": {
+        "input_tokens": 2869857,
+        "output_tokens": 45667,
+        "cache_read_tokens": 2743296,
+        "cache_miss_tokens": 126561,
+        "reasoning_tokens": 37804
+      },
+      "checks": {
+        "verify_passed": true,
+        "focused_passed": true,
+        "compatibility_passed": false,
+        "edge_expected": [
+          "call_skip",
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ],
+        "edge_actual": [
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ]
+      },
+      "passed": false,
+      "case_materials_unchanged": true
+    },
+    {
+      "attempt_id": "thresholds-20261009T033417Z/96000-trial-1",
+      "threshold": 96000,
+      "wall_seconds": 391.196,
+      "durable_run_seconds": 391.017,
+      "stop_reason": "input token limit",
+      "first_edit_seconds": 98.309,
+      "rotations": 0,
+      "repeats_by_tool": {},
+      "pre_edit_repeats_by_tool": {},
+      "usage": {
+        "input_tokens": 5047446,
+        "output_tokens": 38428,
+        "cache_read_tokens": 4896256,
+        "cache_miss_tokens": 151190,
+        "reasoning_tokens": 27844
+      },
+      "checks": {
+        "verify_passed": true,
+        "focused_passed": true,
+        "compatibility_passed": false,
+        "edge_expected": [
+          "call_skip",
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ],
+        "edge_actual": [
+          "early",
+          "late",
+          "legacy_setup",
+          "legacy_teardown",
+          "multiple_errors",
+          "skip_error"
+        ]
+      },
+      "passed": false,
+      "case_materials_unchanged": true
+    }
+  ]
+}

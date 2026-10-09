@@ -87,6 +87,14 @@ bash scripts/release-gate.sh
   workspaces and reports land in ignored `benchmark/runs/`; see
   `benchmark/README.md`. The 25 candidate cases can be checked without a
   model call using `python3 benchmark/verify_cases.py` (requires Bubblewrap).
+- Working-history calibration (Linux, opt-in, paid):
+  `python3 benchmark/run_thresholds.py --source <saved-pytest-case> --live`
+  compares isolated copies of the preserved pytest #14998 experiment; defaults
+  to 32k/64k/96k/128k, two concurrent runs and per-run time/token ceilings.
+  `benchmark/analyze_thresholds.py <run-dir> --source <saved-pytest-case>`
+  reports repeats, rotations, independent acceptance and hypothetical prices.
+  Raw configs/databases/transcripts stay private in ignored `benchmark/runs/`;
+  see `benchmark/README.md`. Never use `.references/` as fixture sources.
 - OpenCode comparison (local, opt-in, paid):
   `python3 benchmark/run_opencode.py --case stream_records --jobs 3` requires
   installed `opencode`, Bubblewrap and the same `OPENCODE_GO_API_KEY` as Latch.

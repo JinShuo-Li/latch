@@ -190,3 +190,43 @@ against `metrics.json`. All SVG, PDF and PNG charts have transparent backgrounds
 light/dark variants change text and grid colors. The root README uses a
 `picture` element to choose SVG text colors for the viewer's theme. Hatched bars
 identify failed external acceptance checks, and all attempts are included.
+
+## Working-history threshold calibration (Linux, opt-in paid)
+
+`run_thresholds.py` reproduces the supervised pytest #14998 task from a preserved
+local experiment directory containing `repo/.case`, `repo/.venv`,
+`PROMPT.md`, `config.toml`, and the independent `audit/test_edges.py`. It reads the
+original checkout and archives the pinned public baseline into fresh workspaces;
+it never edits the original experiment or uses `.references/`. Python 3.11+,
+Bubblewrap, Git, the release Latch binary and the copied development environment
+are required. The config must resolve the same authorized model credential.
+
+```sh
+python3 benchmark/run_thresholds.py --source /path/to/pytest-14998-experiment \
+  --thresholds 32000,64000,96000,128000 --jobs 2 --live
+python3 benchmark/analyze_thresholds.py benchmark/runs/thresholds-<timestamp> \
+  --source /path/to/pytest-14998-experiment --output /tmp/threshold-analysis.json
+```
+
+Only `context.recent_tokens` and each isolated state path change. `--live` is
+mandatory: this calls a paid provider. The default per-attempt ceilings are 1,800
+seconds, 5 million provider input tokens (including cache reads) and 150,000 output
+tokens. Monitoring samples every 30 seconds, so an in-flight request can overshoot
+a token ceiling. Up to three attempts can run concurrently; default concurrency
+is two. `--trials` repeats a sweep. Token ceilings and timeouts produce censored
+attempts, not completed-task timings.
+
+The runner first confirms the baseline fault, then records the agent's edit
+latency, rotations, exact repeated reads/searches/shell outputs, cache usage and
+completion. Independent checks run the three-policy verifier, focused upstream
+tests, and lifecycle compatibility edges including call-phase skip retention.
+The analyzer also checks that auxiliary case files were not altered and reports
+pre-edit repeats separately. Repeated shell outputs may reflect necessary
+revalidation; they are not automatically classified as wasted work.
+
+Raw configurations, state databases and transcripts stay in private ignored
+`benchmark/runs/`. Publish aggregate reports only. Cost scenarios use the dated
+DeepSeek direct-API rates recorded in the comparison report; they are hypothetical
+prices applied to Go token usage, not actual OpenCode Go invoices. A single case
+or one sample per threshold cannot establish a universal optimum; repeat the
+promising candidates and account for independent patch correctness.
