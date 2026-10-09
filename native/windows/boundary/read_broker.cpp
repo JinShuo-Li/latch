@@ -2,48 +2,25 @@
 #include "broker_protocol.h"
 #include "recovery_store.h"
 #include "token.h"
+#include "broker_path.h"
 
 namespace latch {
-namespace {
-bool within(const std::wstring& path, const std::wstring& root) {
-  return _wcsicmp(path.c_str(), root.c_str()) == 0 ||
-      (path.size() > root.size() &&
-       _wcsnicmp(path.c_str(), root.c_str(), root.size()) == 0 &&
-       path[root.size()] == L'\\');
-}
-std::wstring normalize(const std::wstring& input) {
-  require(input.size() >= 3 && input[1] == L':' && input[2] == L'\\',
-          L"broker requires a local absolute path");
-  // Reject streams, device syntax, embedded NULs and Win32 ambiguous names.
-  require(input.find(L':', 2) == std::wstring::npos &&
-              input.find(L'\0') == std::wstring::npos &&
-              input.find(L'/') == std::wstring::npos,
-          L"unsupported broker path syntax");
-  auto path = std::filesystem::path(input).lexically_normal();
-  for (const auto& component : path.relative_path()) {
-    const auto text = component.wstring();
-    if (text.empty()) continue;  // A trailing directory separator is valid.
-    require(text.back() != L'.' && text.back() != L' ' &&
-                text.find_first_of(L"*?\"") == std::wstring::npos,
-            L"ambiguous broker path component");
-  }
-  auto value = path.wstring();
-  while (value.size() > 3 && value.back() == L'\\') value.pop_back();
-  return value;
-}
-}  // namespace
 
 ReadBroker::ReadBroker(HANDLE job, PSID package,
                       const std::vector<std::wstring>& roots,
-                      const std::vector<std::wstring>& denied, bool network)
-    : job_(job), package_(GetLengthSid(package)), sockets_(network) {
+                      const std::vector<std::wstring>& denied, bool network,
+                      const std::vector<std::wstring>& writable,
+                      const std::vector<std::wstring>& denied_write,
+                      const std::vector<std::wstring>& protected_git)
+    : job_(job), package_(GetLengthSid(package)), sockets_(network),
+      writes_(writable, denied, denied_write, protected_git) {
   if (!CopySid(static_cast<DWORD>(package_.size()), package_.data(), package))
     fail(L"copy broker package identity");
   for (const auto& root : roots) {
-    roots_.push_back(normalize(root));
+    roots_.push_back(broker_normalize(root));
     roots_pinned_.emplace_back(root, FILE_READ_ATTRIBUTES);
   }
-  for (const auto& path : denied) denied_.push_back(normalize(path));
+  for (const auto& path : denied) denied_.push_back(broker_normalize(path));
   const auto name = L"\\\\.\\pipe\\LatchRead-" + unique_sid_string();
   auto sd = descriptor(recovery_store::user_acl());
   SECURITY_ATTRIBUTES sa{sizeof(sa), sd.value, FALSE};
@@ -75,10 +52,10 @@ ReadBroker::~ReadBroker() {
 
 bool ReadBroker::allowed(const std::wstring& path) const {
   if (std::any_of(denied_.begin(), denied_.end(),
-                 [&](const auto& root) { return within(path, root); }))
+                 [&](const auto& root) { return broker_path_within(path, root); }))
     return false;
   return std::any_of(roots_.begin(), roots_.end(),
-                    [&](const auto& root) { return within(path, root); });
+                    [&](const auto& root) { return broker_path_within(path, root); });
 }
 
 void ReadBroker::check_links(HANDLE file, const std::wstring& path) const {
@@ -97,7 +74,7 @@ void ReadBroker::check_links(HANDLE file, const std::wstring& path) const {
   do {
     const auto alias = (std::filesystem::path(volume) /
         std::filesystem::path(name).relative_path()).wstring();
-    if (!allowed(normalize(alias))) fail(L"broker refuses outside hardlink", ERROR_ACCESS_DENIED);
+    if (!allowed(broker_normalize(alias))) fail(L"broker refuses outside hardlink", ERROR_ACCESS_DENIED);
     size = 32768;
   } while (FindNextFileNameW(iterator, &size, name));
   if (GetLastError() != ERROR_HANDLE_EOF) fail(L"broker remaining hardlinks");
@@ -147,6 +124,10 @@ void ReadBroker::serve() {
             response.socket_information, response.socket_ticket);
       } else if (request.operation == LatchBrokerOperation::socket_release) {
         response.error = sockets_.release(request.process_id, request.socket_ticket);
+      } else if (request.operation == LatchBrokerOperation::write_open) {
+        writes_.open(request, response, process.value);
+      } else if (request.operation == LatchBrokerOperation::rename || request.operation == LatchBrokerOperation::link) {
+        writes_.rename(request, response, process.value);
       } else if (request.operation == LatchBrokerOperation::read) {
       constexpr ACCESS_MASK reads = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
       GENERIC_MAPPING mapping{FILE_GENERIC_READ, FILE_GENERIC_WRITE,
@@ -158,7 +139,7 @@ void ReadBroker::serve() {
           request.path_length >= 32768 ||
           (request.options & (FILE_DELETE_ON_CLOSE | FILE_OPEN_BY_FILE_ID)) != 0)
         fail(L"broker refuses non-read request", ERROR_ACCESS_DENIED);
-      const auto path = normalize(std::wstring(request.path, request.path_length));
+      const auto path = broker_normalize(std::wstring(request.path, request.path_length));
       if (!allowed(path)) fail(L"broker path denied", ERROR_ACCESS_DENIED);
       PinnedObject pin(path, FILE_READ_ATTRIBUTES);
       for (HANDLE object : [&] {
@@ -180,7 +161,7 @@ void ReadBroker::serve() {
         fail(L"broker final object path");
       std::wstring final_path(final, final_length);
       if (final_path.starts_with(L"\\\\?\\")) final_path.erase(0, 4);
-      if (!allowed(normalize(final_path)))
+      if (!allowed(broker_normalize(final_path)))
         fail(L"broker refuses aliased protected path", ERROR_ACCESS_DENIED);
       check_links(pin.object.value, path);
       // Pin every path component through the final open. The returned object
@@ -204,8 +185,9 @@ void ReadBroker::serve() {
       response.error = error.code;
 #ifdef LATCH_RECOVERY_TESTING
       if (GetEnvironmentVariableW(L"LATCH_BROKER_DIAGNOSTICS", nullptr, 0))
-        std::fwprintf(stderr, L"Broker %ls: %lu access=%lx options=%lx path=%.*ls\n",
+        std::fwprintf(stderr, L"Broker %ls: %lu access=%lx options=%lx rename=%lx path=%.*ls\n",
             error.api, error.code, request.access, request.options,
+            request.rename_flags,
             static_cast<int>(std::min<DWORD>(request.path_length, 32767)), request.path);
 #endif
     } catch (...) {

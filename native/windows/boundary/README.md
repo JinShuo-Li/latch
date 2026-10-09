@@ -12,7 +12,11 @@ precedence over older validation results below.
 
 - Per-call AppContainer plus a separate, unique WRITE_RESTRICTED SID. Neither
   the All Application Packages SID nor a broad host group is a write restrictor.
-- Explicit NTFS workspace/external grants. Write grants exclude WRITE_DAC,
+- Production workspace/external writes use `write_broker.{h,cpp}` with pinned
+  parent/root identities, hardlink checks and scoped file capabilities. No
+  source ACL changes or WRITE_DAC are needed; rename/link are mediated and
+  directory namespace/ACL/owner rights are withheld.
+- Legacy native fixture backend: explicit NTFS workspace/external grants. Write grants exclude WRITE_DAC,
   WRITE_OWNER and FILE_DELETE_CHILD. Git denies contain mutation bits only:
   denying SYNCHRONIZE would accidentally deny ordinary reads.
 - Shared workspace, scratch and write roots grant the AppContainer and write
@@ -160,11 +164,14 @@ cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundar
 cargo clippy -p latch-kernel --all-targets --locked -- -D warnings
 ```
 
-Run `test.ps1`, `adversarial.ps1`, `lifecycle.ps1`, `network.ps1`, and `scale.ps1` in this directory,
+Run `test.ps1`, `read_broker.ps1`, `write_broker.ps1`, `adversarial.ps1`,
+`lifecycle.ps1`, `network.ps1`, and `scale.ps1` in this directory,
 each with `-Binaries <absolute build/bin>` and
 `-FixtureRoot <new absolute disposable directory>`.
 `scale.ps1` defaults to 4,096 existing files, creates host files while
 temporary grants are active, and mutates another batch inside the AppContainer.
+Run `developer.ps1 -Mediated` and `scale.ps1 -Mediated` for the production
+file broker; the default native backend preserves legacy ACL recovery coverage.
 Set `LATCH_BOUNDARY_TIMING=1` to report preflight scan, grant walk, durable
 journal, ACL application, and rollback durations separately. The manual Full
 validation workflow includes the new network and scale fixtures. They do not
@@ -224,10 +231,10 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
   live-model behavior is not claimed.
 - **Startup:** profile creation and scoped ACL grants cost time on a large
   Windows installation. The runner does not cache grants across commands.
-- **Host ACLs:** existing workspace objects that the current user can read but
-  cannot open with `WRITE_DAC` cannot receive temporary AppContainer grants.
-  The command fails closed; a user-owned checkout without outside hardlinks is
-  the current workaround. See `CURRENT_STATE.md` for the `C:\project` case.
+- **Host ACLs:** production source access needs ordinary host read/modify rights,
+  without WRITE_DAC. Small runtime/bootstrap and scratch grants remain journaled.
+  Package-readable sensitive paths fail closed. See `CURRENT_STATE.md` for
+  measured production-broker results and historical ACL-backend limitations.
 - **Integration:** CLI host-side Git inspection is read-only preflight;
   command execution itself enters the boundary.
 - **Filesystem adversaries:** concurrent grants and revocations beyond the journal lock,

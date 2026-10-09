@@ -257,3 +257,16 @@ also remain open.
 
 No physical reboot/power-cut, full native Windows workspace gate, Windows CI,
 production integration, doctor/version changes or NTFS agent dogfood is claimed.
+
+
+### Production source access (2026-10-09)
+
+Production Rust uses `--filesystem broker`: ordinary workspace/write-root
+objects are neither recursively granted nor tracked as ACL recovery roots.
+The per-call file broker owns scoped handles; job teardown revokes sandbox
+access before broker destruction. Runtime bootstrap and scratch ACL intents,
+AppContainer lifecycle and stale-state locking still use this journal. Legacy
+native ACL fixtures continue testing the recovery matrix above. The mediated
+scale fixture verifies that concurrent host files and sandbox mutations retain
+normal inherited ACLs without source rollback. Whole-home, hostile host races
+and physical power-loss qualification remain separate.

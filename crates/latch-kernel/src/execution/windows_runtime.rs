@@ -131,6 +131,8 @@ impl NativeRuntime {
             } else {
                 "read"
             })
+            .arg("--filesystem")
+            .arg("broker")
             .arg("--read-root")
             .arg(&self.runtime)
             .arg("--network")

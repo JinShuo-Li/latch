@@ -32,6 +32,13 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     constexpr DWORD read_rights = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
     constexpr DWORD write_rights = FILE_GENERIC_WRITE | DELETE;
     bool workspace_writable = std::wcscmp(argv[4], L"write") == 0;
+    bool mediated_writes = false;
+    for (int i = 5; i + 1 < argc; i += 2)
+      if (std::wcscmp(argv[i], L"--filesystem") == 0) {
+        if (std::wcscmp(argv[i + 1], L"broker") != 0)
+          fail(L"invalid filesystem backend", ERROR_INVALID_PARAMETER);
+        mediated_writes = true;
+      }
     std::vector<std::wstring> grant_roots{
         std::filesystem::canonical(argv[1]).wstring()};
     std::vector<std::wstring> read_roots;
@@ -69,9 +76,16 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     std::vector<std::wstring> writable_roots = grant_roots;
     if (!workspace_writable) writable_roots.erase(writable_roots.begin());
     std::vector<std::wstring> denied_roots{recovery.root().wstring()};
+    std::vector<std::wstring> denied_write, protected_git;
+    if (mediated_writes)
+      denied_write.push_back(recovery.scratch_path().parent_path().parent_path().wstring());
     for (int i = 5; i + 1 < argc; i += 2)
       if (std::wcscmp(argv[i], L"--deny") == 0)
         denied_roots.push_back(std::filesystem::absolute(argv[i + 1]).lexically_normal().wstring());
+      else if (std::wcscmp(argv[i], L"--deny-write") == 0)
+        denied_write.push_back(std::filesystem::absolute(argv[i + 1]).lexically_normal().wstring());
+      else if (std::wcscmp(argv[i], L"--protect-git") == 0)
+        protected_git.push_back(std::filesystem::absolute(argv[i + 1]).lexically_normal().wstring());
     std::vector<GrantPlan> grant_plans;
     grant_plans.reserve(allowed_roots.size());
     {
@@ -83,19 +97,19 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
             [&](const std::wstring& value) {
               return _wcsicmp(value.c_str(), root.c_str()) == 0;
             });
-        if (!workspace_writable && _wcsicmp(root.c_str(), grant_roots.front().c_str()) == 0)
+        if ((mediated_writes && writable) ||
+            (!workspace_writable && _wcsicmp(root.c_str(), grant_roots.front().c_str()) == 0))
           continue;  // Workspace read opens are mediated, without ACL grants.
         validate_grant_tree(root, writable ? writable_roots : allowed_roots,
                             grant_plans.back(), cancel,
                             recovery, writable);
       }
     }
-    for (const auto& root : allowed_roots)
-      if (workspace_writable || _wcsicmp(root.c_str(), grant_roots.front().c_str()) != 0)
-        recovery.track_root(root);
+    for (size_t index = 0; index < allowed_roots.size(); ++index)
+      if (!grant_plans[index].targets.empty()) recovery.track_root(allowed_roots[index]);
     TimingScope grant_timer(boundary_timing().grant_walk);
     for (size_t index = 0; index < grant_roots.size(); ++index) {
-      if (index == 0 && !workspace_writable) continue;
+      if (mediated_writes || (index == 0 && !workspace_writable)) continue;
       const DWORD rights =
           read_rights | ((index == 0 && !workspace_writable) ? 0 : write_rights);
       grants.add_plan(grant_plans[index],
@@ -142,7 +156,9 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     for (int i = 5; i < argc; ++i) {
       const std::wstring option = argv[i++];
       if (i >= argc) fail(L"missing option path", ERROR_INVALID_PARAMETER);
-      if (option == L"--read-root") {
+      if (option == L"--filesystem") {
+        // Parsed before grant preparation.
+      } else if (option == L"--read-root") {
         // All read roots were tracked and granted before option processing.
       } else if (option == L"--network") {
         if (std::wcscmp(argv[i], L"yes") != 0 &&
@@ -155,18 +171,18 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
           fail(L"invalid timeout", ERROR_INVALID_PARAMETER);
         timeout_ms = value;
       } else if (option == L"--protect-git") {
-        if (workspace_writable) git_reservation.create(argv[i], recovery);
+        if (workspace_writable && !mediated_writes) git_reservation.create(argv[i], recovery);
       } else if (option == L"--write-root") {
         // All write roots were tracked and granted before option processing.
       } else if (option == L"--deny") {
-        const bool audit_only = writable_roots.empty();
+        const bool audit_only = mediated_writes || writable_roots.empty();
         protect_sensitive_tree(argv[i], protected_paths, cancel, recovery, audit_only);
         if (!audit_only) {
           grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
           write_grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
         }
       } else if (option == L"--deny-write") {
-        if (writable_roots.empty()) continue;
+        if (mediated_writes || writable_roots.empty()) continue;
         constexpr DWORD mutate = FILE_WRITE_DATA | FILE_APPEND_DATA |
                                  FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
                                  DELETE | WRITE_DAC | WRITE_OWNER |
@@ -181,7 +197,9 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     Handle restricted = restrict_token(write_sid.value);
     result = execute_target(argv, cancel, restricted.value, write_sid.value,
                             sid, attrs, timeout_ms, recovery, allowed_roots,
-                            denied_roots, caps.CapabilityCount != 0);
+                            denied_roots, caps.CapabilityCount != 0,
+                            mediated_writes ? writable_roots : std::vector<std::wstring>{},
+                            denied_write, protected_git);
 
   } catch (const Error& e) {
     std::fwprintf(stderr, L"%ls: %lu\n", e.api, e.code);

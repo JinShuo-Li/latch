@@ -20,7 +20,7 @@ set_target_properties(latch-boundary-compat PROPERTIES MSVC_RUNTIME_LIBRARY "Mul
 
 target_link_libraries(latch-boundary-compat PRIVATE detours ws2_32)
 target_link_options(latch-boundary-compat PRIVATE "/EXPORT:DetourFinishHelperProcess,@1,NONAME")
-add_executable(latch-boundary-probe runner.cpp common.cpp token.cpp filesystem_acl.cpp process.cpp recovery.cpp recovery_rollback.cpp object_security.cpp recovery_store.cpp appcontainer.cpp desktop.cpp job.cpp read_broker.cpp socket_broker.cpp)
+add_executable(latch-boundary-probe runner.cpp common.cpp token.cpp filesystem_acl.cpp process.cpp recovery.cpp recovery_rollback.cpp object_security.cpp recovery_store.cpp appcontainer.cpp desktop.cpp job.cpp read_broker.cpp socket_broker.cpp write_broker.cpp)
 set_target_properties(latch-boundary-probe PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
 target_link_libraries(latch-boundary-probe PRIVATE detours advapi32 user32 userenv rpcrt4 ole32 shell32 ws2_32)
 add_executable(latch-boundary-files files.cpp)

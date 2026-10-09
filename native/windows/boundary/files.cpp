@@ -5,6 +5,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <winternl.h>
 #include "detours.h"
 #include "handles.h"
 #include "broker_protocol.h"
@@ -20,6 +21,73 @@
 int wmain(int argc, wchar_t** argv) {
   if (argc < 3) return 2;
   const std::wstring operation = argv[1];
+  if (operation == L"create-existing") {
+    HANDLE file = CreateFileW(argv[2], GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, CREATE_NEW, 0, nullptr);
+    const DWORD error = GetLastError();
+    if (file != INVALID_HANDLE_VALUE) { CloseHandle(file); return 1; }
+    return error == ERROR_FILE_EXISTS ? 0 : 2;
+  }
+  if (operation == L"raw-directory-write-deny") {
+    HANDLE directory = CreateFileW(argv[2], GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (directory != INVALID_HANDLE_VALUE) { CloseHandle(directory); return 1; }
+    return GetLastError() == ERROR_ACCESS_DENIED ? 0 : 2;
+  }
+  if (operation == L"raw-namespace-deny") {
+    HANDLE directory = CreateFileW(argv[2], GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (directory == INVALID_HANDLE_VALUE) return 2;
+    using Factory = decltype(&NtCreateFile)(*)();
+    const auto factory = reinterpret_cast<Factory>(GetProcAddress(GetModuleHandleW(L"latch-boundary-compat.dll"), "LatchTestCreateFile"));
+    if (!factory) { CloseHandle(directory); return 3; }
+    wchar_t name[] = L"raw-denied.txt";
+    UNICODE_STRING text{sizeof(name) - sizeof(wchar_t), sizeof(name), name};
+    OBJECT_ATTRIBUTES attributes{sizeof(attributes), directory, &text, OBJ_CASE_INSENSITIVE, nullptr, nullptr};
+    IO_STATUS_BLOCK io{};
+    HANDLE file = nullptr;
+    const NTSTATUS status = factory()(&file, GENERIC_WRITE | SYNCHRONIZE, &attributes,
+        &io, nullptr, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_CREATE,
+        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, nullptr, 0);
+    if (status >= 0) CloseHandle(file);
+    CloseHandle(directory);
+    return status == static_cast<NTSTATUS>(0xc0000022u) ? 0 : 4;
+  }
+  if (operation == L"raw-rename-outside-deny" || operation == L"raw-link-outside-deny") {
+    if (argc != 4) return 2;
+    HANDLE source = CreateFileW(argv[2], DELETE | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    HANDLE directory = CreateFileW(argv[3], FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (source == INVALID_HANDLE_VALUE || directory == INVALID_HANDLE_VALUE) return 3;
+    using Set = NTSTATUS(NTAPI*)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+    using Factory = Set(*)();
+    const auto factory = reinterpret_cast<Factory>(GetProcAddress(GetModuleHandleW(L"latch-boundary-compat.dll"), "LatchTestSetInformation"));
+    if (!factory) return 4;
+    const std::wstring name = L"raw-escape.txt";
+    std::vector<BYTE> buffer(offsetof(FILE_RENAME_INFO, FileName) + name.size() * sizeof(wchar_t));
+    auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
+    rename->RootDirectory = directory;
+    rename->FileNameLength = static_cast<DWORD>(name.size() * sizeof(wchar_t));
+    memcpy(rename->FileName, name.data(), rename->FileNameLength);
+    IO_STATUS_BLOCK io{};
+    const auto kind = static_cast<FILE_INFORMATION_CLASS>(operation == L"raw-rename-outside-deny" ? 10 : 11);
+    const NTSTATUS status = factory()(source, &io, rename, static_cast<ULONG>(buffer.size()), kind);
+    CloseHandle(source); CloseHandle(directory);
+    return status == static_cast<NTSTATUS>(0xc0000022u) ? 0 : 5;
+  }
+  if (operation == L"raw-dacl-deny") {
+    HANDLE file = CreateFileW(argv[2], GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return 2;
+    SECURITY_DESCRIPTOR descriptor{};
+    InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION);
+    SetSecurityDescriptorDacl(&descriptor, TRUE, nullptr, FALSE);
+    const BOOL changed = SetKernelObjectSecurity(file, DACL_SECURITY_INFORMATION, &descriptor);
+    const DWORD error = GetLastError();
+    CloseHandle(file);
+    return !changed && error == ERROR_ACCESS_DENIED ? 0 : 3;
+  }
   if (operation == L"crt-read") {
     auto legacy = LoadLibraryW(L"msvcrt.dll");
     using Access = int (__cdecl*)(const wchar_t*, int);

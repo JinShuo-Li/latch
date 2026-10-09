@@ -3,7 +3,8 @@ param(
   [Parameter(Mandatory=$true)][string]$FixtureRoot,
   [ValidateRange(1024,100000)][int]$ObjectCount = 4096,
   [ValidateRange(1,4096)][int]$SandboxMutationCount = 256,
-  [ValidateRange(1,1024)][int]$ConcurrentHostFilesPerBranch = 32
+  [ValidateRange(1,1024)][int]$ConcurrentHostFilesPerBranch = 32,
+  [switch]$Mediated
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -53,6 +54,7 @@ $info.RedirectStandardError = $true
 $escapedCommand = $command.Replace('"','\"')
 $info.Arguments = $q+$workspace+$q+' '+$q+$fixture+$q+' '+$q+$escapedCommand+$q+
   ' write --read-root '+$q+$runtime+$q+' --timeout-ms 120000'
+if ($Mediated) { $info.Arguments += ' --filesystem broker' }
 $knownMappings = @{}
 $mappingRoot = 'HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings'
 if (Test-Path -LiteralPath $mappingRoot) {

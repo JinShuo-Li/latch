@@ -59,7 +59,7 @@ jobs:
           # .git reservation is a same-volume atomic rename from the
           # LOCALAPPDATA journal. RUNNER_TEMP may be on a separate drive.
           $fixtureBase = Join-Path $env:USERPROFILE ('LatchBoundaryCI-' + $env:GITHUB_RUN_ID)
-          foreach ($suite in @('test', 'read_broker', 'recovery', 'adversarial', 'lifecycle', 'network', 'scale', 'developer', 'deleted_root')) {
+          foreach ($suite in @('test', 'read_broker', 'write_broker', 'recovery', 'adversarial', 'lifecycle', 'network', 'scale', 'developer', 'deleted_root')) {
             try {
               & "native/windows/boundary/$suite.ps1" -Binaries $binaries -FixtureRoot (Join-Path $fixtureBase "latch-native-$suite")
               if ($LASTEXITCODE) { throw "$suite exited $LASTEXITCODE" }
@@ -68,6 +68,10 @@ jobs:
               Write-Output "::error file=native/windows/boundary/$suite.ps1,title=Windows native fixture::$message"
               throw
             }
+          }
+          foreach ($suite in @('developer', 'scale')) {
+            & "native/windows/boundary/$suite.ps1" -Mediated -Binaries $binaries -FixtureRoot (Join-Path $fixtureBase "latch-mediated-$suite")
+            if ($LASTEXITCODE) { throw "Mediated $suite exited $LASTEXITCODE" }
           }
   windows-rust:
     runs-on: windows-2025
