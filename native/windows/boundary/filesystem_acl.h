@@ -18,6 +18,7 @@ struct GrantPlan {
   // One flat UTF-16 arena avoids one heap allocation per object in large roots.
   std::wstring relative_paths;
   std::vector<GrantTarget> targets;
+  bool recursive = true;
 };
 
 class Grants {
@@ -45,7 +46,7 @@ struct GitReservation {
 void validate_grant_tree(const std::filesystem::path& path,
                          const std::vector<std::wstring>& allowed,
                          GrantPlan& plan, const Cancellation& cancel,
-                         Recovery& recovery);
+                         Recovery& recovery, bool recursive = true);
 void protect_sensitive_tree(const std::filesystem::path& input,
                             std::set<std::wstring>& visited,
                             const Cancellation& cancel, Recovery& recovery,

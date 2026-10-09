@@ -240,8 +240,9 @@ DWORD update_acl_pair(const std::wstring& path, PSID first_sid,
 void validate_grant_tree(const std::filesystem::path& path,
                          const std::vector<std::wstring>& allowed,
                          GrantPlan& plan, const Cancellation& cancel,
-                         Recovery& recovery) {
+                         Recovery& recovery, bool recursive) {
   plan.root = path;
+  plan.recursive = recursive;
   const auto visit = [&](const auto& self,
                          const std::filesystem::path& current) -> void {
     cancel.check();
@@ -257,8 +258,18 @@ void validate_grant_tree(const std::filesystem::path& path,
     const DWORD attributes = information.dwFileAttributes;
     if (attributes & FILE_ATTRIBUTE_REPARSE_POINT) return;
     if (attributes & FILE_ATTRIBUTE_DIRECTORY) {
-      for (const auto& child : std::filesystem::directory_iterator(current))
+      for (const auto& child : std::filesystem::directory_iterator(current)) {
+        if (!recursive) {
+          const auto extension = child.path().extension().wstring();
+          if (_wcsicmp(extension.c_str(), L".exe") != 0 &&
+              _wcsicmp(extension.c_str(), L".dll") != 0 &&
+              _wcsicmp(extension.c_str(), L".pyd") != 0) continue;
+          const auto child_attributes = GetFileAttributesW(child.path().c_str());
+          if (child_attributes == INVALID_FILE_ATTRIBUTES) fail(L"bootstrap file attributes");
+          if (child_attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+        }
         self(self, child.path());
+      }
     } else if (!validate_hardlinks(current, allowed, plan.root.wstring(),
                                    information.nNumberOfLinks, recovery)) {
       return;
@@ -427,7 +438,7 @@ void Grants::add_plan(GrantPlan& plan,
       fail(L"read current grant links");
     validate_hardlinks(path, allowed, plan.root.wstring(),
                        information.nNumberOfLinks, recovery);
-    const DWORD inheritance = (target.attributes & FILE_ATTRIBUTE_DIRECTORY)
+    const DWORD inheritance = (plan.recursive && (target.attributes & FILE_ATTRIBUTE_DIRECTORY))
                                   ? SUB_CONTAINERS_AND_OBJECTS_INHERIT
                                   : NO_INHERITANCE;
     AclChange change;
