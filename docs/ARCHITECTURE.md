@@ -73,6 +73,23 @@ flowchart LR
     X[stdio extensions] <--> K
 ```
 
+## Session history management
+
+`EventStore::delete_sessions` records explicit root-session history tombstones in
+`deleted_sessions` using one immediate SQLite transaction. It validates every
+UUID, root identity and optional workspace scope before committing a batch of
+1–100 selections. `list_sessions`, `latest_session` and `resolve_session` exclude
+tombstones; the CLI rechecks selection before building a resumed controller.
+History deletion does not alter raw events, child topology, memories, FTS,
+operations, group projections or artifacts. Workspace mutation/lifecycle queries
+continue to include deleted history so old validation cannot become valid again.
+Already-open controllers can append without resurrecting history visibility.
+
+The TUI picker owns selection and confirmation only; a CLI callback invokes the
+kernel operation. The Web actor serializes deletion with activation, protects the
+current session, limits deletion to the launch workspace and emits a change
+notification after commit. HTTP/SSE and browser projections own no durable truth.
+
 ## Providers and inference profiles
 
 `ResolvedPaths` (`kernel/src/paths.rs`) owns configuration and storage path

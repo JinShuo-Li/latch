@@ -160,6 +160,7 @@ impl EventStore {
     fn migrate(&self) -> Result<()> {
         self.conn()?.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
             CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, workspace TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
+            CREATE TABLE IF NOT EXISTS deleted_sessions(session_id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS events(session_id TEXT NOT NULL, sequence INTEGER NOT NULL, id TEXT NOT NULL UNIQUE, parent_id TEXT, timestamp TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(session_id, sequence));
             CREATE INDEX IF NOT EXISTS events_kind ON events(session_id, kind);
             CREATE INDEX IF NOT EXISTS events_kind_global ON events(kind, session_id, sequence);
@@ -311,14 +312,14 @@ impl EventStore {
         let conn = self.conn()?;
         let value: Option<String> = if let Some(path) = workspace {
             conn.query_row(
-                "SELECT s.id FROM sessions s WHERE workspace=?1 AND NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id=s.id AND e.kind='agent_spawned') ORDER BY updated_at DESC LIMIT 1",
+                "SELECT s.id FROM sessions s WHERE workspace=?1 AND NOT EXISTS (SELECT 1 FROM deleted_sessions d WHERE d.session_id=s.id) AND NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id=s.id AND e.kind='agent_spawned') ORDER BY updated_at DESC LIMIT 1",
                 [path.to_string_lossy().as_ref()],
                 |r| r.get(0),
             )
             .optional()?
         } else {
             conn.query_row(
-                "SELECT s.id FROM sessions s WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id=s.id AND e.kind='agent_spawned') ORDER BY updated_at DESC LIMIT 1",
+                "SELECT s.id FROM sessions s WHERE NOT EXISTS (SELECT 1 FROM deleted_sessions d WHERE d.session_id=s.id) AND NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id=s.id AND e.kind='agent_spawned') ORDER BY updated_at DESC LIMIT 1",
                 [],
                 |r| r.get(0),
             )
@@ -341,6 +342,7 @@ impl EventStore {
             (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='completion_changed' ORDER BY sequence DESC LIMIT 1),
             (SELECT payload FROM events e WHERE e.session_id=s.id AND e.kind='inference_profile_changed' ORDER BY sequence DESC LIMIT 1)
             FROM sessions s WHERE (?1 IS NULL OR s.workspace=?1)
+            AND NOT EXISTS (SELECT 1 FROM deleted_sessions d WHERE d.session_id=s.id)
             AND NOT EXISTS (SELECT 1 FROM events child WHERE child.session_id=s.id AND child.kind='agent_spawned')
             ORDER BY s.updated_at DESC,s.id ASC";
         let workspace = workspace.map(|path| path.to_string_lossy().into_owned());
@@ -401,6 +403,41 @@ impl EventStore {
             })
         })
         .collect()
+    }
+
+    /// Explicitly removes root sessions from history and resume selection.
+    /// Retains events, child topology, projections, and artifacts: other sessions
+    /// may still rely on their workspace mutation evidence. The entire batch is
+    /// validated and committed atomically, including an optional workspace scope.
+    pub fn delete_sessions(&self, ids: &[Uuid], workspace: Option<&Path>) -> Result<()> {
+        if ids.is_empty() || ids.len() > 100 {
+            bail!("select between 1 and 100 sessions");
+        }
+        let ids: std::collections::BTreeSet<_> = ids.iter().copied().collect();
+        let workspace = workspace.map(|path| path.to_string_lossy().into_owned());
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for id in &ids {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions s WHERE s.id=?1
+                 AND (?2 IS NULL OR s.workspace=?2)
+                 AND NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id=s.id AND e.kind='agent_spawned')
+                 AND NOT EXISTS (SELECT 1 FROM deleted_sessions d WHERE d.session_id=s.id))",
+                params![id.to_string(), workspace], |row| row.get(0),
+            )?;
+            if !exists {
+                bail!("session {id} is unavailable or outside this workspace; refresh history");
+            }
+        }
+        let now = Utc::now().to_rfc3339();
+        for id in ids {
+            tx.execute(
+                "INSERT INTO deleted_sessions(session_id,deleted_at) VALUES(?1,?2)",
+                params![id.to_string(), now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Resolves an exact UUID or unambiguous UUID prefix across saved sessions.
@@ -1550,6 +1587,111 @@ fn compact_preview(text: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deleted_history_survives_reopen_without_losing_mutation_or_child_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.sqlite3");
+        let workspace = Path::new("/test/project");
+        let store = EventStore::open(&path).unwrap();
+        let keep = store.create_session(workspace).unwrap();
+        let root = store.create_session(workspace).unwrap();
+        store
+            .append(
+                root,
+                EventPayload::WorkspaceMutationPossible {
+                    operation: "edit".into(),
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                root,
+                EventPayload::UserMessage {
+                    text: "unique deletion evidence".into(),
+                    media: vec![],
+                },
+            )
+            .unwrap();
+        let child = store
+            .create_agent_session(
+                workspace,
+                AgentSessionSpec {
+                    root_session_id: root,
+                    parent_session_id: root,
+                    task_name: "child".into(),
+                    agent_type: None,
+                    depth: 1,
+                },
+                "inspect".into(),
+            )
+            .unwrap();
+        store.create_agent_group(root, "history test").unwrap();
+        let events = store.events(root).unwrap();
+        let mutations = store.workspace_mutation_events_after(workspace, 0).unwrap();
+        let children = store.agent_events(root).unwrap();
+        store
+            .delete_sessions(&[root, root], Some(workspace))
+            .unwrap();
+        drop(store);
+        let store = EventStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .list_sessions(None)
+                .unwrap()
+                .iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>(),
+            vec![keep]
+        );
+        assert_eq!(store.latest_session(Some(workspace)).unwrap(), Some(keep));
+        assert_eq!(store.latest_session(None).unwrap(), Some(keep));
+        assert!(store.resolve_session(&root.to_string()).is_err());
+        assert!(store.resolve_session(&root.to_string()[..8]).is_err());
+        assert_eq!(store.events(root).unwrap(), events);
+        assert_eq!(
+            store.workspace_mutation_events_after(workspace, 0).unwrap(),
+            mutations
+        );
+        assert_eq!(store.agent_events(root).unwrap(), children);
+        assert!(!store.events(child.agent_id).unwrap().is_empty());
+        assert!(store.agent_group_identity(root).unwrap().is_some());
+        assert!(!store.search_events(root, "unique", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn history_deletion_rejects_invalid_batches_atomically() {
+        let store = EventStore::open_memory().unwrap();
+        let here = Path::new("/here");
+        let a = store.create_session(here).unwrap();
+        let b = store.create_session(Path::new("/elsewhere")).unwrap();
+        let child = store
+            .create_agent_session(
+                here,
+                AgentSessionSpec {
+                    root_session_id: a,
+                    parent_session_id: a,
+                    task_name: "child".into(),
+                    agent_type: None,
+                    depth: 1,
+                },
+                "inspect".into(),
+            )
+            .unwrap();
+        for ids in [
+            vec![],
+            vec![a, b],
+            vec![a, Uuid::new_v4()],
+            vec![a, child.agent_id],
+            vec![a; 101],
+        ] {
+            assert!(store.delete_sessions(&ids, Some(here)).is_err());
+            assert!(store.resolve_session(&a.to_string()).is_ok());
+        }
+        store.delete_sessions(&[a, b], None).unwrap();
+        assert!(store.list_sessions(None).unwrap().is_empty());
+        assert_eq!(store.latest_session(None).unwrap(), None);
+    }
+
     #[test]
     fn orders_and_persists_events() {
         let s = EventStore::open_memory().unwrap();

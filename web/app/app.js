@@ -1,7 +1,7 @@
 import {api,subscribe} from './transport.js';
 import {state,session,metadata,profile,providers,model,cellParts,cellText,title} from './state.js';
 import {hydrateIcons,icon} from './icons.js';
-import {renderActivity,renderConversation,renderSessions,renderHeader,renderComposer,renderPermission,renderFiles,renderDetails,showDiff,showModels} from './view.js';
+import {visibleSessions,renderActivity,renderConversation,renderSessions,renderHeader,renderComposer,renderPermission,renderFiles,renderDetails,showDiff,showModels} from './view.js';
 import {renderSettings,settingsPlan,renderSettingsStatus,credentialInput,renderNewModel} from './settings.js';
 
 const $ = selector => document.querySelector(selector);
@@ -145,6 +145,35 @@ $('#auth-form').addEventListener('submit',event=>{event.preventDefault();attempt
 $('#new-chat').addEventListener('click',()=>attempt(newChat));
 $('#home').addEventListener('click',()=>attempt(newChat));
 $('#session-search').addEventListener('input',renderSessions);
+let pendingSessionDeletion = [];
+$('#manage-sessions').addEventListener('click',()=>{state.managingSessions=!state.managingSessions;state.selectedSessions.clear();renderSessions();});
+$('#sessions').addEventListener('change',event=>{
+  const input=event.target.closest('[data-select-session]');
+  if (!input) return;
+  if(input.checked)state.selectedSessions.add(input.dataset.selectSession);else state.selectedSessions.delete(input.dataset.selectSession);
+  renderSessions();
+});
+$('#select-visible-sessions').addEventListener('change',event=>{
+  for(const s of visibleSessions())if(s.id!==session().session_id){if(event.target.checked)state.selectedSessions.add(s.id);else state.selectedSessions.delete(s.id);}
+  renderSessions();
+});
+$('#delete-sessions').addEventListener('click',()=>{
+  pendingSessionDeletion=[...state.selectedSessions];
+  if(!pendingSessionDeletion.length)return;
+  $('#delete-sessions-error').textContent=pendingSessionDeletion.length>100?'Select at most 100 conversations per deletion.':'';
+  $('#confirm-delete-sessions').disabled=pendingSessionDeletion.length>100;
+  $('#delete-session-names').replaceChildren(...pendingSessionDeletion.map(id=>{const li=document.createElement('li');li.textContent=`${state.sessions.find(s=>s.id===id)?.prompt_preview || 'New conversation'} · ${id.slice(0,8)}`;return li;}));
+  $('#delete-sessions-dialog').showModal();
+});
+$('#confirm-delete-sessions').addEventListener('click',async()=>{
+  const button=$('#confirm-delete-sessions');button.disabled=true;
+  try {
+    await api('/api/sessions/delete',{method:'POST',body:{ids:pendingSessionDeletion,instance_id:state.snapshot.instance_id}});
+    state.selectedSessions.clear();$('#delete-sessions-dialog').close();
+    await refreshSessions();toast('Conversations removed from history.');
+  } catch(error) {$('#delete-sessions-error').textContent=error.message;}
+  finally {button.disabled=false;}
+});
 $('#sessions').addEventListener('click',event=>{const button=event.target.closest('[data-session]');if(button)attempt(async()=>{await api(`/api/sessions/${button.dataset.session}/activate`,{method:'POST'});$('#prompt').value='';applySnapshot(await api('/api/bootstrap'));await refreshSessions();$('#app').classList.remove('mobile-sidebar-open');});});
 $('#collapse-sidebar').addEventListener('click',()=>{$('#app').classList.add('sidebar-collapsed');$('#app').classList.remove('mobile-sidebar-open');});
 $('#expand-sidebar').addEventListener('click',()=>{$('#app').classList.remove('sidebar-collapsed');$('#app').classList.toggle('mobile-sidebar-open');});

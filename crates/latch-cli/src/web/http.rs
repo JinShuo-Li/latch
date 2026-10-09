@@ -29,6 +29,7 @@ pub fn router(host: Host) -> Router {
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/events", get(events))
         .route("/api/sessions", get(sessions).post(create))
+        .route("/api/sessions/delete", post(delete_sessions))
         .route("/api/sessions/{id}/activate", post(activate))
         .route("/api/sessions/{id}/commands", post(command))
         .route(
@@ -205,6 +206,25 @@ async fn sessions(State(host): State<Host>) -> Result<Json<Value>, ApiError> {
     Ok(Json(
         json!({"sessions":sessions.into_iter().map(|s|json!({"id":s.id,"workspace":s.workspace,"created_at":s.created_at,"updated_at":s.updated_at,"mode":s.mode,"model":s.model,"completion":s.completion,"prompt_preview":s.prompt_preview,"event_count":s.event_count})).collect::<Vec<_>>()}),
     ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionDeletion {
+    ids: Vec<Uuid>,
+    instance_id: Uuid,
+}
+async fn delete_sessions(
+    State(host): State<Host>,
+    Json(body): Json<SessionDeletion>,
+) -> Result<Json<Value>, ApiError> {
+    if body.instance_id != host.0.instance {
+        return Err(ApiError::conflict(
+            "server restarted; reload before deleting sessions",
+        ));
+    }
+    host.request(Action::DeleteSessions(body.ids))
+        .await
+        .map(Json)
 }
 async fn create(State(host): State<Host>) -> Result<Json<Value>, ApiError> {
     host.request(Action::Activate(None, Vec::new()))

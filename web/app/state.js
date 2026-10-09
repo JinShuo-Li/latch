@@ -1,6 +1,8 @@
 export const state = {
   snapshot:null,
   sessions:[],
+  managingSessions:false,
+  selectedSessions:new Set(),
   detailTab:'task',
   settingsTab:'general',
   connected:false,

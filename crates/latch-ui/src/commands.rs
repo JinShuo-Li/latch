@@ -26,7 +26,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/resume",
-        description: "Resume another saved session",
+        description: "Manage saved sessions: resume or delete",
     },
     SlashCommand {
         name: "/safety",

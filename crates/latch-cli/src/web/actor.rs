@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 pub enum Action {
     Activate(Option<Uuid>, Vec<PathBuf>),
+    DeleteSessions(Vec<Uuid>),
     Detach {
         session: Uuid,
         artifact: String,
@@ -203,6 +204,26 @@ pub async fn run(
                                 }
                             }
                         }
+                    }
+                }
+            }
+            Action::DeleteSessions(ids) => {
+                let view = host.0.view.lock().await;
+                if view.session_id.is_some_and(|id| ids.contains(&id)) {
+                    Err(ApiError::conflict(
+                        "switch to another conversation before deleting the current one",
+                    ))
+                } else {
+                    drop(view);
+                    match host
+                        .database()
+                        .delete_sessions(&ids, Some(&host.0.workspace))
+                    {
+                        Ok(()) => {
+                            host.changed().await;
+                            Ok(json!({"deleted":ids}))
+                        }
+                        Err(error) => Err(ApiError::invalid(error.to_string())),
                     }
                 }
             }

@@ -504,8 +504,14 @@ pub async fn pick_session(workspace: &Path, config: &Config) -> Result<SelectedS
             })
             .collect()
     });
+    let deletion_store = store.clone();
+    let delete = Arc::new(move |ids: &[Uuid]| {
+        deletion_store
+            .delete_sessions(ids, None)
+            .map_err(|error| error.to_string())
+    });
     Ok(
-        match latch_tui::run_session_picker(sessions, workspace, preview).await? {
+        match latch_tui::run_session_picker(sessions, workspace, preview, delete).await? {
             latch_tui::PickerSelection::Resume(id) => {
                 let selected = store.resolve_session(&id.to_string())?;
                 SelectedSession::Session(id, selected.workspace.into())
@@ -538,6 +544,8 @@ pub async fn build_agent(
     let mut restored = None;
     let resume = resume_session.is_some();
     let session_id = if let Some(session) = resume_session {
+        // Recheck after the picker/HTTP selection, before any resume writes.
+        runtime(store.resolve_session(&session.to_string()))?;
         // Approval requests that were pending at exit can no longer be
         // answered; mark them durably before the transcript replay so resume
         // shows honest state instead of a phantom prompt.

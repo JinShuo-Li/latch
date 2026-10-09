@@ -32,6 +32,35 @@ retained through the browser picker and applied once to the first selected or
 created session. Stop the server with Ctrl+C
 in the launching terminal, or Settings → General → Stop Web server.
 
+## Manage conversation history
+
+The sidebar searches conversation prompts, UUIDs, models and modes. Hover a row
+for its UUID, model and full update date. Choose **Manage**, select individual
+conversations or **Select visible**, then **Delete selected**. Selections survive
+search changes; the confirmation dialog lists the complete selection, including
+rows hidden by the current filter. Cancel leaves history unchanged. Failures stay
+in the dialog for retry. Batches are limited to 100 conversations.
+
+Switch to another conversation before deleting the current one. The actor
+serializes deletion with activation and rejects any batch containing the current
+session. `POST /api/sessions/delete` accepts `ids` and `instance_id`, uses the
+existing authentication and same-origin protections, and validates the whole
+batch against the host workspace before committing. Invalid, unavailable or
+out-of-workspace selections cause no partial deletion. Other tabs refresh their
+history through the existing change notifications.
+
+Deletion removes conversations from history and all normal resume selectors,
+including CLI UUIDs and prefixes. It persists across restarts. This is logical
+history deletion: events, child sessions, group projections, search records and
+artifacts remain on disk to preserve workspace validation and durable provenance.
+It does not reclaim disk space or erase stored content. Controllers already open
+in another process may finish recording events without restoring the history row.
+
+The TUI uses the same kernel operation through `/resume` or `latch --resume`:
+Ctrl+Space marks rows, Delete selects the highlighted row or all marked rows,
+`y` confirms, and `n`/Esc cancels. Tab changes workspace scope; marks remain
+selected across scope and search changes. The preview lists the deletion targets.
+
 ## First-run setup
 
 Startup resolves the configuration on the Latch host: `--config <PATH>` when
@@ -210,11 +239,12 @@ transport fixture in Chromium (Node 22+; no npm packages or provider calls):
 ```sh
 node scripts/test_web_markdown.mjs
 node scripts/test_web_setup.mjs /path/to/chromium
+node scripts/test_web_sessions.mjs /path/to/chromium
 ```
 
 This checks first-run and configured startup, credential modes, rejected/pending
 saves, model selection, live refresh, preserved drafts, custom models and mobile
-layout, plus chat table alignment, escaping, streaming and scrolling. The
+layout, session selection across filters, deletion confirmation/cancel/retry and current-session protection, plus chat table alignment, escaping, streaming and scrolling. The
 Markdown parser checks need only Node; browser layout checks need Chromium.
 Both are development-only dependencies.
 

@@ -170,9 +170,16 @@ canonical launch directory. HTTP/SSE and browser projections never own durable
 truth, execution or approvals. See `docs/WEB_UI.md`; the original agreed plan
 is `docs/WEB_UI_PLAN.md`. Linux and Windows Web transport tests reuse the CLI's isolated
 mock provider: `cargo test -p latch-cli --test cli web_transport --locked`.
+Session history deletion is logical: `EventStore::delete_sessions` atomically
+tombstones root sessions (1–100 per batch); history/latest/resume omit them while
+raw events, child topology and workspace mutation evidence remain intact. TUI
+`/resume` owns selection/confirmation; Web Manage uses actor-serialized deletion,
+protects the current session and enforces the launch workspace. It does not reclaim
+disk space.
 Optional browser setup regressions: `node scripts/test_web_setup.mjs <chromium>`
 (Node 22+ and Chromium; isolated transport fixtures, no provider calls; development
-only). `node scripts/test_web_markdown.mjs` checks Markdown parsing without a
+only). Session management regressions: `node scripts/test_web_sessions.mjs <chromium>`
+(same dependencies and isolated transport). `node scripts/test_web_markdown.mjs` checks Markdown parsing without a
 browser. `web/app/markdown.js` owns browser formatting, including tables; keep
 live text, assistant cells and agent reports on the same escaped renderer.
 Default interactive startup requires a resolved config file or explicit

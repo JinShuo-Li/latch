@@ -35,6 +35,10 @@ mechanism added under this model must preserve all of them.
 2. **Durable event ordering.** The raw event log is the source of truth. Events
    receive a monotonic per-session sequence from the single kernel append path
    and are never deleted or lossily summarized. Resume replays the same order.
+   Explicit user history deletion commits kernel-owned root-session tombstones,
+   excludes them from history/resume selection, and preserves original events
+   and workspace mutation evidence. Interfaces confirm before invoking it; the
+   Web actor also protects its current session and enforces workspace scope.
 3. **Transaction semantics.** Multi-event transitions that must survive resume
    commit atomically (for example group task claims use `BEGIN IMMEDIATE`
    compare-and-set inside the transaction that appends the event). No mechanism

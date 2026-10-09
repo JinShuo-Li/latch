@@ -47,10 +47,24 @@ export function renderConversation() {
   if (stick || renderedSession !== current.session_id) requestAnimationFrame(()=>{scroll.scrollTop=scroll.scrollHeight;});
   renderedSession = current.session_id;
 }
-export function renderSessions() {
+export function visibleSessions() {
   const search = $('#session-search').value.toLowerCase();
-  const list = state.sessions.filter(s=>(s.prompt_preview || 'New conversation').toLowerCase().includes(search));
-  $('#sessions').innerHTML = list.length ? list.map(s=>`<button class="session-item ${session().session_id===s.id?'active':''}" data-session="${e(s.id)}" ${session().session_id===s.id?'aria-current="page"':''}>${icon('chat')}<span class="session-text">${e(s.prompt_preview || 'New conversation')}</span><span class="session-time">${e(new Date(s.updated_at).toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}))}</span></button>`).join('') : '<p class="session-empty">No conversations yet.</p>';
+  return state.sessions.filter(s=>[s.prompt_preview || 'New conversation',s.id,s.model || '',s.mode || ''].join(' ').toLowerCase().includes(search));
+}
+export function renderSessions() {
+  const list = visibleSessions();
+  const active = session().session_id;
+  const available = new Set(state.sessions.filter(s=>s.id!==active).map(s=>s.id));
+  for (const id of state.selectedSessions) if (!available.has(id)) state.selectedSessions.delete(id);
+  $('#manage-sessions').textContent = state.managingSessions ? 'Done' : 'Manage';
+  $('#manage-sessions').setAttribute('aria-pressed',String(state.managingSessions));
+  $('#session-management').hidden = !state.managingSessions;
+  $('#delete-sessions').disabled = !state.selectedSessions.size;
+  $('#delete-sessions').textContent = `Delete selected (${state.selectedSessions.size})`;
+  const selectable = list.filter(s=>s.id!==active);
+  $('#select-visible-sessions').checked = selectable.length>0 && selectable.every(s=>state.selectedSessions.has(s.id));
+  $('#select-visible-sessions').indeterminate = selectable.some(s=>state.selectedSessions.has(s.id)) && !$('#select-visible-sessions').checked;
+  $('#sessions').innerHTML = list.length ? list.map(s=>`<div class="session-row">${state.managingSessions?`<input type="checkbox" data-select-session="${e(s.id)}" aria-label="Select ${e(s.prompt_preview || 'New conversation')}" ${state.selectedSessions.has(s.id)?'checked':''} ${s.id===active?'disabled title="Current conversation"':''}>`:''}<button class="session-item ${active===s.id?'active':''}" data-session="${e(s.id)}" title="${e(s.id)} · ${e(s.model || '')} · ${e(new Date(s.updated_at).toLocaleString())}" ${active===s.id?'aria-current="page"':''}>${icon('chat')}<span class="session-text">${e(s.prompt_preview || 'New conversation')}</span><span class="session-time">${e(new Date(s.updated_at).toLocaleDateString(undefined,{month:'short',day:'numeric'}))}</span></button></div>`).join('') : `<p class="session-empty">${state.sessions.length?'No matching conversations.':'No conversations yet.'}</p>`;
 }
 export function renderHeader() {
   const p = profile();

@@ -847,3 +847,125 @@ async fn activity_distinguishes_provider_silence_from_reasoning_without_exposing
     );
     assert!(!done.to_string().contains("private-thought-fixture"));
 }
+
+#[tokio::test]
+async fn history_deletion_is_scoped_atomic_and_protects_current_session() {
+    let f = fixture(vec![Turn::Text("unused")], None, "standard");
+    let web = Web::start(&f).await;
+    let first = web.ready().await;
+    let id = first["state"]["session_id"].as_str().unwrap().to_owned();
+    let instance = first["instance_id"].clone();
+    assert_eq!(
+        web.post(
+            "/api/sessions/delete",
+            json!({"ids":[id],"instance_id":instance})
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        web.post("/api/sessions", json!({})).await.status(),
+        StatusCode::OK
+    );
+    let second = web.ready().await;
+    let current = second["state"]["session_id"].as_str().unwrap();
+    let store = latch_kernel::EventStore::open(&f.root.join("state/latch.sqlite3")).unwrap();
+    let foreign = store
+        .create_session(&f.root.join("other-workspace"))
+        .unwrap();
+    let before = store.events(id.parse().unwrap()).unwrap();
+    assert_eq!(
+        web.post(
+            "/api/sessions/delete",
+            json!({"ids":[id],"instance_id":uuid::Uuid::new_v4()})
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    for ids in [
+        json!([]),
+        json!([id, foreign]),
+        json!([id, uuid::Uuid::new_v4()]),
+        json!([id, current]),
+    ] {
+        assert!(
+            !web.post(
+                "/api/sessions/delete",
+                json!({"ids":ids,"instance_id":instance})
+            )
+            .await
+            .status()
+            .is_success()
+        );
+        assert!(store.resolve_session(&id).is_ok());
+    }
+    let response = web
+        .client
+        .post(format!("{}/api/sessions/delete", web.url))
+        .header("Cookie", &web.cookie)
+        .header("Origin", "https://evil.test")
+        .json(&json!({"ids":[id],"instance_id":instance}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        web.post(
+            "/api/sessions/delete",
+            json!({"ids":[id],"instance_id":instance})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        web.post(&format!("/api/sessions/{id}/activate"), json!({}))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(store.events(id.parse().unwrap()).unwrap(), before);
+    for selector in [id.as_str(), &id[..8]] {
+        let result = run_latch(
+            &f,
+            &[
+                "resume",
+                "--session",
+                selector,
+                "--prompt",
+                "must not run",
+                "--output",
+                "json",
+            ],
+        );
+        assert!(!result.status.success(), "deleted session was resumed");
+        assert!(String::from_utf8_lossy(&result.stdout).contains("no session matches"));
+    }
+    assert!(store.resolve_session(&foreign.to_string()).is_ok());
+    let listed: Value = web.get("/api/sessions").await.json().await.unwrap();
+    assert!(
+        !listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == id)
+    );
+    assert_eq!(web.snapshot().await["state"]["session_id"], current);
+    drop(web);
+    let web = Web::start(&f).await;
+    web.ready().await;
+    let listed: Value = web.get("/api/sessions").await.json().await.unwrap();
+    assert!(
+        !listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == id)
+    );
+    assert!(
+        f.mock.requests().is_empty(),
+        "history management must not call a provider"
+    );
+}

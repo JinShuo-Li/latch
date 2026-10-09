@@ -10,7 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use std::{path::Path, sync::Arc};
+use std::{collections::BTreeSet, path::Path, sync::Arc};
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
@@ -54,6 +54,9 @@ struct Picker {
     selected: usize,
     preview: Vec<SessionPreviewLine>,
     previewed: Option<Uuid>,
+    marked: BTreeSet<Uuid>,
+    confirming: Option<Vec<Uuid>>,
+    notice: String,
 }
 
 impl Picker {
@@ -66,6 +69,9 @@ impl Picker {
             selected: 0,
             preview: Vec::new(),
             previewed: None,
+            marked: BTreeSet::new(),
+            confirming: None,
+            notice: String::new(),
         }
     }
 
@@ -98,6 +104,44 @@ impl Picker {
         self.filtered().get(self.selected).map(|session| session.id)
     }
 
+    fn toggle_mark(&mut self) {
+        if let Some(id) = self.selected_id()
+            && !self.marked.remove(&id)
+        {
+            self.marked.insert(id);
+        }
+    }
+
+    fn begin_delete(&mut self) {
+        let ids = if self.marked.is_empty() {
+            self.selected_id().into_iter().collect::<Vec<_>>()
+        } else {
+            self.marked.iter().copied().collect()
+        };
+        if ids.len() > 100 {
+            self.notice = "Select at most 100 sessions per deletion".into();
+        } else if !ids.is_empty() {
+            self.confirming = Some(ids);
+        }
+    }
+
+    fn confirm_delete(&mut self, delete: &DeleteSessions) {
+        let Some(ids) = self.confirming.take() else {
+            return;
+        };
+        match delete(&ids) {
+            Ok(()) => {
+                self.sessions.retain(|s| !ids.contains(&s.id));
+                self.marked.retain(|id| !ids.contains(id));
+                self.preview.clear();
+                self.previewed = None;
+                self.notice = format!("Removed {} session(s) from history", ids.len());
+                self.clamp();
+            }
+            Err(error) => self.notice = error,
+        }
+    }
+
     fn move_by(&mut self, amount: isize) {
         let len = self.filtered().len();
         if len == 0 {
@@ -109,12 +153,15 @@ impl Picker {
     }
 }
 
+pub type DeleteSessions = dyn Fn(&[Uuid]) -> Result<(), String> + Send + Sync;
+
 /// Opens the session picker. Preview data is requested only for the selected
 /// row, and cached until selection changes.
 pub async fn run_session_picker(
     sessions: Vec<SessionItem>,
     workspace: &Path,
     load_preview: Arc<dyn Fn(Uuid) -> Vec<SessionPreviewLine> + Send + Sync>,
+    delete_sessions: Arc<DeleteSessions>,
 ) -> Result<PickerSelection> {
     let mut guard = super::runtime::Guard::enter()?;
     let mut picker = Picker::new(sessions, workspace);
@@ -136,7 +183,23 @@ pub async fn run_session_picker(
         if key.kind != KeyEventKind::Press {
             continue;
         }
+        if picker.confirming.is_some() {
+            match key.code {
+                KeyCode::Char('y' | 'Y') => picker.confirm_delete(delete_sessions.as_ref()),
+                KeyCode::Esc | KeyCode::Char('n' | 'N') => picker.confirming = None,
+                _ => {}
+            }
+            continue;
+        }
         match key.code {
+            KeyCode::Char(' ')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                picker.toggle_mark();
+            }
+            KeyCode::Delete => picker.begin_delete(),
             KeyCode::Esc => return Ok(PickerSelection::Cancel),
             KeyCode::Enter => {
                 return Ok(picker
@@ -230,7 +293,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
-                " Resume a saved session",
+                " Manage saved sessions",
                 Style::default().bold(),
             )),
             Line::from(vec![
@@ -255,7 +318,13 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
     }
     for (offset, session) in filtered.iter().skip(start).take(visible_rows).enumerate() {
         let selected = start + offset == picker.selected;
-        let marker = if selected { "›" } else { " " };
+        let marker = if picker.marked.contains(&session.id) {
+            "✓"
+        } else if selected {
+            "›"
+        } else {
+            " "
+        };
         let style = if selected {
             crate::theme::palette().selected()
         } else {
@@ -292,8 +361,23 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
         ));
     }
     frame.render_widget(Paragraph::new(rows), sections[1]);
-    let preview = picker
-        .preview
+    let deletion_preview: Vec<_> = picker.confirming.as_ref().map_or_else(Vec::new, |ids| {
+        picker
+            .sessions
+            .iter()
+            .filter(|s| ids.contains(&s.id))
+            .map(|s| SessionPreviewLine {
+                speaker: s.id.to_string()[..8].into(),
+                text: s.prompt.clone(),
+            })
+            .collect()
+    });
+    let preview = if picker.confirming.is_some() {
+        &deletion_preview
+    } else {
+        &picker.preview
+    };
+    let preview = preview
         .iter()
         .map(|line| {
             Line::from(vec![
@@ -312,16 +396,38 @@ fn draw(frame: &mut ratatui::Frame<'_>, picker: &Picker) {
         Paragraph::new(preview).block(
             Block::default()
                 .borders(Borders::TOP)
-                .title(" Preview ")
+                .title(if picker.confirming.is_some() {
+                    " Sessions to delete "
+                } else {
+                    " Preview "
+                })
                 .border_style(crate::theme::palette().faint()),
         ),
         sections[2],
     );
+    let footer = if let Some(ids) = &picker.confirming {
+        vec![
+            Line::raw(format!(
+                " y confirm · n/Esc cancel — Delete {} session(s) from history?",
+                ids.len()
+            )),
+            Line::raw(" Underlying events and artifacts are retained for validation evidence."),
+        ]
+    } else {
+        vec![
+            Line::raw(format!(
+                " ↑↓ select · Enter resume · Ctrl+Space mark ({}) · Del delete · Tab scope",
+                picker.marked.len()
+            )),
+            Line::raw(if picker.notice.is_empty() {
+                " Ctrl+F fresh · Ctrl+Q exit · Esc cancel"
+            } else {
+                &picker.notice
+            }),
+        ]
+    };
     frame.render_widget(
-        Paragraph::new(Line::styled(
-            " ↑↓ select  Enter resume  Tab workspace/all  Ctrl+F fresh  Ctrl+Q exit  Esc cancel",
-            crate::theme::palette().faint(),
-        )),
+        Paragraph::new(footer).style(crate::theme::palette().faint()),
         sections[3],
     );
 }
@@ -370,6 +476,56 @@ mod tests {
             prompt: prompt.into(),
             event_count: 3,
         }
+    }
+
+    #[test]
+    fn deletion_confirmation_freezes_marks_across_filters_and_only_removes_on_commit() {
+        let mut picker = Picker::new(
+            vec![item(1, "/here", "one", 1), item(2, "/there", "two", 2)],
+            Path::new("/here"),
+        );
+        picker.toggle_mark();
+        picker.scope = Scope::All;
+        picker.move_by(1);
+        picker.toggle_mark();
+        picker.query = "one".into();
+        picker.begin_delete();
+        assert_eq!(picker.confirming.as_ref().unwrap().len(), 2);
+        // Cancel changes neither stored rows nor marks.
+        picker.confirming = None;
+        assert_eq!(picker.sessions.len(), 2);
+        picker.begin_delete();
+        picker.confirm_delete(&|_| Err("database locked".into()));
+        assert_eq!(picker.sessions.len(), 2);
+        assert_eq!(picker.marked.len(), 2);
+        assert_eq!(picker.notice, "database locked");
+        picker.begin_delete();
+        picker.query = "two".into();
+        picker.confirm_delete(&|ids| {
+            assert_eq!(ids, &[Uuid::from_u128(1), Uuid::from_u128(2)]);
+            Ok(())
+        });
+        assert!(picker.sessions.is_empty());
+        assert!(picker.marked.is_empty());
+        assert_eq!(picker.selected_id(), None);
+    }
+
+    #[test]
+    fn deletion_defaults_to_selected_row_and_clamps_after_success() {
+        let mut picker = Picker::new(
+            vec![item(1, "/here", "one", 1), item(2, "/here", "two", 2)],
+            Path::new("/here"),
+        );
+        picker.move_by(1);
+        picker.begin_delete();
+        picker.confirm_delete(&|ids| {
+            assert_eq!(ids, &[Uuid::from_u128(2)]);
+            Ok(())
+        });
+        assert_eq!(picker.selected_id(), Some(Uuid::from_u128(1)));
+        picker.toggle_mark();
+        picker.toggle_mark();
+        assert!(picker.marked.is_empty());
     }
 
     #[test]

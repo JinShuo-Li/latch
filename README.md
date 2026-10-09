@@ -70,7 +70,7 @@ On first launch, use `/setup` to choose a provider, enter or reference its API k
 latch -p "Explain this repository"
 ```
 
-Resume a session with `latch --resume`. For scripts, use `latch run --workspace ./project --prompt "Fix the failing test" --output json`; `latch sessions list` shows saved sessions. Run `latch --help` for all options.
+Resume or manage saved sessions with `latch --resume` or `/resume` in the TUI. Use Ctrl+Space to mark sessions, Delete to remove the selected row or marked sessions, and confirm with `y`. For scripts, use `latch run --workspace ./project --prompt "Fix the failing test" --output json`; `latch sessions list` shows saved sessions. Run `latch --help` for all options.
 Latch asks the model to include its final summary when it marks a task complete;
 the recorded validation determines whether that task is verified.
 After recorded edits, a missing implementation claim also receives one bounded
@@ -104,7 +104,7 @@ credentials, enabled models and reasoning effort are reused on later starts.
 The workspace stays fixed to the launch directory. On Windows, start from a
 user-owned NTFS project directory; the embedded sandbox still applies. Conversations, streaming,
 steering, model/settings controls, images, diffs and task details are connected
-to Latch. OpenCode Go's `deepseek-v4.1-flash` accepts image input by default;
+to Latch. Use **Manage** in the conversation sidebar to select and delete history; switch away from the current conversation first. Deletion hides sessions and prevents resume; stored events and artifacts remain for validation evidence. OpenCode Go's `deepseek-v4.1-flash` accepts image input by default;
 `/model` labels image-capable models with `vision`. Both interfaces show sidebar activity: waiting for the model,
 reasoning when reported by the provider, writing, tools, approvals and stopping,
 with elapsed time and time since activity. For remote use, forward with

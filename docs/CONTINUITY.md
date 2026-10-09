@@ -18,6 +18,11 @@ query-recalled original events, and a budgeted tail of verbatim conversation.
 4. **L3 raw store:** original durable events and artifacts. Normal context
    management never deletes them.
 
+Explicit history deletion uses durable session tombstones: normal history and
+resume selectors omit those roots, while original events, child sessions and
+artifacts remain available internally. It never deletes mutation evidence or
+reverses the workspace generation, and it does not reclaim disk space.
+
 Kernel validation evidence records the workspace generation it checked. The
 generation is replayed from durable mutation events across sessions sharing the
 workspace; a historical Passed entry
