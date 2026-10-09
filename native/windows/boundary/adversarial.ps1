@@ -56,6 +56,15 @@ $before = (Get-Acl -LiteralPath $plain).Sddl
 Check 'write-deny' $plain 'write' $true
 if ((Get-Acl -LiteralPath $plain).Sddl -ne $before) { throw 'Refused hardlink changed its outside ACL' }
 [IO.File]::Delete($alias)
+# A read grant must not turn its aliases into writable objects. This was
+# previously accepted when read and write roots shared one hardlink allowlist.
+New-Item -ItemType HardLink -Path $alias -Target $plain | Out-Null
+& $runner $workspace $fixture ('write-allow "'+$alias+'"') write --read-root $runtime --read-root $outside --deny $state
+if ($LASTEXITCODE -ne 125) { throw 'Writable alias into a read-only root was not refused' }
+if ((Get-Acl -LiteralPath $plain).Sddl -ne $before -or [IO.File]::ReadAllText($plain) -ne 'fixture') {
+  throw 'Mixed-permission hardlink changed the outside object'
+}
+[IO.File]::Delete($alias)
 $internal = Join-Path $workspace 'internal.txt'
 [IO.File]::WriteAllText($internal,'fixture')
 New-Item -ItemType HardLink -Path $alias -Target $internal | Out-Null
