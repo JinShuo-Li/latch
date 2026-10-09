@@ -303,7 +303,7 @@ void validate_grant_tree(const std::filesystem::path& path,
 void protect_sensitive_tree(const std::filesystem::path& input,
                             std::set<std::wstring>& visited,
                             const Cancellation& cancel, Recovery& recovery,
-                            bool audit_only) {
+                            bool audit_only, PSID package_sid) {
   cancel.check();
   const auto path = std::filesystem::canonical(input).wstring();
   if (recovery.protected_journal_path(path))
@@ -320,13 +320,22 @@ void protect_sensitive_tree(const std::filesystem::path& input,
   Local owner(descriptor);
   if (code) fail(L"read sensitive ACL", code);
   if (!acl) fail(L"sensitive path has a NULL DACL", ERROR_INVALID_ACL);
-  std::vector<BYTE> storage(acl->AclSize);
+  const DWORD extra = audit_only && package_sid ?
+      sizeof(ACCESS_DENIED_ACE) + GetLengthSid(package_sid) : 0;
+  std::vector<BYTE> storage(acl->AclSize + extra);
   auto* updated = reinterpret_cast<PACL>(storage.data());
-  if (!InitializeAcl(updated, acl->AclSize, acl->AclRevision))
+  if (!InitializeAcl(updated, static_cast<DWORD>(storage.size()), acl->AclRevision))
     fail(L"initialize sensitive ACL");
+  const bool directory = std::filesystem::is_directory(path);
+  if (audit_only && package_sid &&
+      !AddAccessDeniedAceEx(updated, acl->AclRevision,
+          directory ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE,
+          FILE_ALL_ACCESS, package_sid))
+    fail(L"prepare sensitive package deny");
   const SID_IDENTIFIER_AUTHORITY package_authority =
       SECURITY_APP_PACKAGE_AUTHORITY;
   bool package_grant = false;
+  bool broad_grant = false;
   for (DWORD i = 0; i < acl->AceCount; ++i) {
     void* ace = nullptr;
     if (!GetAce(acl, i, &ace)) fail(L"read sensitive ACE");
@@ -334,6 +343,9 @@ void protect_sensitive_tree(const std::filesystem::path& input,
     if (header->AceType == ACCESS_ALLOWED_ACE_TYPE) {
       const auto* allowed = static_cast<const ACCESS_ALLOWED_ACE*>(ace);
       PSID principal = const_cast<DWORD*>(&allowed->SidStart);
+      for (const auto kind : {WinWorldSid, WinAuthenticatedUserSid,
+              WinBuiltinUsersSid, WinInteractiveSid, WinAnonymousSid, WinNetworkSid})
+        if (IsWellKnownSid(principal, kind)) broad_grant = true;
       if (std::memcmp(GetSidIdentifierAuthority(principal), &package_authority,
                       sizeof(package_authority)) == 0) {
         package_grant = true;
@@ -349,16 +361,18 @@ void protect_sensitive_tree(const std::filesystem::path& input,
   }
   if (!audit_only) {
     recovery.change(pinned, before, updated, true);
-  } else if (package_grant) {
+  } else if (package_grant || broad_grant) {
+    require(package_sid != nullptr, L"sensitive sealing requires package identity");
     PinnedObject mutable_object(path);
     const auto current = mutable_object.state();
     require(current.identity == before.identity && current.security == before.security,
             L"sensitive object changed during audit");
+    if (directory) recovery.track_root(path);
     recovery.change(mutable_object, before, updated, true);
   }
-  if (std::filesystem::is_directory(path)) {
+  if (directory) {
     for (const auto& child : std::filesystem::directory_iterator(path))
-      protect_sensitive_tree(child.path(), visited, cancel, recovery, audit_only);
+      protect_sensitive_tree(child.path(), visited, cancel, recovery, audit_only, package_sid);
   }
 }
 

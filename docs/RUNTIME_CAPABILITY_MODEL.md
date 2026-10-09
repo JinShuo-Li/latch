@@ -378,7 +378,8 @@ mutation rights. Write capabilities require a selected writable root and contain
 only requested file data/delete rights, never directory namespace, owner or ACL
 rights. Rename/link operations are separately mediated. Ordinary source objects
 need no `WRITE_DAC` and receive no ACL grants. Scratch/runtime bootstrap grants
-retain journaled recovery; package-readable sensitive objects fail closed.
+retain journaled recovery; package-readable sensitive objects require journaled
+sealing or fail closed.
 Kernel capability selection is unchanged.
 
 ## 9. Where the invariants are enforced in code

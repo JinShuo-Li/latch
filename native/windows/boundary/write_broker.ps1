@@ -127,4 +127,67 @@ try {
     } finally { [void][LatchWriteAclFixture]::CloseHandle($item.Handle) }
   }
 }
+# Hosted runner temporary directories may admit Everyone/Users reads without
+# an All Application Packages ACE. The OS must deny the raw syscall too.
+foreach ($principal in @('S-1-1-0','S-1-5-11','S-1-5-32-545','S-1-15-2-1')) {
+  $saved = Get-Acl -LiteralPath $secret
+  try {
+    $broad = Get-Acl -LiteralPath $secret
+    $broad.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+      [Security.Principal.SecurityIdentifier]::new($principal),
+      [Security.AccessControl.FileSystemRights]::ReadAndExecute,
+      [Security.AccessControl.AccessControlType]::Allow))
+    Set-Acl -LiteralPath $secret -AclObject $broad
+    $before = (Get-Acl -LiteralPath $secret).Sddl
+    foreach ($mode in @('read','write')) {
+      & $runner $workspace $fixture ('raw-read-deny "'+$secret+'"') $mode --filesystem broker --read-root $runtime --deny $sensitive --timeout-ms 10000
+      if ($LASTEXITCODE) { throw "Broad sensitive ACL permitted raw read: $principal $mode" }
+      if ((Get-Acl -LiteralPath $secret).Sddl -ne $before) { throw 'Sensitive sealing did not restore exact ACL' }
+    }
+  } finally { Set-Acl -LiteralPath $secret -AclObject $saved }
+}
+Write-Output 'PASS broad sensitive ACL raw-read denial and exact restoration'
+$saved = Get-Acl -LiteralPath $sensitive
+$process = $null
+try {
+  $broad = Get-Acl -LiteralPath $sensitive
+  $broad.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+    [Security.Principal.SecurityIdentifier]::new('S-1-1-0'),
+    [Security.AccessControl.FileSystemRights]::ReadAndExecute,
+    [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',
+    [Security.AccessControl.PropagationFlags]::None,
+    [Security.AccessControl.AccessControlType]::Allow))
+  Set-Acl -LiteralPath $sensitive -AclObject $broad
+  $template = Join-Path $sensitive 'template.txt'
+  [IO.File]::WriteAllText($template, 'baseline')
+  $expected = (Get-Acl -LiteralPath $template).Sddl
+  $created = Join-Path $sensitive 'concurrent-secret.txt'
+  $info = [Diagnostics.ProcessStartInfo]::new($runner)
+  $info.UseShellExecute = $false
+  $info.CreateNoWindow = $true
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  foreach ($argument in @($workspace,$fixture,('raw-read-deny "'+$created+'"'),'read','--filesystem','broker','--read-root',$runtime,'--deny',$sensitive,'--timeout-ms','10000')) {
+    $info.ArgumentList.Add($argument)
+  }
+  $info.EnvironmentVariables['LATCH_RECOVERY_PAUSE'] = 'all-grants'
+  $process = [Diagnostics.Process]::Start($info)
+  $stdout = $process.StandardOutput.ReadToEndAsync()
+  $stderr = $process.StandardError.ReadToEndAsync()
+  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+  $pause = Join-Path $env:LATCH_RECOVERY_ROOT 'pause.pid'
+  while (!(Test-Path -LiteralPath $pause)) {
+    if ($process.HasExited -or [DateTime]::UtcNow -gt $deadline) { throw 'Sensitive inheritance fixture did not pause' }
+    Start-Sleep -Milliseconds 50
+  }
+  [IO.File]::WriteAllText($created, 'new synthetic secret')
+  New-Item -ItemType File -Path (Join-Path $env:LATCH_RECOVERY_ROOT 'pause.resume') -Force | Out-Null
+  if (!$process.WaitForExit(30000)) { throw 'Sensitive inheritance fixture did not finish' }
+  if ($process.ExitCode) { throw ('Concurrent sensitive read was not denied: '+$stdout.Result+$stderr.Result) }
+  if ((Get-Acl -LiteralPath $created).Sddl -ne $expected) { throw 'Concurrent sensitive file retained temporary deny' }
+  Write-Output 'PASS concurrent sensitive file raw-read denial and inherited ACE recovery'
+} finally {
+  if ($process -and !$process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+  Set-Acl -LiteralPath $sensitive -AclObject $saved
+}
 $global:LASTEXITCODE = 0

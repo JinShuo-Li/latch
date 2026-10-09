@@ -224,7 +224,8 @@ Native enumeration, file reads, descendant cmd.exe listing, source ACL equality,
 parent denial, write/owner/ACL denial, sensitive-tree denial and a hardlink into
 that tree are checked. Host-held fixture handles restore its original ACLs in
 finally. Read-only sensitive paths without package grants need no ACL change;
-package-readable sensitive paths fail closed in the production broker mode.
+package-readable sensitive paths require journaled sealing or fail closed in
+the production broker mode.
 
 Read-only runtime preparation now limits ACL changes to the root and immediate
 `.exe`/`.dll`/`.pyd` bootstrap files, with no inheritance. Nested assets are

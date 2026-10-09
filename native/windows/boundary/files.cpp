@@ -21,6 +21,22 @@
 int wmain(int argc, wchar_t** argv) {
   if (argc < 3) return 2;
   const std::wstring operation = argv[1];
+  if (operation == L"raw-read-deny") {
+    using Factory = decltype(&NtCreateFile)(*)();
+    const auto factory = reinterpret_cast<Factory>(GetProcAddress(GetModuleHandleW(L"latch-boundary-compat.dll"), "LatchTestCreateFile"));
+    if (!factory) return 2;
+    std::wstring name = L"\\??\\" + std::wstring(argv[2]);
+    UNICODE_STRING text{static_cast<USHORT>(name.size() * sizeof(wchar_t)),
+                        static_cast<USHORT>(name.size() * sizeof(wchar_t)), name.data()};
+    OBJECT_ATTRIBUTES attributes{sizeof(attributes), nullptr, &text, OBJ_CASE_INSENSITIVE, nullptr, nullptr};
+    IO_STATUS_BLOCK io{};
+    HANDLE file = nullptr;
+    const auto status = factory()(&file, FILE_GENERIC_READ, &attributes, &io, nullptr, 0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
+        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, nullptr, 0);
+    if (status >= 0) CloseHandle(file);
+    return status == static_cast<NTSTATUS>(0xc0000022u) ? 0 : 3;
+  }
   if (operation == L"create-existing") {
     HANDLE file = CreateFileW(argv[2], GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, CREATE_NEW, 0, nullptr);
