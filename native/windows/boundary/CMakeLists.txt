@@ -20,11 +20,11 @@ set_target_properties(latch-boundary-compat PROPERTIES MSVC_RUNTIME_LIBRARY "Mul
 
 target_link_libraries(latch-boundary-compat PRIVATE detours)
 target_link_options(latch-boundary-compat PRIVATE "/EXPORT:DetourFinishHelperProcess,@1,NONAME")
-add_executable(latch-boundary-probe runner.cpp common.cpp token.cpp filesystem_acl.cpp process.cpp recovery.cpp recovery_rollback.cpp object_security.cpp recovery_store.cpp appcontainer.cpp desktop.cpp job.cpp)
+add_executable(latch-boundary-probe runner.cpp common.cpp token.cpp filesystem_acl.cpp process.cpp recovery.cpp recovery_rollback.cpp object_security.cpp recovery_store.cpp appcontainer.cpp desktop.cpp job.cpp read_broker.cpp)
 set_target_properties(latch-boundary-probe PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
 target_link_libraries(latch-boundary-probe PRIVATE detours advapi32 user32 userenv rpcrt4 ole32 shell32)
 add_executable(latch-boundary-files files.cpp)
-target_link_libraries(latch-boundary-files PRIVATE advapi32 ws2_32)
+target_link_libraries(latch-boundary-files PRIVATE detours advapi32 ws2_32)
 foreach(target IN ITEMS latch-boundary-probe latch-boundary-compat latch-boundary-files)
   target_compile_options(${target} PRIVATE /W4 /WX /permissive- /EHsc /GS /guard:cf /sdl /utf-8)
   target_link_options(${target} PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf /CETCOMPAT)

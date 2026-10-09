@@ -6,11 +6,14 @@
 #include "handles.h"
 #include "job.h"
 #include "token.h"
+#include "read_broker.h"
 namespace latch {
 int execute_target(wchar_t** argv, const Cancellation& cancel,
                    HANDLE restricted, PSID write_sid, PSID sid,
                    LPPROC_THREAD_ATTRIBUTE_LIST attrs, DWORD timeout_ms,
-                   Recovery& recovery) {
+                   Recovery& recovery,
+                   const std::vector<std::wstring>& read_roots,
+                   const std::vector<std::wstring>& denied_roots) {
   PrivateDesktop desktop;
   desktop.create(write_sid, unique_sid_string());
   desktop.grant_package(sid);
@@ -59,6 +62,7 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
     SetEnvironmentVariableW(L"CARGO_TARGET_DIR", target.c_str());
   }
   Job job(recovery.job_name());
+  ReadBroker broker(job.handle.value, sid, read_roots, denied_roots);
   // Assign the child atomically at creation, before any possible runner
   // teardown. No suspended child can be stranded between create and assign.
   bool job_boundary = true;
@@ -113,6 +117,11 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
   Handle thread(pi.hThread);
   recovery.pause(L"child-launch");
   LatchHandles devices{};
+  if (!DuplicateHandle(GetCurrentProcess(), broker.client(), pi.hProcess,
+                       &devices.read_broker, 0, FALSE, DUPLICATE_SAME_ACCESS) ||
+      !DuplicateHandle(GetCurrentProcess(), broker.mutex(), pi.hProcess,
+                       &devices.broker_mutex, 0, FALSE, DUPLICATE_SAME_ACCESS))
+    fail(L"read broker capability payload");
   Handle workspace(CreateFileW(argv[1], FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));

@@ -787,6 +787,15 @@ termination through a synchronization-only process handle and drains the job
 before revoking grants. The runner writes durable, identity-bound
 ACL and resource intents and recovers stale state before accepting another
 command. Sensitive ACL sealing is temporary and exact rollback is checked.
+Read-only workspace commands use `read_broker.{h,cpp}` instead of mutating
+source ACLs. The host-created message pipe and transaction mutex are duplicated
+into the sandbox and its descendants. The broker independently checks the
+requester's job and AppContainer SID, read-only access mask, root containment,
+sensitive exclusions, final object path and hardlink aliases. It pins path
+components against replacement, refuses reparses and case-sensitive directories,
+then duplicates only the requested read rights. The compatibility DLL routes
+opens and metadata queries; bypassing it grants no additional access. Runtime
+bootstrap and writable roots still use recoverable ACL grants.
 The [recovery protocol](../native/windows/boundary/RECOVERY.md) documents the
 module split, real owner-kill tests, and retained conflict cases. AppContainer
 creation is pre-journaled by a unique name and derived SID; recovery verifies

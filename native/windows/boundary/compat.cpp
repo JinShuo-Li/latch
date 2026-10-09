@@ -12,12 +12,23 @@
 #include <cstring>
 #include <initializer_list>
 #include <string>
+#include <utility>
 #include "detours.h"
 #include "handles.h"
+#include "broker_protocol.h"
 
 namespace {
 decltype(&NtCreateFile) real_create = nullptr;
 decltype(&NtOpenFile) real_open = nullptr;
+using QueryAttributes = NTSTATUS (NTAPI*)(POBJECT_ATTRIBUTES, FILE_BASIC_INFO*);
+QueryAttributes real_query_attributes = nullptr;
+struct NetworkOpenInformation {
+  LARGE_INTEGER CreationTime, LastAccessTime, LastWriteTime, ChangeTime;
+  LARGE_INTEGER AllocationSize, EndOfFile;
+  ULONG FileAttributes;
+};
+using QueryFullAttributes = NTSTATUS (NTAPI*)(POBJECT_ATTRIBUTES, NetworkOpenInformation*);
+QueryFullAttributes real_query_full_attributes = nullptr;
 auto real_process = CreateProcessW;
 auto real_final_path = GetFinalPathNameByHandleW;
 auto real_attributes = GetFileAttributesW;
@@ -25,6 +36,10 @@ auto real_attributes_ex = GetFileAttributesExW;
 std::wstring initial_cwd;
 HANDLE null_handle = nullptr;
 HANDLE ksec_handle = nullptr;
+HANDLE read_broker = nullptr;
+HANDLE broker_mutex = nullptr;
+thread_local bool using_broker = false;
+ULONGLONG broker_sequence = 0;
 HANDLE ancestor_handles[latch_max_ancestors]{};
 DWORD ancestor_count = 0;
 ULONGLONG workspace_volume = 0;
@@ -46,6 +61,121 @@ bool duplicate(HANDLE source, PHANDLE target, PIO_STATUS_BLOCK status,
   status->Status = 0;
   status->Information = FILE_OPENED;
   return true;
+}
+
+bool broker_read(POBJECT_ATTRIBUTES attributes, ACCESS_MASK access, ULONG share,
+                 ULONG options, PHANDLE handle, PIO_STATUS_BLOCK status) {
+  if (!read_broker || !broker_mutex || using_broker || !attributes ||
+      !attributes->ObjectName || !handle || !status ||
+      attributes->ObjectName->Length % sizeof(wchar_t)) return false;
+  using_broker = true;
+  struct Reset { ~Reset() { using_broker = false; } } reset;
+  const auto* name = attributes->ObjectName;
+  std::wstring path(name->Buffer, name->Length / sizeof(wchar_t));
+  if (attributes->RootDirectory) {
+    wchar_t root[32768]{};
+    const DWORD length = GetFinalPathNameByHandleW(attributes->RootDirectory, root,
+                                                 32768, FILE_NAME_NORMALIZED);
+    if (!length || length >= 32768 || path.starts_with(L"\\")) return false;
+    path = std::wstring(root, length) + L"\\" + path;
+  }
+  if (path.starts_with(L"\\??\\") || path.starts_with(L"\\\\?\\"))
+    path.erase(0, 4);
+  if (path.size() < 3 || path.size() >= 32768 || path[1] != L':') return false;
+  const DWORD waited = WaitForSingleObject(broker_mutex, 10000);
+  if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) return false;
+  struct Unlock { ~Unlock() { ReleaseMutex(broker_mutex); } } unlock;
+  LatchReadRequest request{};
+  request.version = latch_broker_version;
+  request.process_id = GetCurrentProcessId();
+  request.request_id = ++broker_sequence;
+  request.access = access;
+  request.share = share;
+  request.options = options;
+  request.path_length = static_cast<DWORD>(path.size());
+  std::memcpy(request.path, path.data(), path.size() * sizeof(wchar_t));
+  DWORD bytes = 0;
+  const DWORD request_size = latch_read_request_size(request.path_length);
+  if (!WriteFile(read_broker, &request, request_size, &bytes, nullptr) ||
+      bytes != request_size) return false;
+  // A process killed while holding the mutex may leave its response queued.
+  // Only the matching process/sequence may consume a returned capability.
+  for (;;) {
+    LatchReadResponse response{};
+    if (!ReadFile(read_broker, &response, sizeof(response), &bytes, nullptr) ||
+        bytes != sizeof(response) || response.version != latch_broker_version)
+      return false;
+    if (response.process_id != request.process_id ||
+        response.request_id != request.request_id) continue;
+    if (response.error || !response.file) return false;
+    *handle = response.file;
+    status->Status = 0;
+    status->Information = FILE_OPENED;
+    return true;
+  }
+}
+
+HANDLE broker_attributes(LPCWSTR path) {
+  if (!path) return nullptr;
+  std::wstring name(path);
+  if (!name.starts_with(L"\\\\?\\")) {
+    wchar_t full[32768]{};
+    const DWORD length = GetFullPathNameW(path, 32768, full, nullptr);
+    if (!length || length >= 32768) return nullptr;
+    name.assign(full, length);
+  }
+  UNICODE_STRING text{};
+  text.Buffer = name.data();
+  if (name.size() >= 32768) return nullptr;
+  text.Length = static_cast<USHORT>(name.size() * sizeof(wchar_t));
+  text.MaximumLength = text.Length;
+  OBJECT_ATTRIBUTES attributes{sizeof(attributes), nullptr, &text,
+                               OBJ_CASE_INSENSITIVE, nullptr, nullptr};
+  HANDLE file = nullptr;
+  IO_STATUS_BLOCK io{};
+  if (!broker_read(&attributes, FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+       FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_SYNCHRONOUS_IO_NONALERT,
+       &file, &io)) return nullptr;
+  return file;
+}
+
+NTSTATUS NTAPI query_attributes(POBJECT_ATTRIBUTES attributes, FILE_BASIC_INFO* output) {
+  const NTSTATUS result = real_query_attributes(attributes, output);
+  if (result != static_cast<NTSTATUS>(0xc0000022u) || !output) return result;
+  HANDLE file = nullptr;
+  IO_STATUS_BLOCK io{};
+  if (!broker_read(attributes, FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_SYNCHRONOUS_IO_NONALERT, &file, &io))
+    return result;
+  FILE_BASIC_INFO info{};
+  const BOOL queried = GetFileInformationByHandleEx(file, FileBasicInfo, &info, sizeof(info));
+  CloseHandle(file);
+  if (!queried) return result;
+  output->CreationTime = info.CreationTime;
+  output->LastAccessTime = info.LastAccessTime;
+  output->LastWriteTime = info.LastWriteTime;
+  output->ChangeTime = info.ChangeTime;
+  output->FileAttributes = info.FileAttributes;
+  return 0;
+}
+
+NTSTATUS NTAPI query_full_attributes(POBJECT_ATTRIBUTES attributes, NetworkOpenInformation* output) {
+  const NTSTATUS result = real_query_full_attributes(attributes, output);
+  if (result != static_cast<NTSTATUS>(0xc0000022u) || !output) return result;
+  HANDLE file = nullptr;
+  IO_STATUS_BLOCK io{};
+  if (!broker_read(attributes, FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_SYNCHRONOUS_IO_NONALERT, &file, &io))
+    return result;
+  FILE_BASIC_INFO basic{};
+  FILE_STANDARD_INFO standard{};
+  const BOOL queried = GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic)) &&
+      GetFileInformationByHandleEx(file, FileStandardInfo, &standard, sizeof(standard));
+  CloseHandle(file);
+  if (!queried) return result;
+  *output = {basic.CreationTime, basic.LastAccessTime, basic.LastWriteTime, basic.ChangeTime,
+             standard.AllocationSize, standard.EndOfFile, basic.FileAttributes};
+  return 0;
 }
 
 DWORD WINAPI final_path(HANDLE handle, LPWSTR output, DWORD capacity, DWORD flags) {
@@ -115,17 +245,47 @@ bool metadata_ancestor(POBJECT_ATTRIBUTES attributes, ACCESS_MASK access,
 
 DWORD WINAPI attributes(LPCWSTR path) {
   const DWORD value = real_attributes(path);
-  if (value != INVALID_FILE_ATTRIBUTES || GetLastError() != ERROR_ACCESS_DENIED ||
-      !cwd_ancestor(path)) return value;
-  SetLastError(ERROR_SUCCESS);
-  return FILE_ATTRIBUTE_DIRECTORY;
+  if (value != INVALID_FILE_ATTRIBUTES || GetLastError() != ERROR_ACCESS_DENIED)
+    return value;
+  if (cwd_ancestor(path)) {
+    SetLastError(ERROR_SUCCESS);
+    return FILE_ATTRIBUTE_DIRECTORY;
+  }
+  HANDLE file = broker_attributes(path);
+  FILE_BASIC_INFO info{};
+  if (file) {
+    const BOOL queried = GetFileInformationByHandleEx(file, FileBasicInfo, &info, sizeof(info));
+    CloseHandle(file);
+    if (queried) {
+      SetLastError(ERROR_SUCCESS);
+      return info.FileAttributes;
+    }
+  }
+  SetLastError(ERROR_ACCESS_DENIED);
+  return value;
 }
 
 BOOL WINAPI attributes_ex(LPCWSTR path, GET_FILEEX_INFO_LEVELS level, LPVOID output) {
   const BOOL value = real_attributes_ex(path, level, output);
   if (value || GetLastError() != ERROR_ACCESS_DENIED ||
-      level != GetFileExInfoStandard || !output || !cwd_ancestor(path)) return value;
+      level != GetFileExInfoStandard || !output) return value;
   auto* data = static_cast<WIN32_FILE_ATTRIBUTE_DATA*>(output);
+  if (!cwd_ancestor(path)) {
+    HANDLE file = broker_attributes(path);
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (file) {
+      const BOOL queried = GetFileInformationByHandle(file, &info);
+      CloseHandle(file);
+      if (queried) {
+        *data = {info.dwFileAttributes, info.ftCreationTime, info.ftLastAccessTime,
+                 info.ftLastWriteTime, info.nFileSizeHigh, info.nFileSizeLow};
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+      }
+    }
+    SetLastError(ERROR_ACCESS_DENIED);
+    return FALSE;
+  }
   *data = {};
   data->dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
   SetLastError(ERROR_SUCCESS);
@@ -142,6 +302,8 @@ NTSTATUS NTAPI create(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES att
                                       flags, share, disposition, options, ea, length);
   if (result == static_cast<NTSTATUS>(0xc0000022u) &&
       metadata_ancestor(attributes, access, handle, io)) return 0;
+  if (result == static_cast<NTSTATUS>(0xc0000022u) && disposition == FILE_OPEN &&
+      !length && broker_read(attributes, access, share, options, handle, io)) return 0;
   return result;
 }
 
@@ -153,6 +315,8 @@ NTSTATUS NTAPI open(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES attri
   const NTSTATUS result = real_open(handle, access, attributes, io, share, options);
   if (result == static_cast<NTSTATUS>(0xc0000022u) &&
       metadata_ancestor(attributes, access, handle, io)) return 0;
+  if (result == static_cast<NTSTATUS>(0xc0000022u) &&
+      broker_read(attributes, access, share, options, handle, io)) return 0;
   return result;
 }
 
@@ -232,6 +396,18 @@ BOOL WINAPI spawn(LPCWSTR app, LPWSTR command, LPSECURITY_ATTRIBUTES process_att
   handles.workspace_volume = workspace_volume;
   handles.workspace_drive = workspace_drive;
   handles.ancestor_count = ancestor_count;
+  for (const auto& entry : {std::pair{read_broker, &handles.read_broker},
+                            std::pair{broker_mutex, &handles.broker_mutex}}) {
+    if (entry.first && !DuplicateHandle(GetCurrentProcess(), entry.first,
+          process->hProcess, entry.second, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      TerminateProcess(process->hProcess, 125);
+      WaitForSingleObject(process->hProcess, 5000);
+      CloseHandle(process->hThread);
+      CloseHandle(process->hProcess);
+      *process = {};
+      return FALSE;
+    }
+  }
   for (DWORD i = 0; i < ancestor_count; ++i)
     if (!DuplicateHandle(GetCurrentProcess(), ancestor_handles[i], process->hProcess,
                          &handles.ancestors[i], 0, FALSE, DUPLICATE_SAME_ACCESS)) {
@@ -297,6 +473,8 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (handles && payload_size == sizeof(LatchHandles)) {
     null_handle = handles->null_device;
     ksec_handle = handles->crypto_device;
+    read_broker = handles->read_broker;
+    broker_mutex = handles->broker_mutex;
     workspace_volume = handles->workspace_volume;
     workspace_drive = handles->workspace_drive;
     if (handles->ancestor_count > latch_max_ancestors) return init_failed("ancestor count");
@@ -310,13 +488,18 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
   real_open = reinterpret_cast<decltype(real_open)>(GetProcAddress(ntdll, "NtOpenFile"));
   real_create = reinterpret_cast<decltype(real_create)>(GetProcAddress(ntdll, "NtCreateFile"));
+  real_query_attributes = reinterpret_cast<QueryAttributes>(GetProcAddress(ntdll, "NtQueryAttributesFile"));
+  real_query_full_attributes = reinterpret_cast<QueryFullAttributes>(GetProcAddress(ntdll, "NtQueryFullAttributesFile"));
 
-  if (!real_open || !real_create) return init_failed("native exports");
+  if (!real_open || !real_create || !real_query_attributes || !real_query_full_attributes)
+    return init_failed("native exports");
   if (!DetourRestoreAfterWith()) return init_failed("restore process image");
   if (DetourTransactionBegin()) return init_failed("begin hooks");
   if (DetourUpdateThread(GetCurrentThread())) return init_failed("update thread");
   if (DetourAttach(reinterpret_cast<void**>(&real_create), create)) return init_failed("NtCreateFile hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_open), open)) return init_failed("NtOpenFile hook");
+  if (DetourAttach(reinterpret_cast<void**>(&real_query_attributes), query_attributes)) return init_failed("NtQueryAttributesFile hook");
+  if (DetourAttach(reinterpret_cast<void**>(&real_query_full_attributes), query_full_attributes)) return init_failed("NtQueryFullAttributesFile hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_final_path), final_path)) return init_failed("final path hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_attributes), attributes)) return init_failed("file attributes hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_attributes_ex), attributes_ex)) return init_failed("file attributes ex hook");

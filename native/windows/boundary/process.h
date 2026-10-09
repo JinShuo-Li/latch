@@ -25,5 +25,7 @@ int launch_owner(int argc, wchar_t** argv);
 int execute_target(wchar_t** argv, const Cancellation& cancel,
                    HANDLE restricted, PSID write_sid, PSID sid,
                    LPPROC_THREAD_ATTRIBUTE_LIST attrs, DWORD timeout_ms,
-                   Recovery& recovery);
+                   Recovery& recovery,
+                   const std::vector<std::wstring>& read_roots,
+                   const std::vector<std::wstring>& denied_roots);
 }  // namespace latch

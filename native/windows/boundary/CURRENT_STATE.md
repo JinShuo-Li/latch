@@ -206,3 +206,21 @@ all approved read roots. NULL DACLs are preserved rather than replaced with
 package-only ACEs, which would remove the host's existing rights and obstruct
 recovery. The native adversarial fixture covers mixed-permission aliases and
 retains the existing NULL-DACL denial checks.
+
+## Read broker (2026-10-09)
+
+Read-only workspace execution no longer scans, grants or journals every source
+object. A native broker returns scoped read/enumeration handles after checking
+the caller's job and package SID, exact access mask, pinned path components,
+final path, denied roots and hardlinks. Parent directories remain metadata-only.
+The broker refuses reparses, alternate streams and case-sensitive directories;
+there is no unrestricted command retry. Runtime bootstrap grants remain small
+and recoverable. Writable roots still use the existing ACL grant path.
+
+`read_broker.ps1` passes on the real Windows host with an NTFS fixture that
+explicitly removes the owner's implicit WRITE_DAC while retaining host reads.
+Native enumeration, file reads, descendant cmd.exe listing, source ACL equality,
+parent denial, write/owner/ACL denial, sensitive-tree denial and a hardlink into
+that tree are checked. Host-held fixture handles restore its original ACLs in
+finally. Read-only sensitive paths without package grants need no ACL change;
+package-readable sensitive paths still require exact temporary sealing.

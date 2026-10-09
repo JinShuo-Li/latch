@@ -122,10 +122,10 @@ never by Latch itself.
 
 Windows diagnostic evidence and native Web/status qualification are in
 `docs/WINDOWS_DIAGNOSTICS.md`; keep qualification gaps distinct from proven bugs.
-On Windows, existing workspace objects must permit the current user to change
-their ACLs for temporary AppContainer grants; a readable foreign-owned object
-without `WRITE_DAC` makes execution fail closed. Prefer a focused user-owned
-checkout and avoid local-clone hardlinks to outside roots.
+Windows read-only workspace commands use a native read broker and do not
+require `WRITE_DAC` on ordinary source objects. Writable grants and sensitive
+objects with package-readable ACLs still require recoverable ACL mutation.
+Prefer a focused checkout and avoid local-clone hardlinks to outside roots.
 
 ## Testing philosophy
 
@@ -237,6 +237,10 @@ live home directory is not yet qualified at scale; see
 `native/windows/boundary/CURRENT_STATE.md` before testing one.
 Native ownership is split into runner/token/AppContainer/ACL/recovery/desktop/
 job/process modules; Win32 complexity stays outside the safe Rust kernel.
+`read_broker.{h,cpp}` owns scoped read opens; `broker_protocol.h` is its bounded
+pipe contract. The broker verifies job/package identity, paths, reparses and
+hardlinks before duplicating a read-only handle. DLL hooks only route requests.
+`read_broker.ps1` tests native enumeration without source `WRITE_DAC` or ACL changes.
 `latch-ui/src/activity.rs` owns the shared activity reducer; provider stream
 signals are transient and contain no reasoning text. TUI refreshes every second;
 Web emits five-second connection heartbeats. Silence never proves thinking,

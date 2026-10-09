@@ -74,6 +74,7 @@ mod windows {
             "appcontainer",
             "desktop",
             "job",
+            "read_broker",
         ];
         for name in runner {
             compile(name);
