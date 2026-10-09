@@ -2951,6 +2951,7 @@ fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
         }],
     }]));
     app.output(Output::SetupPaths(crate::SetupPaths {
+        config_exists: true,
         config_path: "/tmp/latch/config.toml".into(),
         state_root: "/tmp/latch".into(),
         source: "new".into(),

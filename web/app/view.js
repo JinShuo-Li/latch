@@ -68,7 +68,7 @@ export function renderSessions() {
 }
 export function renderHeader() {
   const p = profile();
-  $('#model-label').textContent = p.model || 'Choose a model';
+  $('#model-label').textContent = metadata().setup_required ? 'Set up a provider' : p.model || 'Choose a model';
   $('#mode-label').textContent = title(p.mode.toLowerCase());
   $('#mode-button [data-icon]').innerHTML = icon(p.mode==='ASK'?'chat':p.mode==='PLAN'?'list':'hammer');
   $('#effort-button').textContent = p.effort === 'provider_default' || !p.effort ? 'Default effort' : `${title(p.effort)} effort`;
@@ -84,11 +84,11 @@ export function renderComposer() {
   prompt.style.height = 'auto';prompt.style.height = Math.min(prompt.scrollHeight,180)+'px';
   const stopping = current.busy && !prompt.value.trim();
   $('#send-button').innerHTML = icon(stopping?'stop':'arrow-up');
-  $('#send-button').disabled = !state.connected || current.starting || (!current.busy && !prompt.value.trim());
+  $('#send-button').disabled = !state.connected || current.starting || !!metadata().setup_required || (!current.busy && !prompt.value.trim());
   $('#send-button').setAttribute('aria-label',stopping?'Stop response':current.busy?'Add instructions':'Send message');
   prompt.placeholder = current.busy ? 'Add instructions while Latch works…' : 'Ask anything about your workspace…';
-  $('#composer-status').textContent = !state.connected ? 'Reconnecting…' : current.starting ? 'Opening your conversation…' : (current.pending_permissions||[]).length ? 'Waiting for your approval' : current.busy ? 'Working · add instructions at any time' : 'Ready when you are';
-  for (const id of ['new-chat','mode-button','effort-button','model-button']) $(`#${id}`).disabled = current.busy || current.starting;
+  $('#composer-status').textContent = metadata().setup_required ? 'Configure a provider to start' : !state.connected ? 'Reconnecting…' : current.starting ? 'Opening your conversation…' : (current.pending_permissions||[]).length ? 'Waiting for your approval' : current.busy ? 'Working · add instructions at any time' : 'Ready when you are';
+  for (const id of ['new-chat','mode-button','effort-button','model-button']) $(`#${id}`).disabled = current.busy || current.starting || (['effort-button','model-button'].includes(id) && !!metadata().setup_required && metadata().setup_paths?.config_exists===false);
 }
 export function renderPermission() {
   const request = session().pending_permissions?.[0];

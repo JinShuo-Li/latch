@@ -113,18 +113,7 @@ pub async fn run_session(
     output_tx
         .send(Output::SetupProviders(context.setup_providers()))
         .await?;
-    // The resolved storage destination the configuration center will write to.
-    let resolved_paths = latch_kernel::paths::ResolvedPaths::resolve(
-        context.config_path.as_deref(),
-        Some(&context.config.state_dir),
-    );
-    output_tx
-        .send(Output::SetupPaths(latch_ui::SetupPaths {
-            config_path: resolved_paths.config_path.display().to_string(),
-            state_root: resolved_paths.state_root.display().to_string(),
-            source: resolved_paths.source.label().to_owned(),
-        }))
-        .await?;
+    send_setup_paths(&context, &output_tx).await?;
     if info.needs_setup {
         output_tx.send(Output::SetupRequired).await?;
     }
@@ -919,6 +908,23 @@ fn gemini_thinking_capability(
     }
 }
 
+/// Reports the actual configuration destination and its presence.
+async fn send_setup_paths(context: &InferenceContext, tx: &mpsc::Sender<Output>) -> Result<()> {
+    // The resolved storage destination the configuration center will write to.
+    let resolved_paths = latch_kernel::paths::ResolvedPaths::resolve(
+        context.config_path.as_deref(),
+        Some(&context.config.state_dir),
+    );
+    tx.send(Output::SetupPaths(latch_ui::SetupPaths {
+        config_exists: resolved_paths.config_path.is_file(),
+        config_path: resolved_paths.config_path.display().to_string(),
+        state_root: resolved_paths.state_root.display().to_string(),
+        source: resolved_paths.source.label().to_owned(),
+    }))
+    .await?;
+    Ok(())
+}
+
 /// Persists a `/setup` plan and applies the resulting change live.
 async fn apply_setup(
     agent: &mut Agent,
@@ -979,6 +985,23 @@ async fn apply_setup(
     if let SetupPlan::SetCredential { name, credential } = &plan {
         set_provider_credential(context, name, credential)?;
         agent.set_provider_factory(context.provider_factory());
+        let active = agent.profile();
+        if active.provider.as_str() == name {
+            let (profile, descriptor) = context.resolve(&active)?;
+            // Replacing credentials must also replace the live adapter (including
+            // the first-run stub), not just the factory used by child sessions.
+            // A reference to a still-missing environment variable remains editable.
+            if let Ok(provider) = context.build(&profile, &descriptor, agent.session_id) {
+                agent.set_inference_profile(
+                    provider,
+                    profile.clone(),
+                    &descriptor,
+                    context.context.clone(),
+                    "active provider credential updated",
+                )?;
+                send_profile_header(context, tx, workspace, resumed, &profile, &descriptor).await?;
+            }
+        }
         tx.send(Output::SetupProviders(context.setup_providers()))
             .await?;
         tx.send(Output::Notice(format!("{name} credential saved")))
@@ -1045,6 +1068,7 @@ async fn apply_setup(
         }
     }
     let (provider_id, model, effort) = persist_setup(context, &plan)?;
+    send_setup_paths(context, tx).await?;
     // Rebuild the registry from the persisted configuration so resolution
     // matches what the next process will load.
     context.registry = ProviderRegistry::from_config(&context.config)?;

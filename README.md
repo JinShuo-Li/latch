@@ -97,6 +97,10 @@ latch --web --web-port 6007       # choose a local listener port
 latch --web --ssh 6006            # remote listener; prints SSH instructions
 ```
 
+Startup reads `~/.latch/config.toml` (or `--config` / an existing legacy config).
+If setup is needed, the browser opens provider configuration automatically; saved
+credentials, enabled models and reasoning effort are reused on later starts.
+
 The workspace stays fixed to the launch directory. On Windows, start from a
 user-owned NTFS project directory; the embedded sandbox still applies. Conversations, streaming,
 steering, model/settings controls, images, diffs and task details are connected

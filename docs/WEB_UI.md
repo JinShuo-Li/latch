@@ -32,6 +32,32 @@ retained through the browser picker and applied once to the first selected or
 created session. Stop the server with Ctrl+C
 in the launching terminal, or Settings → General → Stop Web server.
 
+## First-run setup
+
+Startup resolves the configuration on the Latch host: `--config <PATH>` when
+specified, otherwise `~/.latch/config.toml` (an existing legacy XDG installation
+continues to be read in place). A default interactive launch without that file
+opens setup even if an OpenAI key is present in the environment. Legacy OpenAI
+fallback values are not shown as a configured browser account. Missing
+credentials also open provider settings. Replacing the active provider’s missing
+credential unlocks the current session immediately when it resolves. Explicit provider/model/effort launch
+overrides retain their existing behavior.
+
+The setup dialog shows the actual configuration destination. Choose a provider,
+enter an API key or reference a host environment variable, then choose a default
+model, enabled models and reasoning effort from the shared catalog. Custom
+endpoints expose base URL, model ID and transport. API keys are stored privately
+on the host; they are never returned to the browser. Saving uses the same
+controller and validation as the TUI. On subsequent starts, Latch loads the saved
+configuration automatically.
+
+Save feedback stays in the dialog. A rejected save retains the form for retry;
+a successful save clears the key and displays the updated provider. Availability
+refreshes update the current model list automatically. Unresolved models open
+the transport editor. Existing provider/model overrides, credentials, defaults,
+pricing and effort mappings remain editable; provider removal requires an
+explicit confirmation.
+
 ## Activity
 
 The left sidebar shows request preparation, waiting for model activity,
@@ -88,8 +114,8 @@ leaves an active turn running; reopening the page recovers its current state.
 - Select Ask/Plan/Work, a configured model and its supported reasoning effort.
   Missing initial configuration opens provider settings. Settings exposes
   providers, credentials, model overrides, safety and approval
-  resolution. Configuration errors appear in the conversation; HTTP acceptance
-  alone is not reported as a successful save.
+  resolution. Configuration results appear in the settings dialog and conversation;
+  HTTP acceptance alone is not reported as a successful save.
 - Review pending approvals including the tool, complete arguments, reason and
   capabilities. Allow once/Deny resolve the kernel's pending request. A decision
   for an already resolved request is rejected.
@@ -111,7 +137,7 @@ transient stream deltas and UI notices are not durable session history.
 
 ## Transport and trust
 
-The Linux-only adapter is `crates/latch-cli/src/web/`: `mod.rs` owns startup and
+The Linux/Windows adapter is `crates/latch-cli/src/web/`: `mod.rs` owns startup and
 host lifetime, `actor.rs` serializes actions/session ownership, `http.rs` owns
 routes/authentication/SSE, and `state.rs` maintains a disposable projection.
 `web/app/` contains the production assets; `web/prototype/` remains a separate
@@ -162,9 +188,20 @@ The Linux real-binary tests use an isolated loopback mock provider and state
 store, covering authentication/origin/Host checks, forwarded authority,
 embedded assets, command retries, durable resume, configuration errors,
 approvals, busy session switches, image validation/media boundaries,
-steering/reconnect, cancellation, shutdown and argument conflicts. No live
-provider credential is needed. Preserve the existing Windows CLI/TUI CI;
-there is no Windows Web server or dedicated Windows Web qualification.
+steering/reconnect, cancellation, shutdown, default-path setup/restart and argument
+conflicts. No live provider credential is needed. Native Windows qualification
+and its remaining gaps are tracked in [Windows diagnostics](WINDOWS_DIAGNOSTICS.md).
+
+Optional frontend regression checks use production assets with an isolated
+transport fixture in Chromium (Node 22+; no npm packages or provider calls):
+
+```sh
+node scripts/test_web_setup.mjs /path/to/chromium
+```
+
+This checks first-run and configured startup, credential modes, rejected/pending
+saves, model selection, live refresh, preserved drafts, custom models and mobile
+layout. Node and Chromium are development-only dependencies.
 
 ## TUI control parity
 

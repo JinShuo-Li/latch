@@ -612,7 +612,23 @@ pub async fn build_agent(
         overridden = true;
     }
     let (profile, descriptor) = configuration(context.resolve(&requested))?;
-    let (provider, needs_setup) = match context.build(&profile, &descriptor, session_id) {
+    // An absent config must not silently turn the legacy OpenAI defaults (or
+    // an ambient credential) into a configured interactive installation.
+    // Explicit profile overrides retain their existing launch semantics.
+    let config_path = latch_kernel::paths::ResolvedPaths::resolve(
+        overrides.config_path.as_deref(),
+        Some(&config.state_dir),
+    )
+    .config_path;
+    let provider_result = if interactive && !overridden && !config_path.is_file() {
+        Err(anyhow::anyhow!(
+            "No configuration at {}. Run /setup to connect a provider.",
+            config_path.display()
+        ))
+    } else {
+        context.build(&profile, &descriptor, session_id)
+    };
+    let (provider, needs_setup) = match provider_result {
         Ok(provider) => (provider, false),
         Err(error) if interactive => {
             // First-run UX: rather than failing before the TUI can offer

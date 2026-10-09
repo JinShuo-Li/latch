@@ -125,6 +125,8 @@ pub enum Output {
 /// and a symbolic source label only; no credential material.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupPaths {
+    /// Whether the resolved configuration file exists on the Latch host.
+    pub config_exists: bool,
     pub config_path: String,
     pub state_root: String,
     pub source: String,

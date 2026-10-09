@@ -29,12 +29,15 @@ impl Web {
         Self::start_with_args(f, &[]).await
     }
     async fn start_with_args(f: &Fixture, extra: &[&str]) -> Self {
+        Self::start_command(f, extra, latch_command(f)).await
+    }
+    async fn start_command(f: &Fixture, extra: &[&str], mut command: Command) -> Self {
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
             .unwrap()
             .port();
-        let mut child = latch_command(f)
+        let mut child = command
             .current_dir(&f.workspace)
             .env_remove("LATCH_WEB_TEST_MISSING_KEY")
             .args(["--web", "--ssh", &port.to_string()])
@@ -525,6 +528,82 @@ fn web_launch_flags_are_unambiguous() {
     }
 }
 
+// Unix home lookup can be isolated with HOME; Windows known-folder APIs cannot.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn missing_default_config_requires_setup_and_saved_config_is_reused() {
+    let f = fixture(vec![Turn::Text("unused")], None, "standard");
+    let command = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_latch"));
+        command
+            .env("HOME", &f.root)
+            .env("USERPROFILE", &f.root)
+            .env("XDG_CONFIG_HOME", f.root.join("xdg-config"))
+            .env("XDG_STATE_HOME", f.root.join("xdg-state"))
+            // An ambient key must not bypass first-run setup with OpenAI defaults.
+            .env("OPENAI_API_KEY", "ambient-test-key")
+            .env("MOCK_API_KEY", "test-secret-key")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    };
+    let web = Web::start_command(&f, &[], command()).await;
+    let initial = web.ready().await;
+    assert_eq!(initial["state"]["metadata"]["setup_required"], true);
+    let paths = &initial["state"]["metadata"]["setup_paths"];
+    assert_eq!(paths["config_exists"], false);
+    let config_path = f.root.join(".latch/config.toml");
+    assert_eq!(
+        Path::new(paths["config_path"].as_str().unwrap()),
+        config_path
+    );
+    let id = initial["state"]["session_id"].as_str().unwrap();
+    let plan = json!({"Apply":{"name":"real-provider","provider_kind":"openai-compatible","base_url":f.mock.base_url,"credential":{"Env":"MOCK_API_KEY"},"model":"mock-model","enabled_models":["mock-model"],"custom_model_display_name":"Mock","custom_transport":"chat_completions","effort":"provider_default"}});
+    assert_eq!(
+        web.post(
+            &format!("/api/sessions/{id}/commands"),
+            Web::command(&initial, json!({"type":"setup_apply","data":plan}))
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let snapshot = web.snapshot().await;
+        if snapshot["state"]["metadata"]["header"]["provider_id"] == "real-provider" {
+            assert_eq!(
+                snapshot["state"]["metadata"]["setup_paths"]["config_exists"],
+                true
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline, "setup failed: {snapshot}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(config_path.is_file());
+    let saved = latch_kernel::Config::load(Some(&config_path)).unwrap();
+    assert_eq!(saved.providers.len(), 1);
+    assert!(saved.providers.contains_key("real-provider"));
+    drop(web);
+    let restarted = Web::start_command(&f, &[], command()).await;
+    let snapshot = restarted.ready().await;
+    assert!(
+        snapshot["state"]["metadata"]
+            .get("setup_required")
+            .is_none()
+    );
+    assert_eq!(
+        snapshot["state"]["metadata"]["header"]["provider_id"],
+        "real-provider"
+    );
+    assert!(
+        f.mock.requests().is_empty(),
+        "setup must not call a provider"
+    );
+}
+
 #[tokio::test]
 async fn provider_setup_unlocks_a_missing_credential_session() {
     let f = fixture(vec![Turn::Text("Configured response")], None, "standard");
@@ -537,7 +616,10 @@ async fn provider_setup_unlocks_a_missing_credential_session() {
     assert_eq!(initial["state"]["metadata"]["setup_required"], true);
     let id = initial["state"]["session_id"].as_str().unwrap();
     let path = format!("/api/sessions/{id}/commands");
-    let plan = json!({"Apply":{"name":"configured","provider_kind":"openai-compatible","base_url":f.mock.base_url,"credential":{"Env":"MOCK_API_KEY"},"model":"mock-model","enabled_models":null,"custom_model_display_name":"Mock","custom_transport":"chat_completions","effort":"provider_default"}});
+    let provider = initial["state"]["metadata"]["header"]["provider_id"]
+        .as_str()
+        .unwrap();
+    let plan = json!({"SetCredential":{"name":provider,"credential":{"Env":"MOCK_API_KEY"}}});
     assert_eq!(
         web.post(
             &path,
@@ -550,7 +632,7 @@ async fn provider_setup_unlocks_a_missing_credential_session() {
     let deadline = Instant::now() + Duration::from_secs(8);
     let configured = loop {
         let s = web.snapshot().await;
-        if s["state"]["metadata"]["header"]["provider_id"] == "configured" {
+        if s["state"]["metadata"].get("setup_required").is_none() {
             break s;
         }
         assert!(Instant::now() < deadline, "setup failed: {s}");

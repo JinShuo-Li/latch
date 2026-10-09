@@ -79,6 +79,17 @@ migration marker and renames legacy config and secrets to backup names so
 deleting the new config cannot reactivate the old installation.
 `latch doctor` reads the same `ResolvedPaths` result and reports every path,
 its source, and migration provenance. It prints credential references only.
+Default interactive launches require a configuration file at the resolved
+location; an ambient OpenAI credential does not turn legacy fallback defaults
+into a configured installation. Missing files or credentials trigger setup;
+explicit profile overrides retain their launch behavior. `SetupPaths` reports
+the resolved location and whether the file exists. The Web adapter hides
+unpersisted fallback provider rows during onboarding and uses the shared setup
+catalog, persistence and validation for all saves. Save results remain visible
+in the dialog, and provider/model discovery updates refresh the current page.
+Updating the active provider’s credential rebuilds its live adapter and refreshes
+the profile header when the new credential resolves; this also unlocks the
+first-run stub without requiring a second model selection.
 Setup saves validate the proposed provider profile before writing. Config and
 secrets are staged in their destination directories and synced; a new secret
 is committed before config publishes its `file:<id>` reference. A failed

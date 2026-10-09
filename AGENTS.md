@@ -168,6 +168,10 @@ canonical launch directory. HTTP/SSE and browser projections never own durable
 truth, execution or approvals. See `docs/WEB_UI.md`; the original agreed plan
 is `docs/WEB_UI_PLAN.md`. Linux and Windows Web transport tests reuse the CLI's isolated
 mock provider: `cargo test -p latch-cli --test cli web_transport --locked`.
+Optional browser setup regressions: `node scripts/test_web_setup.mjs <chromium>`
+(Node 22+ and Chromium; isolated transport fixtures, no provider calls; development
+only). Default interactive startup requires a resolved config file or explicit
+profile overrides; missing config opens setup, never a displayed fallback account.
 Run Windows Web transport tests natively with `-- --test-threads=1`; use a
 user-owned NTFS fixture and preserve Windows CLI/TUI behavior and default CI.
 The reviewed English, dark-default example remains separate in `web/prototype/`:
