@@ -197,3 +197,12 @@ install grant was removed because it did not resolve the failure. For future
 malformed frames, the parser reports a bounded header shape (line count and
 first code points, without header text). Physical power-loss recovery and
 hostile rename/reparse/hardlink races remain open.
+
+## ACL grant corrections (2026-10-09)
+
+Writable hardlink validation uses only writable roots; an alias into a
+read-only root is refused before granting either identity. Read grants retain
+all approved read roots. NULL DACLs are preserved rather than replaced with
+package-only ACEs, which would remove the host's existing rights and obstruct
+recovery. The native adversarial fixture covers mixed-permission aliases and
+retains the existing NULL-DACL denial checks.

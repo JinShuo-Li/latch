@@ -66,13 +66,21 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     std::vector<std::wstring> allowed_roots = grant_roots;
     allowed_roots.insert(allowed_roots.end(), read_roots.begin(),
                          read_roots.end());
+    std::vector<std::wstring> writable_roots = grant_roots;
+    if (!workspace_writable) writable_roots.erase(writable_roots.begin());
     std::vector<GrantPlan> grant_plans;
     grant_plans.reserve(allowed_roots.size());
     {
       TimingScope timer(boundary_timing().preflight_scan);
       for (const auto& root : allowed_roots) {
         grant_plans.emplace_back();
-        validate_grant_tree(root, allowed_roots, grant_plans.back(), cancel,
+        const bool writable = std::any_of(
+            writable_roots.begin(), writable_roots.end(),
+            [&](const std::wstring& value) {
+              return _wcsicmp(value.c_str(), root.c_str()) == 0;
+            });
+        validate_grant_tree(root, writable ? writable_roots : allowed_roots,
+                            grant_plans.back(), cancel,
                             recovery);
       }
     }
@@ -81,7 +89,9 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     for (size_t index = 0; index < grant_roots.size(); ++index) {
       const DWORD rights =
           read_rights | ((index == 0 && !workspace_writable) ? 0 : write_rights);
-      grants.add_plan(grant_plans[index], allowed_roots, write_sid.value,
+      grants.add_plan(grant_plans[index],
+                      (index != 0 || workspace_writable) ? writable_roots : allowed_roots,
+                      write_sid.value,
                       rights);
     }
     for (size_t index = 0; index < read_roots.size(); ++index)

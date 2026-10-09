@@ -201,6 +201,9 @@ bool prepare_acl_pair(PinnedObject& pinned, PSID first_sid, PSID second_sid,
       nullptr, nullptr, &old_acl, nullptr, &descriptor);
   Local descriptor_owner(descriptor);
   if (code != ERROR_SUCCESS) fail(L"read ACL for grant", code);
+  // A NULL DACL already allows access. Replacing it with package-only ACEs
+  // removes host rights and can make identity-based crash recovery impossible.
+  if (!old_acl) return false;
   EXPLICIT_ACCESSW entries[2]{};
   PSID sids[2] = {first_sid, second_sid};
   const size_t entry_count = second_sid ? 2 : 1;
