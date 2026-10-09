@@ -132,7 +132,9 @@ Windows diagnostic evidence and native Web/status qualification are in
 `docs/WINDOWS_DIAGNOSTICS.md`; keep qualification gaps distinct from proven bugs.
 Windows workspace reads and writes use authenticated native file brokers and
 do not require `WRITE_DAC` on ordinary source objects. Runtime bootstrap grants
-and scratch ACLs remain journaled; package-readable sensitive objects fail closed.
+and scratch ACLs remain journaled; package-readable sensitive objects require
+recoverable sealing or fail closed. Sensitive ACL audits must include broad
+Everyone/Users/authenticated principals as well as package grants.
 Prefer a focused checkout and avoid local-clone hardlinks to outside roots.
 
 ## Testing philosophy

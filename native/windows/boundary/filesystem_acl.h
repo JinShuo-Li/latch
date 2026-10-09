@@ -50,5 +50,5 @@ void validate_grant_tree(const std::filesystem::path& path,
 void protect_sensitive_tree(const std::filesystem::path& input,
                             std::set<std::wstring>& visited,
                             const Cancellation& cancel, Recovery& recovery,
-                            bool audit_only = false);
+                            bool audit_only = false, PSID package_sid = nullptr);
 }  // namespace latch

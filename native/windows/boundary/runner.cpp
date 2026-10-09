@@ -176,7 +176,7 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
         // All write roots were tracked and granted before option processing.
       } else if (option == L"--deny") {
         const bool audit_only = mediated_writes || writable_roots.empty();
-        protect_sensitive_tree(argv[i], protected_paths, cancel, recovery, audit_only);
+        protect_sensitive_tree(argv[i], protected_paths, cancel, recovery, audit_only, sid);
         if (!audit_only) {
           grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
           write_grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);

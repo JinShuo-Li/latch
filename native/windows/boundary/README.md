@@ -233,7 +233,7 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
   Windows installation. The runner does not cache grants across commands.
 - **Host ACLs:** production source access needs ordinary host read/modify rights,
   without WRITE_DAC. Small runtime/bootstrap and scratch grants remain journaled.
-  Package-readable sensitive paths fail closed. See `CURRENT_STATE.md` for
+  Package-readable sensitive paths require sealing or fail closed. See `CURRENT_STATE.md` for
   measured production-broker results and historical ACL-backend limitations.
 - **Integration:** CLI host-side Git inspection is read-only preflight;
   command execution itself enters the boundary.

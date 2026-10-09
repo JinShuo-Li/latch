@@ -881,7 +881,10 @@ through `--filesystem broker`; ordinary source trees receive no recursive grants
 The broker opens relative to pinned parents, validates root identities and every
 hardlink, and transfers only requested data/delete rights. Rename/link operations
 remain host-mediated; directory namespace, ACL and owner capabilities are withheld.
-Scratch and runtime bootstrap grants retain journaled recovery. PowerShell 7 is resolved from a native PATH installation, its
+Scratch and runtime bootstrap grants retain journaled recovery. Sensitive ACL
+audits also detect broad Everyone/Users/authenticated permissions, not just
+package SIDs; they journal a deny for this exact package and remove package
+allow routes before launch, or fail closed if sealing cannot be performed. PowerShell 7 is resolved from a native PATH installation, its
 installed module path, or the standard Program Files location; Store launcher
 aliases are not copied. Its complete runtime is staged under a source/managed-host
 identity, and only staged modules enter `PSModulePath`. Fixed headless PowerShell
