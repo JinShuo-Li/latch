@@ -119,12 +119,12 @@ try {
     'invalid checksum' | Set-Content $manifest
     Run-Case 'malformed checksum' @{} 'Missing or invalid checksum'
     Remove-Item $manifest
-    Run-Case 'missing checksum' @{} 'Cannot find path'
+    Run-Case 'missing checksum' @{} 'SHA256SUMS'
     New-Fixture 'other.exe'
     Run-Case 'missing binary' @{} 'exactly one latch.exe'
     New-Fixture
     Remove-Item (Join-Path $root 'latch-x86_64-pc-windows-msvc.zip')
-    Run-Case 'missing release asset' @{} 'Cannot find path'
+    Run-Case 'missing release asset' @{} 'latch-x86_64-pc-windows-msvc.zip'
     Write-Host 'All Windows installer checks passed.'
 } finally {
     $env:PROCESSOR_ARCHITECTURE = $originalArch
