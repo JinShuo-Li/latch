@@ -605,6 +605,35 @@ async fn missing_default_config_requires_setup_and_saved_config_is_reused() {
 }
 
 #[tokio::test]
+async fn session_list_remains_read_only_while_a_writer_holds_the_database() {
+    let f = fixture(vec![Turn::Text("unused")], None, "standard");
+    let web = Web::start(&f).await;
+    let initial = web.ready().await;
+    let database = f.root.join("state/latch.sqlite3");
+    let writer = rusqlite::Connection::open(database).unwrap();
+    // WAL readers must keep working while another connection owns a write
+    // transaction. Reopening EventStore here would rebuild group projections
+    // and try to acquire the same writer lock.
+    writer.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    for _ in 0..3 {
+        let response = tokio::time::timeout(Duration::from_secs(2), web.get("/api/sessions"))
+            .await
+            .expect("listing sessions tried to acquire the writer lock");
+        assert_eq!(response.status(), StatusCode::OK);
+        let listed: Value = response.json().await.unwrap();
+        assert!(
+            listed["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|session| { session["id"] == initial["state"]["session_id"] })
+        );
+    }
+    writer.execute_batch("ROLLBACK;").unwrap();
+    assert!(f.mock.requests().is_empty());
+}
+
+#[tokio::test]
 async fn provider_setup_unlocks_a_missing_credential_session() {
     let f = fixture(vec![Turn::Text("Configured response")], None, "standard");
     let config = std::fs::read_to_string(&f.config_path)

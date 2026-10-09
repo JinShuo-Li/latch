@@ -33,6 +33,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 futures.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile.workspace = true
 
 [lints]

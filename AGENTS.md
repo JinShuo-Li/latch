@@ -161,7 +161,9 @@ Five crates: `latch-protocol` (durable event/model schema shared by all),
 The shared interactive controller is `latch-cli/src/cli/interactive.rs`;
 terminal rendering stays in the TUI, persistence and execution stay in the kernel.
 The Linux/Windows Web adapter is `latch-cli/src/web/{mod,actor,http,state}.rs`; production
-assets in `web/app/` are embedded. `latch --web` binds loopback port 6006;
+assets in `web/app/` are embedded. The Web host reuses its `EventStore` for
+listing/selection; HTTP reads must never reopen/migrate the store or rebuild
+group projections. `latch --web` binds loopback port 6006;
 `--web-port <PORT>` selects a local port and `--ssh <REMOTE_WEB_PORT>` suppresses
 browser launch and prints SSH forwarding instructions. The workspace is the
 canonical launch directory. HTTP/SSE and browser projections never own durable

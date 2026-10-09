@@ -72,10 +72,7 @@ pub async fn run(
                     ))
                 } else {
                     if let Some(selected) = selected {
-                        match host
-                            .database()
-                            .and_then(|s| s.resolve_session(&selected.to_string()))
-                        {
+                        match host.database().resolve_session(&selected.to_string()) {
                             Ok(summary)
                                 if std::path::Path::new(&summary.workspace) == host.0.workspace => {
                             }

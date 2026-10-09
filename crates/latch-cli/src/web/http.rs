@@ -199,7 +199,7 @@ async fn bootstrap(State(host): State<Host>) -> Json<Value> {
 async fn sessions(State(host): State<Host>) -> Result<Json<Value>, ApiError> {
     let sessions = host
         .database()
-        .and_then(|s| s.list_sessions(Some(&host.0.workspace)))
+        .list_sessions(Some(&host.0.workspace))
         .map_err(ApiError::runtime)?;
     Ok(Json(
         json!({"sessions":sessions.into_iter().map(|s|json!({"id":s.id,"workspace":s.workspace,"created_at":s.created_at,"updated_at":s.updated_at,"mode":s.mode,"model":s.model,"completion":s.completion,"prompt_preview":s.prompt_preview,"event_count":s.event_count})).collect::<Vec<_>>()}),

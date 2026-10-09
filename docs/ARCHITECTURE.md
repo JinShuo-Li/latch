@@ -16,7 +16,10 @@ compatibility. Durable protocol and provider serialization remain unchanged.
 
 The Linux/Windows Web adapter in `latch-cli/src/web/` embeds `web/app/` assets and supplies
 HTTP input/output channels to the same controller. Its actor owns one active
-session in the canonical launch workspace; its browser projection uses the
+session in the canonical launch workspace. The host opens one reusable
+`EventStore` for session listing and selection; HTTP reads never reopen the
+store or trigger its write-capable startup migration/projection rebuild. The
+active agent retains its kernel-owned store. Its browser projection uses the
 shared `latch-ui` transcript, diff, sidebar, agent and group reducers. SSE
 reconnects reconstruct current state without owning history or cancelling runs.
 Authentication, same-origin checks, command receipts and media routes remain

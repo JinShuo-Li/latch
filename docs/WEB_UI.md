@@ -140,6 +140,9 @@ transient stream deltas and UI notices are not durable session history.
 The Linux/Windows adapter is `crates/latch-cli/src/web/`: `mod.rs` owns startup and
 host lifetime, `actor.rs` serializes actions/session ownership, `http.rs` owns
 routes/authentication/SSE, and `state.rs` maintains a disposable projection.
+The host reuses one database connection for session listing and selection;
+reading the session list does not reopen the database or rebuild group
+projections alongside an active writer.
 `web/app/` contains the production assets; `web/prototype/` remains a separate
 fixture-based design example. `latch-ui` owns shared contracts, catalogs and
 semantic reducers; `cli/interactive.rs` owns the shared session controller.

@@ -48,6 +48,7 @@ struct HostInner {
     workspace: PathBuf,
     config_path: Option<PathBuf>,
     state_dir: PathBuf,
+    database: EventStore,
     view: Mutex<state::View>,
     changes: broadcast::Sender<u64>,
     actions: mpsc::Sender<actor::Request>,
@@ -65,8 +66,8 @@ impl Host {
             .await
             .map_err(|_| ApiError::conflict("Web session controller stopped"))?
     }
-    fn database(&self) -> anyhow::Result<EventStore> {
-        EventStore::open(&ResolvedPaths::for_state(&self.0.state_dir).database_path)
+    fn database(&self) -> &EventStore {
+        &self.0.database
     }
     async fn changed(&self) {
         let mut view = self.0.view.lock().await;
@@ -94,6 +95,9 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let (actions, receive) = mpsc::channel(32);
     let (changes, _) = broadcast::channel(256);
+    // Open and migrate once for the host. Read-only HTTP requests must not
+    // reopen EventStore, whose startup rebuild writes the group projections.
+    let database = EventStore::open(&ResolvedPaths::for_state(&config.state_dir).database_path)?;
     let host = Host(Arc::new(HostInner {
         token: token.clone(),
         cookie: format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
@@ -101,13 +105,14 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         workspace,
         config_path: args.config.clone(),
         state_dir: config.state_dir.clone(),
+        database,
         view: Mutex::new(state::View::default()),
         changes,
         actions,
         shutdown: CancellationToken::new(),
     }));
     let selected = if args.resume && (args.session.is_some() || args.latest) {
-        let store = host.database()?;
+        let store = host.database();
         let selected = if let Some(selector) = &args.session {
             store.resolve_session(selector)?
         } else {

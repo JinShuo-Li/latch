@@ -1204,6 +1204,7 @@ dependencies = [
  "latch-tui",
  "latch-ui",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
