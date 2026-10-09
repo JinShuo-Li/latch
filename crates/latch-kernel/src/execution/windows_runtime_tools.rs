@@ -9,9 +9,11 @@ pub(super) struct StagedTools {
     pub python: Option<PathBuf>,
     pub node: Option<PathBuf>,
     pub rg: Option<PathBuf>,
+    pub pwsh: Option<PathBuf>,
     python_source: Option<PathBuf>,
     node_source: Option<PathBuf>,
     rg_source: Option<PathBuf>,
+    pwsh_source: Option<PathBuf>,
 }
 
 static STAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -21,6 +23,7 @@ impl StagedTools {
         let python_source = on_path("python.exe");
         let node_source = on_path("node.exe");
         let rg_source = on_path("rg.exe").and_then(|path| standalone_ripgrep(&path));
+        let pwsh_source = powershell_source();
         Self {
             python: python_source
                 .as_ref()
@@ -29,9 +32,22 @@ impl StagedTools {
                 .as_ref()
                 .map(|_| root.join("tool-node/node.exe")),
             rg: rg_source.as_ref().map(|_| root.join("tool-rg/rg.exe")),
+            pwsh: pwsh_source.as_ref().map(|source| {
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                hasher.update(source.to_string_lossy().as_bytes());
+                if let Some(parent) = source.parent()
+                    && let Ok(host) = std::fs::read(parent.join("pwsh.dll"))
+                {
+                    hasher.update(host);
+                }
+                let digest = hasher.finalize();
+                root.join(format!("tool-pwsh-{:x}/pwsh.exe", digest))
+            }),
             python_source,
             node_source,
             rg_source,
+            pwsh_source,
         }
     }
 
@@ -41,6 +57,9 @@ impl StagedTools {
                 self.python.clone().context("Python is not installed")?,
             )),
             "node" | "node.exe" => Ok(Some(self.node.clone().context("Node is not installed")?)),
+            "pwsh" | "pwsh.exe" => Ok(Some(self.pwsh.clone().context(
+                "PowerShell 7 is not installed; install a native PowerShell 7 runtime",
+            )?)),
             "rg" | "rg.exe" => Ok(Some(self.rg.clone().context(
                 "ripgrep is not installed or its package lacks a standalone rg.exe",
             )?)),
@@ -58,6 +77,9 @@ impl StagedTools {
         }
         if let Some(rg) = &self.rg {
             paths.push(rg.parent().context("ripgrep runtime")?.to_path_buf());
+        }
+        if let Some(pwsh) = &self.pwsh {
+            paths.push(pwsh.parent().context("PowerShell runtime")?.to_path_buf());
         }
         Ok(paths)
     }
@@ -126,6 +148,21 @@ impl StagedTools {
         args: &str,
     ) -> Result<()> {
         let invocation = format!("{} {}", program.display(), args).to_ascii_lowercase();
+        if let Some(pwsh) = &self.pwsh
+            && (program == pwsh
+                || invocation
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|word| word == "pwsh"))
+        {
+            self.ensure_pwsh()?;
+            let root = pwsh.parent().context("PowerShell runtime")?;
+            process
+                .arg("--read-root")
+                .arg(root)
+                .arg("--deny-write")
+                .arg(root)
+                .env("PSModulePath", root.join("Modules"));
+        }
         if let Some(python) = &self.python
             && (program == python
                 || invocation
@@ -180,6 +217,36 @@ impl StagedTools {
             .lock()
             .map_err(|_| anyhow::anyhow!("tool staging lock poisoned"))?;
         stage_file(source, target)
+    }
+
+    fn ensure_pwsh(&self) -> Result<()> {
+        let source = self.pwsh_source.as_ref().context("PowerShell source")?;
+        let root = self
+            .pwsh
+            .as_ref()
+            .context("PowerShell target")?
+            .parent()
+            .context("PowerShell parent")?;
+        let _lock = STAGE_LOCK
+            .lock()
+            .map_err(|_| anyhow::anyhow!("tool staging lock poisoned"))?;
+        // Include the managed host identity so an in-place runtime upgrade
+        // cannot reuse the completion marker for an older staged installation.
+        use sha2::{Digest, Sha256};
+        let source_root = source.parent().context("PowerShell source parent")?;
+        let fingerprint = format!(
+            "{:x}",
+            Sha256::digest(std::fs::read(source_root.join("pwsh.dll"))?)
+        );
+        if std::fs::read_to_string(root.join(".complete"))
+            .ok()
+            .as_deref()
+            == Some(&fingerprint)
+        {
+            return Ok(());
+        }
+        stage_tree(source_root, root)?;
+        materialize(root, ".complete", fingerprint.as_bytes())
     }
 
     pub fn ensure_python(&self) -> Result<()> {
@@ -281,6 +348,25 @@ fn on_path(name: &str) -> Option<PathBuf> {
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .map(|directory| directory.join(name))
         .find(|path| path.is_file() && !path.to_string_lossy().contains("WindowsApps"))
+}
+
+fn powershell_source() -> Option<PathBuf> {
+    let mut candidates = on_path("pwsh.exe").into_iter().collect::<Vec<_>>();
+    if let Some(modules) = std::env::var_os("PSModulePath") {
+        candidates.extend(
+            std::env::split_paths(&modules)
+                .filter_map(|directory| directory.parent().map(|parent| parent.join("pwsh.exe"))),
+        );
+    }
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        candidates.push(PathBuf::from(program_files).join("PowerShell/7/pwsh.exe"));
+    }
+    candidates.into_iter().find(|path| {
+        path.is_file()
+            && path
+                .parent()
+                .is_some_and(|parent| parent.join("pwsh.dll").is_file())
+    })
 }
 
 // Chocolatey exposes a launcher shim on PATH. A restricted AppContainer cannot

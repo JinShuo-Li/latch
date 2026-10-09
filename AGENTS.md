@@ -214,8 +214,10 @@ recovery, and a Job Object. It has no unsandboxed or local-account fallback.
 The native runner is built by
 `crates/latch-kernel/build.rs` on Windows (x64 MSVC C++ Build Tools + Windows
 SDK required). Its Rust adapter is `execution/windows_runtime.rs`; fixed
-program aliases, Rust toolchain grants, and read-only Python/Node/ripgrep
-staging belong to `execution/windows_runtime_tools.rs`.
+program aliases, Rust toolchain grants, and read-only Python/Node/ripgrep/PowerShell 7
+staging belong to `execution/windows_runtime_tools.rs`. Fixed headless `pwsh` calls
+default to MTA (explicit apartment flags are preserved); PowerShell 7 is an
+optional prerequisite for PowerShell extensions, not for ordinary commands.
 Default Windows CI runs one production embedded-boundary smoke test; the manual
 workflow runs all native security fixtures and a focused Rust runtime gate.
 The manual Linux job runs the full workspace suite. Windows runtime tests run
