@@ -215,7 +215,8 @@ the caller's job and package SID, exact access mask, pinned path components,
 final path, denied roots and hardlinks. Parent directories remain metadata-only.
 The broker refuses reparses, alternate streams and case-sensitive directories;
 there is no unrestricted command retry. Runtime bootstrap grants remain small
-and recoverable. Writable roots still use the existing ACL grant path.
+and recoverable. The legacy native fixture backend retains the ACL grant path. Production writes
+now use the file broker described below.
 
 `read_broker.ps1` passes on the real Windows host with an NTFS fixture that
 explicitly removes the owner's implicit WRITE_DAC while retaining host reads.
@@ -223,13 +224,12 @@ Native enumeration, file reads, descendant cmd.exe listing, source ACL equality,
 parent denial, write/owner/ACL denial, sensitive-tree denial and a hardlink into
 that tree are checked. Host-held fixture handles restore its original ACLs in
 finally. Read-only sensitive paths without package grants need no ACL change;
-package-readable sensitive paths still require exact temporary sealing.
+package-readable sensitive paths fail closed in the production broker mode.
 
 Read-only runtime preparation now limits ACL changes to the root and immediate
 `.exe`/`.dll`/`.pyd` bootstrap files, with no inheritance. Nested assets are
 opened through the broker. The read-broker fixture includes nested runtime data
-without WRITE_DAC and verifies its exact ACL after shell/Git/CRT probes. Writable
-workspace preparation still uses recursive identity/alias checks and grants.
+without WRITE_DAC and verifies its exact ACL after shell/Git/CRT probes. Workspace writes now use per-operation identity/alias checks instead of grants.
 
 ### Network capability socket transfer (2026-10-09)
 
@@ -241,3 +241,27 @@ firewall are untouched. Real native tests pass TCP client/listener payloads,
 UDP ANSI/Wide entry points, child shells, no-Network/raw/forged-caller denials,
 and listener closure with exact ACL recovery after launcher cancellation.
 Remote private-LAN/proxy/other-IPC qualification remains separate.
+
+### Scoped workspace writes (2026-10-09)
+
+Production Rust calls select `--filesystem broker`. `write_broker.{h,cpp}` opens
+files relative to pinned parent handles, validates root identity and every
+hardlink, and returns only requested data/delete capabilities. Directory
+namespace rights, ACL and owner changes are refused. Rename/link operations
+are mediated separately; POSIX replacement is supported for regular files and
+refused for directories so it cannot bypass pinned policy ancestors. The
+compatibility layer preserves handle inheritance for redirected child output.
+Sensitive paths, Git metadata masks, read-only runtimes and the active package
+profile remain protected. Unsupported paths/reparses fail closed.
+
+Real Windows `write_broker.ps1` passes on source objects without WRITE_DAC,
+including enum/read/write/create/move/delete/mkdir/rmdir and exact unchanged
+source ACLs. Raw NT namespace calls, outside destinations, ACL/owner changes,
+sensitive hardlinks and forged callers are denied. `developer.ps1 -Mediated`
+passes Git init/commit/worktrees, ripgrep, cmd pipelines/redirects, Node/npm and
+Python. `scale.ps1 -Mediated` passes 4,129 initial objects, 512 concurrent host
+files and 256 sandbox mutations. Native preparation was 0.23 ms, grant walk
+7.13 ms, journal 60.44 ms, ACL application 0.51 ms and rollback 51.00 ms; only
+5 bootstrap/scratch ACL mutations remained, independent of source object count.
+This excludes fixture setup, command duration and Rust Git-marker discovery.
+It does not qualify a whole live home, physical power loss or hostile host races.

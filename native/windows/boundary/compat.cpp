@@ -29,6 +29,8 @@ struct NetworkOpenInformation {
 };
 using QueryFullAttributes = NTSTATUS (NTAPI*)(POBJECT_ATTRIBUTES, NetworkOpenInformation*);
 QueryFullAttributes real_query_full_attributes = nullptr;
+using SetInformation = NTSTATUS(NTAPI*)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+SetInformation real_set_information = nullptr;
 auto real_process = CreateProcessW;
 auto real_final_path = GetFinalPathNameByHandleW;
 auto real_attributes = GetFileAttributesW;
@@ -129,11 +131,36 @@ bool duplicate(HANDLE source, PHANDLE target, PIO_STATUS_BLOCK status,
   return true;
 }
 
+bool mutates(ACCESS_MASK access, ULONG disposition, ULONG options) {
+  constexpr ACCESS_MASK mask = GENERIC_WRITE | GENERIC_ALL | DELETE |
+      FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
+      FILE_DELETE_CHILD | WRITE_DAC | WRITE_OWNER | MAXIMUM_ALLOWED;
+  return (access & mask) || disposition != FILE_OPEN || (options & FILE_DELETE_ON_CLOSE);
+}
+
+NTSTATUS broker_error(DWORD error) {
+  switch (error) {
+    case ERROR_FILE_NOT_FOUND: return static_cast<NTSTATUS>(0xc0000034u);
+    case ERROR_PATH_NOT_FOUND: return static_cast<NTSTATUS>(0xc000003au);
+    case ERROR_FILE_EXISTS:
+    case ERROR_ALREADY_EXISTS: return static_cast<NTSTATUS>(0xc0000035u);
+    case ERROR_SHARING_VIOLATION: return static_cast<NTSTATUS>(0xc0000043u);
+    case ERROR_DIR_NOT_EMPTY: return static_cast<NTSTATUS>(0xc0000101u);
+    case ERROR_DIRECTORY: return static_cast<NTSTATUS>(0xc0000103u);
+    case ERROR_DISK_FULL: return static_cast<NTSTATUS>(0xc000007fu);
+    default: return static_cast<NTSTATUS>(0xc0000022u);
+  }
+}
+
 bool broker_read(POBJECT_ATTRIBUTES attributes, ACCESS_MASK access, ULONG share,
-                 ULONG options, PHANDLE handle, PIO_STATUS_BLOCK status) {
+                 ULONG options, PHANDLE handle, PIO_STATUS_BLOCK status,
+                 ULONG disposition = FILE_OPEN, ULONG file_attributes = 0,
+                 PLARGE_INTEGER allocation_size = nullptr,
+                 NTSTATUS* failure = nullptr) {
   if (!read_broker || !broker_mutex || using_broker || !attributes ||
       !attributes->ObjectName || !handle || !status ||
-      attributes->ObjectName->Length % sizeof(wchar_t)) return false;
+      attributes->ObjectName->Length % sizeof(wchar_t) || attributes->SecurityDescriptor)
+    return false;
   using_broker = true;
   struct Reset { ~Reset() { using_broker = false; } } reset;
   const auto* name = attributes->ObjectName;
@@ -152,6 +179,11 @@ bool broker_read(POBJECT_ATTRIBUTES attributes, ACCESS_MASK access, ULONG share,
   if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) return false;
   struct Unlock { ~Unlock() { ReleaseMutex(broker_mutex); } } unlock;
   LatchReadRequest request{};
+  const bool writing = mutates(access, disposition, options);
+  request.operation = writing ? LatchBrokerOperation::write_open : LatchBrokerOperation::read;
+  request.disposition = disposition;
+  request.file_attributes = file_attributes;
+  request.allocation_size = allocation_size ? allocation_size->QuadPart : 0;
   request.access = access;
   request.share = share;
   request.options = options;
@@ -160,10 +192,20 @@ bool broker_read(POBJECT_ATTRIBUTES attributes, ACCESS_MASK access, ULONG share,
   // A process killed while holding the mutex may leave its response queued.
   // Only the matching process/sequence may consume a returned capability.
   LatchReadResponse response{};
-  if (!broker_exchange(request, response) || response.error || !response.file) return false;
+  if (!broker_exchange(request, response)) return false;
+  if (response.error) {
+    if (failure) *failure = broker_error(response.error);
+    return false;
+  }
+  if (!response.file) return false;
+  if ((attributes->Attributes & OBJ_INHERIT) &&
+      !SetHandleInformation(response.file, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+    CloseHandle(response.file);
+    return false;
+  }
   *handle = response.file;
   status->Status = 0;
-  status->Information = FILE_OPENED;
+  status->Information = writing ? response.information : FILE_OPENED;
   return true;
 }
 
@@ -350,12 +392,15 @@ NTSTATUS NTAPI create(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES att
   if (named(attributes, L"\\??\\NUL") &&
       duplicate(null_handle, handle, io,
                 (attributes->Attributes & OBJ_INHERIT) != 0)) return 0;
-  const NTSTATUS result = real_create(handle, access, attributes, io, size,
+  NTSTATUS result = real_create(handle, access, attributes, io, size,
                                       flags, share, disposition, options, ea, length);
-  if (result == static_cast<NTSTATUS>(0xc0000022u) &&
-      metadata_ancestor(attributes, access, handle, io)) return 0;
   if (result == static_cast<NTSTATUS>(0xc0000022u) && disposition == FILE_OPEN &&
-      !length && broker_read(attributes, access, share, options, handle, io)) return 0;
+      metadata_ancestor(attributes, access, handle, io)) return 0;
+  if ((result == static_cast<NTSTATUS>(0xc0000022u) ||
+       (mutates(access, disposition, options) &&
+        (result == static_cast<NTSTATUS>(0xc0000034u) || result == static_cast<NTSTATUS>(0xc000003au)))) &&
+      !length && broker_read(attributes, access, share, options, handle, io,
+                             disposition, flags, size, &result)) return 0;
   return result;
 }
 
@@ -364,12 +409,60 @@ NTSTATUS NTAPI open(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES attri
   if (named(attributes, L"\\Device\\KsecDD") &&
       duplicate(ksec_handle, handle, io,
                 (attributes->Attributes & OBJ_INHERIT) != 0)) return 0;
-  const NTSTATUS result = real_open(handle, access, attributes, io, share, options);
+  NTSTATUS result = real_open(handle, access, attributes, io, share, options);
   if (result == static_cast<NTSTATUS>(0xc0000022u) &&
       metadata_ancestor(attributes, access, handle, io)) return 0;
   if (result == static_cast<NTSTATUS>(0xc0000022u) &&
-      broker_read(attributes, access, share, options, handle, io)) return 0;
+      broker_read(attributes, access, share, options, handle, io, FILE_OPEN, 0, nullptr, &result)) return 0;
   return result;
+}
+
+NTSTATUS NTAPI set_information(HANDLE source, PIO_STATUS_BLOCK io, PVOID buffer,
+                               ULONG length, FILE_INFORMATION_CLASS kind) {
+  const NTSTATUS result = real_set_information(source, io, buffer, length, kind);
+  const auto number = static_cast<ULONG>(kind);
+  const bool rename = number == 10 || number == 65;
+  const bool link = number == 11 || number == 72;
+  if (result != static_cast<NTSTATUS>(0xc0000022u) || (!rename && !link) ||
+      !buffer || length < offsetof(FILE_RENAME_INFO, FileName) || !io ||
+      !read_broker || !broker_mutex || using_broker) return result;
+  const auto* input = static_cast<const FILE_RENAME_INFO*>(buffer);
+  if (!input->FileNameLength || input->FileNameLength % sizeof(wchar_t) ||
+      input->FileNameLength > length - offsetof(FILE_RENAME_INFO, FileName)) return result;
+  using_broker = true;
+  struct Reset { ~Reset() { using_broker = false; } } reset;
+  std::wstring path(input->FileName, input->FileNameLength / sizeof(wchar_t));
+  if (input->RootDirectory) {
+    wchar_t parent[32768]{};
+    const DWORD count = GetFinalPathNameByHandleW(input->RootDirectory, parent, 32768, FILE_NAME_NORMALIZED);
+    if (!count || count >= 32768 || path.starts_with(L"\\")) return result;
+    path = std::wstring(parent, count) + L"\\" + path;
+  } else if (path.size() < 3 || (path[1] != L':' && !path.starts_with(L"\\"))) {
+    wchar_t original[32768]{};
+    const DWORD count = GetFinalPathNameByHandleW(source, original, 32768, FILE_NAME_NORMALIZED);
+    if (!count || count >= 32768) return result;
+    std::wstring parent(original, count);
+    const auto separator = parent.find_last_of(L'\\');
+    if (separator == std::wstring::npos) return result;
+    path = parent.substr(0, separator + 1) + path;
+  }
+  if (path.starts_with(L"\\??\\") || path.starts_with(L"\\\\?\\")) path.erase(0, 4);
+  if (path.size() < 3 || path.size() >= 32768 || path[1] != L':') return result;
+  const DWORD waited = WaitForSingleObject(broker_mutex, 10000);
+  if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) return result;
+  struct Unlock { ~Unlock() { ReleaseMutex(broker_mutex); } } unlock;
+  LatchReadRequest request{};
+  request.operation = rename ? LatchBrokerOperation::rename : LatchBrokerOperation::link;
+  request.source_handle = source;
+  request.rename_flags = number == 65 || number == 72 ? input->Flags : input->ReplaceIfExists;
+  request.path_length = static_cast<DWORD>(path.size());
+  memcpy(request.path, path.data(), path.size() * sizeof(wchar_t));
+  LatchReadResponse response{};
+  if (!broker_exchange(request, response)) return result;
+  if (response.error) return broker_error(response.error);
+  io->Status = 0;
+  io->Information = response.information;
+  return 0;
 }
 
 BOOL WINAPI spawn(LPCWSTR app, LPWSTR command, LPSECURITY_ATTRIBUTES process_attributes,
@@ -512,6 +605,13 @@ BOOL init_failed(const char* stage) {
 }
 } // namespace
 
+#ifdef LATCH_RECOVERY_TESTING
+// Fixtures bypass hooks to prove that returned handles cannot authorize
+// namespace or ACL operations outside the broker policy. Not in Cargo builds.
+extern "C" __declspec(dllexport) decltype(&NtCreateFile) LatchTestCreateFile() { return real_create; }
+extern "C" __declspec(dllexport) SetInformation LatchTestSetInformation() { return real_set_information; }
+#endif
+
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (DetourIsHelperProcess() || reason != DLL_PROCESS_ATTACH) return TRUE;
 
@@ -544,9 +644,10 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   real_create = reinterpret_cast<decltype(real_create)>(GetProcAddress(ntdll, "NtCreateFile"));
   real_query_attributes = reinterpret_cast<QueryAttributes>(GetProcAddress(ntdll, "NtQueryAttributesFile"));
   real_query_full_attributes = reinterpret_cast<QueryFullAttributes>(GetProcAddress(ntdll, "NtQueryFullAttributesFile"));
+  real_set_information = reinterpret_cast<SetInformation>(GetProcAddress(ntdll, "NtSetInformationFile"));
 
   if (!real_open || !real_create || !real_query_attributes || !real_query_full_attributes ||
-      !real_wsa_socket_a)
+      !real_wsa_socket_a || !real_set_information)
     return init_failed("native exports");
   if (!DetourRestoreAfterWith()) return init_failed("restore process image");
   if (DetourTransactionBegin()) return init_failed("begin hooks");
@@ -557,6 +658,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
     return init_failed("network socket hooks");
   if (DetourAttach(reinterpret_cast<void**>(&real_create), create)) return init_failed("NtCreateFile hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_open), open)) return init_failed("NtOpenFile hook");
+  if (DetourAttach(reinterpret_cast<void**>(&real_set_information), set_information)) return init_failed("NtSetInformationFile hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_query_attributes), query_attributes)) return init_failed("NtQueryAttributesFile hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_query_full_attributes), query_full_attributes)) return init_failed("NtQueryFullAttributesFile hook");
   if (DetourAttach(reinterpret_cast<void**>(&real_final_path), final_path)) return init_failed("final path hook");

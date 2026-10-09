@@ -122,9 +122,9 @@ never by Latch itself.
 
 Windows diagnostic evidence and native Web/status qualification are in
 `docs/WINDOWS_DIAGNOSTICS.md`; keep qualification gaps distinct from proven bugs.
-Windows read-only workspace commands use a native read broker and do not
-require `WRITE_DAC` on ordinary source objects. Writable grants and sensitive
-objects with package-readable ACLs still require recoverable ACL mutation.
+Windows workspace reads and writes use authenticated native file brokers and
+do not require `WRITE_DAC` on ordinary source objects. Runtime bootstrap grants
+and scratch ACLs remain journaled; package-readable sensitive objects fail closed.
 Prefer a focused checkout and avoid local-clone hardlinks to outside roots.
 
 ## Testing philosophy
@@ -246,7 +246,9 @@ job/process modules; Win32 complexity stays outside the safe Rust kernel.
 `socket_broker.{h,cpp}` owns Network-authorized TCP/UDP socket transfer/lifetime; `broker_protocol.h` is its bounded
 pipe contract. The broker verifies job/package identity, paths, reparses and
 hardlinks before duplicating a read-only handle. DLL hooks only route requests.
-`read_broker.ps1` tests native enumeration without source `WRITE_DAC` or ACL changes.
+`read_broker.ps1` and `write_broker.ps1` test source access without `WRITE_DAC`
+or ACL changes; `developer.ps1 -Mediated` and `scale.ps1 -Mediated` qualify
+the production file broker. Legacy ACL fixtures remain separate recovery tests.
 `latch-ui/src/activity.rs` owns the shared activity reducer; provider stream
 signals are transient and contain no reasoning text. TUI refreshes every second;
 Web emits five-second connection heartbeats. Silence never proves thinking,

@@ -371,12 +371,15 @@ directories, reading their metadata, and reading files. Ancestors needed to
 resolve the workspace path expose metadata only through inherited handles;
 they are not directory-listing grants. Sensitive paths under a workspace and
 the protected recovery journal remain inaccessible to the sandbox.
-Read-only workspace execution obtains file and enumeration handles through the
-native read broker, which validates job/package identity and the exact path and
-access mask on each open. Ordinary source objects need no `WRITE_DAC`; the
-broker cannot return write, delete, owner or ACL rights. Writable roots and
-temporary sealing of package-readable sensitive objects retain the journaled
-ACL boundary. Kernel capability selection is unchanged.
+Workspace execution obtains file and enumeration handles through authenticated
+native brokers that validate job/package identity, pinned root/parent identities,
+path masks and hardlink aliases on each operation. Read capabilities contain no
+mutation rights. Write capabilities require a selected writable root and contain
+only requested file data/delete rights, never directory namespace, owner or ACL
+rights. Rename/link operations are separately mediated. Ordinary source objects
+need no `WRITE_DAC` and receive no ACL grants. Scratch/runtime bootstrap grants
+retain journaled recovery; package-readable sensitive objects fail closed.
+Kernel capability selection is unchanged.
 
 ## 9. Where the invariants are enforced in code
 

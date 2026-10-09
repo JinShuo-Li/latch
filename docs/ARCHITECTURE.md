@@ -823,8 +823,12 @@ ripgrep shim is resolved to the package's standalone executable before staging.
 Python's standard library is one ZIP archive to avoid thousands of per-command
 ACL changes. Read-only runtime roots grant only their root and immediate native
 bootstrap files (`.exe`, `.dll`, `.pyd`), without inheritance; nested resources
-use the scoped read broker. Workspace write grants retain full preflight and
-recoverable inheritance. PowerShell 7 is resolved from a native PATH installation, its
+use the scoped read broker. Production workspace writes use `write_broker.{h,cpp}`
+through `--filesystem broker`; ordinary source trees receive no recursive grants.
+The broker opens relative to pinned parents, validates root identities and every
+hardlink, and transfers only requested data/delete rights. Rename/link operations
+remain host-mediated; directory namespace, ACL and owner capabilities are withheld.
+Scratch and runtime bootstrap grants retain journaled recovery. PowerShell 7 is resolved from a native PATH installation, its
 installed module path, or the standard Program Files location; Store launcher
 aliases are not copied. Its complete runtime is staged under a source/managed-host
 identity, and only staged modules enter `PSModulePath`. Fixed headless PowerShell

@@ -27,5 +27,8 @@ int execute_target(wchar_t** argv, const Cancellation& cancel,
                    LPPROC_THREAD_ATTRIBUTE_LIST attrs, DWORD timeout_ms,
                    Recovery& recovery,
                    const std::vector<std::wstring>& read_roots,
-                   const std::vector<std::wstring>& denied_roots, bool network);
+                   const std::vector<std::wstring>& denied_roots, bool network,
+                   const std::vector<std::wstring>& writable_roots,
+                   const std::vector<std::wstring>& denied_write,
+                   const std::vector<std::wstring>& protected_git);
 }  // namespace latch

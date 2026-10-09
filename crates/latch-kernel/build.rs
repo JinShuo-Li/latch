@@ -76,6 +76,7 @@ mod windows {
             "job",
             "read_broker",
             "socket_broker",
+            "write_broker",
         ];
         for name in runner {
             compile(name);

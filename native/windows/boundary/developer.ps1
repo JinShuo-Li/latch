@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory=$true)][string]$Binaries,
-  [Parameter(Mandatory=$true)][string]$FixtureRoot
+  [Parameter(Mandatory=$true)][string]$FixtureRoot,
+  [switch]$Mediated
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -25,6 +26,7 @@ $rg=(Get-Command rg.exe -ErrorAction Stop).Source
 if ($env:LATCH_TEST_RG_EXE) { $rg=$env:LATCH_TEST_RG_EXE }
 if (-not (Test-Path -LiteralPath $rg -PathType Leaf)) { throw "ripgrep executable is missing: $rg" }
 function Run([string]$program,[string]$arguments,[string[]]$extra=@()){
+  if($Mediated){$extra=@('--filesystem','broker')+$extra}
   & $runner $workspace $program $arguments write --read-root $runtime --timeout-ms 20000 @extra
   if($LASTEXITCODE){throw ('Sandboxed developer command failed: '+$program+' '+$arguments+' ('+$LASTEXITCODE+')')}
   if(Test-Path -LiteralPath (Join-Path $env:LATCH_RECOVERY_ROOT 'pending')){throw 'Developer command retained its journal'}
