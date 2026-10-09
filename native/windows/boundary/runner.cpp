@@ -87,7 +87,7 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
           continue;  // Workspace read opens are mediated, without ACL grants.
         validate_grant_tree(root, writable ? writable_roots : allowed_roots,
                             grant_plans.back(), cancel,
-                            recovery);
+                            recovery, writable);
       }
     }
     for (const auto& root : allowed_roots)

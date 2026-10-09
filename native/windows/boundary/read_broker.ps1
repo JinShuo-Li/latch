@@ -18,6 +18,10 @@ $runner = Join-Path $runtime 'latch-boundary-probe.exe'
 $fixture = Join-Path $runtime 'latch-boundary-files.exe'
 $ordinary = Join-Path $nested 'readable.txt'
 $outside = Join-Path $root 'outside.txt'
+$runtimeData = Join-Path $runtime 'data'
+$runtimeAsset = Join-Path $runtimeData 'asset.txt'
+New-Item -ItemType Directory $runtimeData | Out-Null
+[IO.File]::WriteAllText($runtimeAsset, 'read-only runtime asset')
 [IO.File]::WriteAllText($ordinary, 'readable without WRITE_DAC')
 [IO.File]::WriteAllText($outside, 'outside private')
 $secret = Join-Path $sensitive 'secret.txt'
@@ -27,7 +31,7 @@ New-Item -ItemType HardLink -Path $alias -Target $secret | Out-Null
 $git = (Get-Command git.exe -ErrorAction Stop).Source
 & $git init --quiet $workspace
 if ($LASTEXITCODE) { throw 'Cannot initialize Git fixture' }
-$objects = @($workspace,$nested,$ordinary,$sensitive,$secret,(Join-Path $workspace '.git'),(Join-Path $workspace '.git/config'))
+$objects = @($runtimeData,$runtimeAsset,$workspace,$nested,$ordinary,$sensitive,$secret,(Join-Path $workspace '.git'),(Join-Path $workspace '.git/config'))
 # Keep host recovery handles before removing WRITE_DAC. OWNER RIGHTS disables
 # the owner's implicit WRITE_DAC, reproducing a readable foreign-owned tree
 # without changing ownership or requiring elevation. Restore the exact DACL
@@ -79,7 +83,7 @@ try {
   foreach ($path in $objects) { $before[$path]=(Get-Acl -LiteralPath $path).Sddl }
   foreach ($case in @(
     @('enumerate-allow',$workspace), @('enumerate-allow',$nested),
-    @('read-allow',$ordinary), @('crt-read',$ordinary), @('write-deny',$ordinary),
+    @('read-allow',$ordinary), @('read-allow',$runtimeAsset), @('crt-read',$ordinary), @('write-deny',$ordinary),
     @('read-deny',$outside), @('enumerate-deny',$root),
     @('read-deny',$secret), @('read-deny',$alias), @('enumerate-deny',$sensitive),
     @('dacl-deny',$ordinary), @('owner-deny',$ordinary)

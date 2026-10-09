@@ -811,7 +811,10 @@ leaving `windows_runtime.rs` to assemble the capability request. Python,
 Node, ripgrep, and PowerShell 7 runtimes are staged as read-only assets; a Chocolatey
 ripgrep shim is resolved to the package's standalone executable before staging.
 Python's standard library is one ZIP archive to avoid thousands of per-command
-ACL changes. PowerShell 7 is resolved from a native PATH installation, its
+ACL changes. Read-only runtime roots grant only their root and immediate native
+bootstrap files (`.exe`, `.dll`, `.pyd`), without inheritance; nested resources
+use the scoped read broker. Workspace write grants retain full preflight and
+recoverable inheritance. PowerShell 7 is resolved from a native PATH installation, its
 installed module path, or the standard Program Files location; Store launcher
 aliases are not copied. Its complete runtime is staged under a source/managed-host
 identity, and only staged modules enter `PSModulePath`. Fixed headless PowerShell
