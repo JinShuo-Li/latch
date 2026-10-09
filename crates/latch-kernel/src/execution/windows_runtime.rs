@@ -406,6 +406,7 @@ mod tests {
         }
         std::fs::write(state.join("secrets.toml"), "fixture secret").unwrap();
         std::fs::write(workspace.join("ordinary.txt"), "workspace contents").unwrap();
+        std::fs::write(workspace.join("中文 文件.txt"), "UTF-8 fixture").unwrap();
         std::fs::write(root.path().join("parent.txt"), "parent private").unwrap();
         std::fs::create_dir(workspace.join("nested")).unwrap();
         std::fs::write(workspace.join("nested").join("match.txt"), "nested match").unwrap();
@@ -451,6 +452,9 @@ mod tests {
             );
             if script == "dir /a /s" {
                 assert!(String::from_utf8_lossy(&listed.stdout).contains("match.txt"));
+                let utf8 = std::str::from_utf8(&listed.stdout)
+                    .expect("native directory output must use UTF-8");
+                assert!(utf8.contains("中文 文件.txt"));
             }
         }
         for script in ["dir /a ..", "type ..\\parent.txt"] {
