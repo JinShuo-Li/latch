@@ -2727,16 +2727,21 @@ fn terminal_screen_commands_toggle_bracketed_paste_symmetrically() {
     assert!(!left.contains("\u{1b}[?2004h"));
     assert!(!entered.contains("\u{1b}[?1000h"));
     assert!(!left.contains("\u{1b}[?1000l"));
-    let mut entered = Vec::new();
-    let mut left = Vec::new();
-    enter_screen(&mut entered, true).unwrap();
-    leave_screen(&mut left, true).unwrap();
-    assert!(
-        String::from_utf8(entered)
-            .unwrap()
-            .contains("\u{1b}[?1000h")
-    );
-    assert!(String::from_utf8(left).unwrap().contains("\u{1b}[?1000l"));
+    // Windows mouse capture uses console APIs, not bytes written to this
+    // buffer. A headless buffer test can certify the ANSI backend only.
+    #[cfg(not(windows))]
+    {
+        let mut entered = Vec::new();
+        let mut left = Vec::new();
+        enter_screen(&mut entered, true).unwrap();
+        leave_screen(&mut left, true).unwrap();
+        assert!(
+            String::from_utf8(entered)
+                .unwrap()
+                .contains("\u{1b}[?1000h")
+        );
+        assert!(String::from_utf8(left).unwrap().contains("\u{1b}[?1000l"));
+    }
 }
 
 fn profile_catalog() -> InferenceCatalog {
