@@ -172,7 +172,10 @@ is `docs/WEB_UI_PLAN.md`. Linux and Windows Web transport tests reuse the CLI's 
 mock provider: `cargo test -p latch-cli --test cli web_transport --locked`.
 Optional browser setup regressions: `node scripts/test_web_setup.mjs <chromium>`
 (Node 22+ and Chromium; isolated transport fixtures, no provider calls; development
-only). Default interactive startup requires a resolved config file or explicit
+only). `node scripts/test_web_markdown.mjs` checks Markdown parsing without a
+browser. `web/app/markdown.js` owns browser formatting, including tables; keep
+live text, assistant cells and agent reports on the same escaped renderer.
+Default interactive startup requires a resolved config file or explicit
 profile overrides; missing config opens setup, never a displayed fallback account.
 Run Windows Web transport tests natively with `-- --test-threads=1`; use a
 user-owned NTFS fixture and preserve Windows CLI/TUI behavior and default CI.

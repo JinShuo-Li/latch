@@ -75,6 +75,15 @@ prove model progress. A finished turn is distinct from verified task completion,
 which remains in Overview. Closing the browser or losing the tunnel does not
 cancel execution.
 
+## Chat tables
+
+Assistant replies, live streamed text and agent reports render Markdown tables
+with header cells and left/center/right column alignment. Escaped pipes and
+pipes inside inline code stay inside their cells. Wide tables scroll horizontally
+inside the transcript instead of widening the page; the scroll region supports
+keyboard focus. Markdown-looking tables inside fenced code remain code. All
+cell text is escaped before formatting.
+
 ## SSH forwarding
 
 On the remote Linux or Windows host (with an SSH server):
@@ -199,12 +208,15 @@ Optional frontend regression checks use production assets with an isolated
 transport fixture in Chromium (Node 22+; no npm packages or provider calls):
 
 ```sh
+node scripts/test_web_markdown.mjs
 node scripts/test_web_setup.mjs /path/to/chromium
 ```
 
 This checks first-run and configured startup, credential modes, rejected/pending
 saves, model selection, live refresh, preserved drafts, custom models and mobile
-layout. Node and Chromium are development-only dependencies.
+layout, plus chat table alignment, escaping, streaming and scrolling. The
+Markdown parser checks need only Node; browser layout checks need Chromium.
+Both are development-only dependencies.
 
 ## TUI control parity
 

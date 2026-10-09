@@ -25,7 +25,10 @@ reconnects reconstruct current state without owning history or cancelling runs.
 Authentication, same-origin checks, command receipts and media routes remain
 transport concerns. See [the Web guide](WEB_UI.md) for contracts and module
 ownership. Windows Web execution uses the same embedded native boundary as
-the CLI and TUI.
+the CLI and TUI. `web/app/markdown.js` owns browser Markdown formatting,
+including escaped semantic tables and code-aware cell splitting; `view.js`
+uses it for live text, durable assistant cells and agent reports. Wide tables
+scroll in their own focusable region without changing transcript/page width.
 
 `latch-ui/src/activity.rs` reduces durable run, request, tool and permission
 lifecycle events together with transient stream activity into sidebar phases.

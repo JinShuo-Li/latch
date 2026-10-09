@@ -1,25 +1,11 @@
 import {state,session,metadata,profile,escapeHtml as e,title,cellParts,cellText,mediaUrl} from './state.js';
 import {icon} from './icons.js';
+import {markdown} from './markdown.js';
+export {markdown} from './markdown.js';
 
 const $ = selector => document.querySelector(selector);
 let renderedCells = '';
 let renderedSession = null;
-export function markdown(text) {
-  const inline = value => e(value).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
-  const lines = String(text || '').split('\n');
-  let code = false; let list = false; let html = '';
-  for (const line of lines) {
-    if (line.startsWith('```')) { if (list) {html += '</ul>';list=false;} html += code ? '</code></pre>' : '<pre class="code-block"><code>'; code = !code; continue; }
-    if (code) {html += e(line)+'\n';continue;}
-    if (/^[-*] /.test(line)) {if (!list) {html += '<ul>';list=true;} html += `<li>${inline(line.slice(2))}</li>`;continue;}
-    if (list) {html += '</ul>';list=false;}
-    if (/^#{1,4} /.test(line)) html += `<h3>${inline(line.replace(/^#+ /,''))}</h3>`;
-    else if (line.trim()) html += `<p>${inline(line)}</p>`;
-  }
-  if (code) html += '</code></pre>';
-  if (list) html += '</ul>';
-  return html;
-}
 function tools(label,raw,key,status='') {
   return `<details class="tool-card" data-detail-key="${e(key)}"><summary>${icon(status === 'Failed' ? 'bug' : 'terminal')}<span>${e(label)}</span><span class="tool-meta">${e(status)}</span>${icon('chevron')}</summary><pre class="tool-output">${e(raw)}</pre></details>`;
 }

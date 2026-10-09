@@ -129,6 +129,30 @@ try {
   await waitFor(`!!document.querySelector('[data-settings-form="credential"]')`);
   const custom=requests.at(-1).data.Apply;
   assert.equal(custom.custom_transport,'responses');assert.deepEqual(custom.enabled_models,['private-model']);
+  await click('[data-close="settings-dialog"]');
+  const tableText='| Model | Tokens | Notes |\n| :--- | ---: | :---: |\n| **中文模型** | `128000` | escaped \\| pipe |\n| `<img src=x onerror=alert(1)>` | 42 | long_'+'identifier_'.repeat(30)+' |';
+  snapshot.state.cells.push({Assistant:{text:tableText}});emit();
+  await waitFor(`!!document.querySelector('.markdown-table')`);
+  assert.equal(await evaluate(`document.querySelectorAll('.markdown-table th').length`),3);
+  assert.equal(await evaluate(`document.querySelectorAll('.markdown-table td').length`),6);
+  assert.equal(await evaluate(`getComputedStyle(document.querySelectorAll('.markdown-table th')[1]).textAlign`),'right');
+  assert.equal(await evaluate(`document.querySelectorAll('.markdown-table td')[2].textContent`),'escaped | pipe');
+  assert.equal(await evaluate(`document.querySelector('.markdown-table img')`),null);
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.markdown-table-scroll')).overflowX`),'auto');
+  snapshot.state.cells.push({Assistant:{text:'| A | B | C | D | E | F |\n| --- | --- | --- | --- | --- | --- |\n| 1 | 2 | 3 | 4 | 5 | 6 |'}});emit();
+  await waitFor(`document.querySelectorAll('.markdown-table-scroll').length===2`);
+  assert.equal(await evaluate(`{const table=document.querySelectorAll('.markdown-table-scroll')[1];table.scrollWidth>table.clientWidth;}`),true);
+  assert.equal(await evaluate(`document.documentElement.scrollWidth<=window.innerWidth`),true);
+  // Streaming takes the same renderer path, including partial rows.
+  snapshot.state.streaming='A | B\n--- | ---\n`x|y` |';emit();
+  await waitFor(`!!document.querySelector('#streaming-text table')`);
+  assert.equal(await evaluate(`document.querySelector('#streaming-text td').textContent`),'x|y');
+  snapshot.state.streaming='```md\n| A | B |\n| --- | --- |\n```';emit();
+  await waitFor(`!!document.querySelector('#streaming-text pre')`);
+  assert.equal(await evaluate(`document.querySelector('#streaming-text table')`),null);
+  await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  assert.equal(await evaluate(`document.documentElement.scrollWidth<=window.innerWidth`),true);
+  console.log('Markdown table browser checks passed (semantic cells, alignment, escaping, streaming, desktop and mobile scrolling).');
   console.log('Web setup browser checks passed (onboarding, credentials, retry, pending save, live updates, drafts, custom models, configured restart, mobile).');
 }finally{
   socket?.close();if(browser && browser.exitCode===null){const exited=once(browser,'exit').catch(()=>{});browser.kill('SIGKILL');await exited;}

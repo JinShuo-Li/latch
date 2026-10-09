@@ -137,6 +137,7 @@ async fn module(Path(name): Path<String>) -> Result<Response, ApiError> {
         "transport.js" => include_str!("../../../../web/app/transport.js"),
         "state.js" => include_str!("../../../../web/app/state.js"),
         "view.js" => include_str!("../../../../web/app/view.js"),
+        "markdown.js" => include_str!("../../../../web/app/markdown.js"),
         "icons.js" => include_str!("../../../../web/app/icons.js"),
         "settings.js" => include_str!("../../../../web/app/settings.js"),
         _ => return Err(ApiError(StatusCode::NOT_FOUND, "unknown asset".into())),

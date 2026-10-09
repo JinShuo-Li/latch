@@ -152,6 +152,7 @@ async fn auth_forwarding_assets_and_command_replay() {
         "/app.js",
         "/state.js",
         "/view.js",
+        "/markdown.js",
         "/transport.js",
         "/settings.js",
         "/icons.js",
