@@ -266,3 +266,10 @@ files and 256 sandbox mutations. Native preparation was 0.23 ms, grant walk
 5 bootstrap/scratch ACL mutations remained, independent of source object count.
 This excludes fixture setup, command duration and Rust Git-marker discovery.
 It does not qualify a whole live home, physical power loss or hostile host races.
+
+
+The 100,000-file mediated fixture also passed locally: 100,033 initial objects,
+512 concurrent host files and 256 sandbox mutations, with exact ACL checks.
+Native preflight/grant/journal/apply/rollback measured 0.26/6.96/25.37/0.35/47.14
+ms and five ACL mutations. Fixture setup and verification time are excluded;
+this is a disposable NTFS tree, not whole-home qualification.

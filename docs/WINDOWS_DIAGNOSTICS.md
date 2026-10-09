@@ -60,3 +60,48 @@ The activity panel reduces uncertainty by showing the real request/tool phase
 and time since activity. It cannot distinguish a hung remote model from a slow
 model when the provider sends no signal. It reports waiting and silence instead
 of guessing that silence means thinking, failure, or completion.
+
+## Larger mediated workspace probe (2026-10-09)
+A larger local mediated scale run passed 100,033 initial objects, 512 concurrent
+host files and 256 sandbox mutations with unchanged source ACLs. Native
+preflight/grant/journal/apply/rollback were 0.26/6.96/25.37/0.35/47.14 ms, with
+five bootstrap/scratch ACL changes. Fixture setup, final ACL verification and
+Rust Git discovery are excluded. This does not qualify a live home directory.
+
+
+## Paid native Windows acceptance (2026-10-09)
+
+The existing Windows OpenCode Go configuration (`deepseek-v4.1-flash`, provider
+default effort, original endpoint/credential reference) drove the actual Windows
+CLI in a disposable NTFS workspace with Chinese characters and spaces. The
+comprehensive run completed in 46.77 s with 11 model requests and 16 successful
+tool calls, no tool errors, and durable completion `Verified`. It enumerated
+with native cmd, searched with ripgrep, patched a Python arithmetic bug, passed
+three supplied unmodified tests, read/wrote Unicode files, inspected Git,
+started/polled a managed Python process, and fetched a host localhost HTTP
+fixture through explicitly authorized Network capability. The body persisted
+as `WINDOWS_LOOPBACK_PASS`. There was no external tool network request.
+
+This run exposed localized cmd output decoding; private-console UTF-8
+initialization fixes it and a real native Rust regression checks exact Unicode
+filenames. A continuation on the rebuilt binary completed in 20.08 s with
+four further model requests and five successful tool calls, showing exact
+Chinese names and refreshing both validation requirements to Passed/Verified.
+Independent host verification checked the unchanged test SHA-256, exact UTF-8
+input/output, localhost response bytes and three passing unittests.
+
+The final sensitive-ACL security build was rechecked in the same paid session
+in 16.54 s: exact Unicode names without a chcp workaround, three passing tests
+and both validation requirements Passed/Verified. The final DOS-alias security fix was rechecked once more in 15.57 s with
+three model requests and four successful tools, both requirements Passed and
+durable completion Verified. Independent host verification passed again.
+Across all four invocations, 21 model requests and 29 tool calls completed
+without tool errors (98.96 s combined process time).
+
+Provider-reported usage across the acceptance: 272,641 input tokens, 4,881
+output tokens, 222,464 cache-read tokens and 50,177 cache-miss tokens. These are
+API usage counters, not a billing receipt or independently verified charge.
+Raw transcripts and databases stay in ignored local fixture storage; the
+acceptance credential copy was removed afterward. The original was unchanged.
+This acceptance proves the listed coding workflow, not whole-home,
+physical power-loss, hostile host races or every possible Windows application.
