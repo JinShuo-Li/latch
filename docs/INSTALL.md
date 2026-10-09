@@ -1,6 +1,6 @@
 # Install Latch
 
-Latch 0.2.3 supports Linux and Windows. Official precompiled releases target
+Latch 0.3.0 supports Linux and Windows. Official precompiled releases target
 x86_64; macOS, ARM64, and musl/Alpine binaries are not currently provided.
 The binary is named `latch` on Linux and `latch.exe` on Windows.
 

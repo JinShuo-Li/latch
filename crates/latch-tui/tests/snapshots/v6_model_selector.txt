@@ -27,4 +27,4 @@ Type a request · /help for commands                                            
   WORK · deepseek-v4.1-flash/low · main · std · ask                                                                ready
                                                                                                                         
 enter send  ctrl+j newline  ctrl+p commands                                                                             
-/tmp/latch                                                                                                  latch v0.2.3
+/tmp/latch                                                                                                  latch v0.3.0

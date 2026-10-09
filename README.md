@@ -1,6 +1,6 @@
 # Latch
 
-Latch is a terminal coding agent for Linux and Windows. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.2.3.
+Latch is a terminal coding agent for Linux and Windows. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.0.
 
 [Website](https://jinshuo-li.github.io/latch/) · [Example configuration](config.example.toml) · [Report a problem](https://github.com/JinShuo-Li/latch/issues)
 
@@ -111,8 +111,7 @@ with elapsed time and time since activity. For remote use, forward with
 `ssh -N -L 7000:127.0.0.1:6006 user@remote-host`, open `http://localhost:7000`,
 and enter the token printed by the remote process.
 
-Web support is available in source builds from current main; published v0.2.3
-binaries predate it. See the [Web guide](docs/WEB_UI.md) for resume, controls and
+Web support is included in the v0.3.0 Linux and Windows binaries. See the [Web guide](docs/WEB_UI.md) for resume, controls and
 connection details. The [review prototype](web/prototype/README.md) remains a
 standalone example; the [integration plan](docs/WEB_UI_PLAN.md) records the scope.
 

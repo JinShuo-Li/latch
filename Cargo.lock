@@ -1191,7 +1191,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "latch-cli"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1218,7 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "latch-kernel"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "latch-protocol"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1258,7 +1258,7 @@ dependencies = [
 
 [[package]]
 name = "latch-tui"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1277,7 +1277,7 @@ dependencies = [
 
 [[package]]
 name = "latch-ui"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "latch-protocol",
