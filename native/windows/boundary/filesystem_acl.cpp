@@ -346,9 +346,17 @@ void protect_sensitive_tree(const std::filesystem::path& input,
       // Elevated hosted runners retain their Administrators group for loader
       // compatibility. It is an ambient read route too, not a private ACL.
       for (const auto kind : {WinWorldSid, WinAuthenticatedUserSid,
-              WinBuiltinUsersSid, WinBuiltinAdministratorsSid, WinInteractiveSid,
+              WinBuiltinUsersSid, WinInteractiveSid,
               WinAnonymousSid, WinNetworkSid})
         if (IsWellKnownSid(principal, kind)) broad_grant = true;
+      if (IsWellKnownSid(principal, WinBuiltinAdministratorsSid)) {
+        BOOL enabled = FALSE;
+        if (!CheckTokenMembership(nullptr, principal, &enabled))
+          fail(L"inspect enabled administrator read route");
+        // A filtered, deny-only group cannot authorize reads. Do not demand
+        // WRITE_DAC merely because a private foreign-owned file lists it.
+        if (enabled) broad_grant = true;
+      }
       if (std::memcmp(GetSidIdentifierAuthority(principal), &package_authority,
                       sizeof(package_authority)) == 0) {
         package_grant = true;

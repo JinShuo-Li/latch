@@ -879,10 +879,12 @@ bootstrap files (`.exe`, `.dll`, `.pyd`), without inheritance; nested resources
 use the scoped read broker. Production workspace writes use `write_broker.{h,cpp}`
 through `--filesystem broker`; ordinary source trees receive no recursive grants.
 The broker opens relative to pinned parents, validates root identities and every
-hardlink, and transfers only requested data/delete rights. Rename/link operations
+hardlink, and transfers only requested data/delete rights. Shared `broker_path.h` expands
+existing 8.3 aliases in policy masks and requests, including the existing prefix
+of future create/rename targets, before path comparisons. Rename/link operations
 remain host-mediated; directory namespace, ACL and owner capabilities are withheld.
 Scratch and runtime bootstrap grants retain journaled recovery. Sensitive ACL
-audits also detect broad Everyone/Users/Administrators/authenticated permissions, not just
+audits also detect broad Everyone/Users/enabled-Administrators/authenticated permissions, not just
 package SIDs; they journal a deny for this exact package and remove package
 allow routes before launch, or fail closed if sealing cannot be performed. PowerShell 7 is resolved from a native PATH installation, its
 installed module path, or the standard Program Files location; Store launcher

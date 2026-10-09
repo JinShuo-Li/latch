@@ -26,6 +26,26 @@ inline std::wstring broker_normalize(const std::wstring& input) {
   }
   auto value = path.wstring();
   while (value.size() > 3 && value.back() == L'\\') value.pop_back();
-  return value;
+  // Policy masks and requests must share the same 8.3-expanded spelling.
+  // GetFullPathName/lexical normalization alone preserve RUNNER~1, allowing
+  // a long-path request to miss a short-path deny. Expand the existing prefix
+  // even when a create/rename destination does not exist yet.
+  std::vector<std::wstring> missing;
+  auto prefix = std::filesystem::path(value);
+  for (;;) {
+    wchar_t expanded[32768]{};
+    const DWORD count = GetLongPathNameW(prefix.c_str(), expanded, 32768);
+    if (count && count < 32768) {
+      std::filesystem::path result(std::wstring(expanded, count));
+      for (auto it = missing.rbegin(); it != missing.rend(); ++it) result /= *it;
+      return result.wstring();
+    }
+    const DWORD error = count ? ERROR_BUFFER_OVERFLOW : GetLastError();
+    if ((error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) ||
+        prefix == prefix.root_path())
+      fail(L"expand broker path aliases", error);
+    missing.push_back(prefix.filename().wstring());
+    prefix = prefix.parent_path();
+  }
 }
 }  // namespace latch

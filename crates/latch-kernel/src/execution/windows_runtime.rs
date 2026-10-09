@@ -226,7 +226,9 @@ impl NativeRuntime {
             secrets.push(profile.state_dir.clone());
         }
         for path in secrets {
-            process.arg("--deny").arg(path);
+            process
+                .arg("--deny")
+                .arg(native_path(&std::fs::canonicalize(path)?)?);
         }
         Ok(process)
     }
