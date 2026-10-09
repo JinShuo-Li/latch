@@ -883,7 +883,9 @@ aliases are not copied. Its complete runtime is staged under a source/managed-ho
 identity, and only staged modules enter `PSModulePath`. Fixed headless PowerShell
 calls default to MTA because STA COM waits fail inside AppContainer; explicit
 `-Sta`/`-Mta` arguments remain authoritative. The boundary still owns execution.
-CLI startup and session Git observations also use `fixed_command`. On Windows,
+CLI startup and session Git observations also use `fixed_command`. Read-only
+calls without external writable roots skip recursive Git metadata discovery;
+they have no workspace write grant to mask. On Windows,
 the ripgrep prerequisite check uses the same shim resolution as fixed-command
 staging without starting a host process;
 the search itself runs through the native boundary. Tool descriptions name the

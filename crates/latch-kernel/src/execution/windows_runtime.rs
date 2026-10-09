@@ -198,8 +198,13 @@ impl NativeRuntime {
         }
         if !profile.git_writable() {
             process.arg("--protect-git").arg(&workspace);
-            for path in git_paths(&workspace)? {
-                process.arg("--deny-write").arg(native_path(&path)?);
+            // A read-only call has no workspace write grant to mask. Walking
+            // every descendant merely to rediscover Git metadata makes even
+            // `dir` depend on the size/readability of the entire source tree.
+            if profile.workspace_writable() || !profile.external_roots.is_empty() {
+                for path in git_paths(&workspace)? {
+                    process.arg("--deny-write").arg(native_path(&path)?);
+                }
             }
         } else {
             for path in git_paths(&workspace)? {
@@ -402,6 +407,10 @@ mod tests {
         std::fs::write(root.path().join("parent.txt"), "parent private").unwrap();
         std::fs::create_dir(workspace.join("nested")).unwrap();
         std::fs::write(workspace.join("nested").join("match.txt"), "nested match").unwrap();
+        // Unrelated malformed nested Git metadata must not stop a read-only
+        // command before it even starts (nor require a recursive discovery).
+        let unrelated_marker = workspace.join("nested").join(".git");
+        std::fs::write(&unrelated_marker, "unrelated malformed fixture").unwrap();
         let runtime = NativeRuntime::install(&root.path().join("runtime")).unwrap();
         let profile = SandboxProfile::new(
             workspace.clone(),
@@ -423,6 +432,7 @@ mod tests {
             workspace.display()
         );
         assert_eq!(output.stdout, b"workspace contents");
+        std::fs::remove_file(unrelated_marker).unwrap();
         for script in ["dir /b ordinary.txt", "dir /b", "dir /a", "dir /a /s"] {
             let listed = runtime
                 .command(&profile, script)

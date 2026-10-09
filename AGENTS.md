@@ -244,6 +244,7 @@ default to MTA (explicit apartment flags are preserved); PowerShell 7 is an
 optional prerequisite for PowerShell extensions, not for ordinary commands.
 Read-only runtime ACL grants are limited to the root and immediate native
 bootstrap files; nested assets use the read broker without recursive grants.
+Read-only calls without external writable roots skip recursive Git discovery.
 Default Windows CI runs one production embedded-boundary smoke test; the manual
 workflow runs all native security fixtures and a focused Rust runtime gate.
 The manual Linux job runs the full workspace suite. Windows runtime tests run
