@@ -5,16 +5,75 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include "detours.h"
+#include "handles.h"
+#include "broker_protocol.h"
 #include <aclapi.h>
 #include <sddl.h>
 #include <vector>
 #include <cstdio>
 #include <cwchar>
 #include <string>
+#include <io.h>
+#include <cerrno>
 
 int wmain(int argc, wchar_t** argv) {
   if (argc < 3) return 2;
   const std::wstring operation = argv[1];
+  if (operation == L"crt-read") {
+    auto legacy = LoadLibraryW(L"msvcrt.dll");
+    using Access = int (__cdecl*)(const wchar_t*, int);
+    const auto legacy_access = reinterpret_cast<Access>(GetProcAddress(legacy, "_waccess"));
+    const int legacy_result = legacy_access(argv[2], 4);
+    std::fwprintf(stderr, L"legacy access result=%d win=%lu\n", legacy_result, GetLastError());
+    const int result = _waccess(argv[2], 4);
+    std::fwprintf(stderr, L"access result=%d errno=%d win=%lu\n", result, errno, GetLastError());
+    FILE* file = nullptr;
+    _wfopen_s(&file, argv[2], L"rb");
+    std::fwprintf(stderr, L"fopen=%d errno=%d win=%lu\n", file != nullptr, errno, GetLastError());
+    if (!file) return 1;
+    const int first = std::fgetc(file);
+    std::fwprintf(stderr, L"first=%d error=%d errno=%d win=%lu\n", first, std::ferror(file), errno, GetLastError());
+    std::fclose(file);
+    return result == 0 && first != EOF ? 0 : 1;
+  }
+  if (operation == L"broker-read-allow" || operation == L"broker-read-deny" ||
+      operation == L"broker-access-deny" || operation == L"broker-caller-deny") {
+    DWORD size = 0;
+    const auto* broker = static_cast<const LatchHandles*>(
+        DetourFindPayloadEx(latch_handles_id, &size));
+    if (!broker || size != sizeof(LatchHandles) || !broker->read_broker ||
+        !broker->broker_mutex || wcslen(argv[2]) >= 32768) return 3;
+    const DWORD waited = WaitForSingleObject(broker->broker_mutex, 5000);
+    if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) return 4;
+    LatchReadRequest request{};
+    request.version = latch_broker_version;
+    request.process_id = GetCurrentProcessId();
+    request.request_id = 0x42524f4b4552;
+    request.access = operation == L"broker-access-deny" ? GENERIC_ALL : GENERIC_READ;
+    request.share = FILE_SHARE_READ | FILE_SHARE_WRITE;
+    request.options = 0x20;  // FILE_SYNCHRONOUS_IO_NONALERT
+    request.path_length = static_cast<DWORD>(wcslen(argv[2]));
+    memcpy(request.path, argv[2], request.path_length * sizeof(wchar_t));
+    if (operation == L"broker-caller-deny" &&
+        !GetNamedPipeServerProcessId(broker->read_broker, &request.process_id)) {
+      ReleaseMutex(broker->broker_mutex);
+      return 5;
+    }
+    DWORD bytes = 0;
+    LatchReadResponse response{};
+    const bool exchanged = WriteFile(broker->read_broker, &request,
+        latch_read_request_size(request.path_length), &bytes, nullptr) &&
+        bytes == latch_read_request_size(request.path_length) &&
+        ReadFile(broker->read_broker, &response, sizeof(response), &bytes, nullptr) &&
+        bytes == sizeof(response) && response.request_id == request.request_id;
+    ReleaseMutex(broker->broker_mutex);
+    const bool allowed = exchanged && !response.error && response.file;
+    if (allowed) CloseHandle(response.file);
+    if (!exchanged || allowed != (operation == L"broker-read-allow")) return 6;
+    std::fwprintf(stdout, L"PASS direct %ls\n", operation.c_str());
+    return 0;
+  }
   if (operation == L"root-stat") {
     for (int i = 2; i < argc; ++i) {
       WIN32_FILE_ATTRIBUTE_DATA data{};

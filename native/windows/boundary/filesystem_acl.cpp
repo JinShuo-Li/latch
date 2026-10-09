@@ -291,7 +291,8 @@ void validate_grant_tree(const std::filesystem::path& path,
 
 void protect_sensitive_tree(const std::filesystem::path& input,
                             std::set<std::wstring>& visited,
-                            const Cancellation& cancel, Recovery& recovery) {
+                            const Cancellation& cancel, Recovery& recovery,
+                            bool audit_only) {
   cancel.check();
   const auto path = std::filesystem::canonical(input).wstring();
   if (recovery.protected_journal_path(path))
@@ -299,7 +300,8 @@ void protect_sensitive_tree(const std::filesystem::path& input,
   if (!visited.insert(path).second) return;
   PACL acl = nullptr;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
-  PinnedObject pinned(path);
+  PinnedObject pinned(path, audit_only ? READ_CONTROL | FILE_READ_ATTRIBUTES :
+                                        READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES);
   const auto before = pinned.state();
   DWORD code = GetSecurityInfo(pinned.object.value, SE_FILE_OBJECT,
                                DACL_SECURITY_INFORMATION, nullptr, nullptr,
@@ -313,6 +315,7 @@ void protect_sensitive_tree(const std::filesystem::path& input,
     fail(L"initialize sensitive ACL");
   const SID_IDENTIFIER_AUTHORITY package_authority =
       SECURITY_APP_PACKAGE_AUTHORITY;
+  bool package_grant = false;
   for (DWORD i = 0; i < acl->AceCount; ++i) {
     void* ace = nullptr;
     if (!GetAce(acl, i, &ace)) fail(L"read sensitive ACE");
@@ -321,8 +324,10 @@ void protect_sensitive_tree(const std::filesystem::path& input,
       const auto* allowed = static_cast<const ACCESS_ALLOWED_ACE*>(ace);
       PSID principal = const_cast<DWORD*>(&allowed->SidStart);
       if (std::memcmp(GetSidIdentifierAuthority(principal), &package_authority,
-                      sizeof(package_authority)) == 0)
+                      sizeof(package_authority)) == 0) {
+        package_grant = true;
         continue;
+      }
     } else if (header->AceType != ACCESS_DENIED_ACE_TYPE) {
       fail(L"unsupported sensitive ACL entry", ERROR_INVALID_ACL);
     }
@@ -331,10 +336,18 @@ void protect_sensitive_tree(const std::filesystem::path& input,
     if (!AddAce(updated, acl->AclRevision, MAXDWORD, ace, header->AceSize))
       fail(L"copy sensitive ACE");
   }
-  recovery.change(pinned, before, updated, true);
+  if (!audit_only) {
+    recovery.change(pinned, before, updated, true);
+  } else if (package_grant) {
+    PinnedObject mutable_object(path);
+    const auto current = mutable_object.state();
+    require(current.identity == before.identity && current.security == before.security,
+            L"sensitive object changed during audit");
+    recovery.change(mutable_object, before, updated, true);
+  }
   if (std::filesystem::is_directory(path)) {
     for (const auto& child : std::filesystem::directory_iterator(path))
-      protect_sensitive_tree(child.path(), visited, cancel, recovery);
+      protect_sensitive_tree(child.path(), visited, cancel, recovery, audit_only);
   }
 }
 

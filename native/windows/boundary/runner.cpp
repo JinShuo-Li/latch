@@ -68,6 +68,10 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
                          read_roots.end());
     std::vector<std::wstring> writable_roots = grant_roots;
     if (!workspace_writable) writable_roots.erase(writable_roots.begin());
+    std::vector<std::wstring> denied_roots{recovery.root().wstring()};
+    for (int i = 5; i + 1 < argc; i += 2)
+      if (std::wcscmp(argv[i], L"--deny") == 0)
+        denied_roots.push_back(std::filesystem::absolute(argv[i + 1]).lexically_normal().wstring());
     std::vector<GrantPlan> grant_plans;
     grant_plans.reserve(allowed_roots.size());
     {
@@ -79,14 +83,19 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
             [&](const std::wstring& value) {
               return _wcsicmp(value.c_str(), root.c_str()) == 0;
             });
+        if (!workspace_writable && _wcsicmp(root.c_str(), grant_roots.front().c_str()) == 0)
+          continue;  // Workspace read opens are mediated, without ACL grants.
         validate_grant_tree(root, writable ? writable_roots : allowed_roots,
                             grant_plans.back(), cancel,
                             recovery);
       }
     }
-    for (const auto& root : allowed_roots) recovery.track_root(root);
+    for (const auto& root : allowed_roots)
+      if (workspace_writable || _wcsicmp(root.c_str(), grant_roots.front().c_str()) != 0)
+        recovery.track_root(root);
     TimingScope grant_timer(boundary_timing().grant_walk);
     for (size_t index = 0; index < grant_roots.size(); ++index) {
+      if (index == 0 && !workspace_writable) continue;
       const DWORD rights =
           read_rights | ((index == 0 && !workspace_writable) ? 0 : write_rights);
       grants.add_plan(grant_plans[index],
@@ -146,14 +155,18 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
           fail(L"invalid timeout", ERROR_INVALID_PARAMETER);
         timeout_ms = value;
       } else if (option == L"--protect-git") {
-        git_reservation.create(argv[i], recovery);
+        if (workspace_writable) git_reservation.create(argv[i], recovery);
       } else if (option == L"--write-root") {
         // All write roots were tracked and granted before option processing.
       } else if (option == L"--deny") {
-        protect_sensitive_tree(argv[i], protected_paths, cancel, recovery);
-        grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
-        write_grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
+        const bool audit_only = writable_roots.empty();
+        protect_sensitive_tree(argv[i], protected_paths, cancel, recovery, audit_only);
+        if (!audit_only) {
+          grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
+          write_grants.add(argv[i], DENY_ACCESS, FILE_ALL_ACCESS);
+        }
       } else if (option == L"--deny-write") {
+        if (writable_roots.empty()) continue;
         constexpr DWORD mutate = FILE_WRITE_DATA | FILE_APPEND_DATA |
                                  FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
                                  DELETE | WRITE_DAC | WRITE_OWNER |
@@ -167,7 +180,8 @@ int run_boundary(int argc, wchar_t** argv, const Cancellation& cancel) {
     recovery.pause(L"all-grants");
     Handle restricted = restrict_token(write_sid.value);
     result = execute_target(argv, cancel, restricted.value, write_sid.value,
-                            sid, attrs, timeout_ms, recovery);
+                            sid, attrs, timeout_ms, recovery, allowed_roots,
+                            denied_roots);
 
   } catch (const Error& e) {
     std::fwprintf(stderr, L"%ls: %lu\n", e.api, e.code);

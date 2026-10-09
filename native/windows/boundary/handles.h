@@ -9,6 +9,8 @@ inline constexpr size_t latch_max_ancestors = 64;
 struct LatchHandles {
   HANDLE null_device;
   HANDLE crypto_device;
+  HANDLE read_broker;
+  HANDLE broker_mutex;
   ULONGLONG workspace_volume;
   wchar_t workspace_drive;
   DWORD ancestor_count;
