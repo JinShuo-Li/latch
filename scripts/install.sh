@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
-# Pin:   curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash -s -- --version v0.3.0
+# Pin:   curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash -s -- --version v0.3.1
 set -euo pipefail
 
 main() {

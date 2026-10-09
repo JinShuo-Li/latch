@@ -16,8 +16,8 @@ and the manual full-validation workflow remain separate.
 3. Push the version commit, then create and push the matching tag, for example:
 
    ```sh
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v0.3.1
+   git push origin v0.3.1
    ```
 
 4. Watch the Release workflow. After both platform jobs succeed, it creates a

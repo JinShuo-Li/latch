@@ -1,6 +1,6 @@
 # Install Latch
 
-Latch 0.3.0 supports Linux and Windows. Official precompiled releases target
+Latch 0.3.1 supports Linux and Windows. Official precompiled releases target
 x86_64; macOS, ARM64, and musl/Alpine binaries are not currently provided.
 The binary is named `latch` on Linux and `latch.exe` on Windows.
 
@@ -41,17 +41,17 @@ builder’s newer glibc.
 
 ### Pin a version or choose a directory
 
-For a published release such as `v0.3.0` (replace with an actual release tag):
+For a published release such as `v0.3.1` (replace with an actual release tag):
 
 ```sh
-curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash -s -- --version v0.3.0 --install-dir "$HOME/.local/bin"
+curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash -s -- --version v0.3.1 --install-dir "$HOME/.local/bin"
 ```
 
 Download the Windows script and pass its parameters:
 
 ```powershell
 Invoke-WebRequest https://jinshuo-li.github.io/latch/install.ps1 -OutFile install.ps1
-./install.ps1 -Version v0.3.0 -InstallDir "$env:LOCALAPPDATA\Programs\Latch\bin"
+./install.ps1 -Version v0.3.1 -InstallDir "$env:LOCALAPPDATA\Programs\Latch\bin"
 ```
 
 Both scripts also accept `LATCH_VERSION` and `LATCH_INSTALL_DIR` environment
@@ -96,11 +96,14 @@ Reopen the terminal after installing these packages. The AppContainer sandbox
 runner and compatibility helper are embedded in `latch.exe`, with a statically
 linked C runtime. There is no unsandboxed fallback on either platform.
 
-On Windows, use a focused checkout owned by your account on NTFS. Latch must be
-able to temporarily change existing workspace ACLs. Readable foreign-owned files
-without `WRITE_DAC`, outside-root hardlinks, and very large or actively changing
-workspaces can fail closed. Use `git clone --no-hardlinks` for local clones.
-See [Windows boundary status](../native/windows/boundary/CURRENT_STATE.md).
+On Windows, use a focused NTFS checkout readable/modifiable by your account.
+Ordinary source reads and writes use scoped file mediation without changing
+source ACLs or requiring `WRITE_DAC`. Sensitive objects with broad/package read
+grants still require temporary journaled sealing; inability to seal fails closed.
+Outside-root hardlinks remain denied; use `git clone --no-hardlinks` for local
+clones. Scoped localhost networking requires explicit Network capability.
+An entire live home directory, physical power-loss recovery and hostile host
+races remain unqualified. See [Windows boundary status](../native/windows/boundary/CURRENT_STATE.md).
 
 ## First run
 

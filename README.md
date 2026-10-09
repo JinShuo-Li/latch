@@ -1,6 +1,6 @@
 # Latch
 
-Latch is a terminal coding agent for Linux and Windows. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.0.
+Latch is a terminal coding agent for Linux and Windows. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.1.
 
 [Website](https://jinshuo-li.github.io/latch/) · [Example configuration](config.example.toml) · [Report a problem](https://github.com/JinShuo-Li/latch/issues)
 
@@ -41,9 +41,9 @@ Follow the installer's PATH instructions, then open a terminal in your project.
 The Linux installer also supports older versioned release archives.
 
 Linux needs glibc 2.35+, `bwrap` (Bubblewrap), `rg` (ripgrep), and Git on `PATH`.
-Windows needs Git for Windows, ripgrep, and a user-owned NTFS workspace.
+Windows needs Git for Windows, ripgrep, and a focused NTFS workspace readable/modifiable by your account.
 The native Windows sandbox is embedded in `latch.exe`; binary installs need no MSVC, WSL, or Git Bash.
-See [Windows findings and current limits](docs/WINDOWS_DIAGNOSTICS.md) for workspace ACL, startup cost and local-server issues.
+Scoped workspace access and capability-authorized localhost networking are supported. See [Windows evidence and current limits](docs/WINDOWS_DIAGNOSTICS.md) for qualification boundaries.
 Latch refuses to run commands if its sandbox is unavailable.
 
 **Build from source**
@@ -111,7 +111,7 @@ with elapsed time and time since activity. For remote use, forward with
 `ssh -N -L 7000:127.0.0.1:6006 user@remote-host`, open `http://localhost:7000`,
 and enter the token printed by the remote process.
 
-Web support is included in the v0.3.0 Linux and Windows binaries. See the [Web guide](docs/WEB_UI.md) for resume, controls and
+Web support is included in the Linux and Windows binaries since v0.3.0. See the [Web guide](docs/WEB_UI.md) for resume, controls and
 connection details. The [review prototype](web/prototype/README.md) remains a
 standalone example; the [integration plan](docs/WEB_UI_PLAN.md) records the scope.
 

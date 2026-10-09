@@ -27,4 +27,4 @@ Type a request · /help for commands
                                                                                                     
   WORK · deepseek-flash/low · main · std · ask                                                      
                                                                                                     
-/tmp/latch-ui                                                                           latch v0.3.0
+/tmp/latch-ui                                                                           latch v0.3.1

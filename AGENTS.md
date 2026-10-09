@@ -1,6 +1,6 @@
 # AGENTS.md — Latch
 
-Latch is a Rust terminal coding agent for Linux and Windows (v0.3.0). Users drive
+Latch is a Rust terminal coding agent for Linux and Windows (v0.3.1). Users drive
 it through the `latch` TUI. Binary installers are in `scripts/install.{sh,ps1}`;
 `cargo install --path crates/latch-cli --locked` remains the source install path.
 
