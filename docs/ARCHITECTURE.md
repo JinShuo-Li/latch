@@ -886,7 +886,9 @@ installed module path, or the standard Program Files location; Store launcher
 aliases are not copied. Its complete runtime is staged under a source/managed-host
 identity, and only staged modules enter `PSModulePath`. Fixed headless PowerShell
 calls default to MTA because STA COM waits fail inside AppContainer; explicit
-`-Sta`/`-Mta` arguments remain authoritative. The boundary still owns execution.
+`-Sta`/`-Mta` arguments remain authoritative. The boundary still owns execution. The injected compatibility module initializes
+each private console to UTF-8 before cmd caches its code page, so localized
+directory output and Unicode filenames survive the UTF-8 tool protocol.
 CLI startup and session Git observations also use `fixed_command`. Read-only
 calls without external writable roots skip recursive Git metadata discovery;
 they have no workspace write grant to mask. On Windows,

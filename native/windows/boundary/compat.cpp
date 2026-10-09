@@ -615,6 +615,12 @@ extern "C" __declspec(dllexport) SetInformation LatchTestSetInformation() { retu
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (DetourIsHelperProcess() || reason != DLL_PROCESS_ATTACH) return TRUE;
 
+  // Each boundary command owns a headless console. Initialize it before cmd
+  // caches its output code page; changing a later chcp child's console does
+  // not change this process's private console.
+  SetConsoleCP(CP_UTF8);
+  SetConsoleOutputCP(CP_UTF8);
+
   const DWORD length = GetModuleFileNameA(module, hook_path, MAX_PATH);
   if (!length || length >= MAX_PATH) return init_failed("module path");
   null_handle = inherited(L"LATCH_NULL_HANDLE");
