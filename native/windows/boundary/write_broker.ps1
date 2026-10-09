@@ -48,11 +48,14 @@ public static class LatchWriteAclFixture {
   public static extern bool SetKernelObjectSecurity(IntPtr handle, uint parts, byte[] descriptor);
   [DllImport("kernel32.dll")]
   public static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern uint GetShortPathNameW(string path, System.Text.StringBuilder buffer, uint length);
 }
 '@
 $restore = @()
 try {
   $user = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  $administrator = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   $ownerRights = [Security.Principal.SecurityIdentifier]::new('S-1-3-4')
   foreach ($path in $objects) {
     $acl = Get-Acl -LiteralPath $path
@@ -71,6 +74,12 @@ try {
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
       $ownerRights, [Security.AccessControl.FileSystemRights]::ReadPermissions,
       [Security.AccessControl.AccessControlType]::Allow))
+    if (!$administrator -and $path -in @($sensitive,$secret)) {
+      $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'),
+        [Security.AccessControl.FileSystemRights]::ReadAndExecute,
+        [Security.AccessControl.AccessControlType]::Allow))
+    }
     if (![LatchWriteAclFixture]::SetKernelObjectSecurity($item.Handle, 4, $acl.GetSecurityDescriptorBinaryForm())) {
       throw "Cannot restrict synthetic fixture DACL: $path"
     }
@@ -86,7 +95,7 @@ try {
     @('enumerate-allow',$workspace), @('enumerate-allow',$nested),
     @('read-allow',$ordinary), @('write-allow',$ordinary), @('create-allow',(Join-Path $nested 'created.txt')), @('read-allow',$runtimeAsset), @('crt-read',$ordinary), 
     @('read-deny',$outside), @('enumerate-deny',$root),
-    @('read-deny',$secret), @('read-deny',$alias), @('enumerate-deny',$sensitive),
+    @('read-deny',$secret), @('raw-read-deny',$secret), @('read-deny',$alias), @('enumerate-deny',$sensitive),
     @('dacl-deny',$ordinary), @('owner-deny',$ordinary), @('create-existing',$ordinary),
     @('broker-read-allow',$ordinary), @('broker-read-deny',$secret),
     @('raw-directory-write-deny',$workspace), @('raw-namespace-deny',$workspace), @('raw-dacl-deny',$ordinary),
@@ -99,6 +108,15 @@ try {
     & $runner $workspace $fixture ('write-deny "'+$target+'"') write --filesystem broker --read-root $runtime --deny $sensitive --deny-write $runtime --protect-git $workspace --timeout-ms 10000
     if($LASTEXITCODE){throw "Mediated write escaped scope: $target"}
   }
+  $shortBuffer = [Text.StringBuilder]::new(32768)
+  if (![LatchWriteAclFixture]::GetShortPathNameW($sensitive,$shortBuffer,32768)) { throw 'Cannot resolve sensitive short path' }
+  $shortSensitive = $shortBuffer.ToString()
+  $shortSecret = Join-Path $shortSensitive 'secret.txt'
+  foreach ($pair in @(@($shortSensitive,$secret),@($sensitive,$shortSecret))) {
+    & $runner $workspace $fixture ('broker-read-deny "'+$pair[1]+'"') write --filesystem broker --read-root $runtime --deny $pair[0] --timeout-ms 10000
+    if ($LASTEXITCODE) { throw 'Short/long path alias bypassed sensitive broker mask' }
+  }
+  Write-Output "PASS short/long sensitive masks: $shortSensitive"
   $cmd = Join-Path $env:SystemRoot 'System32/cmd.exe'
   foreach ($command in @('/d /c dir /a /s', '/d /c cmd /d /c dir /b nested')) {
     # Recursive dir reports access denied for the deliberately masked subtree.
