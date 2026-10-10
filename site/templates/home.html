@@ -1,0 +1,35 @@
+<main id="main" class="home">
+  <section class="intro" aria-labelledby="intro-title">
+    <p class="eyebrow">Open-source · Linux &amp; Windows</p>
+    <h1 id="intro-title">Latch</h1>
+    <p class="lead">A coding agent for your terminal and browser.</p>
+    <p class="intro-description">Written in Rust, with mandatory command sandboxing, durable sessions, and validation tied to the workspace it checked. Use your own model provider.</p>
+    <div class="intro-links"><a class="button" href="docs/introduction/">Read the documentation <span aria-hidden="true">→</span></a><a href="#install">Install Latch ↓</a><a href="https://github.com/JinShuo-Li/latch">View source ↗</a></div>
+  </section>
+  <section id="install" aria-labelledby="install-title" class="home-section">
+    <div class="section-heading"><h2 id="install-title">Installation</h2><a href="docs/installation/">Full install guide →</a></div>
+    <p>Precompiled x86_64 binaries. The installers verify SHA256 checksums.</p>
+    <div class="install-columns">
+      <div><h3>Linux <span>Bash · glibc 2.35+</span></h3><pre><code class="language-sh">curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash</code></pre><p>Requires Bubblewrap, ripgrep, and Git. Installs to <code>~/.local/bin</code>; follow the installer’s PATH instructions.</p></div>
+      <div><h3>Windows <span>PowerShell</span></h3><pre><code class="language-powershell">irm https://jinshuo-li.github.io/latch/install.ps1 | iex</code></pre><p>Requires Git, ripgrep, and a user-owned NTFS workspace. The native sandbox is included. <a href="docs/installation/#install-a-binary">Add the install directory to your user PATH.</a></p></div>
+    </div>
+    <p class="next-step">Run <code>latch</code> in your project, use <code>/setup</code> to choose a provider and model, then check prerequisites with <code>latch doctor</code>. <a href="docs/installation/#build-from-source">Build from source →</a></p>
+  </section>
+  <section class="home-section" aria-labelledby="interfaces-title">
+    <div class="section-heading"><h2 id="interfaces-title">Two interfaces, the same kernel</h2><a href="docs/web/">Web interface guide →</a></div>
+    <p>The TUI and local Web interface share sessions, tools, approvals, and validation.</p>
+    <div class="interface-tabs" role="tablist" aria-label="Interface screenshots" hidden><button id="tab-terminal" type="button" role="tab" aria-controls="terminal-panel" aria-selected="true" tabindex="0">Terminal</button><button id="tab-web" type="button" role="tab" aria-controls="web-panel" aria-selected="false" tabindex="-1">Web</button></div>
+    <figure id="terminal-panel"><a href="assets/terminal.png"><img src="assets/terminal.png" width="1440" height="650" alt="Latch TUI showing a failing test, an assistant response, a multiline composer, and a session sidebar with validation pending." loading="lazy"></a><figcaption>Terminal · Actual Ratatui output from the repository’s deterministic wide-sidebar fixture, rendered as an image. <a href="captures/terminal.txt">Plain-text capture</a>.</figcaption></figure>
+    <figure id="web-panel"><a href="assets/web.png"><img src="assets/web.png" width="1440" height="900" alt="Latch’s local Web interface with conversation navigation and the first-run workspace view before a provider is configured." loading="lazy"></a><figcaption>Web · First-run workspace view captured from a local v$version binary with isolated state. No provider request or credential.</figcaption></figure>
+  </section>
+  <section class="home-section" aria-labelledby="behavior-title">
+    <h2 id="behavior-title">How Latch works</h2>
+    <dl class="principles">
+      <div><dt>Sandboxed commands</dt><dd>Bubblewrap on Linux; native AppContainer on Windows. Command execution stops if the sandbox is unavailable. <a href="docs/safety/">Boundaries and limits →</a></dd></div>
+      <div><dt>Durable sessions</dt><dd>Session events persist in SQLite. Working-history rotation keeps the original record available; resume restores task state and evidence. <a href="docs/sessions/">Sessions and continuity →</a></dd></div>
+      <div><dt>Recorded validation</dt><dd>A pass applies to the workspace state it checked. Later writes make it stale, and active managed processes block certification. <a href="docs/workflow/">Validation semantics →</a></dd></div>
+      <div><dt>Multi-agent support</dt><dd>A root agent can delegate to independent child sessions. Child reports and group coordination do not certify the root task. <a href="docs/agents/">Agent coordination →</a></dd></div>
+    </dl>
+  </section>
+  <section class="home-section reading" aria-labelledby="reading-title"><h2 id="reading-title">Further reading</h2><p><a href="docs/skills-mcp/">Agent Skills and MCP</a> are implemented in v0.3.2, with explicit permission and lifecycle limits. <a href="docs/runtime/#8-implemented-now-vs-deferred">Runtime capabilities</a> distinguish implemented and deferred work.</p><p>The <a href="docs/benchmark-results/">25-task benchmark report</a> records results, failures, and methodology from one exploratory comparison. It does not establish general performance guarantees.</p></section>
+</main>

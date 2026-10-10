@@ -199,13 +199,17 @@ user-owned NTFS fixture and preserve Windows CLI/TUI behavior and default CI.
 The reviewed English, dark-default example remains separate in `web/prototype/`:
 `python3 web/prototype/serve.py --port 6006` (loopback, Python 3, illustrative
 fixtures only). It never executes tools or calls providers; see its README.
-The static GitHub Pages site lives in `site/` and is published by
-`.github/workflows/pages.yml`; its terminal captures come from TUI snapshots.
-Keep its version and install commands aligned with the README; keep the inline
-session capture in `site/index.html` aligned with `site/captures/session.txt`.
-Pages stages
-`scripts/install.sh` and `scripts/install.ps1` alongside `site/`; do not duplicate
-the scripts in `site/`. `.github/workflows/release.yml` builds glibc 2.35+ Linux
+The GitHub Pages site lives in `site/` and is published by
+`.github/workflows/pages.yml`. `site/build.py` generates static docs from repository
+Markdown using `site/navigation.json`; Python 3.11+ and `site/requirements.txt`
+are build-only requirements. Build with `python3 site/build.py`, then check with
+`python3 scripts/test_site.py target/site-preview`. Optional browser checks:
+`node scripts/test_site.mjs <chromium> target/site-preview` (Node 22+).
+Version labels come from Cargo.toml. Keep install snippets aligned with the README.
+Captures use actual TUI fixtures and production Web UI; provenance and refresh
+commands are in `site/README.md`. Pages builds and validates HTML, then stages
+`scripts/install.sh` and `scripts/install.ps1` in the generated artifact; do not
+duplicate the scripts in `site/`. `.github/workflows/release.yml` builds glibc 2.35+ Linux
 and static-CRT native Windows binaries on matching version tags; manual dispatch
 builds without publishing. See `docs/INSTALL.md` and `docs/RELEASING.md`.
 Installer checks: `python3 scripts/test_install.py`, `shellcheck scripts/install.sh`,

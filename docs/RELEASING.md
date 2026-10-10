@@ -69,21 +69,24 @@ latest/pinned selection, checksums, failures preserving existing installs,
 archive contents, architecture rejection, and temporary-file cleanup. They
 make no network requests and do not edit PATH or user configuration.
 
-[Pages](../.github/workflows/pages.yml) stages `site/` plus the two installers in
-`_site/` before uploading. The scripts in `scripts/` are authoritative; do not
-maintain duplicate copies in `site/`. Installer edits trigger Pages deployment.
-For a local preview with the same layout:
+[Pages](../.github/workflows/pages.yml) builds static HTML from repository Markdown,
+checks local links and browser behavior, and stages the two authoritative
+installers from `scripts/` before uploading `_site/`. Source documentation,
+version, configuration, installer, and website edits trigger deployment.
+Do not maintain duplicate installer copies in `site/`.
+
+For a local preview with the same generated layout:
 
 ```sh
-mkdir -p target/site-preview
-cp -R site/. target/site-preview/
-cp scripts/install.sh scripts/install.ps1 target/site-preview/
+python3 -m venv /tmp/latch-site-venv
+/tmp/latch-site-venv/bin/pip install -r site/requirements.txt
+/tmp/latch-site-venv/bin/python site/build.py
+python3 scripts/test_site.py target/site-preview
 python3 -m http.server 8000 --directory target/site-preview
 ```
 
-The site uses system fonts, CSS, and a small vanilla JavaScript file. No frontend
-build step or package installation is needed. The TUI captures remain copied
-from deterministic repository fixtures; keep the inline session fallback in
-`site/index.html` aligned with `site/captures/session.txt`. Benchmark values come
-from the
-[recorded 25-case comparison](../benchmark/reports/2026-10-06-full-comparison/README.md).
+The site uses system fonts, CSS, and vanilla JavaScript. Python 3.11+ and a
+pinned Markdown parser are build-only requirements; no frontend framework or
+runtime server is deployed. Version labels come from `Cargo.toml`.
+See the [site maintenance guide](../site/README.md) for content sources,
+search, optional browser checks, and genuine interface capture provenance.

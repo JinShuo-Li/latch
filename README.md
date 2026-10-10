@@ -2,7 +2,7 @@
 
 Latch is a terminal coding agent for Linux and Windows. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.2.
 
-[Website](https://jinshuo-li.github.io/latch/) · [Example configuration](config.example.toml) · [Report a problem](https://github.com/JinShuo-Li/latch/issues)
+[Website](https://jinshuo-li.github.io/latch/) · [Documentation](https://jinshuo-li.github.io/latch/docs/introduction/) · [Example configuration](config.example.toml) · [Report a problem](https://github.com/JinShuo-Li/latch/issues)
 
 ## Install
 

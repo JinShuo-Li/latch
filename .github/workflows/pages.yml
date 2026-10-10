@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths:
       - site/**
+      - '**/*.md'
+      - Cargo.toml
+      - config.example.toml
+      - benchmark/figures/**
+      - scripts/test_site*
+      - scripts/site_browser.mjs
       - scripts/install.sh
       - scripts/install.ps1
       - .github/workflows/pages.yml
@@ -22,11 +28,18 @@ jobs:
       pages: write
     steps:
       - uses: actions/checkout@v7
-      - name: Stage static site and official installers
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Build and check documentation and official installers
         run: |
-          mkdir -p _site
-          cp -R site/. _site/
-          cp scripts/install.sh scripts/install.ps1 _site/
+          python -m pip install -r site/requirements.txt
+          python site/build.py --output _site
+          python scripts/test_site.py _site
+          node scripts/test_site.mjs "$(command -v google-chrome)" _site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

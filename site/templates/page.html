@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="$description">
+  <meta property="og:title" content="$title · Latch">
+  <meta property="og:description" content="$description">
+  <title>$title · Latch</title>
+  <link rel="canonical" href="https://jinshuo-li.github.io/latch/$canonical">
+  <link rel="icon" href="$root/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="$root/styles.css">
+  <script src="$root/app.js" defer data-root="$root/"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="wordmark" href="$root/" aria-label="Latch home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16h14v-7h-8V4Z"/></svg>Latch</a>
+    <span class="version">v$version</span>
+    <nav aria-label="Main navigation"><a $home_current href="$root/">Overview</a><a $docs_current href="$root/docs/introduction/">Documentation</a></nav>
+    <button class="search-trigger" type="button" data-search hidden>Search docs <kbd>Ctrl K</kbd></button>
+    <a class="github-link" href="https://github.com/JinShuo-Li/latch">GitHub <span aria-hidden="true">↗</span></a>
+  </div>
+</header>
+$body
+<footer class="site-footer"><span>Latch v$version · Rust · MIT license</span><nav aria-label="Footer navigation"><a href="$root/docs/contributing/">Contributing</a><a href="https://github.com/JinShuo-Li/latch/issues">Issues</a><a href="https://github.com/JinShuo-Li/latch">Source ↗</a></nav></footer>
+<dialog id="search-dialog" aria-labelledby="search-title">
+  <div class="search-head"><label id="search-title" for="search-input">Search documentation</label><button type="button" id="search-close" aria-label="Close search">Esc</button></div>
+  <input id="search-input" type="search" placeholder="Search topics, commands, and configuration…" autocomplete="off" spellcheck="false">
+  <p id="search-status" role="status">Type to search. Results stay in your browser.</p>
+  <ul id="search-results" aria-label="Search results"></ul>
+</dialog>
+<p class="sr-only" id="copy-feedback" role="status"></p>
+</body>
+</html>

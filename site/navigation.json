@@ -1,0 +1,42 @@
+[
+  {"title":"Getting Started","pages":[
+    {"slug":"introduction","title":"Introduction","source":"docs/INTRODUCTION.md"},
+    {"slug":"installation","title":"Installation","source":"docs/INSTALL.md"},
+    {"slug":"terminal","title":"Terminal & CLI","source":"README.md","section":"Get started"},
+    {"slug":"web","title":"Web interface","source":"docs/WEB_UI.md"}
+  ]},
+  {"title":"Core Concepts","pages":[
+    {"slug":"workflow","title":"Modes & validation","source":"docs/DESIGN.md","section":"Validation intent versus kernel truth","through":"Context, reads, and approvals"},
+    {"slug":"sessions","title":"Sessions & continuity","source":"docs/CONTINUITY.md"},
+    {"slug":"agents","title":"Multi-agent coordination","source":"docs/ARCHITECTURE.md","section":"Durable child-agent graph","through":"Agent groups: durable coordination overlay"}
+  ]},
+  {"title":"Configuration","pages":[
+    {"slug":"configuration","title":"Setup & providers","source":"docs/DESIGN.md","section":"Configuration and setup"},
+    {"slug":"config-reference","title":"Configuration reference","source":"config.example.toml"}
+  ]},
+  {"title":"Security","pages":[
+    {"slug":"safety","title":"Sandbox & approvals","source":"README.md","section":"Working safely"},
+    {"slug":"windows","title":"Windows qualification","source":"docs/WINDOWS_DIAGNOSTICS.md"},
+    {"slug":"windows-boundary","title":"Windows boundary status","source":"native/windows/boundary/CURRENT_STATE.md"}
+  ]},
+  {"title":"Extensions","pages":[
+    {"slug":"skills-mcp","title":"Agent Skills & MCP","source":"docs/SKILLS_AND_MCP.md"},
+    {"slug":"extension-protocol","title":"Extension protocol","source":"docs/PROTOCOL.md"}
+  ]},
+  {"title":"Architecture","pages":[
+    {"slug":"architecture","title":"System architecture","source":"docs/ARCHITECTURE.md"},
+    {"slug":"runtime","title":"Runtime capabilities","source":"docs/RUNTIME_CAPABILITY_MODEL.md"},
+    {"slug":"design","title":"Design decisions","source":"docs/DESIGN.md"}
+  ]},
+  {"title":"Benchmarks","pages":[
+    {"slug":"benchmark-results","title":"25-task comparison","source":"benchmark/reports/2026-10-06-full-comparison/README.md"},
+    {"slug":"benchmarks","title":"Methodology & harness","source":"benchmark/README.md"},
+    {"slug":"history-benchmark","title":"Working-history calibration","source":"benchmark/reports/2026-10-09-history-thresholds/README.md"},
+    {"slug":"long-horizon","title":"Long-horizon testing","source":"docs/LONG_HORIZON_TEST_REPORT.md"}
+  ]},
+  {"title":"Contributing","pages":[
+    {"slug":"contributing","title":"Development & checks","source":"docs/CONTRIBUTING.md"},
+    {"slug":"releasing","title":"Releasing","source":"docs/RELEASING.md"},
+    {"slug":"dogfood","title":"Docker dogfood harness","source":"docs/DOGFOOD_DOCKER.md"}
+  ]}
+]
