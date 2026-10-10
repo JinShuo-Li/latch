@@ -31,6 +31,8 @@ pub struct Config {
     pub failure: FailureConfig,
     #[serde(default)]
     pub extensions: Vec<ExtensionConfig>,
+    #[serde(default)]
+    pub mcp_servers: Vec<crate::mcp::McpServerConfig>,
     /// Central lifecycle deadlines for extension hosts, in whole seconds.
     /// Extensions are operator-installed but not trusted to answer forever:
     /// every stage that waits on one is bounded (see
@@ -909,6 +911,7 @@ impl Default for Config {
             context: ContextConfig::default(),
             failure: FailureConfig::default(),
             extensions: vec![],
+            mcp_servers: vec![],
             extension_lifecycle: ExtensionLifecycleConfig::default(),
             models: BTreeMap::new(),
         }
@@ -919,6 +922,13 @@ impl Config {
     /// Validate user-owned config fields before a new setup transaction is
     /// staged. Provider adapters still enforce their own wire constraints.
     pub fn validate(&self) -> Result<()> {
+        let mut names = std::collections::BTreeSet::new();
+        for server in &self.mcp_servers {
+            server.validate()?;
+            if !names.insert(&server.name) {
+                anyhow::bail!("duplicate MCP server {}", server.name);
+            }
+        }
         for (id, entry) in &self.providers {
             if id.is_empty()
                 || !id.chars().all(|ch| {
@@ -1036,6 +1046,13 @@ impl Config {
             toml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
         if !has_state_override {
             config.state_dir = paths.state_root;
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for server in &config.mcp_servers {
+            server.validate()?;
+            if !names.insert(&server.name) {
+                anyhow::bail!("duplicate MCP server {}", server.name);
+            }
         }
         Ok(config)
     }
