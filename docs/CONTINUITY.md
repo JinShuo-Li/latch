@@ -218,6 +218,16 @@ accumulation rules, and equivalence tests pin that incremental extension equals
 a full rebuild at every prefix. Exact raw-event recall stays available via FTS,
 and no episode ever replaces the events it summarizes.
 
+Failure supervision is session-scoped, so it is not a durable disproof ledger.
+Streaks are rebuilt from that session's own raw events, canonical
+materialization renders only the lineages still active, and the markers above
+stay coarse (`failure`, `reground`) instead of carrying the diagnosis. A
+failure that was understood and closed — "this binary cannot be reproduced from
+this tree because X" — is therefore gone from memory: a later session, a
+sibling session sharing the workspace, and every child start from zero, and
+only the raw transcript and FTS recall retain why it was never a real problem.
+Provider-visible durable disproof does not exist yet.
+
 ## File state and compaction
 
 File observations for files within the 64 KiB read bound include SHA-256 and

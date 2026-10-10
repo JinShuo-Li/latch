@@ -67,6 +67,34 @@ the strategy moved. At the retry budget the kernel requests re-ground: inspect
 reality, name disproven assumptions, change strategy. Supervision state
 replays from raw events so resume keeps a stalled loop visible.
 
+### Known limits of failure supervision
+
+The mechanism is reliable about what it can see and weaker than its summary
+reads on what it cannot. These limits are recorded because the claims above are
+narrower than they first appear:
+
+- **A lineage is the whole normalized command, not the failing behavior.** For
+  `shell` the lineage subject is the whitespace-normalized command text, so
+  changing any argument (a path, an `-m5`, a head count) starts a fresh lineage
+  at count 1. Perturbing the command spelling while the same behavior keeps
+  failing never reaches the re-ground budget, and the earlier streak is not
+  surfaced as related evidence. For other tools the subject is the bare tool
+  name, so every `search` failure shares one lineage regardless of query.
+- **The signature is coarse.** It is the subject's first whitespace token plus
+  at most eight output lines with ASCII digits masked and `(elapsed …)` lines
+  dropped, so two genuinely different failures of one command that differ only
+  in numbers collapse into one signature. A materially different failure body
+  under an unchanged subject is the only change that restarts the count.
+- **Every errored tool call becomes a failure, including probes whose exit code
+  is the answer.** `grep` with no match, a failing `test`, `git diff --quiet`, a
+  `find | head` under `pipefail`, or a `search` that legitimately found nothing
+  is presented as an active failure lineage, and only a later successful
+  `shell` call with the same normalized command resolves it — a passing
+  `validate` clears only its own requirement lineage, and successful inspection
+  tools never reset a streak. False lineages therefore consume the re-ground
+  budget and can re-ground the model over a probe that already answered the
+  question.
+
 ## Progress and stagnation
 
 Successful inspections are supervised too. The kernel keys every read, search,
@@ -137,6 +165,17 @@ re-added as a decision. Decisions, constraints, and questions can be superseded
 or resolved explicitly; history stays in events and memory records while the
 canonical view stays current.
 
+Failure knowledge is deliberately weaker than the rest of memory, and it is not
+durable across sessions. Failure supervision is session-scoped: each session
+rebuilds its own streaks from its own raw events, canonical materialization
+renders only the lineages that are still active, and the archival episode index
+keeps the coarse `failure`/`reground` markers instead of the diagnosis. A
+failure the agent understood and closed — "this binary cannot be reproduced
+from this tree because X" — therefore is not knowledge a later session starts
+with, and a sibling or child session begins from zero on the same workspace.
+The raw transcript and FTS recall are the only path back to it. Durable
+disproof is the missing record here, not more prompt text.
+
 ## Change ownership
 
 Latch records the dirty starting tree and retains pre-edit bytes for Latch- and
@@ -148,6 +187,27 @@ are classified as shell-originated where detection is possible (Git worktrees,
 bounded snapshots) and marked explicitly non-reversible or undetectable
 otherwise — Latch never pretends a shell mutation pre-existed. Destructive Git
 recovery, automatic commit, and automatic push are absent.
+
+## Build provenance
+
+Latch's version surfaces report the crate version alone: TUI chrome, the Web
+`/api/meta` response, and MCP/extension `clientInfo` all read
+`CARGO_PKG_VERSION`. `latch doctor` checks every external prerequisite — the
+execution backend, `rg`, Git, config, state dir, profile, credential — and
+nothing about Latch's own artifact. No embedded source revision, no dirty-tree
+marker, and no comparison of the running binary against the tree it runs
+inside. The agent therefore cannot answer "am I the compile product of this
+working directory?" from kernel facts, which is exactly the class of question
+the kernel exists to answer; a stale `target/release/latch` or an older
+installed binary passes every existing check. Mtimes and `git log` are the
+model's own inferences, not evidence.
+
+The fix shape — not yet implemented — is to record the source revision and dirty
+state at build time (`build.rs` → `cargo:rustc-env`) and surface them in
+`latch --version`, TUI chrome, Web meta, and a read-only `doctor` comparison
+against the workspace Git HEAD and the newest source mtime. A mismatch stays a
+warning, never a failure: running a deliberately older installed binary is
+legitimate.
 
 ## Transcript plus state
 
