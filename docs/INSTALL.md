@@ -1,6 +1,6 @@
 # Install Latch
 
-Latch 0.3.1 supports Linux and Windows. Official precompiled releases target
+Latch 0.3.2 supports Linux and Windows. Official precompiled releases target
 x86_64; macOS, ARM64, and musl/Alpine binaries are not currently provided.
 The binary is named `latch` on Linux and `latch.exe` on Windows.
 
@@ -41,17 +41,17 @@ builder’s newer glibc.
 
 ### Pin a version or choose a directory
 
-For a published release such as `v0.3.1` (replace with an actual release tag):
+For a published release such as `v0.3.2` (replace with an actual release tag):
 
 ```sh
-curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash -s -- --version v0.3.1 --install-dir "$HOME/.local/bin"
+curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash -s -- --version v0.3.2 --install-dir "$HOME/.local/bin"
 ```
 
 Download the Windows script and pass its parameters:
 
 ```powershell
 Invoke-WebRequest https://jinshuo-li.github.io/latch/install.ps1 -OutFile install.ps1
-./install.ps1 -Version v0.3.1 -InstallDir "$env:LOCALAPPDATA\Programs\Latch\bin"
+./install.ps1 -Version v0.3.2 -InstallDir "$env:LOCALAPPDATA\Programs\Latch\bin"
 ```
 
 Both scripts also accept `LATCH_VERSION` and `LATCH_INSTALL_DIR` environment

@@ -31,4 +31,4 @@ Type a request · /help for commands                                            
   WORK · std · ask                                                                                                 ready
                                                                                                                         
 enter send  ctrl+j newline  ctrl+p commands                                                                             
-.                                                                                                           latch v0.3.1
+.                                                                                                           latch v0.3.2

@@ -1,5 +1,5 @@
 # Usage: irm https://jinshuo-li.github.io/latch/install.ps1 | iex
-# Pin: download this script, then ./install.ps1 -Version v0.3.1
+# Pin: download this script, then ./install.ps1 -Version v0.3.2
 [CmdletBinding()]
 param(
     [string]$Version = $(if ($env:LATCH_VERSION) { $env:LATCH_VERSION } else { 'latest' }),
