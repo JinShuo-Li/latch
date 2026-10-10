@@ -78,6 +78,8 @@ pub struct Agent {
     /// Managed processes can still write after validation returns.
     active_managed_processes: HashMap<String, Uuid>,
     extensions: ExtensionRegistry,
+    mcp: crate::mcp::McpRegistry,
+    skills: crate::skills::SkillCatalog,
     failures: FailureManager,
     progress: ProgressSupervisor,
     /// Sequence cursor of the last event already consumed by the progress
@@ -228,6 +230,8 @@ impl Agent {
         let progress =
             ProgressSupervisor::new(DEFAULT_STAGNATION_BUDGET, runtime.workspace.clone());
         let group = supervisor.as_ref().map(AgentSupervisor::group);
+        let skills =
+            crate::skills::SkillCatalog::discover(&runtime.workspace, dirs::home_dir().as_deref());
         Self {
             session_id: runtime.session_id,
             workspace: runtime.workspace,
@@ -241,6 +245,8 @@ impl Agent {
             workspace_generation_watermark: 0,
             active_managed_processes: HashMap::new(),
             extensions: ExtensionRegistry::new(),
+            mcp: crate::mcp::McpRegistry::default(),
+            skills,
             failures: FailureManager::new(runtime.retry_budget),
             progress,
             progress_watermark: 0,
@@ -698,11 +704,39 @@ impl Agent {
             )
             .await
     }
+    pub async fn load_mcp(
+        &mut self,
+        config: &crate::mcp::McpServerConfig,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        let runner = self.tools.sandbox_runner_for_extension()?;
+        let profile = self.tools.extension_sandbox_profile();
+        self.mcp.add(config, (&runner, &profile), cancel).await?;
+        if let Some(supervisor) = &self.supervisor {
+            supervisor.add_mcp_config(config.clone());
+        }
+        Ok(())
+    }
+    pub fn mcp_status(&self) -> String {
+        self.mcp.status()
+    }
+    pub fn skills_status(&self) -> String {
+        let mut text = self.skills.context();
+        for diagnostic in &self.skills.diagnostics {
+            text.push_str(&format!("\n{diagnostic}"));
+        }
+        text
+    }
+    pub async fn shutdown_mcp(&mut self) -> Result<()> {
+        self.mcp.shutdown().await
+    }
     pub async fn shutdown_extensions(&mut self) -> Result<()> {
         if let Some(supervisor) = &self.supervisor {
             supervisor.close_all().await?;
         }
-        self.extensions.shutdown_all().await
+        let mcp = self.mcp.shutdown().await;
+        let extensions = self.extensions.shutdown_all().await;
+        mcp.and(extensions)
     }
 
     #[must_use]

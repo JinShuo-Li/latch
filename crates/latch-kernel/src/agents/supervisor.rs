@@ -75,6 +75,7 @@ pub(super) struct SupervisorInner {
     context_factory: RwLock<ContextEngineFactory>,
     pub tools: ToolExecutor,
     pub settings: RwLock<WorkerSettings>,
+    pub mcp_servers: RwLock<Vec<crate::mcp::McpServerConfig>>,
     pub graph: Mutex<AgentGraph>,
     /// Root-scoped coordination overlay. Separate from the graph (topology)
     /// and from worker execution; it never owns children.
@@ -175,6 +176,7 @@ impl AgentSupervisor {
                 context_factory,
                 tools,
                 settings: RwLock::new(settings),
+                mcp_servers: RwLock::new(Vec::new()),
                 graph: Mutex::new(graph),
                 group,
                 workers: Mutex::new(HashMap::new()),
@@ -183,6 +185,14 @@ impl AgentSupervisor {
                 shutdown: CancellationToken::new(),
             }),
         })
+    }
+
+    pub(crate) fn add_mcp_config(&self, config: crate::mcp::McpServerConfig) {
+        self.inner
+            .mcp_servers
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(config);
     }
 
     /// The root's durable coordination overlay.

@@ -1157,3 +1157,12 @@ large-history stress tests (`cargo test -p latch-kernel --lib continuity --
 --nocapture`) stay out of CI by convention. Tests are not moved between tiers
 merely to make CI green, and passing CI alone is not sufficient for a
 substantial change.
+
+## Agent Skills and MCP (v0.3.2)
+
+`skills.rs` owns Agent Skills discovery and bounded resource reads. `mcp.rs` owns
+stdio/Streamable HTTP clients, version negotiation, discovery and lifecycle.
+`agent/dispatch.rs` owns permissions, pre-call validation invalidation and durable
+results; `agent/request.rs` includes fixed schemas. The shared CLI session builder
+loads operator-configured servers; child workers own independent clients.
+See [Skills and MCP](SKILLS_AND_MCP.md) for configuration and compatibility.

@@ -219,7 +219,7 @@ the same log. These changes add no capability or unsandboxed execution path.
 | Port | Status | Today's mechanism | Planned contract shape |
 |---|---|---|---|
 | `ProviderAdapter` | **implemented as `ModelProvider`** | `provider.rs` (`OpenAiProvider`, `OpenAiResponsesProvider`, `AnthropicProvider`), `ProviderRegistry`, `ProviderFactory` | Keep the trait; add adapters, not a second abstraction |
-| `ToolProvider` | **implemented as `ToolExecutor` + extension registration** | `tools.rs` dispatch; `extension.rs` registered tools; kernel tools in `agent/request.rs` | A future `ToolProvider` port sources tool definitions + execution into the same dispatch and policy pipeline |
+| `ToolProvider` | **implemented as `ToolExecutor` + extension/MCP registration** | `tools.rs` dispatch; `extension.rs` and `mcp.rs` registered tools; kernel tools in `agent/request.rs` | A future `ToolProvider` port sources tool definitions + execution into the same dispatch and policy pipeline |
 | `ContextEngine` | **implemented** (`context.rs`) | `ContinuityEngine`; `ContextEngineFactory` propagates the policy to all child sessions (default: continuity) | New implementations replace the default at root and child level; contract stable |
 | `Coordinator` | **partially implemented, concrete** | `AgentSupervisor` (execution/lifecycle), `GroupCoordinator` (durable claims/mailbox) | A `Coordinator` port would let an alternative coordination strategy plug in while root truth, child sessions, and group durability stay kernel-owned |
 | `PreferenceProvider` | **partially implemented, concrete** | `Config`, `PolicyEngine`, `PermissionBroker` (approval resolution) | A port for user/operator preferences (approvals, model preference, safety defaults) with the same durable resolution rules |
@@ -243,7 +243,7 @@ loses its invariants.
 | **Runtime extension** | an out-of-process program started under the mandatory sandbox, speaking framed JSON-RPC over stdio: tools, commands, observe/transform/guard hooks, context sources | cooperative, below kernel authority | only through `ExtensionRegistry`; tools pass safety classification; observations are non-authoritative context sources; the model never sees raw hook payloads |
 | **Backend** | a replaceable mechanism for a kernel-owned port (context, workspace, executor, computer, browser, service) | trusted, operator-installed, in-process with the kernel | through its port contract; if it appends durable events it does so as structured kernel context, not arbitrary truth |
 | **Client** | a steering/observing surface (the TUI and Linux/Windows loopback Web UI today; a remote Feishu/Slack/Telegram adapter later) | authenticated but untrusted with kernel internals | through an app protocol: submit user turns, observe semantic events, resolve pending permissions through kernel-mediated requests |
-| **MCP** | an external capability integration standard: MCP servers publish tools/resources/prompts | external, own protocol | as a capability source behind the extension/remote-host boundary; MCP is **not** Latch's internal plugin ABI |
+| **MCP** | an external capability integration standard: MCP servers publish tools/resources/prompts | external, own protocol | through the operator-configured `McpRegistry` behind kernel dispatch; MCP is **not** Latch's internal plugin ABI |
 
 Only the kernel appends authoritative events. Extensions, clients, and MCP
 servers can influence what the model *sees* (context sources, tool results,
@@ -345,13 +345,20 @@ network access remains an `Ask` under Strict/Standard.
 
 ### MCP integration
 
-An MCP server is connected by an operator-configured extension or remote host
-and surfaces its tools through `ToolProvider`-equivalent registration. Its tool
-calls flow through Latch's classification, permission, cancellation, and
-result-integrity pipeline exactly like builtin tools. MCP resources can be
-context sources. Latch's own extension protocol remains the internal plugin
-ABI; MCP is an external integration layer, so replacing either one does not
-disturb the other.
+Operator-configured MCP clients in `mcp.rs` connect sandboxed stdio and
+Streamable HTTP tool servers. They remain external capability sources, separate
+from the extension ABI. Calls flow through kernel classification, approvals,
+cancellation and durable results. Tools require WORK mode and approval under
+Strict/Standard; untrusted annotations never widen permission. The kernel records
+possible mutation before calling a server, invalidating older validation passes.
+Catalog schemas stay fixed during a session, including after disconnect.
+
+Agent Skills in `skills.rs` supply metadata to session context and instructions /
+resources through durable `load_skill` results. They do not own execution,
+authorization or the Context Engine contract. The existing `tools.kernel` and
+`context.engine` declarations continue to describe these kernel-owned surfaces;
+MCP does not create a new kernel control port. See [Skills and MCP](SKILLS_AND_MCP.md)
+for protocol versions, limits and unsupported optional features.
 
 ## 8. Implemented now vs deferred
 
@@ -368,7 +375,7 @@ disturb the other.
 | `Coordinator` / `PreferenceProvider` port traits | deferred; concrete supervisors and policy already exist |
 | Linux/Windows loopback Web client | implemented: shared controller, authenticated HTTP/SSE, fixed launch workspace, SSH local forwarding |
 | App protocol for remote clients (Feishu/Slack/Telegram) | deferred |
-| MCP integration | deferred |
+| MCP tool client integration | implemented: sandboxed stdio, Streamable HTTP, modern/legacy negotiation; optional MCP features remain explicit |
 
 Inspection shell commands run with enforced read-only filesystem grants even
 in WORK mode. The conservative command classifier does not prove that

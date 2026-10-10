@@ -179,6 +179,15 @@ impl PromptCompiler {
                 &format!("Repository instructions from {name}:\n{content}"),
             ));
         }
+        let skills = crate::skills::SkillCatalog::discover(workspace, dirs::home_dir().as_deref());
+        if !skills.skills.is_empty() {
+            f.push(fragment(
+                "environment.skills",
+                170,
+                false,
+                &skills.context(),
+            ));
+        }
         f.sort_by_key(|x| x.priority);
         // Fragment ids and versions are compiler metadata (shown by
         // `latch debug prompt`); the model only needs the instructions, so the

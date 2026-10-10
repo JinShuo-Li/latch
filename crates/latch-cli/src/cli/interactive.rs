@@ -1189,6 +1189,15 @@ async fn handle_command(agent: &mut Agent, text: &str, tx: &mpsc::Sender<Output>
                 .await?;
             }
         }
+        "/skills" => {
+            tx.send(Output::Notice(agent.skills_status())).await?;
+        }
+        "/mcp" => {
+            if parts.next() == Some("stop") {
+                agent.shutdown_mcp().await?;
+            }
+            tx.send(Output::Notice(agent.mcp_status())).await?;
+        }
         "/context" => {
             let c = agent.context(None)?;
             let s = &c.stats;

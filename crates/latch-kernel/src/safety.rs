@@ -121,8 +121,8 @@ pub fn classify(tool: &str, args: &Value, context: Context<'_>) -> Classificatio
         | "group_task" | "group_message" | "group_status" => {
             Classification::allow(CapabilitySet::new(), format!("{tool} (kernel state)"))
         }
-        "read_file" | "read_image" | "search" | "read_artifact" | "git_status" | "git_diff"
-        | "exec_poll" | "exec_terminate" => {
+        "load_skill" | "read_file" | "read_image" | "search" | "read_artifact" | "git_status"
+        | "git_diff" | "exec_poll" | "exec_terminate" => {
             let mut capabilities = CapabilitySet::new();
             capabilities.insert(Capability::WorkspaceRead);
             Classification::allow(capabilities, format!("{tool} (workspace read)"))

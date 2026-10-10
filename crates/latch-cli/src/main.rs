@@ -50,6 +50,8 @@ async fn main() -> ExitCode {
             cli::machine::execute(cli::machine::resume_request(&args, resume)).await
         }
         Some(Commands::Sessions(sessions)) => cli::sessions::execute(&args, sessions).await,
+        Some(Commands::Skills) => legacy_exit(cli::integrations::skills()),
+        Some(Commands::Mcp { check }) => legacy_exit(cli::integrations::mcp(&args, check).await),
         Some(Commands::Doctor(doctor)) => cli::doctor::execute(&args, doctor),
         Some(Commands::Migrate) => legacy_exit(migrate(&args)),
         Some(Commands::Debug { command }) => legacy_exit(debug_dispatch(&args, command)),

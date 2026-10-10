@@ -82,6 +82,13 @@ pub enum Commands {
     /// Check runtime prerequisites, configuration, and credentials without
     /// running a task or contacting the provider.
     Doctor(DoctorArgs),
+    /// List discovered Agent Skills and frontmatter diagnostics.
+    Skills,
+    /// List configured MCP servers, or connect and discover tools with --check.
+    Mcp {
+        #[arg(long)]
+        check: bool,
+    },
     /// Explicitly copy a legacy XDG installation into ~/.latch.
     Migrate,
     /// Inspect internal prompt compilation and diagnostics without running a task.

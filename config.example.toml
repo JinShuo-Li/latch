@@ -146,3 +146,21 @@ stagnation_budget = 2
 # request_seconds = 120      # one tool/guard/transform/context response
 # shutdown_seconds = 5       # shutdown response + exit notification
 # exit_seconds = 5           # graceful exit before SIGKILL + reap
+
+# Optional external MCP tool servers. These do not replace Latch extensions.
+# Stdio always runs in the mandatory read-only extension sandbox.
+# [[mcp_servers]]
+# name = "local-tools"
+# transport = "stdio"
+# command = "python3"
+# args = ["/absolute/path/to/server.py"]
+# enabled = true
+# timeout_seconds = 120
+#
+# [[mcp_servers]]
+# name = "remote-tools"
+# transport = "streamable_http"
+# url = "https://example.com/mcp"
+# bearer_token_env = "EXAMPLE_MCP_TOKEN"
+# enabled = false
+# timeout_seconds = 120

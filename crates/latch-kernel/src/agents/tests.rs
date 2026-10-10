@@ -1390,3 +1390,77 @@ async fn group_messages_deliver_once_at_a_child_boundary_without_waking_idle_chi
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn mcp_children_use_independent_clients_and_durable_results() {
+    use sha2::Digest;
+    let name = format!(
+        "mcp_fixture_{}",
+        &hex::encode(sha2::Sha256::digest(b"echo"))[..24]
+    );
+    let provider = Arc::new(TestProvider::with_first_calls(vec![ToolCall {
+        id: "child-mcp".into(),
+        name: name.clone(),
+        arguments: serde_json::json!({"hello":"child"}),
+    }]));
+    let (workspace, store, mut agent) = test_agent(provider.clone(), Mode::Work);
+    agent
+        .set_safety(latch_protocol::Safety::Autonomous)
+        .unwrap();
+    let script = workspace.path().join("mcp.py");
+    std::fs::write(&script, include_str!("../../tests/fixtures/mcp.py")).unwrap();
+    let config = crate::mcp::McpServerConfig {
+        name: "fixture".into(),
+        enabled: true,
+        timeout_seconds: 60,
+        transport: crate::mcp::McpTransportConfig::Stdio {
+            command: if cfg!(windows) { "python" } else { "python3" }.into(),
+            args: vec![script.to_string_lossy().into_owned()],
+        },
+    };
+    agent
+        .load_mcp(&config, &CancellationToken::new())
+        .await
+        .unwrap();
+    let supervisor = agent.agent_supervisor().unwrap();
+    let mut ids = Vec::new();
+    for task in ["one", "two"] {
+        ids.push(
+            supervisor
+                .spawn_agent(
+                    task.into(),
+                    "echo child".into(),
+                    None,
+                    DelegationContext::default(),
+                )
+                .await
+                .unwrap()
+                .agent_id,
+        );
+    }
+    for id in &ids {
+        supervisor
+            .wait_agents(&[*id], Duration::from_secs(90))
+            .await
+            .unwrap();
+        let events = store.events(*id).unwrap();
+        assert!(events.iter().any(|e| matches!(&e.payload, EventPayload::ToolCompleted { result } if result.name == name)), "child {id} has no successful MCP result");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.payload, EventPayload::WorkspaceMutationPossible { .. }))
+        );
+    }
+    assert!(
+        provider
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.tools.iter().any(|t| t.name == name))
+    );
+    assert!(!store.events(agent.session_id).unwrap().iter().any(
+        |e| matches!(&e.payload, EventPayload::ToolCompleted { result } if result.name == name)
+    ));
+    agent.shutdown_extensions().await.unwrap();
+}

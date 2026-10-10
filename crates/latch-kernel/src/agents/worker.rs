@@ -16,6 +16,61 @@ pub(super) async fn run_worker(
     inner: Weak<SupervisorInner>,
     identity: AgentIdentity,
     agent: &mut Agent,
+    receiver: mpsc::Receiver<WorkerCommand>,
+    initial: Option<String>,
+    restored_messages: Vec<AgentMessage>,
+    lifetime: CancellationToken,
+) {
+    let configs = inner
+        .upgrade()
+        .map(|s| {
+            s.mcp_servers
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        })
+        .unwrap_or_default();
+    for config in &configs {
+        if let Err(error) = agent.load_mcp(config, &lifetime).await {
+            let report = agent.agent_report(
+                &identity,
+                AgentStatus::Failed,
+                format!("MCP startup: {error:#}"),
+            );
+            if let Some(shared) = inner.upgrade()
+                && shared
+                    .store
+                    .append(
+                        identity.agent_id,
+                        EventPayload::AgentReportCreated {
+                            report: report.clone(),
+                        },
+                    )
+                    .is_ok()
+            {
+                update_from_worker(&inner, identity.agent_id, AgentStatus::Failed, Some(report));
+            }
+            let _ = agent.shutdown_extensions().await;
+            return;
+        }
+    }
+    worker_loop(
+        inner,
+        identity,
+        agent,
+        receiver,
+        initial,
+        restored_messages,
+        lifetime,
+    )
+    .await;
+    let _ = agent.shutdown_extensions().await;
+}
+
+async fn worker_loop(
+    inner: Weak<SupervisorInner>,
+    identity: AgentIdentity,
+    agent: &mut Agent,
     mut receiver: mpsc::Receiver<WorkerCommand>,
     initial: Option<String>,
     restored_messages: Vec<AgentMessage>,

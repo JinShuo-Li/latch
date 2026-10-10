@@ -705,6 +705,14 @@ pub async fn build_agent(
             config.context.clone(),
         );
     }
+    for server in config.mcp_servers.iter().filter(|server| server.enabled) {
+        runtime(
+            agent
+                .load_mcp(server, cancel)
+                .await
+                .with_context(|| format!("initialize MCP {}", server.name)),
+        )?;
+    }
     for extension in config
         .extensions
         .iter()

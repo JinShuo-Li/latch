@@ -88,6 +88,14 @@ impl Agent {
                     .await
             }
             PermissionMode::AiReview => {
+                if self.mcp.owns(&call.name) {
+                    // A server's arbitrary `command` argument cannot describe
+                    // the capabilities or side effects of an external tool.
+                    return self
+                        .human_resolution(request_id, classification, reason, sink, cancel)
+                        .await;
+                }
+
                 let Some(command) = call
                     .arguments
                     .get("command")

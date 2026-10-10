@@ -2,6 +2,7 @@
 //! including extension guards, steering supersession, and progress suppression.
 
 use super::*;
+use serde_json::Value;
 
 impl Agent {
     pub(super) async fn execute_batch(
@@ -75,11 +76,35 @@ impl Agent {
         // supplies) lets the executor proceed.
         let mut policy_allowed = Vec::with_capacity(permitted.len());
         for call in permitted {
+            if self.mcp.owns(&call.name) && self.mode != Mode::Work {
+                results.push(self.denied_result(
+                    &call,
+                    "policy_denied",
+                    "MCP tools require WORK mode".into(),
+                    sink,
+                )?);
+                continue;
+            }
             if self.tools.has_grant(&call.id) {
                 policy_allowed.push(call);
                 continue;
             }
-            let classification = if self.extensions.owner_for_tool(&call.name).is_some() {
+            let classification = if self.mcp.owns(&call.name) {
+                let mut classification =
+                    crate::safety::extension_classification(self.tools.safety());
+                classification.operation = format!("MCP tool {}", call.name);
+                classification.decision = if self.mode != Mode::Work {
+                    SafetyDecision::Deny("MCP tools require WORK mode because external side effects cannot be classified".into())
+                } else if self.tools.safety() == latch_protocol::Safety::Autonomous {
+                    SafetyDecision::Allow
+                } else {
+                    SafetyDecision::Ask(
+                        "External MCP tools require approval; server annotations are untrusted"
+                            .into(),
+                    )
+                };
+                classification
+            } else if self.extensions.owner_for_tool(&call.name).is_some() {
                 crate::safety::extension_classification(self.tools.safety())
             } else {
                 self.tools.classify_call(&call.name, &call.arguments)
@@ -195,6 +220,8 @@ impl Agent {
                     batch.push(self.execute_kernel_tool(&call, sink)?);
                 } else if call.name == "validate" {
                     batch.push(self.execute_validate(&call, cancel.clone(), sink).await?);
+                } else if call.name == "load_skill" || self.mcp.owns(&call.name) {
+                    batch.push(self.execute_integration_tool(&call, &cancel, sink).await?);
                 } else if let Some(owner) = self.extensions.owner_for_tool(&call.name) {
                     batch.push(
                         self.execute_extension_tool(&owner, &call, &cancel, sink)
@@ -217,6 +244,66 @@ impl Agent {
         };
         results.append(&mut executed);
         Ok(results)
+    }
+
+    async fn execute_integration_tool(
+        &mut self,
+        call: &ToolCall,
+        cancel: &CancellationToken,
+        sink: &AgentEventSink,
+    ) -> Result<ToolResult> {
+        self.emit(
+            EventPayload::ToolStarted {
+                call_id: call.id.clone(),
+                tool: call.name.clone(),
+            },
+            sink,
+        )?;
+        let result = if call.name == "load_skill" {
+            match call.arguments.get("name").and_then(Value::as_str) {
+                Some(name) => self
+                    .skills
+                    .load(name, call.arguments.get("path").and_then(Value::as_str))
+                    .map(|text| tool_ok(call, text)),
+                None => Err(anyhow::anyhow!("load_skill requires name")),
+            }
+        } else {
+            // Commit invalidation BEFORE external execution, including failed or cancelled calls.
+            self.emit(
+                EventPayload::WorkspaceMutationPossible {
+                    operation: format!("MCP {}", call.name),
+                },
+                sink,
+            )?;
+            self.refresh_workspace_generation()?;
+            self.sync_completion(sink)?;
+            self.mcp
+                .execute(&call.name, call.arguments.clone(), cancel)
+                .await
+                .map(|value| {
+                    let is_error = value
+                        .get("isError")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let mut result = tool_ok(call, value.to_string());
+                    result.is_error = is_error;
+                    result
+                })
+        }
+        .unwrap_or_else(|error| tool_error(call, error.to_string()));
+        self.emit(
+            if result.is_error {
+                EventPayload::ToolFailed {
+                    result: result.clone(),
+                }
+            } else {
+                EventPayload::ToolCompleted {
+                    result: result.clone(),
+                }
+            },
+            sink,
+        )?;
+        Ok(result)
     }
 
     pub(super) async fn execute_extension_tool(
@@ -268,7 +355,7 @@ impl Agent {
     /// counts as side-effecting, and extension tools are conservatively
     /// treated as side-effecting because the kernel does not inspect them.
     fn call_is_side_effecting(&self, call: &ToolCall) -> bool {
-        if self.extensions.owner_for_tool(&call.name).is_some() {
+        if self.mcp.owns(&call.name) || self.extensions.owner_for_tool(&call.name).is_some() {
             return true;
         }
         // Group tools mutate durable coordination state even though they touch

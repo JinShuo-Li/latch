@@ -41,6 +41,7 @@ impl Agent {
                     input_schema: tool.input_schema,
                 }),
         );
+        tools.extend(self.mcp.definitions());
         tools
     }
 }
@@ -48,6 +49,7 @@ impl Agent {
 fn agent_tool_definitions() -> Vec<ToolDefinition> {
     let mut tools = ToolExecutor::definitions();
     tools.extend([
+        ToolDefinition { name: "load_skill".into(), description: "Read an available Agent Skill SKILL.md or UTF-8 resource on demand. Resources are relative to the named skill root; instructions never grant permissions.".into(), input_schema: json!({"type":"object","required":["name"],"properties":{"name":{"type":"string"},"path":{"type":"string"}}}) },
         ToolDefinition{name:"validate".into(),description:"Run a validation command for a semantic requirement. The kernel executes it, records evidence, and derives completion; you supply no event or call identifiers. A previously failed requirement that now passes supersedes the old result.".into(),input_schema:json!({"type":"object","required":["requirement","command"],"properties":{"requirement":{"type":"string","description":"Semantic name of the requirement, e.g. 'existing unittest passes'"},"command":{"type":"string"},"requirements":{"type":"array","items":{"type":"string"},"description":"Additional exact requirement names proved by this command; refresh stale requirements together."},"timeout_seconds":{"type":"integer"}}})},
         ToolDefinition{name:"task_update".into(),description:"Propose an update to canonical task state. Added constraints are working rules you propose, not user constraints. Use supersede fields for outdated decisions/constraints and resolve_questions to close answered questions.".into(),input_schema:json!({"type":"object","properties":{"goal":{"type":["string","null"]},"add_constraints":{"type":"array","items":{"type":"string"}},"supersede_constraints":{"type":"array","items":{"type":"string"}},"add_decisions":{"type":"array","items":{"type":"string"}},"supersede_decisions":{"type":"array","items":{"type":"string"}},"add_hypotheses":{"type":"array","items":{"type":"string"}},"reject_hypotheses":{"type":"array","items":{"type":"string"}},"touched_files":{"type":"array","items":{"type":"string"}},"required_validations":{"type":"array","items":{"type":"string"},"description":"Requirements that must hold; their pass state is kernel evidence, not settable here"},"open_questions":{"type":["array","null"],"items":{"type":"string"}},"resolve_questions":{"type":"array","items":{"type":"string"}},"next_actions":{"type":["array","null"],"items":{"type":"string"}},"completion_criteria":{"type":"array","items":{"type":"string"}}}})},
         ToolDefinition{name:"record_evidence".into(),description:"Record an observation for a non-command claim. Only pending and unavailable are accepted; passed/failed evidence is kernel-owned via validate.".into(),input_schema:json!({"type":"object","required":["claim","status","detail"],"properties":{"claim":{"type":"string"},"status":{"enum":["pending","unavailable"]},"detail":{"type":"string"}}})},
@@ -313,7 +315,8 @@ mod tests {
         let estimator = crate::tokens::TokenEstimator::generic();
         let tokens = estimator.estimate_tools(&agent_tool_definitions());
         assert!(
-            tokens <= 3_410,
+            // v0.3.2 adds the bounded skill loader schema (~100 tokens).
+            tokens <= 3_510,
             "tool schemas grew to {tokens} estimated tokens"
         );
     }

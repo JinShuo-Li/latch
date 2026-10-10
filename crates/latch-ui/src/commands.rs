@@ -9,6 +9,14 @@ pub struct SlashCommand {
 
 pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
+        name: "/skills",
+        description: "List discovered Agent Skills and diagnostics",
+    },
+    SlashCommand {
+        name: "/mcp",
+        description: "Show MCP connections; /mcp stop disconnects all",
+    },
+    SlashCommand {
         name: "/attach",
         description: "Attach an image file to the next prompt",
     },

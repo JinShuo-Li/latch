@@ -1480,3 +1480,76 @@ fn extension_initialization_failure_is_a_runtime_failure() {
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "web/mod.rs"]
 mod web_transport;
+
+#[test]
+fn integrations_skills_metadata_and_diagnostics_without_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let skill = dir.path().join(".latch/skills/review");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: review\ndescription: Local review\n---\nBODY_MUST_NOT_BE_DISCLOSED",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_latch"))
+        .current_dir(dir.path())
+        .arg("skills")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("review\tLocal review"));
+    assert!(!text.contains("BODY_MUST_NOT_BE_DISCLOSED"));
+    std::fs::write(skill.join("SKILL.md"), "---\nname: invalid\n---").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_latch"))
+        .current_dir(dir.path())
+        .arg("skills")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("SKILL.md"));
+}
+
+#[test]
+fn integrations_mcp_lists_and_checks_sandboxed_server_without_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("mcp.py");
+    std::fs::write(
+        &script,
+        include_str!("../../latch-kernel/tests/fixtures/mcp.py"),
+    )
+    .unwrap();
+    let config = dir.path().join("config.toml");
+    let quote = |p: &Path| toml::Value::String(p.to_string_lossy().into_owned()).to_string();
+    std::fs::write(&config, format!("state_dir = {}\n[[mcp_servers]]\nname='fixture'\ntransport='stdio'\ncommand='{}'\nargs=[{}]\ntimeout_seconds=60\n", quote(&dir.path().join("state")), if cfg!(windows) {"python"} else {"python3"}, quote(&script))).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_latch"))
+        .current_dir(dir.path())
+        .arg("--config")
+        .arg(&config)
+        .arg("mcp")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("fixture\tenabled\tstdio"));
+    assert!(
+        !dir.path().join("state").exists(),
+        "listing must not launch or initialize state"
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_latch"))
+        .current_dir(dir.path())
+        .arg("--config")
+        .arg(&config)
+        .args(["mcp", "--check"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("protocol 2026-07-28, 1 tools"));
+}

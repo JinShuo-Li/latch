@@ -5758,3 +5758,149 @@ async fn the_verification_correction_cannot_loop_forever() {
         CompletionState::ImplementedNotVerified
     );
 }
+
+#[tokio::test]
+async fn skills_disclosure_is_durable_and_provider_neutral() {
+    let d = tempdir().unwrap();
+    let root = d.path().join(".latch/skills/sample");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("SKILL.md"),
+        "---\nname: sample\ndescription: Sample skill\nallowed-tools: exec\n---\nSKILL_BODY_9284",
+    )
+    .unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let sid = store.create_session(d.path()).unwrap();
+    let tools = ToolExecutor::new(
+        d.path().into(),
+        d.path().join("art"),
+        store.clone(),
+        sid,
+        PolicyEngine::new(Mode::Plan, d.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: d.path().into(),
+        mode: Mode::Plan,
+        store: store.clone(),
+        provider: Arc::new(FakeProvider::scripted(vec![])),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    assert!(!agent.skills_status().contains("SKILL_BODY_9284"));
+    let call = ToolCall {
+        id: "skill-call".into(),
+        name: "load_skill".into(),
+        arguments: json!({"name":"sample"}),
+    };
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let results = agent
+        .execute_batch(vec![call], CancellationToken::new(), &sink)
+        .await
+        .unwrap();
+    assert!(!results[0].is_error);
+    assert!(results[0].output.contains("SKILL_BODY_9284"));
+    let events = store.events(sid).unwrap();
+    assert!(events.iter().any(|e| matches!(&e.payload, EventPayload::ToolCompleted { result } if result.output.contains("SKILL_BODY_9284"))));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.payload, EventPayload::WorkspaceMutationPossible { .. }))
+    );
+    // The loader cannot interpret allowed-tools as an execution grant.
+    assert!(!agent.tools.has_grant("skill-call"));
+}
+
+#[tokio::test]
+async fn mcp_permissions_evidence_and_stable_schema() {
+    use crate::mcp::{McpServerConfig, McpTransportConfig};
+    let d = tempdir().unwrap();
+    let fixture = d.path().join("mcp.py");
+    std::fs::write(&fixture, include_str!("../../tests/fixtures/mcp.py")).unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let sid = store.create_session(d.path()).unwrap();
+    let tools = ToolExecutor::new(
+        d.path().into(),
+        d.path().join("art"),
+        store.clone(),
+        sid,
+        PolicyEngine::new(Mode::Plan, d.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: d.path().into(),
+        mode: Mode::Plan,
+        store: store.clone(),
+        provider: Arc::new(FakeProvider::scripted(vec![])),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    let config = McpServerConfig {
+        name: "fixture".into(),
+        enabled: true,
+        timeout_seconds: 60,
+        transport: McpTransportConfig::Stdio {
+            command: if cfg!(windows) { "python" } else { "python3" }.into(),
+            args: vec![fixture.to_string_lossy().into_owned()],
+        },
+    };
+    let cancel = CancellationToken::new();
+    agent.load_mcp(&config, &cancel).await.unwrap();
+    let name = agent.mcp.definitions()[0].name.clone();
+    let sink: AgentEventSink = Arc::new(|_| {});
+    let call = |id: &str| ToolCall {
+        id: id.into(),
+        name: name.clone(),
+        arguments: json!({}),
+    };
+    // Even a readOnlyHint=true tool is denied in PLAN.
+    let results = agent
+        .execute_batch(vec![call("denied")], cancel.clone(), &sink)
+        .await
+        .unwrap();
+    assert!(results[0].is_error);
+    assert!(
+        !store
+            .events(sid)
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e.payload, EventPayload::WorkspaceMutationPossible { .. }))
+    );
+    agent.set_mode(Mode::Work).unwrap();
+    agent.set_permissions(PermissionMode::AiReview).unwrap();
+    let mut misleading = call("command-is-not-authorization");
+    misleading.arguments = json!({"command":"echo safe"});
+    let results = agent
+        .execute_batch(vec![misleading], cancel.clone(), &sink)
+        .await
+        .unwrap();
+    assert!(results[0].is_error);
+    assert!(store.events(sid).unwrap().iter().any(|e| matches!(&e.payload, EventPayload::PermissionResolved { source, approved, .. } if source == "non_interactive" && !approved)));
+    agent.set_safety(Safety::Autonomous).unwrap();
+    let before = agent.evidence.workspace_generation();
+    let results = agent
+        .execute_batch(vec![call("allowed")], cancel, &sink)
+        .await
+        .unwrap();
+    assert!(!results[0].is_error);
+    assert!(agent.evidence.workspace_generation() > before);
+    let events = store.events(sid).unwrap();
+    let invalidation = events
+        .iter()
+        .position(|e| matches!(e.payload, EventPayload::WorkspaceMutationPossible { .. }))
+        .unwrap();
+    let terminal = events.iter().position(|e| matches!(&e.payload, EventPayload::ToolCompleted { result } if result.call_id == "allowed")).unwrap();
+    assert!(invalidation < terminal);
+    let schemas = serde_json::to_value(agent.tool_definitions()).unwrap();
+    agent.shutdown_mcp().await.unwrap();
+    assert_eq!(
+        schemas,
+        serde_json::to_value(agent.tool_definitions()).unwrap()
+    );
+    // Generation and results remain in durable history after disconnect.
+    assert!(store.events(sid).unwrap().iter().any(|e| matches!(&e.payload, EventPayload::WorkspaceMutationPossible { operation } if operation.starts_with("MCP "))));
+}

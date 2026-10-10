@@ -1,6 +1,6 @@
 # Latch
 
-Latch is a terminal coding agent for Linux and Windows. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.1.
+Latch is a terminal coding agent for Linux and Windows. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.2.
 
 [Website](https://jinshuo-li.github.io/latch/) · [Example configuration](config.example.toml) · [Report a problem](https://github.com/JinShuo-Li/latch/issues)
 
@@ -158,3 +158,11 @@ against DeepSeek v4.1 Flash and records independent checks, tokens, cache reads,
 and wall time. It is opt-in and uses a real provider credential.
 
 Latch is independent software and has no runtime dependency on the upstream projects studied in `.references/`.
+
+### Agent Skills and MCP
+
+Latch discovers Agent Skills in `.latch/skills`, `.agents/skills`, `.claude/skills`
+and their user-level equivalents, loading instructions and resources on demand.
+Operator-configured MCP servers provide tools over sandboxed stdio or Streamable
+HTTP with modern and legacy protocol support. Inspect them with `latch skills`,
+`latch mcp --check`, `/skills`, and `/mcp`. See [setup and security boundaries](docs/SKILLS_AND_MCP.md).

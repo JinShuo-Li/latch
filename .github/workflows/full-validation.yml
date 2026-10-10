@@ -111,6 +111,8 @@ jobs:
           # platform wiring while the native job covers the full ACL matrix.
           foreach ($test in @(
             'windows_runtime',
+            'mcp',
+            'skills',
             'loop_executes_registered_extension_tool',
             'loop_executes_registered_powershell_extension_tool',
             'read_only_shell_classification_is_conservative',

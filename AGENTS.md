@@ -1,6 +1,6 @@
 # AGENTS.md — Latch
 
-Latch is a Rust terminal coding agent for Linux and Windows (v0.3.1). Users drive
+Latch is a Rust terminal coding agent for Linux and Windows (v0.3.2). Users drive
 it through the `latch` TUI. Binary installers are in `scripts/install.{sh,ps1}`;
 `cargo install --path crates/latch-cli --locked` remains the source install path.
 
@@ -362,3 +362,13 @@ Memory/cache invariants (do not violate):
 - After completing any work, update this `AGENTS.md` if the change altered
   commands, prerequisites, module ownership, constraints, or working
   preferences. Keep it compact and verified; it is guidance, not a changelog.
+
+Agent Skills discovery and bounded resource reads belong to `skills.rs`; MCP
+stdio/Streamable HTTP clients and lifecycle belong to `mcp.rs`. Skills are session
+context and durable tool results, never permission grants. MCP tool calls require
+WORK mode, conservative approval and durable pre-call validation invalidation;
+server annotations never authorize calls. Inspect with `latch skills`, `latch mcp`
+and `latch mcp --check`; TUI `/mcp stop` disconnects the current session while
+retaining schemas. Focused tests: `cargo test -p latch-kernel --lib skills --locked`
+and `cargo test -p latch-kernel --lib mcp --locked`; Windows runs serially and needs
+Python for the stdio fixture. See `docs/SKILLS_AND_MCP.md`.

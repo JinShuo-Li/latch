@@ -290,3 +290,13 @@ has reported reasoning, never reasoning text. Silence and transport heartbeats
 do not establish model progress, failure or completion. On resume an unfinished
 historical phase is shown as interrupted; it does not imply a live provider or
 process. Canonical task state and recorded validation remain authoritative.
+
+## Agent Skills and MCP (v0.3.2)
+
+Skill metadata belongs to the session prompt; bodies/resources enter only through
+durable `load_skill` tool results. MCP tool results use the same event history.
+Neither integration changes the Context Engine port, canonical state, stable system
+prompt, provider serialization, whole-unit rollover or recall. Disconnect retains
+MCP schemas for the session so it cannot invalidate the cached tool prefix.
+Possible external mutations commit before execution and stale older validation.
+See [Skills and MCP](SKILLS_AND_MCP.md) for configuration and compatibility.
