@@ -20,6 +20,7 @@ pub mod provider;
 pub mod providers;
 pub mod safety;
 pub mod sandbox;
+pub mod skills;
 pub mod session;
 pub mod state;
 pub mod store;
