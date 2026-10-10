@@ -47,7 +47,15 @@ impl Web {
         let mut stdout = BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
         stdout.read_line(&mut line).unwrap();
-        assert!(line.starts_with("Latch Web:"), "{line}");
+        if !line.starts_with("Latch Web:") {
+            let _ = child.kill();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "Web startup failed: status={} first_line={line:?} stderr={}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
         let token = line.trim().split("#token=").nth(1).unwrap();
         let url = format!("http://127.0.0.1:{port}");
         let client = Client::builder().no_proxy().build().unwrap();
@@ -95,7 +103,9 @@ impl Web {
         self.get("/api/bootstrap").await.json().await.unwrap()
     }
     async fn ready(&self) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Windows session startup performs native recovery/bootstrap work on
+        // hosted runners. This is a correctness wait, not a latency assertion.
+        let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 60 } else { 10 });
         loop {
             let snapshot = self.snapshot().await;
             if snapshot["state"]["busy"] == false && snapshot["state"]["starting"] == false {
