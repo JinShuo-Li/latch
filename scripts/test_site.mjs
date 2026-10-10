@@ -27,7 +27,11 @@ try {
   browser=await openBrowser(chromium);
   const {cdp,evaluate,waitFor,screenshot}=browser;
   async function viewport(width,height=900){await cdp('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});}
-  async function navigate(path){await cdp('Page.navigate',{url:base+path});await waitFor(`document.readyState==='complete' && !!document.querySelector('#main')`);}
+  async function navigate(path){
+    await evaluate(`globalThis.__siteNavigation='pending'`);
+    await cdp('Page.navigate',{url:base+path});
+    await waitFor(`globalThis.__siteNavigation===undefined && document.readyState==='complete' && !!document.querySelector('#main')`);
+  }
   const click=selector=>evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   await mkdir('target/site-review',{recursive:true});
   await viewport(1440);await navigate('');
@@ -42,6 +46,7 @@ try {
   await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowLeft',code:'ArrowLeft'});
   assert.equal(await evaluate(`document.activeElement.id`),'tab-terminal');
   assert.equal(await evaluate(`document.querySelector('#terminal-panel').hidden`),false);
+  console.log('Home, screenshot assets, and keyboard tabs passed.');
   await navigate('docs/introduction/');
   await screenshot('target/site-review/docs-desktop.png');
   assert.equal(await evaluate(`document.querySelector('.sidebar [aria-current="page"]').textContent`),'Introduction');
@@ -65,6 +70,7 @@ try {
   // Verify the copied action with localhost clipboard permissions.
   await click('.copy-button');
   await waitFor(`document.querySelector('.copy-button').textContent==='Copied'`);
+  console.log('Search, Escape, keyboard results, and clipboard passed.');
   for(const path of ['', 'docs/installation/', 'docs/architecture/', 'docs/config-reference/', 'docs/benchmark-results/']) {
     for(const width of [1440,1024,768,390,320]) {
       await viewport(width);await navigate(path);

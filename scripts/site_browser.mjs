@@ -12,7 +12,8 @@ export async function openBrowser(executable) {
   async function close() {
     socket?.close();
     if (browser.exitCode === null) { browser.kill(); await once(browser, 'exit'); }
-    await rm(profile, {recursive:true, force:true});
+    // Chromium helpers can finish writing after the browser parent exits.
+    await rm(profile, {recursive:true, force:true, maxRetries:10, retryDelay:100});
   }
   try {
     const endpoint = await new Promise((resolve,reject) => {
