@@ -372,3 +372,8 @@ and `latch mcp --check`; TUI `/mcp stop` disconnects the current session while
 retaining schemas. Focused tests: `cargo test -p latch-kernel --lib skills --locked`
 and `cargo test -p latch-kernel --lib mcp --locked`; Windows runs serially and needs
 Python for the stdio fixture. See `docs/SKILLS_AND_MCP.md`.
+
+Windows MCP stdio connections close after discovery and each call to preserve the
+native per-user recovery lock; reconnect verifies the fixed catalog before any
+execution. Stateful Windows servers need Streamable HTTP. Keep this lifecycle
+covered by `mcp_children_use_independent_clients_and_durable_results`.

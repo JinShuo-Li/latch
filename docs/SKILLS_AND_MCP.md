@@ -103,6 +103,7 @@ server. Schema registrations remain fixed for the session even after disconnect.
 Every enabled server must initialize successfully before a session starts.
 Child agents open independent clients using the root's operator configuration;
 their calls, approvals, results and evidence belong to the child session.
+On Windows, stdio uses a fresh initialized connection per call (see below).
 Closing workers and sessions tears down their clients. No process or permission
 grant is shared between sessions.
 
@@ -135,10 +136,20 @@ session to reconnect. Stdio closes stdin, waits briefly, then kills and reaps a
 server that does not exit. Process lifetime remains owned by the platform
 execution backend (Bubblewrap on Linux; native AppContainer/Job Object on Windows).
 
+Windows retains the native boundary's one-active-recovery-transaction-per-user
+rule. Stdio discovery closes its sandbox before returning; each tool call opens
+an independent initialized server, verifies the protocol and entire tool catalog
+against the fixed session snapshot, executes exactly once, and closes it. A
+catalog change fails closed. This releases the recovery lock between calls so
+command tools and child agents can operate. Stdio server memory does not persist
+between Windows calls; servers requiring in-memory session state must use
+Streamable HTTP. Linux stdio connections persist for the session. No global
+recovery lock, journal rule, or AppContainer protection is weakened.
+
 Only tool discovery/execution is exposed. Sampling, elicitation, client roots,
 subscriptions, MCP resources/prompts, OAuth flows, and asynchronous tasks are not
 advertised. Unsupported server interactions fail explicitly. Tools may return
-structured/text content and `isError`; media remains serialized external data
+validated result envelopes, structured/text content and `isError`; media remains serialized external data
 rather than becoming an unvalidated image handle.
 
 ## Permissions and evidence

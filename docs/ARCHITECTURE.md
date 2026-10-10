@@ -1166,3 +1166,7 @@ stdio/Streamable HTTP clients, version negotiation, discovery and lifecycle.
 results; `agent/request.rs` includes fixed schemas. The shared CLI session builder
 loads operator-configured servers; child workers own independent clients.
 See [Skills and MCP](SKILLS_AND_MCP.md) for configuration and compatibility.
+
+Windows MCP stdio uses initialized connections per call, validating the fixed
+catalog before execution and releasing the native recovery lock between calls.
+Linux stdio and HTTP retain their normal connection lifetimes.

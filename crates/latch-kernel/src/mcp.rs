@@ -106,6 +106,12 @@ enum Transport {
     Http(HttpTransport),
 }
 
+struct StdioReconnect {
+    config: McpServerConfig,
+    backend: ExecutionBackend,
+    profile: SandboxProfile,
+}
+
 pub struct McpClient {
     pub name: String,
     pub version: String,
@@ -114,9 +120,37 @@ pub struct McpClient {
     deadline: Duration,
     tools: BTreeMap<String, (String, ToolDefinition)>,
     failed: bool,
+    reconnect: Option<Box<StdioReconnect>>,
 }
 impl McpClient {
     pub async fn connect(
+        config: &McpServerConfig,
+        sandbox: (&ExecutionBackend, &SandboxProfile),
+        cancel: &CancellationToken,
+    ) -> Result<Self> {
+        Self::connect_scoped(config, sandbox, cancel, cfg!(windows)).await
+    }
+    async fn connect_scoped(
+        config: &McpServerConfig,
+        sandbox: (&ExecutionBackend, &SandboxProfile),
+        cancel: &CancellationToken,
+        short_lived: bool,
+    ) -> Result<Self> {
+        let mut client = Self::connect_active(config, sandbox, cancel).await?;
+        if short_lived && matches!(client.transport, Transport::Stdio(_)) {
+            // Windows recovery deliberately permits one live transaction per
+            // user. Never pin its lock while the agent is idle or using tools.
+            client.shutdown().await?;
+            client.failed = false;
+            client.reconnect = Some(Box::new(StdioReconnect {
+                config: config.clone(),
+                backend: sandbox.0.clone(),
+                profile: sandbox.1.clone(),
+            }));
+        }
+        Ok(client)
+    }
+    async fn connect_active(
         config: &McpServerConfig,
         sandbox: (&ExecutionBackend, &SandboxProfile),
         cancel: &CancellationToken,
@@ -176,6 +210,7 @@ impl McpClient {
             deadline: Duration::from_secs(config.timeout_seconds),
             tools: BTreeMap::new(),
             failed: false,
+            reconnect: None,
         };
         let startup = async {
             client.negotiate(cancel).await?;
@@ -321,6 +356,56 @@ impl McpClient {
         args: Value,
         cancel: &CancellationToken,
     ) -> Result<Value> {
+        if self.failed {
+            bail!("MCP server disconnected; start a new session to reconnect");
+        }
+        if !self.owns(name) || !args.is_object() {
+            bail!("unregistered MCP tool or invalid arguments");
+        }
+        if let Some(reconnect) = &self.reconnect {
+            let mut active = match Self::connect_active(
+                &reconnect.config,
+                (&reconnect.backend, &reconnect.profile),
+                cancel,
+            )
+            .await
+            {
+                Ok(active) => active,
+                Err(error) => {
+                    self.failed = true;
+                    return Err(error);
+                }
+            };
+            active.deadline = self.deadline;
+            let same_catalog = active.version == self.version
+                && serde_json::to_value(active.definitions())?
+                    == serde_json::to_value(self.definitions())?;
+            let result = if same_catalog {
+                active.execute_active(name, args, cancel).await
+            } else {
+                self.failed = true;
+                Err(anyhow!(
+                    "MCP catalog changed; start a new session before executing tools"
+                ))
+            };
+            self.failed |= active.failed;
+            let cleanup = active.shutdown().await;
+            if cleanup.is_err() {
+                self.failed = true;
+            }
+            return match result {
+                Ok(value) => cleanup.map(|_| value),
+                Err(error) => Err(error),
+            };
+        }
+        self.execute_active(name, args, cancel).await
+    }
+    async fn execute_active(
+        &mut self,
+        name: &str,
+        args: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
         let (original, definition) = self
             .tools
             .get(name)
@@ -336,6 +421,7 @@ impl McpClient {
             cancel,
         )
         .await
+        .and_then(validate_tool_result)
     }
     async fn request(
         &mut self,
@@ -389,7 +475,9 @@ impl McpClient {
                         }
                         continue;
                     }
-                    if value.get("id") == message.get("id") {
+                    if value.get("id") == message.get("id")
+                        || (value.get("id").is_none() && modern_error(&value))
+                    {
                         return Ok(value);
                     }
                     // Late replies from the bounded modern probe are harmless.
@@ -438,10 +526,19 @@ impl McpClient {
         Ok(())
     }
 }
+fn validate_tool_result(value: Value) -> Result<Value> {
+    if !value.get("content").is_some_and(Value::is_array)
+        || value.get("isError").is_some_and(|v| !v.is_boolean())
+    {
+        bail!("MCP tools/call returned an invalid result");
+    }
+    Ok(value)
+}
+
 fn modern_error(value: &Value) -> bool {
     matches!(
         value.pointer("/error/code").and_then(Value::as_i64),
-        Some(-32020..=-32016 | -32022)
+        Some(-32022..=-32020)
     )
 }
 fn validate_rpc(value: &Value) -> Result<()> {
@@ -459,7 +556,11 @@ fn rpc_result(value: Value) -> Result<Value> {
         .get("result")
         .cloned()
         .context("MCP response missing result")?;
-    if result.get("inputRequests").is_some() {
+    if result.get("inputRequests").is_some()
+        || result
+            .get("resultType")
+            .is_some_and(|kind| kind != "complete")
+    {
         bail!("MCP tool requested unsupported client interaction");
     }
     Ok(result)
@@ -578,7 +679,10 @@ async fn http_post(
                     let value: Value = serde_json::from_str(&data)?;
                     data.clear();
                     validate_rpc(&value)?;
-                    if value.get("id") == message.get("id") && value.get("method").is_none() {
+                    if (value.get("id") == message.get("id")
+                        || (value.get("id").is_none() && modern_error(&value)))
+                        && value.get("method").is_none()
+                    {
                         return Ok(value);
                     }
                     if value.get("id").is_some() && value.get("method").is_some() {
@@ -597,7 +701,8 @@ async fn http_post(
     let value: Value = serde_json::from_slice(&bytes)
         .with_context(|| format!("MCP HTTP {status}: invalid JSON response"))?;
     validate_rpc(&value)?;
-    if value.get("id") != message.get("id") {
+    if value.get("id") != message.get("id") && !(value.get("id").is_none() && modern_error(&value))
+    {
         bail!("MCP HTTP response id mismatch");
     }
     if !status.is_success() && value.get("error").is_none() {
@@ -731,6 +836,8 @@ impl McpRegistry {
                     c.name,
                     if c.failed {
                         "disconnected"
+                    } else if c.reconnect.is_some() {
+                        "ready (per-call stdio)"
                     } else {
                         "connected"
                     },
@@ -826,62 +933,68 @@ mod transport_tests {
             .collect::<CapabilitySet>(),
         );
         for legacy in [false, true] {
-            let mut args = vec![fixture.to_string_lossy().into_owned()];
-            if legacy {
-                args.push("--legacy".into());
-            }
-            let config = McpServerConfig {
-                name: "fixture".into(),
-                enabled: true,
-                timeout_seconds: 60,
-                transport: McpTransportConfig::Stdio {
-                    command: if cfg!(windows) { "python" } else { "python3" }.into(),
-                    args,
-                },
-            };
-            let mut client =
-                McpClient::connect(&config, (&backend, &profile), &CancellationToken::new())
-                    .await
-                    .unwrap();
-            assert_eq!(client.version, if legacy { "2024-11-05" } else { MODERN });
-            let name = client.definitions()[0].name.clone();
-            let value = client
-                .execute(&name, json!({"hello":"世界"}), &CancellationToken::new())
+            for short_lived in [false, true] {
+                let mut args = vec![fixture.to_string_lossy().into_owned()];
+                if legacy {
+                    args.push("--legacy".into());
+                }
+                let config = McpServerConfig {
+                    name: "fixture".into(),
+                    enabled: true,
+                    timeout_seconds: 60,
+                    transport: McpTransportConfig::Stdio {
+                        command: if cfg!(windows) { "python" } else { "python3" }.into(),
+                        args,
+                    },
+                };
+                let mut client = McpClient::connect_scoped(
+                    &config,
+                    (&backend, &profile),
+                    &CancellationToken::new(),
+                    short_lived,
+                )
                 .await
                 .unwrap();
-            assert!(
-                value["content"][0]["text"]
-                    .as_str()
-                    .unwrap()
-                    .contains("hello")
-            );
-            assert_eq!(
-                client
-                    .execute(&name, json!({"fail":true}), &CancellationToken::new())
+                assert_eq!(client.version, if legacy { "2024-11-05" } else { MODERN });
+                let name = client.definitions()[0].name.clone();
+                let value = client
+                    .execute(&name, json!({"hello":"世界"}), &CancellationToken::new())
                     .await
-                    .unwrap()["isError"],
-                true
-            );
-            let cancel = CancellationToken::new();
-            if legacy {
-                cancel.cancel();
-            } else {
-                client.deadline = Duration::from_millis(20);
+                    .unwrap();
+                assert!(
+                    value["content"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("hello")
+                );
+                assert_eq!(
+                    client
+                        .execute(&name, json!({"fail":true}), &CancellationToken::new())
+                        .await
+                        .unwrap()["isError"],
+                    true
+                );
+                let cancel = CancellationToken::new();
+                if legacy {
+                    cancel.cancel();
+                } else {
+                    client.deadline = Duration::from_millis(20);
+                }
+                assert!(
+                    client
+                        .execute(&name, json!({"sleep":true}), &cancel)
+                        .await
+                        .is_err()
+                );
+                assert!(client.failed);
+                assert!(
+                    client
+                        .execute(&name, json!({}), &CancellationToken::new())
+                        .await
+                        .is_err()
+                );
+                client.shutdown().await.unwrap();
             }
-            assert!(
-                client
-                    .execute(&name, json!({"sleep":true}), &cancel)
-                    .await
-                    .is_err()
-            );
-            assert!(client.failed);
-            assert!(
-                client
-                    .execute(&name, json!({}), &CancellationToken::new())
-                    .await
-                    .is_err()
-            );
-            client.shutdown().await.unwrap();
         }
     }
 
@@ -1006,6 +1119,7 @@ mod transport_tests {
                     deadline: Duration::from_secs(5),
                     tools: BTreeMap::new(),
                     failed: false,
+                    reconnect: None,
                 };
                 let cancel = CancellationToken::new();
                 client.negotiate(&cancel).await.unwrap();
@@ -1023,7 +1137,71 @@ mod transport_tests {
     #[tokio::test]
     async fn mcp_rpc_rejects_interactions_and_malformed_envelopes() {
         assert!(rpc_result(json!({"jsonrpc":"1.0","result":{}})).is_err());
+        assert!(rpc_result(json!({"jsonrpc":"2.0","result":{"resultType":"input_required","requestState":"pending"}})).is_err());
+        for code in [-32020, -32021, -32022] {
+            assert!(modern_error(&json!({"error":{"code":code}})));
+        }
+        assert!(!modern_error(&json!({"error":{"code":-32601}})));
+        assert!(validate_tool_result(json!({})).is_err());
+        assert!(validate_tool_result(json!({"content":[],"isError":"false"})).is_err());
+        assert!(validate_tool_result(json!({"content":[],"isError":true})).is_ok());
         assert!(rpc_result(json!({"jsonrpc":"2.0","result":{"inputRequests":[{}]}})).is_err());
         assert!(rpc_result(json!({"jsonrpc":"2.0","error":{"code":-1}})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod negotiation_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[tokio::test]
+    async fn modern_capability_errors_without_ids_never_fall_back() {
+        for sse in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 8192];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                let value = json!({"jsonrpc":"2.0","error":{"code":-32021,"message":"Client capability required","data":{"requiredCapabilities":{"elicitation":{}}}}});
+                let body = if sse {
+                    format!("data: {value}\n\n")
+                } else {
+                    value.to_string()
+                };
+                let content_type = if sse {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
+                socket.write_all(format!("HTTP/1.1 400 Bad Request\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            });
+            let mut client = McpClient {
+                name: "probe".into(),
+                version: MODERN.into(),
+                transport: Transport::Http(HttpTransport {
+                    client: reqwest::Client::builder().no_proxy().build().unwrap(),
+                    url,
+                    token: None,
+                    session: None,
+                }),
+                next_id: 1,
+                deadline: Duration::from_secs(1),
+                tools: BTreeMap::new(),
+                failed: false,
+                reconnect: None,
+            };
+            let error = client
+                .negotiate(&CancellationToken::new())
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("modern negotiation failed"),
+                "{error:#}"
+            );
+            assert_eq!(client.version, MODERN);
+            assert_eq!(client.next_id, 2);
+            task.await.unwrap();
+        }
     }
 }

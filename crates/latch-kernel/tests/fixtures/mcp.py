@@ -27,6 +27,8 @@ for line in sys.stdin:
         result = {"content": [{"type": "text", "text": json.dumps(arguments)}], "isError": arguments.get("fail", False)}
     else:
         error = {"code": -32601, "message": "unsupported"}
+    if not legacy and not error:
+        result["resultType"] = "complete"
     response = {"jsonrpc": "2.0", "id": request["id"]}
     response["error" if error else "result"] = error or result
     print(json.dumps(response), flush=True)
