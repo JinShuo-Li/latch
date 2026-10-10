@@ -3,8 +3,7 @@
 The browser uses the same interactive controller and kernel as the TUI. It
 starts in English with the approved dark layout. The workspace is fixed to the
 canonical directory where `latch` starts; selecting a conversation never changes
-that directory. Web support is available in source builds from current main;
-published v0.2.3 binaries predate this integration.
+that directory. Web support is included in Linux and Windows binaries since v0.3.0.
 
 ## Start locally
 
@@ -21,8 +20,10 @@ If no desktop browser is available, open the printed URL manually. Assets are
 embedded in the binary: Python, Node, npm, and a separate frontend service are
 not runtime requirements. Linux requires `bwrap`; Windows uses the embedded AppContainer runner. Both
 require Git and ripgrep for the corresponding tools. On Windows, use a
-user-owned NTFS checkout whose objects permit temporary ACL grants; starting
-the browser does not prove the workspace is executable.
+focused user-owned NTFS checkout. Ordinary source files use native file brokers
+without ACL changes or `WRITE_DAC`; runtime bootstrap and scratch grants still
+use journaled recovery. Starting the browser does not prove the workspace is
+executable. See [Windows qualification](WINDOWS_DIAGNOSTICS.md).
 
 Config/provider/model/effort/mode/attachment overrides remain available. Resume
 with `latch --web --resume --latest` or `--resume --session <ID>`. A bare
