@@ -3,16 +3,28 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new commit supersedes an older smoke run on the same branch or PR.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   linux-smoke:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - name: Install runtime prerequisites
+        timeout-minutes: 5
         run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep shellcheck
       - name: Check Linux installer
         run: |
@@ -24,43 +36,70 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Format and architecture invariants
+        with:
+          shared-key: smoke
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Format
+        run: cargo fmt --all -- --check
+      # Compile separately so a stalled test cannot look like a slow build.
+      - name: Compile smoke targets
+        timeout-minutes: 12
         run: |
-          cargo fmt --all -- --check
-          cargo test -p latch-kernel --test invariants --locked
-          cargo test -p latch-kernel --lib sandbox::tests::probe_succeeds_on_this_host --locked
-      - name: Build and start Latch
-        run: |
+          cargo test -p latch-kernel --test invariants --no-run --locked
+          cargo test -p latch-kernel --lib --no-run --locked
           cargo build -p latch-cli --locked
-          target/debug/latch --version
+      - name: Architecture invariants
+        timeout-minutes: 2
+        run: cargo test -p latch-kernel --test invariants --locked
+      - name: Probe mandatory Linux sandbox
+        timeout-minutes: 2
+        run: cargo test -p latch-kernel --lib sandbox::tests::probe_succeeds_on_this_host --locked
+      - name: Start Latch
+        timeout-minutes: 1
+        run: target/debug/latch --version
 
   windows-smoke:
     runs-on: windows-2025
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: smoke
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check Windows installer (PowerShell 7 and Windows PowerShell 5.1)
         shell: pwsh
         run: |
           & scripts/test-install.ps1
           powershell -NoProfile -File scripts/test-install.ps1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Compile smoke targets
+        timeout-minutes: 18
+        shell: pwsh
+        run: |
+          cargo test -p latch-kernel --lib --no-run --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test -p latch-cli --test cli --no-run --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build -p latch-cli --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Verify embedded native boundary
+        timeout-minutes: 3
         shell: pwsh
         run: |
           cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked -- --test-threads=1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Windows Web transport
+        timeout-minutes: 8
         shell: pwsh
         run: |
           cargo test -p latch-cli --test cli web_transport --locked -- --test-threads=1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Build and start Latch
+      - name: Start Latch
+        timeout-minutes: 1
         shell: pwsh
         run: |
-          cargo build -p latch-cli --locked
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & target/debug/latch.exe --version
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $latchBinaryDir = (Resolve-Path target/debug).Path

@@ -1140,10 +1140,24 @@ cache decides how cheaply we can send it** — correctness and long-horizon
 continuity outrank cache locality. **CI protects what Latch must never stop
 being. Local tests verify that the current implementation actually works.**
 
-CI is a small, stable architectural gate: `cargo fmt --all -- --check`,
-`cargo clippy --workspace --all-targets --all-features -- -D warnings`, and the
-deliberately selected invariant tier in
-`crates/latch-kernel/tests/invariants.rs`. That tier is fast and deterministic
+Default CI runs Linux and Windows smoke jobs: formatting, offline installer
+checks, the kernel invariant tier, a real Linux Bubblewrap probe, the embedded
+Windows boundary test, Windows Web transport, and CLI build/start. Compilation
+has its own step before bounded runtime checks, with 20/35-minute Linux/Windows
+job limits. New pushes cancel superseded smoke runs on the same branch or PR.
+Caches separate smoke and full-validation builds; only main writes them.
+
+The manual `Full validation` workflow retains the complete Linux release gate
+(format, Clippy, invariants, workspace tests, release build), Windows native
+security fixtures, and serial Windows Rust/runtime/integration/Web checks plus
+a release build. Runs are serialized per ref without cancellation. Windows
+format/Clippy, test compilation, runtime checks and release compilation have
+separate steps and limits; native fixtures stay sequential on one runner.
+Windows Web readiness allows 60 seconds for native startup rather than treating
+the Linux 10-second correctness wait as a cross-platform latency requirement.
+
+The deliberately selected invariant tier in
+`crates/latch-kernel/tests/invariants.rs` is fast and deterministic
 by construction — no `bwrap`, `rg`, `python3`, network, timing, or large
 histories — and pins durable history as the source of truth, append-only cache
 epochs that are not memory boundaries, canonical-state authority, the absence
@@ -1152,8 +1166,8 @@ validation/evidence, safety hard-deny, steering protocol correctness,
 deterministic provider serialization, and cache-accounting semantics.
 
 Detailed correctness (providers, sandbox/command execution, snapshots,
-extensions) runs locally with `cargo test --workspace`, and long-session /
-large-history stress tests (`cargo test -p latch-kernel --lib continuity --
+extensions) runs in manual full validation and locally with
+`cargo test --workspace`, and long-session / large-history stress tests (`cargo test -p latch-kernel --lib continuity --
 --nocapture`) stay out of CI by convention. Tests are not moved between tiers
 merely to make CI green, and passing CI alone is not sufficient for a
 substantial change.

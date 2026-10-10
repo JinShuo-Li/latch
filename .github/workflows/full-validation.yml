@@ -3,14 +3,24 @@ name: Full validation
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# Full qualification runs finish even when newer commits arrive.
+concurrency:
+  group: full-validation-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   linux-release:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install deterministic test prerequisites
         run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep python3
       - name: Enable Bubblewrap user namespaces on this runner
@@ -19,13 +29,18 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: full-validation
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Deterministic release gate
+        timeout-minutes: 50
         run: bash scripts/release-gate.sh
 
   windows-native:
     runs-on: windows-2025
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Windows test prerequisites
         shell: pwsh
         run: |
@@ -38,6 +53,7 @@ jobs:
           if (-not $rgBinary) { throw "Chocolatey ripgrep package has no standalone rg.exe under $rgPackage" }
           "LATCH_TEST_RG_EXE=$rgBinary" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Build native boundary with strict MSVC warnings
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -53,6 +69,7 @@ jobs:
           cmake --build target/windows-native-ci --config Release --parallel
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Native recovery, filesystem and process security
+        timeout-minutes: 30
         shell: pwsh
         run: |
           $binaries = Join-Path $PWD 'target/windows-native-ci/bin'
@@ -77,8 +94,9 @@ jobs:
           }
   windows-rust:
     runs-on: windows-2025
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -86,6 +104,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: full-validation
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install ripgrep for sandboxed search tests
         shell: pwsh
         run: |
@@ -100,13 +121,26 @@ jobs:
           $env:PATH = "$rgDirectory;$env:PATH"
           & $rgBinary --version
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Windows runtime smoke and release build
+      - name: Format and Clippy
+        timeout-minutes: 20
         shell: pwsh
         run: |
           cargo fmt --all -- --check
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Compile Windows runtime tests
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          cargo test -p latch-kernel --lib --no-run --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test -p latch-cli --test cli --no-run --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Windows runtime and integrations
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
           # Linux runs the complete workspace suite; this Windows lane checks
           # platform wiring while the native job covers the full ACL matrix.
           foreach ($test in @(
@@ -128,5 +162,11 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo test -p latch-cli --test cli integrations --locked -- --test-threads=1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test -p latch-cli --test cli web_transport --locked -- --test-threads=1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Windows release build
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
           cargo build --release --locked
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

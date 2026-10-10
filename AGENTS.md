@@ -29,7 +29,12 @@ Default CI (`.github/workflows/ci.yml`) is a fast Linux and Windows smoke gate:
 formatting, kernel architectural invariants, a real Bubblewrap probe, an
 embedded Windows boundary command, and a CLI build/start on both hosts. The
 manual `Full validation` workflow runs the complete Linux release gate and
-Windows native security and Rust runtime suites.
+Windows native security and Rust runtime suites, including Web transport.
+Smoke jobs separate compilation from bounded runtime checks (Linux 20 minutes,
+Windows 35); same-branch/PR pushes cancel superseded CI runs. Full validation
+runs are serialized per ref without cancellation. Windows tests remain serial;
+Web readiness allows 60 seconds on Windows for native startup (10 on Linux).
+Rust caches separate smoke/full-validation profiles and only main saves them.
 
 The deterministic Linux release gate remains `bash scripts/release-gate.sh`.
 The manual CI workflow installs Bubblewrap, ripgrep, and Python and enables
