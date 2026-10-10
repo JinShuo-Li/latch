@@ -290,6 +290,12 @@ impl Agent {
                     result
                 })
         }
+        .and_then(|mut result| {
+            let (output, artifact) = self.tools.bound_output(result.output, "integration")?;
+            result.output = output;
+            result.artifact_id = artifact;
+            Ok(result)
+        })
         .unwrap_or_else(|error| tool_error(call, error.to_string()));
         self.emit(
             if result.is_error {

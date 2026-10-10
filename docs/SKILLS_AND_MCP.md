@@ -58,7 +58,9 @@ Skills are instructions, not trusted kernel policy.
 The catalog is session context, never the stable provider system field. Loaded
 instructions and resources are ordinary durable tool results: history, replay,
 rotation, recall, and context budgets treat them like any other tool output.
-Resume does not re-read a resource to reconstruct an old result. Root and child
+Large results use the existing 24 KB preview and immutable artifact spill; full
+content remains accessible with `read_artifact`. Resume does not re-read a
+resource to reconstruct an old result. Root and child
 agents discover skills independently in their shared workspace.
 
 ## MCP configuration

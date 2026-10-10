@@ -357,7 +357,7 @@ impl ToolExecutor {
         }
         Ok((format!("exit 0\n{}", output.text), output.artifact_id))
     }
-    pub(super) fn bound_output(
+    pub(crate) fn bound_output(
         &self,
         text: String,
         prefix: &str,

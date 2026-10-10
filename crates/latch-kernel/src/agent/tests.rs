@@ -5811,6 +5811,28 @@ async fn skills_disclosure_is_durable_and_provider_neutral() {
     );
     // The loader cannot interpret allowed-tools as an execution grant.
     assert!(!agent.tools.has_grant("skill-call"));
+    let full = "中".repeat(20_000);
+    std::fs::write(root.join("large.txt"), &full).unwrap();
+    let call = ToolCall {
+        id: "large-skill".into(),
+        name: "load_skill".into(),
+        arguments: json!({"name":"sample","path":"large.txt"}),
+    };
+    let results = agent
+        .execute_batch(vec![call], CancellationToken::new(), &sink)
+        .await
+        .unwrap();
+    assert!(!results[0].is_error);
+    assert!(results[0].output.len() < 25_000);
+    let artifact = results[0]
+        .artifact_id
+        .as_ref()
+        .expect("large resource must spill");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("art").join(artifact)).unwrap(),
+        full
+    );
+    assert!(store.events(sid).unwrap().iter().any(|e| matches!(&e.payload, EventPayload::ToolCompleted { result } if result.artifact_id.as_ref() == Some(artifact))));
 }
 
 #[tokio::test]
