@@ -126,5 +126,7 @@ jobs:
           }
           cargo test -p latch-cli --test cli doctor_reports_profile_and_credential --locked
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test -p latch-cli --test cli integrations --locked -- --test-threads=1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo build --release --locked
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
