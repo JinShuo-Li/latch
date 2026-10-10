@@ -1,12 +1,21 @@
 name: Release
 
 # Cut a release: update workspace.package.version and Cargo.lock, commit, then
-# git tag vX.Y.Z && git push origin vX.Y.Z. Both builds must pass before publishing.
+# git tag vX.Y.Z && git push origin vX.Y.Z. All three builds must pass before publishing.
 on:
   push:
     tags: ['v*.*.*']
-  # Manual runs build and check both targets; they never publish a release.
+  # Manual runs are build-only unless publication is explicitly requested.
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the workspace version after all three builds finish
+        type: boolean
+        default: false
+      skip_checks:
+        description: Skip runtime and installer checks for this manual build
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,6 +63,9 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             rustflags: ''
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            rustflags: ''
           # Statically link the Rust C runtime; embedded native helpers use /MT.
           - os: windows-2025
             target: x86_64-pc-windows-msvc
@@ -61,6 +73,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
+      SKIP_RELEASE_CHECKS: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_checks }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -70,14 +83,14 @@ jobs:
         with:
           key: release-${{ matrix.target }}
       - name: Linux runtime and installer checks
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && env.SKIP_RELEASE_CHECKS != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap ripgrep
           cargo test -p latch-kernel --lib sandbox::tests::probe_succeeds_on_this_host --locked --target ${{ matrix.target }}
           python3 scripts/test_install.py
       - name: Windows boundary and installer checks
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.SKIP_RELEASE_CHECKS != 'true'
         shell: pwsh
         run: |
           cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked --target ${{ matrix.target }} -- --test-threads=1
@@ -95,7 +108,9 @@ jobs:
           mkdir -p package dist
           install -m 755 "target/$RELEASE_TARGET/release/latch" package/latch
           strip package/latch
-          test "$(package/latch --version)" = "latch ${RELEASE_TAG#v}"
+          if [[ "$SKIP_RELEASE_CHECKS" != true ]]; then
+            test "$(package/latch --version)" = "latch ${RELEASE_TAG#v}"
+          fi
           cp LICENSE config.example.toml package/
           printf 'Version: %s\nTarget: %s\nCommit: %s\n' "$RELEASE_TAG" "$RELEASE_TARGET" "$GITHUB_SHA" > package/BUILD_INFO
           rustc --version >> package/BUILD_INFO
@@ -111,8 +126,10 @@ jobs:
         run: |
           New-Item -ItemType Directory package, dist | Out-Null
           Copy-Item "target/$env:RELEASE_TARGET/release/latch.exe" package/latch.exe
-          $version = & package/latch.exe --version
-          if ($LASTEXITCODE -or $version -ne "latch $($env:RELEASE_TAG.Substring(1))") { throw "Unexpected binary version: $version" }
+          if ($env:SKIP_RELEASE_CHECKS -ne 'true') {
+            $version = & package/latch.exe --version
+            if ($LASTEXITCODE -or $version -ne "latch $($env:RELEASE_TAG.Substring(1))") { throw "Unexpected binary version: $version" }
+          }
           Copy-Item LICENSE, config.example.toml package/
           @("Version: $env:RELEASE_TAG", "Target: $env:RELEASE_TARGET", "Commit: $env:GITHUB_SHA", (rustc --version), "Installation: https://github.com/JinShuo-Li/latch/blob/$env:RELEASE_TAG/docs/INSTALL.md") | Set-Content package/BUILD_INFO -Encoding utf8
           Compress-Archive -Path package/* -DestinationPath "dist/latch-$env:RELEASE_TARGET.zip"
@@ -124,8 +141,8 @@ jobs:
           retention-days: 7
 
   publish:
-    if: github.event_name == 'push'
-    needs: build
+    if: github.event_name == 'push' || inputs.publish
+    needs: [version, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -139,6 +156,7 @@ jobs:
         working-directory: dist
         run: |
           test -s latch-x86_64-unknown-linux-gnu.tar.gz
+          test -s latch-aarch64-unknown-linux-gnu.tar.gz
           test -s latch-x86_64-pc-windows-msvc.zip
           test -s install.sh
           test -s install.ps1
@@ -147,10 +165,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           # Draft first: installers must not see a release before uploads finish.
-          gh release create "$RELEASE_TAG" --verify-tag --draft --title "Latch $RELEASE_TAG" --generate-notes dist/*
+          tag_args=(--verify-tag)
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            # A manual publication creates a missing tag at the built commit.
+            # GITHUB_TOKEN-created tags do not launch a second release workflow.
+            tag_args=(--target "$GITHUB_SHA")
+          fi
+          gh release create "$RELEASE_TAG" "${tag_args[@]}" --draft --title "Latch $RELEASE_TAG" --generate-notes dist/*
           if [[ "$RELEASE_TAG" == *-* ]]; then
             gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
           else

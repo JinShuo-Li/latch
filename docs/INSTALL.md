@@ -1,7 +1,8 @@
 # Install Latch
 
 Latch 0.3.2 supports Linux and Windows. Official precompiled releases target
-x86_64; macOS, ARM64, and musl/Alpine binaries are not currently provided.
+x86_64 Linux, ARM64 Linux, and x86_64 Windows; macOS, Windows ARM64, and
+musl/Alpine binaries are not currently provided.
 The binary is named `latch` on Linux and `latch.exe` on Windows.
 
 ## Install a binary
@@ -27,7 +28,7 @@ Windows, from Windows PowerShell 5.1+ or PowerShell 7:
 irm https://jinshuo-li.github.io/latch/install.ps1 | iex
 ```
 
-Linux installs to `~/.local/bin`. Windows installs to
+Linux automatically selects the x86_64 or ARM64 archive and installs to `~/.local/bin`. Windows installs to
 `%LOCALAPPDATA%\Programs\Latch\bin`. The scripts print PATH instructions if
 needed; they do not change shell profiles or the persistent Windows PATH.
 On Linux, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
@@ -66,8 +67,9 @@ Download the archive for your platform and `SHA256SUMS` from the same
 
 | Platform | Asset | Runtime baseline |
 | --- | --- | --- |
-| Linux | `latch-x86_64-unknown-linux-gnu.tar.gz` | glibc 2.35+ (Ubuntu 22.04+, Debian 12+, or equivalent) |
-| Windows | `latch-x86_64-pc-windows-msvc.zip` | x64 Windows with AppContainer support and an NTFS workspace |
+| Linux x86_64 | `latch-x86_64-unknown-linux-gnu.tar.gz` | glibc 2.35+ (Ubuntu 22.04+, Debian 12+, or equivalent) |
+| Linux ARM64 | `latch-aarch64-unknown-linux-gnu.tar.gz` | glibc 2.35+ (Ubuntu 22.04+, Debian 12+, or equivalent) |
+| Windows x86_64 | `latch-x86_64-pc-windows-msvc.zip` | x64 Windows with AppContainer support and an NTFS workspace |
 
 Verify the archive hash against its exact filename in `SHA256SUMS`, using
 `sha256sum` on Linux or `Get-FileHash -Algorithm SHA256` on Windows, then extract

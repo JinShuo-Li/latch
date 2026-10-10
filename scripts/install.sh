@@ -9,7 +9,7 @@ main() {
   latch_install_work=''
   latch_install_staged=''
   trap 'rm -rf -- "$latch_install_work"; if [[ -n "$latch_install_staged" ]]; then rm -f -- "$latch_install_staged"; fi' EXIT
-  local os arch release_url base asset expected actual member legacy
+  local os arch target release_url base asset expected actual member legacy
   while (( $# )); do
     case "$1" in
       --version|--install-dir)
@@ -25,7 +25,11 @@ main() {
   done
   os="$(uname -s)"; arch="$(uname -m)"
   [[ "$os" == Linux ]] || fail "Unsupported OS: $os. Binary releases support Linux and Windows; macOS is not supported."
-  [[ "$arch" == x86_64 || "$arch" == amd64 ]] || fail "Unsupported architecture: $arch. Linux releases currently require x86_64."
+  case "$arch" in
+    x86_64|amd64) target='x86_64-unknown-linux-gnu' ;;
+    aarch64|arm64) target='aarch64-unknown-linux-gnu' ;;
+    *) fail "Unsupported architecture: $arch. Linux releases support x86_64 and ARM64." ;;
+  esac
   [[ -n "$install_dir" ]] || fail 'Install directory cannot be empty.'
   for dependency in curl tar sha256sum install mktemp; do
     command -v "$dependency" >/dev/null 2>&1 || fail "Missing $dependency. Install it and retry."
@@ -40,16 +44,16 @@ main() {
   fi
   [[ "$version" == v* ]] || version="v$version"
   [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail "Invalid version: $version. Expected vX.Y.Z (or a prerelease tag)."
-  asset='latch-x86_64-unknown-linux-gnu.tar.gz'
+  asset="latch-$target.tar.gz"
   base="$repo/releases/download/$version"
   latch_install_work="$(mktemp -d)"
-  echo "Downloading Latch $version for x86_64 Linux…"
+  echo "Downloading Latch $version for $arch Linux…"
   download "$base/SHA256SUMS" "$latch_install_work/SHA256SUMS"
   member=latch
   expected="$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset { print $1 }' "$latch_install_work/SHA256SUMS")"
   # Older official Linux releases used versioned assets and a top-level directory.
   if [[ -z "$expected" ]]; then
-    legacy="latch-$version-x86_64-unknown-linux-gnu"
+    legacy="latch-$version-$target"
     asset="$legacy.tar.gz"
     member="$legacy/latch"
     expected="$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset { print $1 }' "$latch_install_work/SHA256SUMS")"

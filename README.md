@@ -6,7 +6,7 @@ Latch is a terminal coding agent for Linux and Windows. It keeps sessions on dis
 
 ## Install
 
-Install the latest precompiled release for x86_64 Linux or Windows; no Rust toolchain is needed.
+Install the latest precompiled release for Linux (x86_64 or ARM64) or Windows (x86_64); no Rust toolchain is needed.
 
 **Linux (Bash)**
 

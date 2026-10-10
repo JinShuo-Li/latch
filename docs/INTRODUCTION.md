@@ -52,7 +52,7 @@ for the implemented and deferred boundary.
 
 ## Supported platforms and limits
 
-Precompiled binaries target x86_64 Linux (glibc 2.35+) and Windows. Linux needs
+Precompiled binaries target x86_64 and ARM64 Linux (glibc 2.35+), and x86_64 Windows. Linux needs
 Bubblewrap, ripgrep, and Git. Windows needs Git, ripgrep, and a focused user-owned
 NTFS workspace. The native Windows sandbox is embedded in the binary.
 

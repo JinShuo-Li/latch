@@ -8,7 +8,7 @@
   </section>
   <section id="install" aria-labelledby="install-title" class="home-section">
     <div class="section-heading"><h2 id="install-title">Installation</h2><a href="docs/installation/">Full install guide →</a></div>
-    <p>Precompiled x86_64 binaries. The installers verify SHA256 checksums.</p>
+    <p>Precompiled binaries for Linux x86_64/ARM64 and Windows x86_64. The installers verify SHA256 checksums.</p>
     <div class="install-columns">
       <div><h3>Linux <span>Bash · glibc 2.35+</span></h3><pre><code class="language-sh">curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash</code></pre><p>Requires Bubblewrap, ripgrep, and Git. Installs to <code>~/.local/bin</code>; follow the installer’s PATH instructions.</p></div>
       <div><h3>Windows <span>PowerShell</span></h3><pre><code class="language-powershell">irm https://jinshuo-li.github.io/latch/install.ps1 | iex</code></pre><p>Requires Git, ripgrep, and a user-owned NTFS workspace. The native sandbox is included. <a href="docs/installation/#install-a-binary">Add the install directory to your user PATH.</a></p></div>

@@ -1,8 +1,10 @@
 # Binary releases
 
 [Release](../.github/workflows/release.yml) runs when a tag matching `v*.*.*`
-is pushed. Manual dispatch runs the same builds and checks without publishing,
-so maintainers can verify packaging before creating a tag. It verifies that the tag matches `workspace.package.version`, builds
+is pushed. Manual dispatch defaults to build-only. Set `publish=true` to publish the
+workspace version and create its tag at the built commit if missing. Set
+`skip_checks=true` only when the operator explicitly requests building and
+publishing without runtime/installer checks. It verifies that the tag matches `workspace.package.version`, builds
 `latch` on Linux and Windows, runs platform sandbox smoke checks and offline
 installer tests, and checks the packaged executable's version. Existing CI
 and the manual full-validation workflow remain separate.
@@ -20,7 +22,7 @@ and the manual full-validation workflow remain separate.
    git push origin v0.3.2
    ```
 
-4. Watch the Release workflow. After both platform jobs succeed, it creates a
+4. Watch the Release workflow. After all three target jobs succeed, it creates a
    draft, uploads all assets and `SHA256SUMS`, and publishes the complete release.
    Stable tags become latest; tags with a prerelease suffix are marked prerelease
    and do not change the stable install target.
@@ -33,13 +35,15 @@ publish the Pages site but do not create binary releases.
 - `latch-x86_64-unknown-linux-gnu.tar.gz`: built on Ubuntu 22.04 for glibc 2.35+.
   SQLite is bundled and TLS uses rustls. The binary is stripped; glibc remains a
   runtime dependency. Bubblewrap, ripgrep, and Git remain system prerequisites.
+- `latch-aarch64-unknown-linux-gnu.tar.gz`: built natively on Ubuntu 22.04 ARM64
+  for glibc 2.35+, with the same Linux runtime prerequisites.
 - `latch-x86_64-pc-windows-msvc.zip`: built on the native x64 MSVC runner with
   `-C target-feature=+crt-static`. The embedded sandbox executable and DLL already
   use `/MT`. Consumers do not need the compiler, Windows SDK, or WSL.
 - Each archive contains the executable, `LICENSE`, `config.example.toml`, and
   `BUILD_INFO` (version, target, source commit, and Rust compiler version).
 - `install.sh`, `install.ps1`: the installers from the tagged commit.
-- `SHA256SUMS`: SHA256 of both archives and the two installer scripts, with bare
+- `SHA256SUMS`: SHA256 of all three archives and the two installer scripts, with bare
   asset filenames. Installers require one exact matching manifest entry.
 
 Only the publish job receives `contents: write`; build jobs cannot publish.

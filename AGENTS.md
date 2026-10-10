@@ -209,9 +209,11 @@ Version labels come from Cargo.toml. Keep install snippets aligned with the READ
 Captures use actual TUI fixtures and production Web UI; provenance and refresh
 commands are in `site/README.md`. Pages builds and validates HTML, then stages
 `scripts/install.sh` and `scripts/install.ps1` in the generated artifact; do not
-duplicate the scripts in `site/`. `.github/workflows/release.yml` builds glibc 2.35+ Linux
-and static-CRT native Windows binaries on matching version tags; manual dispatch
-builds without publishing. See `docs/INSTALL.md` and `docs/RELEASING.md`.
+duplicate the scripts in `site/`. `.github/workflows/release.yml` builds glibc 2.35+ Linux x86_64/ARM64
+and static-CRT Windows x86_64 binaries on matching version tags. Manual dispatch
+is build-only by default; explicit `publish=true` publishes the workspace version,
+creating a missing tag at the built commit. `skip_checks=true` skips runtime and
+installer checks only when explicitly requested by the operator. See `docs/INSTALL.md` and `docs/RELEASING.md`.
 Installer checks: `python3 scripts/test_install.py`, `shellcheck scripts/install.sh`,
 and `scripts/test-install.ps1` on Windows (PowerShell 5.1 and 7). These offline
 checks are part of default CI and tag-release builds.

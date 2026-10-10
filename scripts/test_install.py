@@ -147,7 +147,7 @@ else:
         self.assertIn('Cannot download', self.run_installer(succeeds=False))
 
     def test_unsupported_architecture_and_os(self):
-        for os_name, arch in [('Linux', 'aarch64'), ('Darwin', 'x86_64')]:
+        for os_name, arch in [('Linux', 'armv7l'), ('Darwin', 'x86_64')]:
             self.mock('uname', f'#!/bin/sh\nif [ "$1" = -s ]; then echo {os_name}; else echo {arch}; fi\n')
             self.assertIn('Unsupported', self.run_installer(succeeds=False))
             self.assertFalse((self.downloads / 'requests').exists())
