@@ -36,7 +36,10 @@ try {
   await mkdir('target/site-review',{recursive:true});
   await viewport(1440);await navigate('');
   await waitFor(`!document.querySelector('[data-search]').hidden && document.querySelector('#web-panel').hidden`);
-  assert.equal(await evaluate(`[...document.images].every(image=>image.complete && image.naturalWidth>0)`),true);
+  // Below-fold screenshots are lazy-loaded in production; request them explicitly
+  // before asserting asset availability instead of depending on preload timing.
+  await evaluate(`[...document.images].forEach(image=>{image.loading='eager';})`);
+  await waitFor(`[...document.images].every(image=>image.complete && image.naturalWidth>0)`);
   await screenshot('target/site-review/home-desktop.png');
   await click('#tab-web');
   assert.equal(await evaluate(`document.querySelector('#web-panel').hidden`),false);
