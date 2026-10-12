@@ -521,13 +521,8 @@ impl ProcessBuffer {
         }
     }
 
-    /// Appends one completed read chunk, spilling to the artifact once the
+    /// Appends already-decoded text, spilling to the artifact once the
     /// in-memory prefix reaches `PROCESS_MAX_BUFFER_BYTES`.
-    pub(super) fn append(&mut self, bytes: &[u8], artifacts: &Path, artifact_name: &str) {
-        let chunk = String::from_utf8_lossy(bytes);
-        self.push_text(&chunk, artifacts, artifact_name);
-    }
-
     fn push_text(&mut self, chunk: &str, artifacts: &Path, artifact_name: &str) {
         if let Some(file) = self.overflow.as_mut() {
             if file.write_all(chunk.as_bytes()).is_err() {
@@ -573,6 +568,61 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
     index
 }
 
+/// Incremental UTF-8 decoder for one output stream. Read chunks can split a
+/// multi-byte character, so an incomplete trailing sequence is carried to the
+/// next read instead of being decoded as a replacement character; genuinely
+/// invalid bytes still become U+FFFD, exactly like `String::from_utf8_lossy`.
+#[derive(Debug, Default)]
+struct Utf8Decoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8Decoder {
+    fn decode(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut text = String::new();
+        loop {
+            match std::str::from_utf8(&self.pending) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    self.pending.clear();
+                    break;
+                }
+                Err(error) => {
+                    let valid = error.valid_up_to();
+                    text.push_str(
+                        std::str::from_utf8(&self.pending[..valid]).expect("valid UTF-8 prefix"),
+                    );
+                    match error.error_len() {
+                        Some(invalid) => {
+                            text.push('\u{FFFD}');
+                            self.pending.drain(..valid + invalid);
+                        }
+                        None => {
+                            // An incomplete character at the end: keep it for
+                            // the next read.
+                            self.pending.drain(..valid);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        text
+    }
+
+    /// Decodes any trailing incomplete sequence at EOF, matching a
+    /// whole-stream lossy decode.
+    fn flush(&mut self) -> String {
+        if self.pending.is_empty() {
+            return String::new();
+        }
+        let text = String::from_utf8_lossy(&self.pending).into_owned();
+        self.pending.clear();
+        text
+    }
+}
+
 pub(super) fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(
     mut reader: R,
     output: Arc<Mutex<ProcessBuffer>>,
@@ -580,15 +630,28 @@ pub(super) fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(
     artifact_name: String,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut decoder = Utf8Decoder::default();
         let mut buffer = [0u8; 4096];
         loop {
             match reader.read(&mut buffer).await {
                 Ok(0) | Err(_) => break,
-                Ok(n) => output
-                    .lock()
-                    .await
-                    .append(&buffer[..n], &artifacts, &artifact_name),
+                Ok(n) => {
+                    let text = decoder.decode(&buffer[..n]);
+                    if !text.is_empty() {
+                        output
+                            .lock()
+                            .await
+                            .push_text(&text, &artifacts, &artifact_name);
+                    }
+                }
             }
+        }
+        let tail = decoder.flush();
+        if !tail.is_empty() {
+            output
+                .lock()
+                .await
+                .push_text(&tail, &artifacts, &artifact_name);
         }
     })
 }
@@ -600,7 +663,7 @@ mod tests {
     fn fixture_process(dir: &Path, text: &str, artifact: Option<&str>) -> ManagedProcess {
         let mut output = ProcessBuffer::new();
         if !text.is_empty() {
-            output.append(text.as_bytes(), dir, "process-fixture.log");
+            output.push_text(text, dir, "process-fixture.log");
         }
         ManagedProcess {
             label: String::new(),
@@ -648,10 +711,10 @@ mod tests {
     fn managed_process_output_stays_bounded_and_spills_to_the_artifact() {
         let dir = tempfile::tempdir().unwrap();
         let mut output = ProcessBuffer::new();
-        let chunk = vec![b'x'; 4096];
+        let chunk = "x".repeat(4096);
         let total = PROCESS_MAX_BUFFER_BYTES + 3 * 4096;
         for _ in 0..(total / chunk.len()) {
-            output.append(&chunk, dir.path(), "process-fixture.log");
+            output.push_text(&chunk, dir.path(), "process-fixture.log");
         }
         assert!(
             output.text.len() <= PROCESS_MAX_BUFFER_BYTES,
@@ -749,8 +812,8 @@ mod tests {
         )
         .unwrap();
         let mut output = ProcessBuffer::new();
-        output.append(
-            &vec![b'q'; PROCESS_MAX_BUFFER_BYTES + 4096],
+        output.push_text(
+            &"q".repeat(PROCESS_MAX_BUFFER_BYTES + 4096),
             &artifacts,
             "process-fixture.log",
         );
@@ -787,5 +850,55 @@ mod tests {
             )),
             "the durable exit event must carry the artifact"
         );
+    }
+
+    /// CR-07 regression: a multi-byte character split across two reads must be
+    /// reassembled, not decoded as two replacement characters.
+    #[test]
+    fn utf8_split_across_reads_is_reassembled() {
+        let mut decoder = Utf8Decoder::default();
+        let bytes = "日本語".as_bytes();
+        assert_eq!(decoder.decode(&bytes[..4]), "日");
+        assert_eq!(decoder.decode(&bytes[4..]), "本語");
+        assert_eq!(decoder.flush(), "");
+    }
+
+    #[test]
+    fn utf8_invalid_bytes_become_replacement_characters() {
+        let mut decoder = Utf8Decoder::default();
+        assert_eq!(decoder.decode(&[0xFF, 0xFE, b'a']), "\u{FFFD}\u{FFFD}a");
+        assert_eq!(decoder.flush(), "");
+    }
+
+    #[test]
+    fn utf8_incomplete_tail_flushes_as_replacement_at_eof() {
+        let mut decoder = Utf8Decoder::default();
+        assert_eq!(decoder.decode(&[b'a', 0xE6, 0x97]), "a");
+        assert_eq!(decoder.flush(), "\u{FFFD}");
+    }
+
+    #[tokio::test]
+    async fn spawn_reader_reassembles_multibyte_output_split_across_reads() {
+        use tokio::io::AsyncWriteExt;
+        let dir = tempfile::tempdir().unwrap();
+        let output = Arc::new(Mutex::new(ProcessBuffer::new()));
+        let payload = format!("{}éb", "a".repeat(4095));
+        let bytes = payload.as_bytes();
+        // The first 4096 bytes end between the two bytes of `é`.
+        assert!(bytes.len() > 4096);
+        let (mut writer, reader) = tokio::io::duplex(8192);
+        let handle = spawn_reader(
+            reader,
+            output.clone(),
+            dir.path().into(),
+            "process-fixture.log".into(),
+        );
+        writer.write_all(&bytes[..4096]).await.unwrap();
+        writer.write_all(&bytes[4096..]).await.unwrap();
+        drop(writer);
+        handle.await.unwrap();
+        let retained = output.lock().await.text.clone();
+        assert_eq!(retained, payload);
+        assert!(!retained.contains('\u{FFFD}'));
     }
 }
