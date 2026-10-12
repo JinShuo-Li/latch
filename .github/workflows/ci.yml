@@ -26,10 +26,11 @@ jobs:
       - name: Install runtime prerequisites
         timeout-minutes: 5
         run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep shellcheck
-      - name: Check Linux installer
+      - name: Check Linux installer and scripts
         run: |
-          shellcheck scripts/install.sh
+          shellcheck scripts/install.sh scripts/fetch-references.sh scripts/test-fetch-references.sh
           python3 scripts/test_install.py
+          bash scripts/test-fetch-references.sh
       - name: Enable Bubblewrap user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - uses: dtolnay/rust-toolchain@stable

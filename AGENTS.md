@@ -222,6 +222,9 @@ installer checks only when explicitly requested by the operator. See `docs/INSTA
 Installer checks: `python3 scripts/test_install.py`, `shellcheck scripts/install.sh`,
 and `scripts/test-install.ps1` on Windows (PowerShell 5.1 and 7). These offline
 checks are part of default CI and tag-release builds.
+Reference-fetch recovery is checked offline by
+`bash scripts/test-fetch-references.sh` (local git upstreams, no network; part
+of the Linux smoke job alongside `shellcheck scripts/fetch-references.sh`).
 Resolve latest installer versions through GitHub's public release redirect,
 not its rate-limited unauthenticated API; keep both PowerShell response shapes covered.
 
