@@ -1,6 +1,7 @@
 use super::supervisor::{SupervisorInner, update_from_worker};
 use crate::agent::{Agent, AgentEventSink};
 use latch_protocol::{AgentIdentity, AgentMessage, AgentStatus, EventPayload};
+use std::future::Future;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -178,6 +179,52 @@ async fn drain_follow_ups(
     }
 }
 
+/// Races one child turn against lifetime cancellation and worker commands.
+///
+/// Once closing starts, the lifetime future and the command channel are
+/// disabled: an already-cancelled lifetime is permanently ready and a closed
+/// command channel is permanently empty, so re-arming either branch would
+/// busy-spin at full CPU until the child turn observes cancellation and
+/// finishes. Returns the turn outcome, whether an explicit interrupt was
+/// requested, and whether this worker is closing.
+pub(super) async fn race_turn<F>(
+    run: F,
+    receiver: &mut mpsc::Receiver<WorkerCommand>,
+    lifetime: &CancellationToken,
+    turn_cancel: &CancellationToken,
+    child_mailbox: &super::mailbox::ChildMailbox,
+) -> (anyhow::Result<String>, bool, bool)
+where
+    F: Future<Output = anyhow::Result<String>>,
+{
+    let mut interrupted = false;
+    let mut closing = false;
+    tokio::pin!(run);
+    let outcome = loop {
+        tokio::select! {
+            outcome = &mut run => break outcome,
+            () = lifetime.cancelled(), if !closing => {
+                closing = true;
+                turn_cancel.cancel();
+            }
+            command = receiver.recv(), if !closing => match command {
+                Some(WorkerCommand::Information(message)) | Some(WorkerCommand::Continue(message)) => {
+                    child_mailbox.push(message);
+                }
+                Some(WorkerCommand::Interrupt) => {
+                    interrupted = true;
+                    turn_cancel.cancel();
+                }
+                Some(WorkerCommand::Close) | None => {
+                    closing = true;
+                    turn_cancel.cancel();
+                }
+            }
+        }
+    };
+    (outcome, interrupted, closing)
+}
+
 async fn run_turn(
     inner: &Weak<SupervisorInner>,
     identity: &AgentIdentity,
@@ -207,33 +254,14 @@ async fn run_turn(
         let turn_cancel = lifetime.child_token();
         let child_mailbox = agent.child_mailbox_handle();
         let sink: AgentEventSink = Arc::new(|_| {});
-        let run = agent.run(prompt.as_str(), turn_cancel.clone(), sink);
-        tokio::pin!(run);
-        let mut interrupted = false;
-        let mut closing = false;
-        let outcome = loop {
-            tokio::select! {
-                outcome = &mut run => break outcome,
-                () = lifetime.cancelled() => {
-                    closing = true;
-                    turn_cancel.cancel();
-                }
-                command = receiver.recv() => match command {
-                    Some(WorkerCommand::Information(message)) | Some(WorkerCommand::Continue(message)) => {
-                        child_mailbox.push(message);
-                    }
-                    Some(WorkerCommand::Interrupt) => {
-                        interrupted = true;
-                        turn_cancel.cancel();
-                    }
-                    Some(WorkerCommand::Close) | None => {
-                        closing = true;
-                        turn_cancel.cancel();
-                    }
-                }
-            }
-        };
-        (outcome, interrupted, closing)
+        race_turn(
+            agent.run(prompt.as_str(), turn_cancel.clone(), sink),
+            receiver,
+            lifetime,
+            &turn_cancel,
+            &child_mailbox,
+        )
+        .await
     };
     if closing {
         close(inner, identity.agent_id);
@@ -283,5 +311,113 @@ fn close(inner: &Weak<SupervisorInner>, agent_id: uuid::Uuid) {
             .is_ok()
     {
         update_from_worker(inner, agent_id, AgentStatus::Closed, None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use latch_protocol::AgentMessageKind;
+
+    fn message(text: &str) -> AgentMessage {
+        AgentMessage {
+            message_id: uuid::Uuid::new_v4(),
+            kind: AgentMessageKind::Information,
+            text: text.into(),
+        }
+    }
+
+    /// CR-06 regression: after lifetime cancellation sets closing, the command
+    /// branch must not re-arm, so a command arriving during shutdown never
+    /// reaches the child mailbox and the loop cannot spin on a permanently
+    /// ready cancellation future.
+    #[tokio::test]
+    async fn cancelled_lifetime_stops_races_and_ignores_late_commands() {
+        let mailbox = super::super::mailbox::ChildMailbox::default();
+        let raced_mailbox = mailbox.clone();
+        let lifetime = CancellationToken::new();
+        lifetime.cancel();
+        let turn_cancel = CancellationToken::new();
+        let cancel_seen = turn_cancel.clone();
+        let (release, run_waits) = tokio::sync::oneshot::channel::<()>();
+        let run = async move {
+            run_waits.await.ok();
+            Ok("finished".to_owned())
+        };
+        let (commands, mut receiver) = mpsc::channel(4);
+        let raced = tokio::spawn(async move {
+            race_turn(run, &mut receiver, &lifetime, &turn_cancel, &raced_mailbox).await
+        });
+        // The cancellation branch fires exactly once and cancels the turn.
+        cancel_seen.cancelled().await;
+        commands
+            .send(WorkerCommand::Information(message("late")))
+            .await
+            .unwrap();
+        // Give a re-armed command branch a chance to misbehave before asserting.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            mailbox.drain().is_empty(),
+            "commands accepted after closing must not reach the child"
+        );
+        release.send(()).unwrap();
+        let (outcome, interrupted, closing) = raced.await.unwrap();
+        assert_eq!(outcome.unwrap(), "finished");
+        assert!(!interrupted);
+        assert!(closing);
+    }
+
+    /// A command that arrives before closing still interrupts the turn.
+    #[tokio::test]
+    async fn interrupt_before_closing_still_cancels_the_turn() {
+        let mailbox = super::super::mailbox::ChildMailbox::default();
+        let raced_mailbox = mailbox.clone();
+        let lifetime = CancellationToken::new();
+        let turn_cancel = CancellationToken::new();
+        let cancel_seen = turn_cancel.clone();
+        let (release, run_waits) = tokio::sync::oneshot::channel::<()>();
+        let run = async move {
+            run_waits.await.ok();
+            Ok("interrupted".to_owned())
+        };
+        let (commands, mut receiver) = mpsc::channel(4);
+        let raced = tokio::spawn(async move {
+            race_turn(run, &mut receiver, &lifetime, &turn_cancel, &raced_mailbox).await
+        });
+        commands.send(WorkerCommand::Interrupt).await.unwrap();
+        cancel_seen.cancelled().await;
+        release.send(()).unwrap();
+        let (outcome, interrupted, closing) = raced.await.unwrap();
+        assert!(interrupted);
+        assert!(!closing);
+        assert_eq!(outcome.unwrap(), "interrupted");
+    }
+
+    /// A closed command channel closes the worker once and then waits for the
+    /// turn, instead of treating every empty receive as a fresh close.
+    #[tokio::test]
+    async fn closed_command_channel_waits_for_the_turn() {
+        let mailbox = super::super::mailbox::ChildMailbox::default();
+        let raced_mailbox = mailbox.clone();
+        let lifetime = CancellationToken::new();
+        let turn_cancel = CancellationToken::new();
+        let cancel_seen = turn_cancel.clone();
+        let (release, run_waits) = tokio::sync::oneshot::channel::<()>();
+        let run = async move {
+            run_waits.await.ok();
+            Ok("closed".to_owned())
+        };
+        let (commands, mut receiver) = mpsc::channel::<WorkerCommand>(1);
+        drop(commands);
+        let raced = tokio::spawn(async move {
+            race_turn(run, &mut receiver, &lifetime, &turn_cancel, &raced_mailbox).await
+        });
+        // The empty channel closes the worker and cancels the turn exactly once.
+        cancel_seen.cancelled().await;
+        release.send(()).unwrap();
+        let (outcome, interrupted, closing) = raced.await.unwrap();
+        assert!(closing);
+        assert!(!interrupted);
+        assert_eq!(outcome.unwrap(), "closed");
     }
 }
