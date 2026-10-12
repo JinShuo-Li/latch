@@ -175,11 +175,13 @@ impl ToolExecutor {
             }
         }
         if let Some(artifact) = &process.artifact_id {
-            text.push_str(&format!("\n[full output artifact: {artifact}]"));
-        } else if spill_failed {
-            text.push_str(&format!(
-                "\n[output beyond {PROCESS_MAX_BUFFER_BYTES} bytes was dropped: the overflow artifact could not be written]"
-            ));
+            let completeness = if spill_failed { "incomplete" } else { "full" };
+            text.push_str(&format!("\n[{completeness} output artifact: {artifact}]"));
+        }
+        if spill_failed {
+            text.push_str(
+                "\n[output was dropped: the overflow artifact could not be written completely]",
+            );
         }
         Ok((text, process.artifact_id.clone()))
     }
@@ -850,6 +852,62 @@ mod tests {
             )),
             "the durable exit event must carry the artifact"
         );
+    }
+
+    /// A failed append after successful spill must keep the partial artifact
+    /// readable, while every later poll explicitly reports missing output.
+    #[tokio::test]
+    async fn exec_poll_reports_incomplete_artifact_after_append_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let session = store.create_session(dir.path()).unwrap();
+        let executor = ToolExecutor::new_with_state_dir(
+            dir.path().into(),
+            artifacts.clone(),
+            dir.path().join("state"),
+            store.clone(),
+            session,
+            PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        let name = "process-fixture.log";
+        let retained = "q".repeat(PROCESS_MAX_BUFFER_BYTES + 4096);
+        let mut output = ProcessBuffer::new();
+        output.push_text(&retained, &artifacts, name);
+        // A read-only handle makes write_all fail deterministically on both
+        // platforms, without exhausting the host disk or changing global limits.
+        output.overflow = Some(std::fs::File::open(artifacts.join(name)).unwrap());
+        output.push_text("lost output", &artifacts, name);
+        assert!(output.spill_failed);
+        assert!(output.overflow.is_none());
+        output.push_text("also lost", &artifacts, name);
+        assert_eq!(
+            std::fs::read_to_string(artifacts.join(name)).unwrap(),
+            retained
+        );
+        let mut process = fixture_process(dir.path(), "", None);
+        process.output = Arc::new(Mutex::new(output));
+        executor
+            .processes
+            .lock()
+            .await
+            .insert("fixture".into(), process);
+        for _ in 0..2 {
+            let (text, artifact) = executor
+                .process_poll(&ToolCall {
+                    id: "poll".into(),
+                    name: "exec_poll".into(),
+                    arguments: json!({"id": "fixture"}),
+                })
+                .await
+                .unwrap();
+            assert_eq!(artifact.as_deref(), Some(name));
+            assert!(text.contains("incomplete output artifact: process-fixture.log"));
+            assert!(text.contains("output was dropped"));
+            assert!(!text.contains("full output artifact"));
+        }
     }
 
     /// CR-07 regression: a multi-byte character split across two reads must be

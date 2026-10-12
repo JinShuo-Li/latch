@@ -591,7 +591,10 @@ writes, checkpoints, and undo. Shell and validation processes use bounded
 timeout, cancellation, captured status, and artifact spill for large output.
 Managed `exec_*` processes are owned by the kernel, buffered in memory, spilled
 to artifacts past a cap, and durably closed with `ProcessExited`; a resumed
-session reports honestly that children did not survive the restart.
+session reports honestly that children did not survive the restart. If an
+artifact append fails, later polls retain the partial artifact reference, label
+it incomplete, and report dropped output even when the artifact was previously
+created successfully.
 
 ## Context engine port
 

@@ -77,8 +77,10 @@ After recorded edits, a missing implementation claim also receives one bounded
 correction opportunity; a normal CLI exit alone is not verified completion.
 An empty final completion summary receives a kernel report of recorded changes
 and current validation status without an extra model request; it stays visible on resume.
-Managed processes record natural exits automatically. When validation cannot
-certify the workspace, it names the blocker. Once the retry budget is exhausted,
+Managed processes record natural exits automatically. If saving their output
+fails, polling reports lost output and labels any partial log as incomplete.
+When validation cannot certify the workspace, it names the blocker. Once the
+retry budget is exhausted,
 validation commands blocked by the same active processes are not rerun.
 When several requirements need fresh evidence, one validation command can
 prove them together; older passes remain historical after later writes.
