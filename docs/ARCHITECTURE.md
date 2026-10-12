@@ -771,7 +771,7 @@ in `media.rs`. Tools keep the
 `process`, `files`, `write`, and `git` into children. The TUI keeps the app
 state and reducer in `lib.rs` with
 `transcript`, `markdown`, `chrome`, `theme`, and `runtime` alongside the
-existing `composer`, `sidebar`, `diff`, `presentation`, `agents`, `group`, and
+existing `composer`, `sidebar`, `diff`, `presentation`, `agents`, and
 `session_picker` modules.
 Child modules are children of their owner, so private state stays private while
 each file owns one concern.
