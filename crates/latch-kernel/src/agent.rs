@@ -177,8 +177,11 @@ fn initial_context_engine_factory<C: ContextEngine + 'static>(
 }
 
 impl Agent {
-    #[must_use]
-    pub fn new<C: ContextEngine + 'static>(runtime: AgentRuntime<C>) -> Self {
+    /// Fallible root-agent constructor. Supervisor reconstruction reads the
+    /// durable agent graph and may reconcile it with an append and reload the
+    /// group coordinator; an I/O, lock, or corrupt-state error must surface as
+    /// a clean error rather than a panic.
+    pub fn try_new<C: ContextEngine + 'static>(runtime: AgentRuntime<C>) -> Result<Self> {
         let settings = WorkerSettings {
             context: runtime.continuity.config().clone(),
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -200,9 +203,15 @@ impl Agent {
             runtime.tools.clone(),
             settings,
             context_factory,
-        )
-        .expect("reconstruct durable agent graph");
-        Self::new_inner(runtime, Some(supervisor), 0)
+        )?;
+        Ok(Self::new_inner(runtime, Some(supervisor), 0))
+    }
+
+    /// Panicking convenience wrapper around [`Self::try_new`] for tests.
+    /// Production callers must use `try_new` and surface the error.
+    #[must_use]
+    pub fn new<C: ContextEngine + 'static>(runtime: AgentRuntime<C>) -> Self {
+        Self::try_new(runtime).expect("reconstruct durable agent graph")
     }
 
     pub(crate) fn new_child<C: ContextEngine + 'static>(

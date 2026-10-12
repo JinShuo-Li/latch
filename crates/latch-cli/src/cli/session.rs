@@ -673,7 +673,7 @@ pub async fn build_agent(
     }
     let continuity =
         ContinuityEngine::for_model(store.clone(), config.context.clone(), &profile.model);
-    let mut agent = Agent::new(AgentRuntime {
+    let mut agent = runtime(Agent::try_new(AgentRuntime {
         session_id,
         workspace: workspace.to_path_buf(),
         mode,
@@ -682,7 +682,7 @@ pub async fn build_agent(
         tools,
         continuity,
         retry_budget: config.failure.retry_budget,
-    });
+    }))?;
     agent.set_stagnation_budget(config.failure.stagnation_budget);
     agent.set_max_model_turns(config.failure.max_model_turns);
     agent.set_extension_lifecycle((&config.extension_lifecycle).into());

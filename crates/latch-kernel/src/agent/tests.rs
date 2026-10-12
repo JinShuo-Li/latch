@@ -2426,6 +2426,76 @@ async fn duplicate_provider_call_ids_cannot_share_one_approval() {
     );
 }
 
+/// CR-10 regression: a recoverable supervisor-reconstruction failure returns
+/// a clean error instead of panicking in the CLI's build path.
+#[tokio::test]
+async fn try_new_propagates_supervisor_reconstruction_errors() {
+    let d = tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let root = store.create_session(d.path()).unwrap();
+    let child = store.create_session(d.path()).unwrap();
+    let identity = latch_protocol::AgentIdentity {
+        agent_id: child,
+        root_session_id: root,
+        parent_session_id: root,
+        task_name: "leftover child".into(),
+        agent_type: None,
+        depth: 1,
+    };
+    store
+        .append(
+            child,
+            EventPayload::AgentSpawned {
+                identity,
+                delegation_brief: "leftover turn".into(),
+            },
+        )
+        .unwrap();
+    store
+        .append(
+            child,
+            EventPayload::AgentStatusChanged {
+                status: latch_protocol::AgentStatus::Running,
+                reason: None,
+            },
+        )
+        .unwrap();
+    let build = |store: &EventStore| {
+        let tools = ToolExecutor::new(
+            d.path().into(),
+            d.path().join("art"),
+            store.clone(),
+            root,
+            PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        AgentRuntime {
+            session_id: root,
+            workspace: d.path().into(),
+            mode: Mode::Work,
+            store: store.clone(),
+            provider: Arc::new(FakeProvider::scripted(vec![])),
+            tools,
+            continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+            retry_budget: 1,
+        }
+    };
+    // Reconstructing the interrupted child requires a durable reconciliation
+    // append; when that append fails, the constructor must not panic.
+    store.fail_appends(true);
+    let error = match Agent::try_new(build(&store)) {
+        Ok(_) => panic!("a failing reconciliation append must surface as an error"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{error:#}").contains("injected event-store append failure"),
+        "{error:#}"
+    );
+    store.fail_appends(false);
+    let agent = Agent::try_new(build(&store)).unwrap();
+    assert!(agent.agent_supervisor().is_some());
+}
+
 #[tokio::test]
 async fn non_interactive_ask_is_denied_with_a_durable_record() {
     let workspace_dir = tempdir().unwrap();
