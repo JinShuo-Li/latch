@@ -378,13 +378,34 @@ else
     bad "recursive deletion left a real dogfood descendant"
 fi
 
+# --- summary policy (no Docker required) ---------------------------------
+# KEEP=1 keeps artifacts for inspection but must still report success; only a
+# real check failure exits non-zero.
+for case_expected in '0 0 clean' '0 1 kept' '2 0 failed' '2 1 failed'; do
+    read -r expected_fail expected_keep expected_mode <<<"$case_expected"
+    actual="$(dogfood_summary "$expected_fail" "$expected_keep")"
+    if [ "$actual" = "$expected_mode" ]; then
+        ok "summary for failed=$expected_fail keep=$expected_keep is '$expected_mode'"
+    else
+        bad "summary for failed=$expected_fail keep=$expected_keep was '$actual' (expected '$expected_mode')"
+    fi
+done
+
 # --- summary -------------------------------------------------------------
 echo
 echo "passed: $pass   failed: $fail"
 
-if [ "$fail" -gt 0 ] || [ "${KEEP:-0}" = "1" ]; then
-    echo "artifacts kept at $work"
-    exit 1
-fi
-rm -rf "$work"
-exit 0
+case "$(dogfood_summary "$fail" "${KEEP:-0}")" in
+    failed)
+        echo "artifacts kept at $work"
+        exit 1
+        ;;
+    kept)
+        echo "artifacts kept at $work (KEEP=1)"
+        exit 0
+        ;;
+    *)
+        rm -rf "$work"
+        exit 0
+        ;;
+esac

@@ -41,3 +41,18 @@ dogfood_safe_remove() {
         *) echo "refusing to delete outside $root_real: $target_real" >&2 ;;
     esac
 }
+
+# Summary policy for the harness: `failed` when any check failed, `kept` when
+# KEEP=1 asked to keep artifacts for inspection, and `clean` otherwise. Only
+# `failed` is a failing exit status; KEEP=1 keeps artifacts and still reports
+# success.
+dogfood_summary() {
+    local fail="$1" keep="${2:-0}"
+    if [ "$fail" -gt 0 ]; then
+        printf '%s' "failed"
+    elif [ "$keep" = "1" ]; then
+        printf '%s' "kept"
+    else
+        printf '%s' "clean"
+    fi
+}
