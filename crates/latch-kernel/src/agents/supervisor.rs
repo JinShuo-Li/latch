@@ -326,6 +326,10 @@ impl AgentSupervisor {
             None => message,
         };
         let brief = delegation_brief(&task_name, &delegation, &self.inner.workspace, &context);
+        // Reserve worker registration before publishing the child in the graph.
+        // A concurrent message may discover Starting children, but must not
+        // reconstruct one before its initial brief/profile is installed.
+        let mut workers = self.inner.workers.lock().unwrap_or_else(|e| e.into_inner());
         let identity = {
             let mut graph = self.inner.graph.lock().unwrap_or_else(|e| e.into_inner());
             if graph.snapshots().iter().any(|node| {
@@ -390,7 +394,7 @@ impl AgentSupervisor {
                 )));
             }
         }
-        if let Err(error) = self.start_worker(identity.clone(), Some(brief)) {
+        if let Err(error) = self.start_worker_locked(&mut workers, identity.clone(), Some(brief)) {
             self.inner.store.append(
                 identity.agent_id,
                 EventPayload::AgentStatusChanged {
@@ -650,28 +654,23 @@ impl AgentSupervisor {
             .map(|node| node.identity.clone())
             .ok_or_else(|| anyhow!("unknown agent {agent_id}"))?;
         let mut workers = self.inner.workers.lock().unwrap_or_else(|e| e.into_inner());
-        // Re-check under the workers lock: a concurrent caller may have
-        // started the worker since the fast path above.
-        if let Some(handle) = workers.get(&agent_id) {
-            return Ok(handle.sender.clone());
-        }
-        let (sender, handle) = self.spawn_worker(identity, None)?;
-        workers.insert(agent_id, handle);
-        Ok(sender)
+        self.start_worker_locked(&mut workers, identity, None)
     }
 
-    fn start_worker(
+    /// Both first starts and reconstruction serialize creation and registration.
+    /// First starts acquire this lock before publishing their graph identity.
+    fn start_worker_locked(
         &self,
+        workers: &mut HashMap<Uuid, WorkerHandle>,
         identity: AgentIdentity,
         initial: Option<String>,
     ) -> Result<mpsc::Sender<WorkerCommand>> {
         let agent_id = identity.agent_id;
+        if let Some(handle) = workers.get(&agent_id) {
+            return Ok(handle.sender.clone());
+        }
         let (sender, handle) = self.spawn_worker(identity, initial)?;
-        self.inner
-            .workers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(agent_id, handle);
+        workers.insert(agent_id, handle);
         Ok(sender)
     }
 

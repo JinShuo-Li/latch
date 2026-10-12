@@ -351,6 +351,11 @@ append-only child-session events. Graph replay reduces those events in stable
 name/id order. A persisted `Starting` or `Running` state with no surviving
 runtime is reconciled once to `Interrupted`; it is never rerun implicitly.
 
+First starts reserve the worker registry before publishing the child in the
+runtime graph. First starts and reconstruction share the registry lock through
+worker creation and registration, so concurrent messages cannot create a second
+worker or replace the worker carrying the initial delegation brief.
+
 The model-facing schema is fixed: `spawn_agent`, `send_agent_message`,
 `continue_agent`, `wait_agents`, `list_agents`, `interrupt_agent`, and
 `close_agent` exist regardless of graph contents. Spawn is asynchronous;

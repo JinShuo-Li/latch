@@ -1532,3 +1532,77 @@ async fn mcp_children_use_independent_clients_and_durable_results() {
     ));
     agent.shutdown_extensions().await.unwrap();
 }
+
+/// First publication and resumed-worker reconstruction must share one
+/// registration lock, including while the initial child is being built.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_worker_start_and_concurrent_ensure_share_one_channel() {
+    let (_workspace, store, root) = test_agent(Arc::new(TestProvider::plain(0)), Mode::Work);
+    let supervisor = root.agent_supervisor().unwrap();
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let count = Arc::new(AtomicUsize::new(0));
+    supervisor.set_context_engine_factory({
+        let entered = entered.clone();
+        let release = release.clone();
+        let count = count.clone();
+        Arc::new(move |spec| {
+            if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                entered.wait();
+                release.wait();
+            }
+            Ok(Box::new(ContinuityEngine::new(
+                store.clone(),
+                spec.context.clone(),
+            )))
+        })
+    });
+    let starting = {
+        let supervisor = supervisor.clone();
+        tokio::spawn(async move {
+            supervisor
+                .spawn_agent(
+                    "race".into(),
+                    "inspect initial brief".into(),
+                    None,
+                    DelegationContext::default(),
+                )
+                .await
+        })
+    };
+    entered.wait();
+    let id = supervisor.list_agents()[0].agent_id;
+    let (finished, completion) = std::sync::mpsc::channel();
+    let attempting = Arc::new(std::sync::Barrier::new(2));
+    let ensuring = {
+        let supervisor = supervisor.clone();
+        let attempting = attempting.clone();
+        tokio::task::spawn_blocking(move || {
+            attempting.wait();
+            let sender = supervisor.ensure_worker_for_test(id);
+            let _ = finished.send(());
+            sender
+        })
+    };
+    attempting.wait();
+    // Release the builder even if the assertion would fail, so the regression
+    // cannot leave a blocked runtime thread behind.
+    let finished_before_release = completion.recv_timeout(Duration::from_millis(100)).is_ok();
+    release.wait();
+    starting.await.unwrap().unwrap();
+    let sender = ensuring.await.unwrap().unwrap();
+    let registered = supervisor.ensure_worker_for_test(id).unwrap();
+    assert!(
+        !finished_before_release,
+        "ensure bypassed first-start registration"
+    );
+    assert!(
+        sender.same_channel(&registered),
+        "first start replaced another worker"
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    supervisor
+        .wait_agents(&[id], Duration::from_secs(2))
+        .await
+        .unwrap();
+}
