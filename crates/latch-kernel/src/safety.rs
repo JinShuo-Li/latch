@@ -214,6 +214,17 @@ fn classify_file_write(tool: &str, args: &Value, context: Context<'_>) -> Classi
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| absolute.clone());
+        if is_filesystem_root(&root) {
+            return Classification::deny(
+                capabilities,
+                operation,
+                format!(
+                    "refusing to approve {}: its write scope would be the filesystem root {}; write inside the workspace or name a path below the root",
+                    absolute.display(),
+                    root.display()
+                ),
+            );
+        }
         return Classification::ask(
             capabilities,
             vec![root],
@@ -306,6 +317,17 @@ fn classify_command(tool: &str, args: &Value, context: Context<'_>) -> Classific
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| path.clone());
+        if is_filesystem_root(&root) {
+            return Classification::deny(
+                capabilities,
+                operation,
+                format!(
+                    "refusing to approve {}: its write scope would be the filesystem root {}; write inside the workspace or name a path below the root",
+                    path.display(),
+                    root.display()
+                ),
+            );
+        }
         let mut capabilities = capabilities;
         capabilities.extend(&requested_capabilities(args));
         capabilities.extend(&inferred_command_capabilities(&command));
@@ -705,6 +727,13 @@ fn is_metadata_file(path: &Path) -> bool {
     )
 }
 
+/// True when a path is a filesystem root (`/`, a Windows drive root, or a UNC
+/// share root). Binding a root writable would expose the entire host, so it can
+/// never be an approved external write scope.
+fn is_filesystem_root(path: &Path) -> bool {
+    path.parent().is_none()
+}
+
 fn system_destructive_target(path: &Path) -> bool {
     let text = path.to_string_lossy();
     #[cfg(windows)]
@@ -1046,6 +1075,55 @@ mod tests {
                 .capabilities
                 .contains(Capability::ExternalFilesystemWrite)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_root_write_scope_is_denied() {
+        // CR-02: approving `/newfile` would have carried the `/` parent as the
+        // external root and mounted the whole host writable.
+        for path in ["/latch-cr02-top-level", "/"] {
+            let classification = classify(
+                "write",
+                &json!({"path": path, "content": "x"}),
+                context(Mode::Work, Safety::Autonomous, Path::new("/tmp/ws")),
+            );
+            assert!(
+                matches!(classification.decision, Decision::Deny(_)),
+                "{path} must not become an approvable root write"
+            );
+            assert!(
+                classification.external_roots.is_empty(),
+                "{path} must not carry external roots"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_root_shell_write_target_is_denied() {
+        let classification = classify(
+            "shell",
+            &json!({"command": "echo x > /latch-cr02-top-level"}),
+            context(Mode::Work, Safety::Autonomous, Path::new("/tmp/ws")),
+        );
+        assert!(
+            matches!(classification.decision, Decision::Deny(_)),
+            "a shell write at the filesystem root must be denied"
+        );
+        assert!(classification.external_roots.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_drive_root_write_scope_is_denied() {
+        let classification = classify(
+            "write",
+            &json!({"path": r"C:\latch-cr02-top-level", "content": "x"}),
+            context(Mode::Work, Safety::Autonomous, Path::new(r"C:\ws")),
+        );
+        assert!(matches!(classification.decision, Decision::Deny(_)));
+        assert!(classification.external_roots.is_empty());
     }
 
     #[cfg(unix)]
