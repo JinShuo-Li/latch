@@ -340,13 +340,30 @@ pub fn ingest_image_bytes(
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        // Write-then-rename keeps a concurrently observed artifact complete;
-        // content addressing makes the last writer's bytes identical anyway.
-        let temp = artifacts.join(format!("media/.{sha256}.{}.tmp", std::process::id()));
+        // The temp name is unique per attempt: a deterministic name would make
+        // two concurrent ingestions of the same image in one process write the
+        // same temp file, so one rename wins and the loser either errors
+        // spuriously or keeps writing through the renamed inode.
+        let temp = artifacts.join(format!(
+            "media/.{sha256}.{}.{}.tmp",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
         std::fs::write(&temp, bytes)?;
-        std::fs::rename(&temp, &path).inspect_err(|_| {
-            let _ = std::fs::remove_file(&temp);
-        })?;
+        match std::fs::rename(&temp, &path) {
+            Ok(()) => {}
+            // Windows cannot rename over an existing destination, and any
+            // platform can lose the race to a concurrent writer. The
+            // destination is then verified content-addressed bytes, so
+            // accepting it is the same artifact.
+            Err(_) if artifact_matches(&path, &sha256, bytes.len() as u64) => {
+                let _ = std::fs::remove_file(&temp);
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&temp);
+                return Err(anyhow!("store media artifact {artifact_path}: {error}"));
+            }
+        }
     }
     Ok(MediaRef {
         id: sha256.clone(),
@@ -359,6 +376,21 @@ pub fn ingest_image_bytes(
         height: Some(height),
         display_name,
     })
+}
+
+/// True when `path` already holds exactly the content-addressed artifact for
+/// `sha256` with `len` bytes. Used to accept a lost write/rename race: the
+/// destination is the same immutable content, not a partial or foreign file.
+fn artifact_matches(path: &Path, sha256: &str, len: u64) -> bool {
+    if std::fs::metadata(path)
+        .map(|meta| meta.len() != len)
+        .unwrap_or(true)
+    {
+        return false;
+    }
+    std::fs::read(path)
+        .map(|existing| hex::encode(Sha256::digest(&existing)) == sha256)
+        .unwrap_or(false)
 }
 
 /// Reads the immutable bytes of a durable media reference, refusing any path
@@ -479,6 +511,55 @@ mod tests {
             "identical bytes must not create a second artifact"
         );
         assert_eq!(read_image_bytes(dir.path(), &reference).unwrap(), TINY_PNG);
+    }
+
+    /// CR-08 regression: concurrent ingestion of the same image from one
+    /// process must not fail on the rename or leave a temp artifact behind.
+    #[test]
+    fn concurrent_identical_ingestion_is_race_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for _ in 0..8 {
+                let root = root.clone();
+                handles.push(scope.spawn(move || ingest_image_bytes(&root, TINY_PNG, None)));
+            }
+            let mut references = Vec::new();
+            for handle in handles {
+                references.push(handle.join().unwrap().unwrap());
+            }
+            for reference in &references {
+                assert_eq!(read_image_bytes(&root, reference).unwrap(), TINY_PNG);
+            }
+            assert!(
+                references.windows(2).all(|pair| pair[0].id == pair[1].id),
+                "identical bytes must map to one content-addressed artifact"
+            );
+        });
+        for entry in std::fs::read_dir(dir.path().join("media")).unwrap() {
+            let name = entry.unwrap().file_name();
+            assert!(
+                !name.to_string_lossy().ends_with(".tmp"),
+                "temp artifact must not survive ingestion: {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn artifact_match_requires_identical_content_and_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("artifact");
+        std::fs::write(&path, b"good").unwrap();
+        let sha = hex::encode(Sha256::digest(b"good"));
+        assert!(artifact_matches(&path, &sha, 4));
+        assert!(!artifact_matches(&path, &sha, 5));
+        assert!(!artifact_matches(
+            &path,
+            &hex::encode(Sha256::digest(b"evil")),
+            4
+        ));
+        assert!(!artifact_matches(&dir.path().join("missing"), &sha, 4));
     }
 
     #[test]
