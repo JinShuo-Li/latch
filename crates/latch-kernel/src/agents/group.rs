@@ -465,6 +465,10 @@ struct GroupCoordinatorInner {
     root_session_id: Uuid,
     name: String,
     state: Mutex<GroupState>,
+    /// Test-only pause point between `reload`'s durable read and its in-memory
+    /// assignment, used to prove that a concurrent `apply` is never clobbered.
+    #[cfg(test)]
+    reload_pause: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl GroupCoordinator {
@@ -478,6 +482,8 @@ impl GroupCoordinator {
                 root_session_id,
                 name,
                 state: Mutex::new(GroupState::default()),
+                #[cfg(test)]
+                reload_pause: Mutex::new(None),
             }),
         };
         coordinator.reload()?;
@@ -499,9 +505,25 @@ impl GroupCoordinator {
     /// Rebuilds the in-memory reducer from the durable group events belonging
     /// to this root's group. Cross-session delivery events are included in
     /// global commit order, so replay is deterministic.
+    ///
+    /// The reducer lock is held across the durable read and the assignment, so
+    /// an `apply` for an event committed after the read runs after the
+    /// assignment instead of being clobbered by it. Callers that mutate durable
+    /// state must not hold this lock.
     fn reload(&self) -> Result<()> {
+        let mut state = self.state();
         let events = self.inner.store.group_events()?;
-        let mut state = GroupState::default();
+        #[cfg(test)]
+        if let Some(pause) = self
+            .inner
+            .reload_pause
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            pause();
+        }
+        let mut rebuilt = GroupState::default();
         let mut known_tasks: HashSet<Uuid> = HashSet::new();
         for event in &events {
             let include = match &event.payload {
@@ -509,26 +531,28 @@ impl GroupCoordinator {
                     identity.root_session_id == self.inner.root_session_id
                 }
                 EventPayload::AgentGroupMemberJoined { group_id, .. } => {
-                    state.group_id() == Some(*group_id)
+                    rebuilt.group_id() == Some(*group_id)
                 }
-                EventPayload::GroupTaskCreated { task } => state.group_id() == Some(task.group_id),
+                EventPayload::GroupTaskCreated { task } => {
+                    rebuilt.group_id() == Some(task.group_id)
+                }
                 EventPayload::GroupTaskClaimed { task_id, .. }
                 | EventPayload::GroupTaskStatusChanged { task_id, .. }
                 | EventPayload::GroupTaskReleased { task_id, .. } => known_tasks.contains(task_id),
                 EventPayload::GroupMessageQueued { message }
                 | EventPayload::GroupMessageDelivered { message } => {
-                    state.group_id() == Some(message.group_id)
+                    rebuilt.group_id() == Some(message.group_id)
                 }
                 _ => false,
             };
             if include {
-                state.apply(event);
+                rebuilt.apply(event);
                 if let EventPayload::GroupTaskCreated { task } = &event.payload {
                     known_tasks.insert(task.task_id);
                 }
             }
         }
-        *self.state() = state;
+        *state = rebuilt;
         Ok(())
     }
 
@@ -1318,6 +1342,51 @@ mod tests {
         assert!(resumed.deliver_pending(root, true).unwrap().is_empty());
         assert_eq!(resumed.inbox(root, true, 10).len(), 1);
         assert!(resumed.inbox(root, true, 10)[0].delivered);
+    }
+
+    /// CR-13 regression: a reload that reads durable events must not clobber an
+    /// in-memory update applied while it rebuilds. The pause hook runs after the
+    /// durable read; the reducer lock must be held from before that read to the
+    /// assignment, so the concurrent claim below applies after the rebuild.
+    #[test]
+    fn reload_does_not_clobber_a_concurrent_apply() {
+        let store = EventStore::open_memory().unwrap();
+        let workspace = Path::new("/tmp/group-reload-race");
+        let root = store.create_session(workspace).unwrap();
+        let child = Uuid::new_v4();
+        let coordinator = GroupCoordinator::new(store, root, "workspace".into()).unwrap();
+        coordinator.join(child).unwrap();
+        let task = coordinator
+            .create_task(root, "parser".into(), String::new(), vec![], true, vec![])
+            .unwrap();
+        let (read_done, reading) = std::sync::mpsc::channel::<()>();
+        *coordinator
+            .inner
+            .reload_pause
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Box::new(move || {
+            let _ = read_done.send(());
+            // Give the concurrent claim time to commit and apply under the old
+            // unlocked rebuild before the assignment clobbers it.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }));
+        let reloading = {
+            let coordinator = coordinator.clone();
+            std::thread::spawn(move || coordinator.reload())
+        };
+        // The reload has read its snapshot; this claim commits and applies now.
+        reading.recv().unwrap();
+        let claimed = coordinator.claim(task.task_id, child).unwrap();
+        reloading.join().unwrap().unwrap();
+        assert_eq!(claimed.status, GroupTaskStatus::Claimed);
+        assert_eq!(
+            coordinator
+                .snapshot()
+                .task(task.task_id)
+                .map(|task| task.status),
+            Some(GroupTaskStatus::Claimed),
+            "a concurrent apply must survive the rebuild"
+        );
     }
 
     #[test]
