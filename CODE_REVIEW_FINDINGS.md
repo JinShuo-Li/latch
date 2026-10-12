@@ -27,7 +27,7 @@ scripts rather than regressions in the suite.
 | CR-08 | Medium | kernel / media | Concurrent ingestion of the same image races on a fixed temp path | Open |
 | CR-09 | Low-Med | kernel / provider | SSE frame decoder merges frames when line endings are mixed | Open |
 | CR-10 | Low-Med | kernel / agent | `Agent::new` panics on recoverable supervisor/store errors | Open |
-| CR-11 | Low-Med | kernel / store | `EventStore` sets no `busy_timeout`; concurrent processes can hit `SQLITE_BUSY` | Open |
+| CR-11 | Low-Med | kernel / store | `EventStore` sets no `busy_timeout`; concurrent processes can hit `SQLITE_BUSY` | False positive |
 | CR-12 | Low | kernel / agents | `ensure_worker` check-then-spawn can orphan a duplicate worker | Open |
 | CR-13 | Low | kernel / agents | Group `reload` can clobber a concurrent in-memory update | Open |
 | CR-14 | Medium | scripts | `fetch-references.sh` leaves a poisoned half-initialized checkout after a failed fetch | Open |
@@ -237,18 +237,30 @@ caller already returns `Result` and can surface a clean error.
 Suggested fix: add a fallible constructor (`try_new`) and propagate the error;
 keep `new` as a test-only wrapper or remove the `expect`.
 
-### CR-11 — `EventStore` configures no `busy_timeout`
+### CR-11 — `EventStore` configures no `busy_timeout` — **false positive, corrected**
 
 Location: `crates/latch-kernel/src/store.rs:160-179` (migrations set only
 `journal_mode=WAL` and `foreign_keys=ON`).
 
-Two Latch processes sharing one state directory (for example a running TUI plus
-`latch sessions` or `latch run`) can hit `SQLITE_BUSY` immediately on write
-contention instead of waiting, producing user-visible "database is locked"
-failures.
+This finding was based on the migration statements alone and missed the
+connection default. `EventStore` opens its file connection with
+`rusqlite::Connection::open` (`store.rs:130`) and its in-memory connection with
+`Connection::open_in_memory` (`store.rs:144`). In `rusqlite 0.37.0`, every open
+path (`Connection::open` -> `open_with_flags`, `open_in_memory` ->
+`open_in_memory_with_flags` -> `open_with_flags`) calls
+`InnerConnection::open_with_flags`, which already configures a 5000 ms SQLite
+busy timeout:
 
-Suggested fix: set `PRAGMA busy_timeout = <ms>` (for example 5000) during
-`migrate`/`open` so concurrent writers retry within a bounded window.
+```
+// rusqlite-0.37.0/src/inner_connection.rs:119
+let r = ffi::sqlite3_busy_timeout(db, 5000);
+```
+
+Concurrent writers in `WAL` mode therefore already retry within a bounded
+5000 ms window; `PRAGMA busy_timeout` in the migration batch would be redundant.
+No code change was made. If `rusqlite` ever changes that default, this
+assumption must be revisited; the exact crate version is pinned by
+`Cargo.lock` and `--locked` is used by every gate.
 
 ### CR-12 — `ensure_worker` check-then-spawn can orphan a worker
 
