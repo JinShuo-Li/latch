@@ -2,7 +2,10 @@
 
 Point-in-time review of Latch v0.3.2 at commit `c2cf392` (2026-10-10), recorded
 2026-10-12. Findings are code-reading results with the verification noted per
-item; none have been fixed yet. Severity reflects likely impact, not frequency.
+item. All 25 items were then processed one focused commit at a time; each
+section carries its resolution and the summary table names the commit. CR-11
+was verified to be a false positive and the review document was corrected
+instead of changing code. Severity reflects likely impact, not frequency.
 
 Baseline at review time:
 
@@ -10,38 +13,38 @@ Baseline at review time:
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`: clean.
 - Script self-checks: `python3 scripts/test_install.py` 14/14, `node scripts/test_web_markdown.mjs` 5/5.
 
-The problems below are therefore gaps not covered by the current tests, lint, or
-scripts rather than regressions in the suite.
+The problems below were therefore gaps not covered by the tests, lint, or
+scripts present at review time rather than regressions in the suite.
 
 ## Summary
 
 | ID | Severity | Area | Finding | Status |
 |----|----------|------|---------|--------|
-| CR-01 | High | kernel / tools | `git status -z` rename records are misparsed; undo can target a path outside the workspace | Open |
-| CR-02 | High | kernel / safety | Approving an outside-workspace write to a top-level path mounts `/` writable in the sandbox | Open |
-| CR-03 | High | kernel / tools | Managed-process output is unbounded while running and `exec_poll` returns it unbounded | Open |
-| CR-04 | Medium | kernel / provider | Responses API silently drops tool calls with unparseable arguments | Open |
-| CR-05 | Medium | kernel / approvals | Approval grants are keyed by the provider-supplied call id | Open |
-| CR-06 | Medium | kernel / agents | Worker shutdown busy-spins after lifetime cancellation | Open |
-| CR-07 | Medium | kernel / tools | Per-chunk `from_utf8_lossy` corrupts multi-byte output split across reads | Open |
-| CR-08 | Medium | kernel / media | Concurrent ingestion of the same image races on a fixed temp path | Open |
-| CR-09 | Low-Med | kernel / provider | SSE frame decoder merges frames when line endings are mixed | Open |
-| CR-10 | Low-Med | kernel / agent | `Agent::new` panics on recoverable supervisor/store errors | Open |
-| CR-11 | Low-Med | kernel / store | `EventStore` sets no `busy_timeout`; concurrent processes can hit `SQLITE_BUSY` | False positive |
-| CR-12 | Low | kernel / agents | `ensure_worker` check-then-spawn can orphan a duplicate worker | Open |
-| CR-13 | Low | kernel / agents | Group `reload` can clobber a concurrent in-memory update | Open |
-| CR-14 | Medium | scripts | `fetch-references.sh` leaves a poisoned half-initialized checkout after a failed fetch | Open |
-| CR-15 | Low-Med | site | `site/build.py` rewrites links inside code blocks and does not protect tracked `docs/` | Open |
-| CR-16 | Low-Med | benchmark | `compare.py` / `run_opencode.py` fail when `--output-dir` already exists | Open |
-| CR-17 | Low | scripts | `dogfood.sh` crashes on a flag missing its value; `--remove` is ignored with `--workspace` | Open |
-| CR-18 | Low | scripts | `dogfood-test.sh` exits 1 for `KEEP=1` even when all checks pass | Open |
-| CR-19 | Medium | CI | Windows `large-tree` recovery assertion never runs in CI; `cargo.ps1` is wired into no workflow | Open |
-| CR-20 | Medium | CI / supply chain | Workflows use mutable action tags, including the release publisher with `contents: write` | Open |
-| CR-21 | Low | docs | `AGENTS.md` references nonexistent "F1–F5" regressions and an incomplete snapshot-exception list | Open |
-| CR-22 | Low | docs | `native/windows/boundary/README.md` still states "Version remains 0.2.3" | Open |
-| CR-23 | Low | docs | `docs/ARCHITECTURE.md` attributes a `group` module to `latch-tui`, which has none | Open |
-| CR-24 | Low | docs | `docs/DESIGN.md` names a `/api/meta` endpoint; the real route is `/api/bootstrap` | Open |
-| CR-25 | Low | docs / site | Sidebar width clamp is narrower than documented; the home page hardcodes `v0.3.2` | Open |
+| CR-01 | High | kernel / tools | `git status -z` rename records are misparsed; undo can target a path outside the workspace | Fixed `f3f27cb` |
+| CR-02 | High | kernel / safety | Approving an outside-workspace write to a top-level path mounts `/` writable in the sandbox | Fixed `3081b9b` |
+| CR-03 | High | kernel / tools | Managed-process output is unbounded while running and `exec_poll` returns it unbounded | Fixed `074f13b` |
+| CR-04 | Medium | kernel / provider | Responses API silently drops tool calls with unparseable arguments | Fixed `4220d2b` |
+| CR-05 | Medium | kernel / approvals | Approval grants are keyed by the provider-supplied call id | Fixed `c3802c0` |
+| CR-06 | Medium | kernel / agents | Worker shutdown busy-spins after lifetime cancellation | Fixed `785e417` |
+| CR-07 | Medium | kernel / tools | Per-chunk `from_utf8_lossy` corrupts multi-byte output split across reads | Fixed `c4ad228` |
+| CR-08 | Medium | kernel / media | Concurrent ingestion of the same image races on a fixed temp path | Fixed `ad99f1a` |
+| CR-09 | Low-Med | kernel / provider | SSE frame decoder merges frames when line endings are mixed | Fixed `0d9ac80` |
+| CR-10 | Low-Med | kernel / agent | `Agent::new` panics on recoverable supervisor/store errors | Fixed `3533bbb` |
+| CR-11 | Low-Med | kernel / store | `EventStore` sets no `busy_timeout`; concurrent processes can hit `SQLITE_BUSY` | False positive — corrected `6a4263a` |
+| CR-12 | Low | kernel / agents | `ensure_worker` check-then-spawn can orphan a duplicate worker | Fixed `24fffe1` |
+| CR-13 | Low | kernel / agents | Group `reload` can clobber a concurrent in-memory update | Fixed `bda51de` |
+| CR-14 | Medium | scripts | `fetch-references.sh` leaves a poisoned half-initialized checkout after a failed fetch | Fixed `3562437` |
+| CR-15 | Low-Med | site | `site/build.py` rewrites links inside code blocks and does not protect tracked `docs/` | Fixed `7566b63` |
+| CR-16 | Low-Med | benchmark | `compare.py` / `run_opencode.py` fail when `--output-dir` already exists | Fixed `fb6c0d9` |
+| CR-17 | Low | scripts | `dogfood.sh` crashes on a flag missing its value; `--remove` is ignored with `--workspace` | Fixed `ef70132` |
+| CR-18 | Low | scripts | `dogfood-test.sh` exits 1 for `KEEP=1` even when all checks pass | Fixed `3c33c9e` |
+| CR-19 | Medium | CI | Windows `large-tree` recovery assertion never runs in CI; `cargo.ps1` is wired into no workflow | Fixed `8cf492d` |
+| CR-20 | Medium | CI / supply chain | Workflows use mutable action tags, including the release publisher with `contents: write` | Fixed `c851404` |
+| CR-21 | Low | docs | `AGENTS.md` references nonexistent "F1–F5" regressions and an incomplete snapshot-exception list | Fixed `f4add41` |
+| CR-22 | Low | docs | `native/windows/boundary/README.md` still states "Version remains 0.2.3" | Fixed `1994180` |
+| CR-23 | Low | docs | `docs/ARCHITECTURE.md` attributes a `group` module to `latch-tui`, which has none | Fixed `f10542d` |
+| CR-24 | Low | docs | `docs/DESIGN.md` names a `/api/meta` endpoint; the real route is `/api/bootstrap` | Fixed `266ea90` |
+| CR-25 | Low | docs / site | Sidebar width clamp is narrower than documented; the home page hardcodes `v0.3.2` | Fixed `1b5ea8a` |
 
 ## 1. Correctness and security
 
@@ -80,6 +83,9 @@ or `C` status, consume the following field as the source path and keep only the
 destination (field one) as the worktree path. Add a regression test built from
 the byte sequence above.
 
+
+**Resolution (`f3f27cb`):** Parsed `-z` output as a record stream: after an `R`/`C` status the following NUL field is consumed as the rename/copy source, so only destinations become worktree paths. Regression tests cover the exact `R  renamed.txt\0old.txt\0R  src/new.rs\0src/old.rs\0` byte sequence and real `git mv` output; both fail against the previous parser. Verified with a live repository before and after the change.
+
 ### CR-02 — Outside-workspace write approval can grant a writable mount of `/`
 
 Location: `crates/latch-kernel/src/safety.rs:213-222` (`classify_file_write`),
@@ -102,6 +108,9 @@ broad), or fall back to binding only the named file; at minimum require an
 explicit second confirmation that names the directory being granted. A unit
 test asserting that `write /x` does not produce a `/` root would pin this.
 
+
+**Resolution (`3081b9b`):** `classify_file_write` and `classify_command` now deny a write whose derived approval root has no parent (a filesystem root) with an actionable message; the classification is a hard `Deny` that no grant can convert. Unit tests cover `write /x`, `echo x > /x`, and a Windows drive root (the Windows test is not executed on this host).
+
 ### CR-03 — Managed-process output is unbounded
 
 Location: `crates/latch-kernel/src/tools/process.rs:414-456` (`refresh_process`),
@@ -122,6 +131,9 @@ tail and stream overflow to the artifact file), and bound `exec_poll` output
 with an artifact reference for the remainder, consistent with the large-output
 convention used by other tools.
 
+
+**Resolution (`074f13b`):** Managed output now lives in a `ProcessBuffer`: a bounded 4 MiB in-memory prefix with overflow streamed to the per-process artifact, and `exec_poll` returns at most 24 KB per response with the artifact reference. The durable exit event adopts the streaming artifact. Four `tools::process` tests cover the cap, poll bounding, artifact adoption, and retryable exit commits.
+
 ## 2. Robustness and races
 
 ### CR-04 — Responses API silently drops tool calls with unparseable arguments
@@ -138,6 +150,9 @@ across transports.
 
 Suggested fix: return an error carrying the call id and raw argument prefix, as
 the Chat Completions adapter does. Add a provider-serialization unit test.
+
+
+**Resolution (`4220d2b`):** `ResponsesStreamState::finish` returns a `Result`; an unparseable argument stream becomes a provider error naming the call id, function name, parse failure, and a bounded raw prefix, redacted at the transport like other provider errors. Regression test `responses_stream_invalid_tool_arguments_are_reported_not_dropped`.
 
 ### CR-05 — Approval grants are keyed by the provider-supplied call id
 
@@ -157,6 +172,9 @@ Suggested fix: derive a kernel-owned per-call nonce for approval binding
 (e.g. a UUID or sequence stored alongside the call), and use the provider id
 only for serialization.
 
+
+**Resolution (`c3802c0`):** The kernel normalizes every model response so repeated provider ids get deterministic `#kernel-N` suffixes before the response is persisted or approved, and clears all single-use grants at both boundaries of `execute_batch`. Durable history, lifecycle events, and provider replay all use the normalized ids, so an approval applies to exactly one call. Two provider tests plus an end-to-end test where the second duplicate-id write must request its own (denied) approval.
+
 ### CR-06 — Worker shutdown busy-spins after lifetime cancellation
 
 Location: `crates/latch-kernel/src/agents/worker.rs:214-235`.
@@ -172,6 +190,9 @@ Suggested fix: after the first cancellation, set the flag and await only
 on CPU behavior is hard to test; a code-level test can at least pin that the
 branch does not re-arm.
 
+
+**Resolution (`785e417`):** Extracted `race_turn` and disabled the lifetime-cancellation and command branches once closing starts, awaiting only the child turn; a closed command channel can no longer re-trigger the close branch either. Three tests pin late-command suppression after cancellation, interrupt handling, and closed-channel shutdown.
+
 ### CR-07 — Per-chunk UTF-8 decoding corrupts split multi-byte characters
 
 Location: `crates/latch-kernel/src/tools/process.rs:461-477`.
@@ -185,6 +206,9 @@ corrupted; `run_process_inner` avoids this by collecting bytes and decoding once
 Suggested fix: keep a byte buffer (or a small carry for incomplete sequences)
 and decode on complete boundaries, matching `run_process_inner`; emit U+FFFD
 only for genuinely invalid data.
+
+
+**Resolution (`c4ad228`):** Each output stream carries an incremental `Utf8Decoder`: incomplete trailing sequences are reassembled across reads and a genuinely truncated tail flushes as U+FFFD at EOF. Tests cover a split CJK character, invalid bytes, the EOF tail, and a reader integration that splits `é` across two writes.
 
 ### CR-08 — Concurrent identical image ingestion races on a fixed temp path
 
@@ -202,6 +226,9 @@ where `rename` cannot replace it.
 Suggested fix: use a unique temp name per attempt (random suffix) and treat a
 lost rename as success when the destination exists and hashes match, or use
 `create_new` and retry. Add a test that ingests one image twice concurrently.
+
+
+**Resolution (`ad99f1a`):** Temp names are unique per attempt and a lost rename is accepted only after verifying the destination is the identical content-addressed artifact (also the Windows rename-over-existing case). An 8-thread concurrent-ingestion test plus direct `artifact_matches` checks.
 
 ### CR-09 — SSE decoder can merge two frames when line endings are mixed
 
@@ -223,6 +250,9 @@ error.
 Suggested fix: select `min(a, b)` and use the corresponding delimiter length:
 `(Some(a), Some(b)) if a < b => (a,2)`, `(Some(_), Some(b)) => (b,4)`, etc.
 
+
+**Resolution (`0d9ac80`):** The SSE decoder selects the earliest delimiter with its matching length instead of preferring `\n\n`. Two regression tests cover a CRLF frame followed by an LF frame and fragmented mixed-ending frames.
+
 ### CR-10 — `Agent::new` panics on recoverable supervisor construction errors
 
 Location: `crates/latch-kernel/src/agent.rs:195-204`
@@ -236,6 +266,9 @@ caller already returns `Result` and can surface a clean error.
 
 Suggested fix: add a fallible constructor (`try_new`) and propagate the error;
 keep `new` as a test-only wrapper or remove the `expect`.
+
+
+**Resolution (`3533bbb`):** Added `Agent::try_new`, which propagates supervisor reconstruction errors; the CLI build path uses it, and `new` remains a documented panicking test wrapper. A regression test injects an event-store append failure during child reconciliation and asserts a clean error.
 
 ### CR-11 — `EventStore` configures no `busy_timeout` — **false positive, corrected**
 
@@ -262,6 +295,9 @@ No code change was made. If `rusqlite` ever changes that default, this
 assumption must be revisited; the exact crate version is pinned by
 `Cargo.lock` and `--locked` is used by every gate.
 
+
+**Resolution (`6a4263a`):** False positive, corrected in the review document only. `rusqlite 0.37.0` sets `sqlite3_busy_timeout(db, 5000)` in every open path (`inner_connection.rs:119`), and `EventStore` uses `Connection::open`/`open_in_memory`, so concurrent writers already retry within five seconds. No code change was made.
+
 ### CR-12 — `ensure_worker` check-then-spawn can orphan a worker
 
 Location: `crates/latch-kernel/src/agents/supervisor.rs:612-668`
@@ -279,6 +315,9 @@ Suggested fix: reserve the slot atomically before spawning (insert a placeholder
 or hold the map lock across the spawn decision), or make insertion detect the
 race and shut the loser down.
 
+
+**Resolution (`24fffe1`):** `ensure_worker` re-checks the worker map and inserts under the workers lock with the spawn inside the critical section, and worker creation is split into an unregistered `spawn_worker`. The graph lock is released before the workers lock, so the locks never nest in opposite orders. A four-task concurrent-ensure test asserts all callers share one worker channel and the map holds exactly one worker.
+
 ### CR-13 — Group `reload` can clobber a concurrent in-memory update
 
 Location: `crates/latch-kernel/src/agents/group.rs:502-537`.
@@ -292,6 +331,9 @@ The store remains authoritative, so claims still work.
 Suggested fix: hold the state lock across the rebuild (reading events inside the
 critical section), or reapply events newer than the snapshot sequence after
 assignment.
+
+
+**Resolution (`bda51de`):** `reload` now holds the reducer lock from before the durable read through the assignment, so a concurrent `apply` runs after the rebuild. A test-only pause hook makes the interleaving deterministic; the regression test was run against the previous unlocked ordering and failed with the claimed `Pending` state before the fix.
 
 ## 3. Tooling, scripts, and CI
 
@@ -310,6 +352,9 @@ Suggested fix: treat a checkout with no valid `HEAD` as incomplete — remove it
 and retry, or fetch into a temporary directory and rename into place only after
 verification. Print a recovery hint on failure.
 
+
+**Resolution (`3562437`):** New checkouts are fetched into a unique staging directory and renamed into place only after verifying the exact shallow revision, with an EXIT trap cleaning staging on any failure. An existing destination without a valid HEAD is removed only when it is an empty git scaffold; anything that might hold work is refused with an actionable message. `scripts/test-fetch-references.sh` covers success, idempotence, poisoned-checkout recovery, refusal, and failed-fetch cleanup (6/6, local upstreams, no network) and runs in the Linux smoke job with shellcheck.
+
 ### CR-15 — `site/build.py` rewrites links inside code blocks and can write into tracked `docs/`
 
 Location: `site/build.py:60-65` (output guard), `:116-120` (link rewrite).
@@ -327,6 +372,9 @@ Suggested fix: restrict the rewrite to text outside `code`/`pre` regions (for
 example by splitting on code blocks or rewriting before conversion), and extend
 the output guard to reject any path inside a tracked repository directory.
 
+
+**Resolution (`7566b63`):** Qualified: Python-Markdown escapes quotes in fenced code blocks (`href=&quot;x&quot;`), so fenced samples were never affected. Indented code blocks, inline code spans, and raw HTML do preserve quotes and were affected. The rewrite now runs only outside `<pre>`/`<code>` regions, and the output guard rejects any in-repository output except the generated `target/` and `_site/` directories. `scripts/test_site_build.py` checks both, and the full build plus `scripts/test_site.py` pass unchanged (no current document is affected).
+
 ### CR-16 — Benchmark runners fail when `--output-dir` already exists
 
 Location: `benchmark/compare.py:91-93`, `benchmark/run_opencode.py:153-155`.
@@ -340,6 +388,9 @@ fresh run directory and behaves consistently.
 Suggested fix: mirror `run.py` — always nest a stamped/pid subdirectory under
 the requested output root, or use `exist_ok=True` plus a collision-resistant
 stamp.
+
+
+**Resolution (`fb6c0d9`):** Added a shared `run.report_root` helper: the requested output directory is treated as a container and a fresh stamped run directory is nested under it, matching `run.py`, and all three runners use it. `benchmark/test_runners.py` covers reuse of an existing directory, creation, naming, and permissions.
 
 ### CR-17 — `dogfood.sh` argument handling edge cases
 
@@ -356,6 +407,9 @@ Location: `scripts/dogfood.sh:87-111` (flag loop), `:301-306` (removal).
 Suggested fix: validate that each value flag has a next argument, validate
 `--provider-env` names, and warn when `--remove` cannot act.
 
+
+**Resolution (`ef70132`):** Every value-taking option requires a next argument and dies with a usage error (exit 2); `--provider-env` validates a shell-identifier name before indirect expansion; and `--workspace DIR --remove` now reports the run directory as not removed. The dogfood harness gains offline checks for all three.
+
 ### CR-18 — `dogfood-test.sh` reports failure when `KEEP=1`
 
 Location: `scripts/dogfood-test.sh:353-361`.
@@ -366,6 +420,9 @@ even when all checks pass, breaking wrappers that rely on status.
 
 Suggested fix: exit 0 when `fail == 0`, keeping artifacts and printing where
 they are; reserve exit 1 for real failures.
+
+
+**Resolution (`3c33c9e`):** Summary policy moved into `dogfood_summary`: only real check failures exit 1, while `KEEP=1` keeps artifacts and exits 0. The harness checks the policy offline; the old condition exited 1 whenever `KEEP=1`.
 
 ### CR-19 — CI-native coverage gaps on Windows
 
@@ -385,6 +442,9 @@ Suggested fix: add `large-tree` to the default points (or set
 `LATCH_RECOVERY_POINTS` in the workflow), and wire `cargo.ps1` into the native
 job or explicitly document why it stays manual.
 
+
+**Resolution (`8cf492d`):** `large-tree` is now in the default `recovery.ps1` points so the bounded ancestor-handle assertion runs whenever the fixture runs, and the manual Full validation Windows native job invokes `cargo.ps1` through `VsDevCmd.bat` after building the fixtures, using the rustup sysroot. Workflow YAML was validated; the Windows fixtures themselves were not executed on this host.
+
 ### CR-20 — Workflows use mutable action tags, including the release publisher
 
 Location: `.github/workflows/*.yml` (`uses:` entries), notably
@@ -402,6 +462,9 @@ Suggested fix: pin third-party actions to commit SHAs (with a comment naming
 the release) and enable Dependabot updates; keep `stable` only where a moving
 major is explicitly intended.
 
+
+**Resolution (`c851404`):** Every workflow action is pinned to its resolved 40-hex commit SHA with the release in a trailing comment, including the `contents: write` release publisher. `dtolnay/rust-toolchain` is pinned to its `stable` branch head and every workflow passes `toolchain: stable` explicitly, so the installed toolchain still tracks stable. `.github/dependabot.yml` requests weekly `github-actions` updates. All refs were verified against the upstream repositories and the YAML parses.
+
 ## 4. Documentation
 
 ### CR-21 — `AGENTS.md` inaccuracies
@@ -417,6 +480,9 @@ Location: `AGENTS.md:53`, `AGENTS.md:116-118`.
   (`sidebar.rs:2000`), `v3_semantic` and `v3_narrow`
   (`presentation.rs:193,235`).
 
+
+**Resolution (`f4add41`):** AGENTS.md now names the `f4_*` bounded-read tests instead of the nonexistent F1-F5 regressions and lists all four `include_str!` snapshots (`v31_diff`, `v31_sidebar`, `v3_semantic`, `v3_narrow`).
+
 ### CR-22 — Stale version in the Windows boundary README
 
 Location: `native/windows/boundary/README.md:4` (and `:263-264`).
@@ -424,6 +490,9 @@ Location: `native/windows/boundary/README.md:4` (and `:263-264`).
 "Version remains 0.2.3" contradicts `Cargo.toml` (`0.3.2`) and the published
 `docs/releases/0.3.*.md` entries. The file is linked from the root README as
 current status, so the statement reads as live rather than historical.
+
+
+**Resolution (`1994180`):** The Windows boundary README now records that its fixture results were taken against v0.2.3 and that tagged releases have been published since v0.3.0, instead of stating a live "Version remains 0.2.3" and that no release existed.
 
 ### CR-23 — `docs/ARCHITECTURE.md` attributes a `group` module to the TUI
 
@@ -434,6 +503,9 @@ There is no `crates/latch-tui/src/group.rs` and no `mod group` in
 `crates/latch-ui/src/group.rs`. The TUI module list should drop `group` (or the
 sentence should point at the `latch-ui` module).
 
+
+**Resolution (`f10542d`):** Removed `group` from the TUI module list in `docs/ARCHITECTURE.md`; the shared reducer lives in `crates/latch-ui/src/group.rs`, which the document already states elsewhere.
+
 ### CR-24 — `docs/DESIGN.md` names a nonexistent Web endpoint
 
 Location: `docs/DESIGN.md:193-194`.
@@ -441,6 +513,9 @@ Location: `docs/DESIGN.md:193-194`.
 The router (`crates/latch-cli/src/web/http.rs:21-46`) exposes
 `/api/bootstrap`; the frontend calls `/api/bootstrap`
 (`web/app/app.js:60`). `/api/meta` occurs only in this document.
+
+
+**Resolution (`266ea90`):** `docs/DESIGN.md` now names the real `/api/bootstrap` endpoint (router in `crates/latch-cli/src/web/http.rs`, frontend calls in `web/app/`); `/api/meta` existed only in the document.
 
 ### CR-25 — Small doc/site drift
 
@@ -450,6 +525,9 @@ The router (`crates/latch-cli/src/web/http.rs:21-46`) exposes
 - `site/templates/home.html:34`: hardcodes "implemented in v0.3.2" while
   `site/README.md` and `AGENTS.md` state version labels come from `Cargo.toml`;
   it will go stale on the next version bump.
+
+
+**Resolution (`1b5ea8a`):** `docs/ARCHITECTURE.md` now describes the per-breakpoint sidebar clamp (20-44 columns) instead of only the >=160-column range, and `site/templates/home.html` uses the build's `v$version` substitution instead of hardcoded `v0.3.2`; a rebuilt home page renders the Cargo.toml version.
 
 ## Suggested repair order
 
@@ -464,3 +542,31 @@ the existing suites (`tools/tests.rs` for drift/undo and process handling,
 `provider.rs` unit tests for SSE and Responses parsing, `media.rs` tests for
 concurrent ingestion, and the shell/Python checks for the script and site
 issues).
+
+## Final validation
+
+Every item above is one focused commit on top of `c2cf392` (the resolution
+lines and the summary table name the commits). Validation on the final tree:
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`: clean.
+- `cargo test --workspace --locked`: 873 passed, 0 failed, 9 ignored (the
+  ignored tests are the opt-in live-provider suites).
+- `bash scripts/release-gate.sh`: passed, including the mandatory Bubblewrap
+  namespace/mount probe, the architectural invariants (20/20), the full
+  workspace suite, and the locked release build.
+- Scripts and tooling: `python3 scripts/test_install.py` 14/14,
+  `bash scripts/test-fetch-references.sh` 6/6,
+  `shellcheck scripts/install.sh scripts/fetch-references.sh scripts/test-fetch-references.sh`
+  clean (0.10.0), `node scripts/test_web_markdown.mjs` 5/5,
+  `python3 benchmark/verify_cases.py` verified all 25 candidate cases,
+  `python3 benchmark/test_runners.py` 4/4.
+- Site: `python3 site/build.py` plus `scripts/test_site.py` (26 HTML pages,
+  1468 local links/assets/fragments, 208 search sections) and
+  `scripts/test_site_build.py` passed with Python-Markdown 3.7.
+
+Not executed on this host and therefore not claimed: the Windows native
+fixtures and Windows CI lanes (no Windows host; the workflow wiring was
+YAML-validated only), the optional Chromium browser checks (no Chromium), the
+Docker dogfood harness (its offline argument and summary checks were run
+directly), and the opt-in live provider tests.
