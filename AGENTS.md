@@ -50,9 +50,10 @@ cargo build --release --locked
 ```
 
 `crates/latch-kernel/tests/invariants.rs` remains the fast architectural tier.
-The full workspace suite covers deterministic F1–F5 regressions and sandbox
-behavior; a failed Bubblewrap probe fails either gate rather than skipping
-security coverage. Live/paid/network-provider tests remain opt-in and ignored.
+The full workspace suite covers detailed correctness, including the
+deterministic `f4_*` bounded-read regressions, and sandbox behavior; a failed
+Bubblewrap probe fails either gate rather than skipping security coverage.
+Live/paid/network-provider tests remain opt-in and ignored.
 
 For significant changes, run the release gate plus relevant cache/long-session
 tests before committing:
@@ -114,7 +115,7 @@ bash scripts/release-gate.sh
   charts. Both use recorded results without model calls and require optional
   Matplotlib and actual Times New Roman `times.ttf` / `timesbd.ttf` fonts.
 - Snapshot updates: `LATCH_UPDATE_SNAPSHOTS=1 cargo test -p latch-tui --lib`.
-  Exceptions: `crates/latch-tui/tests/snapshots/{v31_sidebar,v3_semantic}.txt`
+  Exceptions: `crates/latch-tui/tests/snapshots/{v31_diff,v31_sidebar,v3_semantic,v3_narrow}.txt`
   use `include_str!`; edit them by hand and keep `cargo test -p latch-tui --lib` green.
 - Extension fixture tests need `python3`; the reference TS extension needs
   `node` + `npm ci && npm run build` in `sdk/typescript` and `extensions/example-ts`.
