@@ -1419,6 +1419,77 @@ async fn non_git_shell_mutation_is_marked_non_reversible() {
     )));
 }
 
+/// CR-01 regression: in `-z` format a rename record is `XY <destination>`
+/// followed by a bare NUL-terminated `<source>` field. The source must never
+/// be treated as a workspace path; a stripped source such as `/old.rs` is
+/// absolute and would escape the workspace in `Path::join`.
+#[test]
+fn porcelain_z_rename_records_keep_destinations_and_drop_sources() {
+    let workspace = Path::new("/ws");
+    let raw: &[u8] =
+        b"R  renamed.txt\0old.txt\0R  src/new.rs\0src/old.rs\0?? new.txt\0M  tracked.txt\0";
+    assert_eq!(
+        ownership::parse_porcelain_z(raw, workspace),
+        vec![
+            workspace.join("renamed.txt"),
+            workspace.join("src/new.rs"),
+            workspace.join("new.txt"),
+            workspace.join("tracked.txt"),
+        ]
+    );
+}
+
+/// CR-01 regression against real `git status -z` output: only rename
+/// destinations are returned, and every returned path stays inside the
+/// workspace even when the source path would strip to an absolute path.
+#[test]
+fn porcelain_z_real_git_rename_output_stays_inside_the_workspace() {
+    let d = tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(d.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(d.path().join("src")).unwrap();
+    std::fs::write(d.path().join("old.txt"), "a").unwrap();
+    std::fs::write(d.path().join("src/old.rs"), "b").unwrap();
+    git(&["add", "-A"]);
+    git(&[
+        "-c",
+        "user.email=t@l",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    ]);
+    git(&["mv", "old.txt", "renamed.txt"]);
+    git(&["mv", "src/old.rs", "src/new.rs"]);
+    let out = git(&["status", "--porcelain", "-z", "--untracked-files=all"]);
+    let paths = ownership::parse_porcelain_z(&out.stdout, d.path());
+    assert_eq!(
+        paths,
+        vec![d.path().join("renamed.txt"), d.path().join("src/new.rs")]
+    );
+    for path in paths {
+        assert!(
+            path.starts_with(d.path()),
+            "{} escaped the workspace",
+            path.display()
+        );
+    }
+}
+
 #[tokio::test]
 async fn preexisting_dirty_work_is_preserved_and_distinguishable() {
     let d = tempdir().unwrap();

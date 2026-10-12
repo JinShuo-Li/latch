@@ -551,18 +551,32 @@ pub(super) fn git_porcelain(
     if !out.status.success() {
         return Ok(None);
     }
+    Ok(Some(parse_porcelain_z(&out.stdout, workspace)))
+}
+
+/// Parses NUL-separated `git status --porcelain -z` records into workspace
+/// paths.
+///
+/// Each record starts with a two-byte `XY` status and a space, followed by the
+/// worktree path. Rename and copy records carry the source as one additional
+/// NUL-terminated field with no status prefix (`git help status`: "the field
+/// order is reversed"), so that field must be consumed as part of the record
+/// instead of being mistaken for a path of its own.
+pub(super) fn parse_porcelain_z(stdout: &[u8], workspace: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    for item in out.stdout.split(|b| *b == 0).filter(|s| !s.is_empty()) {
-        if item.len() > 3 {
-            let entry = String::from_utf8_lossy(&item[3..]);
-            // Rename entries read "to -> from"; the worktree path is the target.
-            let path = entry
-                .split_once(" -> ")
-                .map_or(entry.as_ref(), |(_, target)| target);
-            paths.push(workspace.join(path));
+    let mut fields = stdout.split(|byte| *byte == 0);
+    while let Some(item) = fields.next() {
+        if item.len() <= 3 {
+            continue;
         }
+        let status = &item[..2];
+        if status.iter().any(|byte| matches!(byte, b'R' | b'C')) {
+            // The following field is the rename/copy source, not a new record.
+            fields.next();
+        }
+        paths.push(workspace.join(String::from_utf8_lossy(&item[3..]).as_ref()));
     }
-    Ok(Some(paths))
+    paths
 }
 
 /// The exact HEAD blob for a path, used as pre-change content for files that
