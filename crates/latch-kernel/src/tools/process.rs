@@ -2,6 +2,7 @@
 //! transitions stay here; platform cleanup and shell syntax live in execution.
 
 use super::*;
+use std::io::Write as _;
 
 /// How long a terminated or exited process's output readers may take to see
 /// EOF. Bubblewrap's namespace init can be interrupted before it execs the
@@ -55,13 +56,24 @@ impl ToolExecutor {
             .spawn()
             .with_context(|| format!("start process: {command}"))?;
         let pid = child.id();
-        let output = Arc::new(Mutex::new(String::new()));
+        let output = Arc::new(Mutex::new(ProcessBuffer::new()));
+        let artifact_name = format!("process-{id}.log");
         let mut readers = Vec::new();
         if let Some(stdout) = child.stdout.take() {
-            readers.push(spawn_reader(stdout, output.clone()));
+            readers.push(spawn_reader(
+                stdout,
+                output.clone(),
+                self.artifacts.clone(),
+                artifact_name.clone(),
+            ));
         }
         if let Some(stderr) = child.stderr.take() {
-            readers.push(spawn_reader(stderr, output.clone()));
+            readers.push(spawn_reader(
+                stderr,
+                output.clone(),
+                self.artifacts.clone(),
+                artifact_name.clone(),
+            ));
         }
         self.store.append(
             self.session_id,
@@ -91,7 +103,6 @@ impl ToolExecutor {
         // alive. Lifecycle commits remain serialized with poll/terminate.
         let processes = Arc::downgrade(&self.processes);
         let store = self.store.clone();
-        let artifacts = self.artifacts.clone();
         let session_id = self.session_id;
         let watched_id = id.clone();
         tokio::spawn(async move {
@@ -106,8 +117,7 @@ impl ToolExecutor {
                     };
                     // A failed durable commit must remain retryable, never a
                     // successful in-memory exit with no corresponding event.
-                    let _ =
-                        refresh_process(&store, session_id, &artifacts, &watched_id, process).await;
+                    let _ = refresh_process(&store, session_id, &watched_id, process).await;
                     if process.exit_recorded {
                         break;
                     }
@@ -136,10 +146,20 @@ impl ToolExecutor {
             }
             bail!("unknown process {id}; start one with exec_start");
         };
-        refresh_process(&self.store, self.session_id, &self.artifacts, id, process).await?;
-        let full = process.output.lock().await.clone();
-        let new = full.get(process.cursor..).unwrap_or("").to_owned();
-        process.cursor = full.len();
+        refresh_process(&self.store, self.session_id, id, process).await?;
+        let output = process.output.lock().await;
+        let start = process.cursor.min(output.text.len());
+        let mut end = start
+            .saturating_add(PROCESS_POLL_MAX_BYTES)
+            .min(output.text.len());
+        while end > start && !output.text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let new = output.text[start..end].to_owned();
+        process.cursor = end;
+        let truncated = end < output.text.len();
+        let spill_failed = output.spill_failed;
+        drop(output);
         let label = if process.label.is_empty() {
             String::new()
         } else {
@@ -150,9 +170,16 @@ impl ToolExecutor {
             text.push_str("(no new output)");
         } else {
             text.push_str(&new);
+            if truncated {
+                text.push_str("\n[more retained output; call exec_poll again]");
+            }
         }
         if let Some(artifact) = &process.artifact_id {
             text.push_str(&format!("\n[full output artifact: {artifact}]"));
+        } else if spill_failed {
+            text.push_str(&format!(
+                "\n[output beyond {PROCESS_MAX_BUFFER_BYTES} bytes was dropped: the overflow artifact could not be written]"
+            ));
         }
         Ok((text, process.artifact_id.clone()))
     }
@@ -168,7 +195,7 @@ impl ToolExecutor {
             }
             bail!("unknown process {id}");
         };
-        refresh_process(&self.store, self.session_id, &self.artifacts, id, process).await?;
+        refresh_process(&self.store, self.session_id, id, process).await?;
         if process.status == ProcessStatus::Running {
             if let Some(child) = process.child.as_mut() {
                 crate::execution::kill_sandbox_children(child.id());
@@ -179,7 +206,7 @@ impl ToolExecutor {
             process.child = None;
             drain_readers(std::mem::take(&mut process.readers)).await;
         }
-        refresh_process(&self.store, self.session_id, &self.artifacts, id, process).await?;
+        refresh_process(&self.store, self.session_id, id, process).await?;
         Ok((
             format!("[process {id}: {}]", process.status.label()),
             process.artifact_id.clone(),
@@ -190,7 +217,7 @@ impl ToolExecutor {
     pub(crate) async fn refresh_managed_processes(&self) -> Result<()> {
         let mut processes = self.processes.lock().await;
         for (id, process) in processes.iter_mut() {
-            refresh_process(&self.store, self.session_id, &self.artifacts, id, process).await?;
+            refresh_process(&self.store, self.session_id, id, process).await?;
         }
         Ok(())
     }
@@ -402,7 +429,7 @@ pub(super) struct ManagedProcess {
     label: String,
     status: ProcessStatus,
     child: Option<Child>,
-    output: Arc<Mutex<String>>,
+    output: Arc<Mutex<ProcessBuffer>>,
     readers: Vec<tokio::task::JoinHandle<()>>,
     /// Byte offset already returned to the model by `exec_poll`.
     cursor: usize,
@@ -414,7 +441,6 @@ pub(super) struct ManagedProcess {
 async fn refresh_process(
     store: &EventStore,
     session_id: Uuid,
-    artifacts: &Path,
     id: &str,
     process: &mut ManagedProcess,
 ) -> Result<()> {
@@ -426,18 +452,16 @@ async fn refresh_process(
             bail!("running managed process {id} has no child");
         };
         let Some(status) = child.try_wait()? else {
+            // Still running: adopt the streaming artifact as soon as overflow
+            // starts so polls can reference it.
+            adopt_artifact(process).await;
             return Ok(());
         };
         process.status = ProcessStatus::Exited(status.code().unwrap_or(-1));
         process.child = None;
         drain_readers(std::mem::take(&mut process.readers)).await;
     }
-    let full = process.output.lock().await.clone();
-    if full.len() > PROCESS_MAX_BUFFER_BYTES {
-        let name = format!("process-{id}.log");
-        std::fs::write(artifacts.join(&name), full.as_bytes())?;
-        process.artifact_id = Some(name);
-    }
+    adopt_artifact(process).await;
     let status = match process.status {
         ProcessStatus::Running => unreachable!("running processes are not finalized"),
         ProcessStatus::Exited(code) => format!("exit {code}"),
@@ -455,12 +479,105 @@ async fn refresh_process(
     Ok(())
 }
 
+/// Adopts the streaming overflow artifact, if any, as the process artifact.
+async fn adopt_artifact(process: &mut ManagedProcess) {
+    let output = process.output.lock().await;
+    if process.artifact_id.is_none() {
+        process.artifact_id.clone_from(&output.artifact);
+    }
+}
+
 /// Managed process output retained in memory before spilling to an artifact.
 const PROCESS_MAX_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 
+/// Maximum bytes returned by one `exec_poll`. Larger output stays readable
+/// through the process artifact, matching the bounded-output convention used
+/// by the other tools.
+const PROCESS_POLL_MAX_BYTES: usize = 24_000;
+
+/// Combined stdout/stderr of one managed process: a bounded in-memory prefix
+/// plus an append-only artifact holding everything beyond it. A chatty process
+/// can therefore neither grow session memory without limit nor inject an
+/// unbounded result into the durable event log in one poll.
+#[derive(Debug)]
+pub(super) struct ProcessBuffer {
+    text: String,
+    /// Artifact name once output exceeded the retained prefix.
+    artifact: Option<String>,
+    /// Open append handle for the overflow artifact.
+    overflow: Option<std::fs::File>,
+    /// Set when output exceeded the cap but could not be streamed to disk.
+    /// The excess is dropped rather than retained; polls report it honestly.
+    spill_failed: bool,
+}
+
+impl ProcessBuffer {
+    pub(super) fn new() -> Self {
+        Self {
+            text: String::new(),
+            artifact: None,
+            overflow: None,
+            spill_failed: false,
+        }
+    }
+
+    /// Appends one completed read chunk, spilling to the artifact once the
+    /// in-memory prefix reaches `PROCESS_MAX_BUFFER_BYTES`.
+    pub(super) fn append(&mut self, bytes: &[u8], artifacts: &Path, artifact_name: &str) {
+        let chunk = String::from_utf8_lossy(bytes);
+        self.push_text(&chunk, artifacts, artifact_name);
+    }
+
+    fn push_text(&mut self, chunk: &str, artifacts: &Path, artifact_name: &str) {
+        if let Some(file) = self.overflow.as_mut() {
+            if file.write_all(chunk.as_bytes()).is_err() {
+                self.overflow = None;
+                self.spill_failed = true;
+            }
+            return;
+        }
+        if self.spill_failed {
+            return;
+        }
+        let keep = PROCESS_MAX_BUFFER_BYTES.saturating_sub(self.text.len());
+        if chunk.len() <= keep {
+            self.text.push_str(chunk);
+            return;
+        }
+        // First overflow: the artifact must hold the complete stream, so the
+        // already-retained prefix is written before the new chunk.
+        let start = std::fs::File::create(artifacts.join(artifact_name));
+        let Ok(mut file) = start else {
+            self.spill_failed = true;
+            return;
+        };
+        if file.write_all(self.text.as_bytes()).is_err()
+            || file.write_all(chunk.as_bytes()).is_err()
+        {
+            self.spill_failed = true;
+            return;
+        }
+        let boundary = floor_char_boundary(chunk, keep);
+        self.text.push_str(&chunk[..boundary]);
+        self.overflow = Some(file);
+        self.artifact = Some(artifact_name.to_owned());
+    }
+}
+
+/// Largest byte index `<= index` that is a char boundary in `text`.
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
 pub(super) fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(
     mut reader: R,
-    output: Arc<Mutex<String>>,
+    output: Arc<Mutex<ProcessBuffer>>,
+    artifacts: PathBuf,
+    artifact_name: String,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buffer = [0u8; 4096];
@@ -470,7 +587,7 @@ pub(super) fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(
                 Ok(n) => output
                     .lock()
                     .await
-                    .push_str(&String::from_utf8_lossy(&buffer[..n])),
+                    .append(&buffer[..n], &artifacts, &artifact_name),
             }
         }
     })
@@ -480,34 +597,43 @@ pub(super) fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(
 mod tests {
     use super::*;
 
+    fn fixture_process(dir: &Path, text: &str, artifact: Option<&str>) -> ManagedProcess {
+        let mut output = ProcessBuffer::new();
+        if !text.is_empty() {
+            output.append(text.as_bytes(), dir, "process-fixture.log");
+        }
+        ManagedProcess {
+            label: String::new(),
+            status: ProcessStatus::Exited(0),
+            child: None,
+            output: Arc::new(Mutex::new(output)),
+            readers: Vec::new(),
+            cursor: 0,
+            artifact_id: artifact.map(str::to_owned),
+            exit_recorded: false,
+        }
+    }
+
     #[tokio::test]
     async fn failed_exit_commit_is_retryable_and_never_reported_twice() {
         let dir = tempfile::tempdir().unwrap();
         let store = EventStore::open_memory().unwrap();
         let session = store.create_session(dir.path()).unwrap();
-        let mut process = ManagedProcess {
-            label: String::new(),
-            status: ProcessStatus::Exited(7),
-            child: None,
-            output: Arc::new(Mutex::new("retained".into())),
-            readers: Vec::new(),
-            cursor: 0,
-            artifact_id: None,
-            exit_recorded: false,
-        };
+        let mut process = fixture_process(dir.path(), "retained", None);
+        process.status = ProcessStatus::Exited(7);
         store.fail_appends(true);
         assert!(
-            refresh_process(&store, session, dir.path(), "fixture", &mut process)
+            refresh_process(&store, session, "fixture", &mut process)
                 .await
                 .is_err()
         );
         assert!(!process.exit_recorded);
         assert!(store.events(session).unwrap().is_empty());
         store.fail_appends(false);
-        refresh_process(&store, session, dir.path(), "fixture", &mut process)
+        refresh_process(&store, session, "fixture", &mut process)
             .await
             .unwrap();
-        refresh_process(&store, session, dir.path(), "fixture", &mut process)
+        refresh_process(&store, session, "fixture", &mut process)
             .await
             .unwrap();
         assert!(process.exit_recorded);
@@ -515,6 +641,151 @@ mod tests {
         assert!(matches!(&store.events(session).unwrap()[0].payload,
             EventPayload::ProcessExited { status, .. } if status == "exit 7"
         ));
-        assert_eq!(process.output.lock().await.as_str(), "retained");
+        assert_eq!(process.output.lock().await.text, "retained");
+    }
+
+    #[test]
+    fn managed_process_output_stays_bounded_and_spills_to_the_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut output = ProcessBuffer::new();
+        let chunk = vec![b'x'; 4096];
+        let total = PROCESS_MAX_BUFFER_BYTES + 3 * 4096;
+        for _ in 0..(total / chunk.len()) {
+            output.append(&chunk, dir.path(), "process-fixture.log");
+        }
+        assert!(
+            output.text.len() <= PROCESS_MAX_BUFFER_BYTES,
+            "in-memory output must stay capped: {}",
+            output.text.len()
+        );
+        assert_eq!(output.artifact.as_deref(), Some("process-fixture.log"));
+        let stored = std::fs::read(dir.path().join("process-fixture.log")).unwrap();
+        assert_eq!(
+            stored.len(),
+            total,
+            "the artifact must hold the full stream"
+        );
+        assert!(stored.iter().all(|byte| *byte == b'x'));
+    }
+
+    #[tokio::test]
+    async fn exec_poll_bounds_each_response_and_references_the_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let session = store.create_session(dir.path()).unwrap();
+        let executor = ToolExecutor::new_with_state_dir(
+            dir.path().into(),
+            artifacts.clone(),
+            dir.path().join("state"),
+            store.clone(),
+            session,
+            PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        // Enough output to span three bounded polls while remaining under the
+        // in-memory cap, so this exercises poll bounding rather than spilling.
+        let total = 2 * PROCESS_POLL_MAX_BYTES + 100;
+        let process = fixture_process(dir.path(), &"z".repeat(total), None);
+        executor
+            .processes
+            .lock()
+            .await
+            .insert("fixture".into(), process);
+        let mut seen = String::new();
+        let mut polls = 0;
+        loop {
+            let poll = executor
+                .execute(
+                    &ToolCall {
+                        id: "poll".into(),
+                        name: "exec_poll".into(),
+                        arguments: json!({"id": "fixture"}),
+                    },
+                    CancellationToken::new(),
+                )
+                .await;
+            assert!(!poll.is_error, "{}", poll.output);
+            assert!(
+                poll.output.len() <= PROCESS_POLL_MAX_BYTES + 4096,
+                "one poll returned {} bytes",
+                poll.output.len()
+            );
+            seen.push_str(&poll.output);
+            polls += 1;
+            if !poll.output.contains("[more retained output") {
+                break;
+            }
+            assert!(polls < 10, "bounded polls must terminate");
+        }
+        assert_eq!(polls, 3, "bounded polls cover the whole retained output");
+        assert_eq!(
+            seen.matches('z').count(),
+            total,
+            "polling must return every retained byte exactly once"
+        );
+        // The exited process's exit event is durable and carries the artifact.
+        assert!(store.events(session).unwrap().iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::ProcessExited { id, .. } if id == "fixture"
+        )));
+    }
+
+    #[tokio::test]
+    async fn exec_poll_references_the_streaming_artifact_after_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        let store = EventStore::open_memory().unwrap();
+        let session = store.create_session(dir.path()).unwrap();
+        let executor = ToolExecutor::new_with_state_dir(
+            dir.path().into(),
+            artifacts.clone(),
+            dir.path().join("state"),
+            store.clone(),
+            session,
+            PolicyEngine::new(Mode::Work, dir.path().into(), PermissionConfig::default()),
+        )
+        .unwrap();
+        let mut output = ProcessBuffer::new();
+        output.append(
+            &vec![b'q'; PROCESS_MAX_BUFFER_BYTES + 4096],
+            &artifacts,
+            "process-fixture.log",
+        );
+        let mut process = fixture_process(dir.path(), "", None);
+        process.output = Arc::new(Mutex::new(output));
+        executor
+            .processes
+            .lock()
+            .await
+            .insert("fixture".into(), process);
+        let poll = executor
+            .execute(
+                &ToolCall {
+                    id: "poll".into(),
+                    name: "exec_poll".into(),
+                    arguments: json!({"id": "fixture"}),
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!poll.is_error, "{}", poll.output);
+        assert!(
+            poll.output
+                .contains("[full output artifact: process-fixture.log]"),
+            "{}",
+            poll.output
+        );
+        assert_eq!(poll.artifact_id.as_deref(), Some("process-fixture.log"));
+        assert!(
+            store.events(session).unwrap().iter().any(|event| matches!(
+                &event.payload,
+                EventPayload::ProcessExited { id, artifact_id: Some(name), .. }
+                    if id == "fixture" && name == "process-fixture.log"
+            )),
+            "the durable exit event must carry the artifact"
+        );
     }
 }
