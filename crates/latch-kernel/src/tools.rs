@@ -283,6 +283,15 @@ impl ToolExecutor {
             .unwrap_or(false)
     }
 
+    /// Drops every pending single-use grant. Called around batch dispatch so an
+    /// approval can only ever authorize the call it was resolved for, never a
+    /// later call that reuses the same id.
+    pub fn clear_grants(&self) {
+        if let Ok(mut grants) = self.grants.lock() {
+            grants.clear();
+        }
+    }
+
     fn grant_for(&self, call_id: &str) -> Option<CapabilityGrant> {
         self.grants
             .lock()

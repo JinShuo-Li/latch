@@ -2313,6 +2313,119 @@ async fn approved_outside_write_executes_and_denied_write_does_not() {
     }
 }
 
+/// CR-05 regression: two calls in one batch carrying the same
+/// provider-supplied id must each request their own approval. The kernel
+/// normalizes the duplicate id before dispatch, so the second call can never
+/// take the first call's grant fast path.
+#[tokio::test]
+async fn duplicate_provider_call_ids_cannot_share_one_approval() {
+    use crate::config::OutsidePolicy;
+    let workspace_dir = tempdir().unwrap();
+    let outside_a = tempdir().unwrap();
+    let outside_b = tempdir().unwrap();
+    let path_a = outside_a.path().join("a.txt");
+    let path_b = outside_b.path().join("b.txt");
+    let store = EventStore::open_memory().unwrap();
+    let sid = store.create_session(workspace_dir.path()).unwrap();
+    let responses = vec![
+        ModelResponse {
+            text: "two writes".into(),
+            tool_calls: vec![
+                ToolCall {
+                    id: "dup".into(),
+                    name: "write".into(),
+                    arguments: json!({"path": path_a.to_string_lossy(), "content": "a", "base_hash": null}),
+                },
+                ToolCall {
+                    id: "dup".into(),
+                    name: "write".into(),
+                    arguments: json!({"path": path_b.to_string_lossy(), "content": "b", "base_hash": null}),
+                },
+            ],
+            stop_reason: "tool_calls".into(),
+            usage: None,
+            reasoning_content: None,
+            reasoning: vec![],
+        },
+        final_response("The approved write is done but unverified."),
+        final_response("Nothing else to do."),
+    ];
+    let tools = ToolExecutor::new(
+        workspace_dir.path().into(),
+        workspace_dir.path().join("art"),
+        store.clone(),
+        sid,
+        PolicyEngine::new(
+            Mode::Work,
+            workspace_dir.path().into(),
+            PermissionConfig {
+                outside_workspace: OutsidePolicy::Ask,
+                ..PermissionConfig::default()
+            },
+        ),
+    )
+    .unwrap();
+    let mut agent = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: workspace_dir.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        provider: Arc::new(FakeProvider::scripted(responses)),
+        tools,
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    agent.enable_interactive_permissions();
+    let broker = agent.permission_broker();
+    let run = agent.run(
+        "write two files",
+        CancellationToken::new(),
+        Arc::new(|_| {}),
+    );
+    let approver = async {
+        let mut seen = 0;
+        for _ in 0..1000 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            if let Some(request_id) = broker.pending_ids().await.first().copied() {
+                seen += 1;
+                // Approve only the first request; the second write targets a
+                // different directory and must be denied on its own merits.
+                broker.resolve(request_id, seen == 1).await;
+                if seen == 2 {
+                    return;
+                }
+            }
+        }
+        panic!("agent did not request approval for both duplicate-id calls");
+    };
+    let (result, ()) = tokio::join!(run, approver);
+    result.unwrap();
+    let events = store.events(sid).unwrap();
+    let requests = events
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::PermissionRequested { .. }))
+        .count();
+    assert_eq!(requests, 2, "each call must ask for its own approval");
+    let mut ids: Vec<String> = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::ToolRequested { call } => Some(call.id.clone()),
+            _ => None,
+        })
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec!["dup".to_owned(), "dup#kernel-2".to_owned()],
+        "duplicate provider ids are normalized before dispatch"
+    );
+    assert_eq!(std::fs::read_to_string(&path_a).unwrap(), "a");
+    assert!(
+        !path_b.exists(),
+        "the denied duplicate-id write must not reuse the first approval"
+    );
+}
+
 #[tokio::test]
 async fn non_interactive_ask_is_denied_with_a_durable_record() {
     let workspace_dir = tempdir().unwrap();

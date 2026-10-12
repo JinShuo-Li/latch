@@ -11,6 +11,9 @@ impl Agent {
         cancel: CancellationToken,
         sink: &AgentEventSink,
     ) -> Result<Vec<ToolResult>> {
+        // Approvals are bound to the calls of exactly one batch: clear anything
+        // a suppressed, failed, or interrupted earlier batch left behind.
+        self.tools.clear_grants();
         let mut permitted = Vec::new();
         let mut results = Vec::new();
         for call in calls {
@@ -72,8 +75,8 @@ impl Agent {
             }
         }
         // Policy `Ask` is a real approval request, not a denial. Only an
-        // approval keyed to this kernel call id (which the model never
-        // supplies) lets the executor proceed.
+        // approval keyed to this call's kernel-normalized id (unique per batch;
+        // the model never assigns it itself) lets the executor proceed.
         let mut policy_allowed = Vec::with_capacity(permitted.len());
         for call in permitted {
             if self.mcp.owns(&call.name) && self.mode != Mode::Work {
@@ -243,6 +246,7 @@ impl Agent {
             batch
         };
         results.append(&mut executed);
+        self.tools.clear_grants();
         Ok(results)
     }
 

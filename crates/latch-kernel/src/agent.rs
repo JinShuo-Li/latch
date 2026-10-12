@@ -1342,7 +1342,13 @@ impl Agent {
                 .stream(request.clone(), cancel.clone(), sink.clone())
                 .await
             {
-                Ok(r) => return Ok(r),
+                Ok(mut r) => {
+                    // Provider ids are untrusted input. Normalize duplicates
+                    // before the response is persisted or approved so every
+                    // call has its own kernel-unique approval key.
+                    crate::provider::normalize_tool_call_ids(&mut r);
+                    return Ok(r);
+                }
                 Err(e) if attempt < self.max_model_retries && !cancel.is_cancelled() => {
                     self.store.append(
                         self.session_id,

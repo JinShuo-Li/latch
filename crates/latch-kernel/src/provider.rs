@@ -14,6 +14,33 @@ use crate::config::{EffortForm, EffortForms, EffortMapping};
 use latch_protocol::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
+/// Ensures every tool call in one model response carries a distinct id.
+///
+/// Tool call ids are provider-supplied, and approval grants are keyed by call
+/// id. A response that repeats an id (buggy or hostile endpoint) must not let a
+/// second call inherit the first call's approval, so the kernel renames each
+/// repeat with a deterministic suffix. Durable history, tool lifecycle events,
+/// and the next provider request all replay the normalized id, exactly as the
+/// user approved it.
+pub fn normalize_tool_call_ids(response: &mut ModelResponse) {
+    let mut seen = BTreeSet::new();
+    for call in &mut response.tool_calls {
+        if seen.insert(call.id.clone()) {
+            continue;
+        }
+        let base = call.id.clone();
+        let mut suffix = 2;
+        loop {
+            let candidate = format!("{base}#kernel-{suffix}");
+            if seen.insert(candidate.clone()) {
+                call.id = candidate;
+                break;
+            }
+            suffix += 1;
+        }
+    }
+}
+
 /// One user-defined per-level effort map at the adapter boundary.
 pub type EffortMap = BTreeMap<ReasoningEffort, EffortMapping>;
 
@@ -3631,6 +3658,87 @@ mod tests {
         assert!(error.contains("call-7"), "{error}");
         assert!(error.contains("read_file"), "{error}");
         assert!(error.contains("raw prefix"), "{error}");
+    }
+
+    /// CR-05 regression: approval grants are keyed by call id, so a response
+    /// that repeats an id must be normalized to distinct kernel ids before the
+    /// batch is dispatched or persisted.
+    #[test]
+    fn duplicate_tool_call_ids_are_normalized_to_distinct_kernel_ids() {
+        let mut response = ModelResponse {
+            text: String::new(),
+            tool_calls: vec![
+                ToolCall {
+                    id: "call-1".into(),
+                    name: "read_file".into(),
+                    arguments: json!({"path": "a"}),
+                },
+                ToolCall {
+                    id: "call-1".into(),
+                    name: "write".into(),
+                    arguments: json!({"path": "b", "content": "x", "base_hash": null}),
+                },
+                ToolCall {
+                    id: "call-2".into(),
+                    name: "read_file".into(),
+                    arguments: json!({"path": "c"}),
+                },
+            ],
+            stop_reason: "tool_calls".into(),
+            usage: None,
+            reasoning_content: None,
+            reasoning: Vec::new(),
+        };
+        normalize_tool_call_ids(&mut response);
+        let ids: Vec<String> = response
+            .tool_calls
+            .iter()
+            .map(|call| call.id.clone())
+            .collect();
+        assert_eq!(ids[0], "call-1");
+        assert_eq!(ids[2], "call-2");
+        assert_ne!(ids[0], ids[1]);
+        assert!(ids[1].starts_with("call-1#kernel-"), "{ids:?}");
+        // Normalizing again is a no-op; ids stay stable for replay.
+        normalize_tool_call_ids(&mut response);
+        assert_eq!(
+            response
+                .tool_calls
+                .iter()
+                .map(|call| call.id.clone())
+                .collect::<Vec<_>>(),
+            ids
+        );
+    }
+
+    #[test]
+    fn normalization_never_collides_with_provider_supplied_suffixes() {
+        let mut response = ModelResponse {
+            text: String::new(),
+            tool_calls: ["call-1", "call-1", "call-1#kernel-2"]
+                .into_iter()
+                .map(|id| ToolCall {
+                    id: id.into(),
+                    name: "read_file".into(),
+                    arguments: json!({"path": "a"}),
+                })
+                .collect(),
+            stop_reason: "tool_calls".into(),
+            usage: None,
+            reasoning_content: None,
+            reasoning: Vec::new(),
+        };
+        normalize_tool_call_ids(&mut response);
+        let ids: BTreeSet<&str> = response
+            .tool_calls
+            .iter()
+            .map(|call| call.id.as_str())
+            .collect();
+        assert_eq!(
+            ids.len(),
+            response.tool_calls.len(),
+            "ids must stay distinct: {ids:?}"
+        );
     }
 
     #[test]
