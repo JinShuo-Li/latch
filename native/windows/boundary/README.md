@@ -1,8 +1,9 @@
 # Native Windows boundary — 2026-09-27
 
 `windows-native-port` selects this runner from the production
-`ExecutionBackend`. Version remains 0.2.3. Native fixture results below
-establish the listed cases only; do not merge a red Windows gate into main.
+`ExecutionBackend`. The results below were recorded against v0.2.3; the current
+workspace version is in `Cargo.toml`. Native fixture results below establish
+the listed cases only; do not merge a red Windows gate into main.
 
 Current validation status and the large home-directory performance limit are
 recorded in [CURRENT_STATE.md](CURRENT_STATE.md). Its more recent checks take
@@ -260,7 +261,9 @@ recorded NTFS identity. See `RECOVERY.md` for cases that still retain a journal.
   builds under the boundary, VS discovery without an
   explicit developer environment, non-English/Unicode runtime installation
   paths, and KsecDD handle exposure review.
-- **Release:** a local ZIP package and installation smoke test exist. Version
-  remains 0.2.3; no tag or public release has been made.
+- **Release:** a local ZIP package and installation smoke test exist. These
+  results predate the first tagged release (the workspace was at v0.2.3 and no
+  tag or public release existed then); tagged releases are published since
+  v0.3.0, with notes under `docs/releases/`.
 
 The kernel integration module is compiled for production Windows.
