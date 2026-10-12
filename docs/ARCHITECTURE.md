@@ -1118,7 +1118,8 @@ unparsed input falls back to raw, uncolored lines. `/diff` opens a full-width
 inspector with independent scrolling, temporary sidebar collapse, and a raw
 toggle. The sidebar appears automatically at ≥110 columns, toggles with Ctrl+B
 or `/sidebar`, and collapses on narrow terminals unless explicitly opened.
-Its width remains responsive (roughly 24–32%, clamped to 28–44 columns).
+Its width remains responsive (roughly 24–32%, clamped per breakpoint between
+20 and 44 columns).
 
 ## Resume
 
