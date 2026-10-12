@@ -191,7 +191,7 @@ recovery, automatic commit, and automatic push are absent.
 ## Build provenance
 
 Latch's version surfaces report the crate version alone: TUI chrome, the Web
-`/api/meta` response, and MCP/extension `clientInfo` all read
+`/api/bootstrap` response, and MCP/extension `clientInfo` all read
 `CARGO_PKG_VERSION`. `latch doctor` checks every external prerequisite — the
 execution backend, `rg`, Git, config, state dir, profile, credential — and
 nothing about Latch's own artifact. No embedded source revision, no dirty-tree
