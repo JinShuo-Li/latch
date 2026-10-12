@@ -75,6 +75,10 @@ python3 benchmark/run.py run --case stream_records \
   --config ~/.latch/config.toml
 ```
 
+Offline runner checks (no credentials, network, or sandbox needed):
+`python3 benchmark/test_runners.py` covers report-directory handling, and
+`python3 benchmark/verify_cases.py` checks the candidate cases with Bubblewrap.
+
 For a legacy installation, pass its `~/.config/latch/config.toml` instead.
 Repeat `--case` to select several cases, or use `--case all`. The runner pins
 the CLI invocation to provider `opencode-go`, model `deepseek-v4.1-flash`, and

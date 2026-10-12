@@ -11,6 +11,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from pathlib import Path
@@ -41,6 +42,28 @@ def discover():
 
 def save_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def report_root(output_dir, label=""):
+    """Creates the requested output container and a fresh private run directory.
+
+    The caller-supplied directory is only a container, so re-running into an
+    existing results directory keeps working; every run gets its own stamped
+    subdirectory. Returns `(root, stamp)` so callers record the same timestamp
+    they used for the directory name.
+    """
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    prefix = f"{label}-" if label else ""
+    root = output_dir / f"{prefix}{stamp}-{os.getpid()}"
+    try:
+        root.mkdir(mode=0o700)
+    except FileExistsError:
+        # Same second and process: fall back to a unique suffix rather than
+        # failing on a directory that already exists.
+        root = Path(tempfile.mkdtemp(prefix=f"{root.name}-", dir=output_dir))
+    return root, stamp
 
 
 def git_revision(directory):
@@ -300,10 +323,7 @@ def main():
         if any(not isinstance(pricing.get(key), (int, float)) or pricing[key] < 0
                for key in required):
             parser.error("--pricing needs nonnegative USD rates per million tokens")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_root = args.output_dir.resolve() / f"{stamp}-{os.getpid()}"
-    run_root.mkdir(mode=0o700)
+    run_root, _stamp = report_root(args.output_dir)
     reports = []
     for case_id in selected:
         data, case_dir = cases[case_id]

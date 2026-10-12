@@ -88,9 +88,7 @@ def main():
     latch, opencode = args.latch.resolve(), args.opencode.resolve()
     if not latch.is_file() or not opencode.is_file():
         parser.error("agent binaries must exist")
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    root = (args.output_dir or run.ROOT / "runs" / f"comparison-{stamp}-{os.getpid()}").resolve()
-    root.mkdir(parents=True, mode=0o700)
+    root, stamp = run.report_root(args.output_dir or run.ROOT / "runs", "comparison")
     for name in ["latch", "opencode"]:
         (root / name).mkdir(mode=0o700)
     version = run.run_process([str(opencode), "--version"], cwd=root, timeout=10,

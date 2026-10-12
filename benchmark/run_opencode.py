@@ -149,10 +149,7 @@ def main():
     selected = list(dict.fromkeys(args.case))
     if any(case_id not in cases for case_id in selected):
         parser.error("unknown case")
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    root = args.output_dir or run.ROOT / "runs" / f"opencode-{stamp}-{os.getpid()}"
-    root = root.resolve()
-    root.mkdir(parents=True, mode=0o700)
+    root, stamp = run.report_root(args.output_dir or run.ROOT / "runs", "opencode")
     binary = Path(args.opencode).resolve()
     version = run.run_process([str(binary), "--version"], cwd=root, timeout=10,
                              env={"PATH": "/usr/bin:/bin",
