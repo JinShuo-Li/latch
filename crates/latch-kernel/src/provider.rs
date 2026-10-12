@@ -691,7 +691,9 @@ impl ModelProvider for OpenAiResponsesProvider {
                 }
             }
         }
-        let result = state.finish();
+        let result = state
+            .finish()
+            .map_err(|error| anyhow!("{}", crate::credentials::redact(&error, &[&self.api_key])))?;
         sink(StreamEvent::Completed(result.clone()));
         Ok(result)
     }
@@ -821,32 +823,37 @@ impl ResponsesStreamState {
         Ok(Vec::new())
     }
 
-    fn finish(self) -> ModelResponse {
-        let tool_calls = self
+    fn finish(self) -> Result<ModelResponse, String> {
+        let mut tool_calls = Vec::new();
+        for (id, name, args) in self
             .calls
             .into_values()
             .filter(|(_, name, _)| !name.is_empty())
-            .filter_map(|(id, name, args)| {
-                let arguments = if args.trim().is_empty() {
-                    Value::Object(Default::default())
-                } else {
-                    serde_json::from_str(&args).ok()?
-                };
-                Some(ToolCall {
-                    id,
-                    name,
-                    arguments,
-                })
-            })
-            .collect();
-        ModelResponse {
+        {
+            let arguments = if args.trim().is_empty() {
+                Value::Object(Default::default())
+            } else {
+                serde_json::from_str(&args).map_err(|error| {
+                    format!(
+                        "invalid OpenAI Responses tool arguments for {name} ({id}): {error}; raw prefix: {}",
+                        args.chars().take(200).collect::<String>()
+                    )
+                })?
+            };
+            tool_calls.push(ToolCall {
+                id,
+                name,
+                arguments,
+            });
+        }
+        Ok(ModelResponse {
             text: self.text,
             tool_calls,
             stop_reason: "completed".to_owned(),
             usage: self.usage,
             reasoning_content: (!self.summary.is_empty()).then_some(self.summary),
             reasoning: self.reasoning,
-        }
+        })
     }
 }
 
@@ -3400,7 +3407,7 @@ mod tests {
                 }
             }))
             .unwrap();
-        let response = state.finish();
+        let response = state.finish().unwrap();
         assert_eq!(response.text, "hello world");
         assert_eq!(response.reasoning_content.as_deref(), Some("plan"));
         assert_eq!(response.tool_calls.len(), 1);
@@ -3444,7 +3451,7 @@ mod tests {
                 }
             }))
             .unwrap();
-        let response = state.finish();
+        let response = state.finish().unwrap();
         assert_eq!(response.reasoning_content.as_deref(), Some("plan"));
         assert_eq!(
             response.reasoning,
@@ -3479,7 +3486,7 @@ mod tests {
                 "item":{"id":"fc_1","type":"function_call","call_id":"call-1","name":"read_file"}
             }))
             .unwrap();
-        let first = state.finish();
+        let first = state.finish().unwrap();
         let encrypted = latch_protocol::ReasoningArtifact::Encrypted {
             data: "opaque-ciphertext".into(),
         };
@@ -3599,6 +3606,31 @@ mod tests {
             }))
             .unwrap_err();
         assert!(error.contains("bad request"));
+    }
+
+    /// CR-04 regression: a truncated or malformed argument stream must be a
+    /// hard provider error naming the call, never a silently dropped tool call
+    /// that degrades the turn to text-only.
+    #[test]
+    fn responses_stream_invalid_tool_arguments_are_reported_not_dropped() {
+        let mut state = ResponsesStreamState::default();
+        state
+            .apply(&json!({
+                "type":"response.function_call_arguments.delta",
+                "item_id":"fc_1",
+                "delta":"{\"path\":\"unterminated"
+            }))
+            .unwrap();
+        state
+            .apply(&json!({
+                "type":"response.output_item.done",
+                "item":{"id":"fc_1","type":"function_call","call_id":"call-7","name":"read_file"}
+            }))
+            .unwrap();
+        let error = state.finish().unwrap_err();
+        assert!(error.contains("call-7"), "{error}");
+        assert!(error.contains("read_file"), "{error}");
+        assert!(error.contains("raw prefix"), "{error}");
     }
 
     #[test]
