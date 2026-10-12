@@ -18,6 +18,44 @@ REPO = Path(__file__).resolve().parent.parent
 SITE = REPO / 'site'
 GITHUB = 'https://github.com/JinShuo-Li/latch/blob/main/'
 
+LINK = re.compile(r'\b(href|src|srcset)="([^"]+)"')
+# `<pre>`/`<code>` regions whose displayed text must never be rewritten.
+CODE_SPAN = re.compile(r'<(pre|code)\b[^>]*>.*?</\1>', re.S | re.IGNORECASE)
+
+
+def rewrite_links(content, rewriter):
+    """Rewrites `href`/`src`/`srcset` values outside code regions.
+
+    Python-Markdown escapes quotes in fenced code blocks, but indented code
+    blocks, inline code spans, and raw HTML keep them, so a documentation code
+    sample containing `href="x"` would otherwise abort the build with a
+    missing-reference error or silently rewrite the displayed sample.
+    """
+    def replace(match):
+        return f'{match[1]}="{html.escape(rewriter(match[2]), quote=True)}"'
+
+    parts, last = [], 0
+    for match in CODE_SPAN.finditer(content):
+        parts.append(LINK.sub(replace, content[last:match.start()]))
+        parts.append(match.group(0))
+        last = match.end()
+    parts.append(LINK.sub(replace, content[last:]))
+    return ''.join(parts)
+
+
+def validate_output(output):
+    """Refuses outputs that could overwrite tracked source or a repository parent."""
+    output = output.resolve()
+    if output == REPO or REPO.is_relative_to(output):
+        raise ValueError('Output must not be the repository or one of its parents')
+    if output.is_relative_to(REPO) and not any(
+        output.is_relative_to(REPO / name) for name in ('target', '_site')
+    ):
+        raise ValueError(
+            'Output inside the repository must be under target/ or _site/, e.g. target/site-preview'
+        )
+    return output
+
 
 def excerpt(text, page):
     if 'section' not in page:
@@ -59,9 +97,7 @@ def plain(value):
 
 def build(output):
     # Refuse outputs that could overwrite tracked source or a repository parent.
-    output = output.resolve()
-    if output == REPO or REPO.is_relative_to(output) or output == SITE or output.is_relative_to(SITE):
-        raise ValueError('Output must be a separate generated directory, e.g. target/site-preview')
+    output = validate_output(output)
     output.mkdir(parents=True, exist_ok=True)
     groups = json.loads((SITE / 'navigation.json').read_text())
     pages = [dict(page, group=group['title']) for group in groups for page in group['pages']]
@@ -116,8 +152,7 @@ def build(output):
         md = markdown.Markdown(extensions=['fenced_code', 'tables', 'toc', 'sane_lists'],
                                extension_configs={'toc': {'permalink': True, 'permalink_title': 'Link to this section'}})
         content = md.convert(text)
-        content = re.sub(r'\b(href|src|srcset)="([^"]+)"',
-                         lambda m: f'{m[1]}="{html.escape(rewrite_url(m[2], page), quote=True)}"', content)
+        content = rewrite_links(content, lambda value: rewrite_url(value, page))
         content = re.sub(r'<th(?=[ >])', '<th scope="col"', content)
         content = content.replace('<table>', '<div class="table-scroll" role="region" aria-label="Table" tabindex="0"><table>').replace('</table>', '</table></div>')
         content = content.replace('<pre><code class="language-mermaid">', '<p class="diagram-note">Architecture diagram source (Mermaid):</p><pre><code class="language-mermaid">')

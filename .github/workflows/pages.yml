@@ -37,6 +37,7 @@ jobs:
       - name: Build and check documentation and official installers
         run: |
           python -m pip install -r site/requirements.txt
+          python scripts/test_site_build.py
           python site/build.py --output _site
           python scripts/test_site.py _site
           node scripts/test_site.mjs "$(command -v google-chrome)" _site
