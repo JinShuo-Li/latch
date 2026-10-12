@@ -2749,10 +2749,14 @@ impl SseDecoder {
                 find_bytes(&self.buffer, b"\n\n"),
                 find_bytes(&self.buffer, b"\r\n\r\n"),
             ) {
-                (Some(a), Some(b)) if a <= b => Some((a, 2)),
-                (Some(a), _) => Some((a, 2)),
-                (_, Some(b)) => Some((b, 4)),
-                _ => None,
+                // Pick the earliest delimiter, whichever line ending it uses;
+                // preferring `\n\n` unconditionally would consume across an
+                // earlier `\r\n\r\n` frame and merge two payloads.
+                (Some(a), Some(b)) if a < b => Some((a, 2)),
+                (Some(_), Some(b)) => Some((b, 4)),
+                (Some(a), None) => Some((a, 2)),
+                (None, Some(b)) => Some((b, 4)),
+                (None, None) => None,
             };
             let Some((i, delimiter_len)) = delimiter else {
                 break;
@@ -3121,6 +3125,23 @@ mod tests {
         assert!(d.push(b"data: {\"a\":").is_empty());
         assert_eq!(d.push(b"1}\n\n"), ["{\"a\":1}"]);
         assert_eq!(d.push(b"data: ok\r\n\r\n"), ["ok"]);
+    }
+    /// CR-09 regression: a CRLF-terminated frame followed by an LF-terminated
+    /// one must not be merged by preferring the later `\n\n` delimiter.
+    #[test]
+    fn mixed_line_ending_frames_stay_separate() {
+        let mut d = SseDecoder::default();
+        assert_eq!(
+            d.push(b"data: first\r\n\r\ndata: second\n\n"),
+            ["first", "second"]
+        );
+        assert!(d.buffer.is_empty());
+    }
+    #[test]
+    fn mixed_line_ending_frames_decode_in_arrival_order() {
+        let mut d = SseDecoder::default();
+        assert_eq!(d.push(b"data: one\n\ndata: tw"), ["one"]);
+        assert_eq!(d.push(b"o\r\n\r\ndata: three\n\n"), ["two", "three"]);
     }
     #[test]
     fn reasoning_effort_is_only_emitted_when_selected() {
