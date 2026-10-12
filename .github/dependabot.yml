@@ -1,0 +1,13 @@
+version: 2
+# Every GitHub Action in .github/workflows is pinned to a full commit SHA with
+# the release in a trailing comment, including the release publisher's
+# contents: write job. Dependabot proposes SHA bumps so the pins stay current.
+# dtolnay/rust-toolchain has no release tags; it is pinned to its `stable`
+# branch head and every workflow passes `toolchain: stable` explicitly, so the
+# installed toolchain still tracks stable.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

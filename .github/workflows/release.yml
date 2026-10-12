@@ -33,7 +33,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check version and release tag
         id: version
         env:
@@ -75,11 +75,12 @@ jobs:
       RUSTFLAGS: ${{ matrix.rustflags }}
       SKIP_RELEASE_CHECKS: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_checks }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch, pinned; the action still installs current stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: release-${{ matrix.target }}
       - name: Linux runtime and installer checks
@@ -133,7 +134,7 @@ jobs:
           Copy-Item LICENSE, config.example.toml package/
           @("Version: $env:RELEASE_TAG", "Target: $env:RELEASE_TARGET", "Commit: $env:GITHUB_SHA", (rustc --version), "Installation: https://github.com/JinShuo-Li/latch/blob/$env:RELEASE_TAG/docs/INSTALL.md") | Set-Content package/BUILD_INFO -Encoding utf8
           Compress-Archive -Path package/* -DestinationPath "dist/latch-$env:RELEASE_TARGET.zip"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-${{ matrix.target }}
           path: dist/*
@@ -147,7 +148,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: release-*
           path: dist
