@@ -159,6 +159,74 @@ async fn wait_for_status(supervisor: &AgentSupervisor, id: uuid::Uuid, wanted: A
     .expect("agent status transition");
 }
 
+/// CR-12 regression: concurrent worker reconstruction for one child must
+/// return one live worker. The old check-then-spawn left the losing worker
+/// running after its handle was overwritten, so callers received two different
+/// channels for one child session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_worker_ensure_reuses_one_live_worker() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = EventStore::open_memory().unwrap();
+    let session_id = store.create_session(workspace.path()).unwrap();
+    let provider = Arc::new(TestProvider::plain(0));
+    let root = root_agent(
+        provider.clone(),
+        Mode::Work,
+        store.clone(),
+        workspace.path().to_path_buf(),
+        session_id,
+    );
+    let supervisor = root.agent_supervisor().unwrap().clone();
+    let child = supervisor
+        .spawn_agent(
+            "inspect".into(),
+            "inspect only the delegated concern".into(),
+            None,
+            DelegationContext::default(),
+        )
+        .await
+        .unwrap();
+    // Simulate process end: no live reference may keep the first supervisor
+    // (and its child worker) alive across the rebuild.
+    drop(supervisor);
+    drop(root);
+    let resumed = root_agent(
+        provider,
+        Mode::Work,
+        store.clone(),
+        workspace.path().to_path_buf(),
+        session_id,
+    );
+    let supervisor = resumed.agent_supervisor().unwrap().clone();
+    drop(resumed);
+    let agent_id = child.agent_id;
+    let barrier = Arc::new(tokio::sync::Barrier::new(4));
+    let mut tasks = Vec::new();
+    for _ in 0..4 {
+        let supervisor = supervisor.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            supervisor.ensure_worker_for_test(agent_id)
+        }));
+    }
+    let mut senders = Vec::new();
+    for task in tasks {
+        senders.push(task.await.unwrap().unwrap());
+    }
+    assert!(
+        senders
+            .windows(2)
+            .all(|pair| pair[0].same_channel(&pair[1])),
+        "every concurrent caller must receive the same worker channel"
+    );
+    assert_eq!(
+        supervisor.worker_count_for_test(),
+        1,
+        "one child must have exactly one live worker"
+    );
+}
+
 #[tokio::test]
 async fn spawn_runs_asynchronously_and_produces_compact_report() {
     let (_workspace, store, agent) = test_agent(Arc::new(TestProvider::plain(0)), Mode::Work);

@@ -609,6 +609,34 @@ impl AgentSupervisor {
             .map(|handle| handle.sender.clone())
     }
 
+    /// Live worker count. Two workers for one child would mean one handle was
+    /// overwritten and orphaned.
+    #[cfg(test)]
+    pub(super) fn worker_count_for_test(&self) -> usize {
+        self.inner
+            .workers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn ensure_worker_for_test(
+        &self,
+        agent_id: Uuid,
+    ) -> Result<mpsc::Sender<WorkerCommand>> {
+        self.ensure_worker(agent_id)
+    }
+
+    /// Returns the live worker for `agent_id`, starting one when the map has no
+    /// handle.
+    ///
+    /// The map re-check and the insertion share the workers lock, so two
+    /// concurrent callers cannot both observe no worker and spawn two workers
+    /// for one child; the second insert would otherwise overwrite the first
+    /// handle and leave a running worker that still owns the child session.
+    /// The graph lock is released before the workers lock, so the two locks
+    /// never nest in opposite orders.
     fn ensure_worker(&self, agent_id: Uuid) -> Result<mpsc::Sender<WorkerCommand>> {
         if let Some(sender) = self.sender(agent_id) {
             return Ok(sender);
@@ -621,7 +649,15 @@ impl AgentSupervisor {
             .get(agent_id)
             .map(|node| node.identity.clone())
             .ok_or_else(|| anyhow!("unknown agent {agent_id}"))?;
-        self.start_worker(identity, None)
+        let mut workers = self.inner.workers.lock().unwrap_or_else(|e| e.into_inner());
+        // Re-check under the workers lock: a concurrent caller may have
+        // started the worker since the fast path above.
+        if let Some(handle) = workers.get(&agent_id) {
+            return Ok(handle.sender.clone());
+        }
+        let (sender, handle) = self.spawn_worker(identity, None)?;
+        workers.insert(agent_id, handle);
+        Ok(sender)
     }
 
     fn start_worker(
@@ -629,6 +665,24 @@ impl AgentSupervisor {
         identity: AgentIdentity,
         initial: Option<String>,
     ) -> Result<mpsc::Sender<WorkerCommand>> {
+        let agent_id = identity.agent_id;
+        let (sender, handle) = self.spawn_worker(identity, initial)?;
+        self.inner
+            .workers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(agent_id, handle);
+        Ok(sender)
+    }
+
+    /// Builds and spawns one worker without registering it. `ensure_worker`
+    /// holds the workers lock across this call so the decision to start a
+    /// worker is atomic with its registration.
+    fn spawn_worker(
+        &self,
+        identity: AgentIdentity,
+        initial: Option<String>,
+    ) -> Result<(mpsc::Sender<WorkerCommand>, WorkerHandle)> {
         let mut agent = self.build_child(&identity)?;
         let restored_messages = if initial.is_none() {
             undelivered_messages(&self.inner.store, identity.agent_id)?
@@ -639,7 +693,6 @@ impl AgentSupervisor {
         let lifetime = self.inner.shutdown.child_token();
         let weak = Arc::downgrade(&self.inner);
         let worker_lifetime = lifetime.clone();
-        let worker_id = identity.agent_id;
         let join = tokio::spawn(async move {
             run_worker(
                 weak,
@@ -652,19 +705,14 @@ impl AgentSupervisor {
             )
             .await;
         });
-        self.inner
-            .workers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(
-                worker_id,
-                WorkerHandle {
-                    sender: sender.clone(),
-                    lifetime,
-                    join,
-                },
-            );
-        Ok(sender)
+        Ok((
+            sender.clone(),
+            WorkerHandle {
+                sender,
+                lifetime,
+                join,
+            },
+        ))
     }
 
     fn build_child(&self, identity: &AgentIdentity) -> Result<Agent> {
