@@ -69,6 +69,13 @@ die() {
     exit 2
 }
 
+# Every value-taking option must have a next argument; under `set -u` reading
+# `$2` directly would abort with an unbound-variable error instead of a usage
+# error.
+require_value() {
+    [ $# -ge 2 ] || die "option $1 requires a value (see --help)"
+}
+
 # Run-id validation and the recursive-deletion guard live in a shared library
 # so scripts/dogfood-test.sh can cover them deterministically without Docker.
 # shellcheck source=dogfood-lib.sh
@@ -86,20 +93,29 @@ safe_remove_run_dir() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --prompt) prompt="$2"; shift 2 ;;
-        --workspace) workspace="$2"; shift 2 ;;
-        --fixture) fixture="$2"; shift 2 ;;
-        --config) config="$2"; shift 2 ;;
-        --provider-env) forward_env+=("$2"); shift 2 ;;
-        --model) model="$2"; shift 2 ;;
-        --provider) provider="$2"; shift 2 ;;
-        --mode) mode="$2"; shift 2 ;;
-        --output) output="$2"; shift 2 ;;
-        --network) network="$2"; shift 2 ;;
-        --image) image="$2"; shift 2 ;;
+        --prompt) require_value "$@"; prompt="$2"; shift 2 ;;
+        --workspace) require_value "$@"; workspace="$2"; shift 2 ;;
+        --fixture) require_value "$@"; fixture="$2"; shift 2 ;;
+        --config) require_value "$@"; config="$2"; shift 2 ;;
+        --provider-env)
+            require_value "$@"
+            case "$2" in
+                ''|*[!A-Za-z0-9_]*|[0-9]*)
+                    die "--provider-env expects an environment variable name: '$2'"
+                    ;;
+            esac
+            forward_env+=("$2")
+            shift 2
+            ;;
+        --model) require_value "$@"; model="$2"; shift 2 ;;
+        --provider) require_value "$@"; provider="$2"; shift 2 ;;
+        --mode) require_value "$@"; mode="$2"; shift 2 ;;
+        --output) require_value "$@"; output="$2"; shift 2 ;;
+        --network) require_value "$@"; network="$2"; shift 2 ;;
+        --image) require_value "$@"; image="$2"; shift 2 ;;
         --build) build="always"; shift ;;
         --no-build) build="never"; shift ;;
-        --run-id) run_id="$2"; run_id_set=1; shift 2 ;;
+        --run-id) require_value "$@"; run_id="$2"; run_id_set=1; shift 2 ;;
         --shell) shell=1; shift ;;
         --keep) shift ;;
         --remove) remove=1; shift ;;
@@ -301,7 +317,11 @@ fi
 if [ "$remove" -eq 1 ] && [ "$disposable" -eq 1 ]; then
     safe_remove_run_dir "$run_dir"
     echo "removed:   $run_dir" >&2
-elif [ "$remove" -eq 0 ]; then
+elif [ "$remove" -eq 1 ]; then
+    # A caller-supplied --workspace is never deleted; say so instead of
+    # silently ignoring --remove.
+    echo "not removed: $run_dir (a caller-supplied --workspace is never deleted)" >&2
+else
     echo "kept:      $run_dir (use --remove to delete)" >&2
 fi
 

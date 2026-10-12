@@ -191,7 +191,9 @@ source/image revision can be inspected. `target/` is ignored by Git.
 
 - Containers always run with `--rm`; no dangling containers or volumes.
 - The run directory is kept by default for inspection. Delete it with
-  `--remove` or `rm -rf target/dogfood/<run-id>`.
+  `--remove` or `rm -rf target/dogfood/<run-id>`. A caller-supplied
+  `--workspace DIR` is never deleted; the runner then reports the run
+  directory as not removed instead of silently ignoring `--remove`.
 - Reclaim Docker build cache with `docker builder prune` if disk is tight.
 
 ## ARM64 notes

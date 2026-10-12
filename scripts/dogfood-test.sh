@@ -327,6 +327,34 @@ for bad in '../../tmp' '/foo' '..' 'a/b'; do
     esac
 done
 
+# A value-taking option without its value is a usage error (exit 2), never an
+# unbound-variable abort under `set -u`.
+for missing in '--prompt' '--workspace' '--fixture' '--config' '--model' \
+    '--provider' '--mode' '--output' '--network' '--image' '--run-id'; do
+    set +e
+    missing_out="$("$root/scripts/dogfood.sh" "$missing" 2>&1)"
+    missing_status=$?
+    set -e
+    if [ "$missing_status" -eq 2 ]; then
+        ok "runner rejects '$missing' without a value (exit 2)"
+    else
+        bad "runner exited $missing_status for '$missing' without a value: $missing_out"
+    fi
+done
+
+# --provider-env must be a shell identifier before indirect expansion runs.
+for bad_name in 'bad-name' '1LEADING' 'a b' ''; do
+    set +e
+    env_out="$("$root/scripts/dogfood.sh" --provider-env "$bad_name" --prompt x 2>&1)"
+    env_status=$?
+    set -e
+    if [ "$env_status" -eq 2 ] && printf '%s' "$env_out" | grep -q 'environment variable name'; then
+        ok "runner rejects --provider-env '$bad_name'"
+    else
+        bad "runner did not reject --provider-env '$bad_name' (exit $env_status): $env_out"
+    fi
+done
+
 # Deletion guard: a symlink inside the dogfood root that points outside it must
 # never cause the outside directory to be removed.
 guard_outside="$work/guard-outside"
