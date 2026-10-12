@@ -12,7 +12,7 @@ function Header([string]$journal){
     $fields=@(); for($i=0;$i -lt $count;$i++){ $length=$reader.ReadUInt32();$fields += [Text.Encoding]::Unicode.GetString($reader.ReadBytes($length*2)) }; return ,$fields
   } finally {$reader.Dispose()}
 }
-$points=@('after-journal','profile-intent','profile-api-key','profile-api-directory','profile-api-mapping','profile-orphan-conflict','profile-unsealed','profile-resealed','profile-key-conflict','profile-mapping-conflict','first-acl','unrelated-denied','all-grants','appcontainer','child-launch','descendants','cleanup','rollback-sealed','profile-removed','reboot-equivalent','torn-intent','corrupt-record','host-acl-conflict','replaced-object')
+$points=@('after-journal','profile-intent','profile-api-key','profile-api-directory','profile-api-mapping','profile-orphan-conflict','profile-unsealed','profile-resealed','profile-key-conflict','profile-mapping-conflict','first-acl','unrelated-denied','all-grants','appcontainer','child-launch','descendants','cleanup','rollback-sealed','profile-removed','reboot-equivalent','torn-intent','corrupt-record','host-acl-conflict','replaced-object','large-tree')
 if($env:LATCH_RECOVERY_POINTS){$points=$env:LATCH_RECOVERY_POINTS.Split(',')}
 foreach($point in $points) {
   $case=Join-Path $root $point;$workspace=Join-Path $case 'workspace';$runtime=Join-Path $case 'runtime';$state=Join-Path $case 'state';$journal=Join-Path $case 'journal'

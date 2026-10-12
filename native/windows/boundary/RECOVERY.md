@@ -183,6 +183,13 @@ provisioning is performed. Linux Bubblewrap policy is unchanged.
 - Fresh sequential `cargo.ps1` passed compile/link, one unit test, one actual
   rustdoc test, and cleanup. Evidence: `target/recovery-final-cargo`. Its
   read roots include toolchain `bin` and `lib`, not the HTML documentation.
+- CI coverage: `large-tree` is part of the default `recovery.ps1` points, so the
+  bounded ancestor-handle assertion runs in the manual Full validation Windows
+  native job (it is no longer opt-in via `LATCH_RECOVERY_POINTS`), and that job
+  now invokes `cargo.ps1` through `VsDevCmd.bat` after building the fixtures,
+  which gives the sandboxed-Cargo compile/link/unit/rustdoc path automated
+  coverage. Local runs still need an x64 Visual Studio developer shell and a
+  new disposable NTFS fixture directory.
 - The Rust embedded-runner test compiled with `cargo test -p latch-kernel
   --lib native_shell_and_fixed_git_use_embedded_boundary --locked --no-run`.
   The resulting real Rust test executable then passed that test with isolated

@@ -41,6 +41,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install Windows test prerequisites
         shell: pwsh
         run: |
@@ -92,6 +93,33 @@ jobs:
             & "native/windows/boundary/$suite.ps1" -Mediated -Binaries $binaries -FixtureRoot (Join-Path $fixtureBase "latch-mediated-$suite")
             if ($LASTEXITCODE) { throw "Mediated $suite exited $LASTEXITCODE" }
           }
+      - name: Sandboxed Cargo fixture
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw 'Visual Studio with C++ tools not found' }
+          $devCmd = Join-Path $vsPath 'Common7/Tools/VsDevCmd.bat'
+          if (-not (Test-Path -LiteralPath $devCmd)) { throw "VsDevCmd.bat not found: $devCmd" }
+          $toolchain = (& rustc --print sysroot).Trim()
+          if (-not (Test-Path -LiteralPath (Join-Path $toolchain 'bin/cargo.exe'))) { throw "Rust toolchain has no cargo.exe: $toolchain" }
+          $binaries = Join-Path $PWD 'target/windows-native-ci/bin'
+          # cargo.ps1 requires LIB from an x64 Visual Studio developer shell and
+          # a fresh disposable NTFS directory on the same volume as the
+          # LOCALAPPDATA journal.
+          $fixture = Join-Path $env:USERPROFILE ('LatchBoundaryCargoCI-' + $env:GITHUB_RUN_ID)
+          $script = Join-Path $PWD 'native/windows/boundary/cargo.ps1'
+          $wrapper = Join-Path $env:RUNNER_TEMP 'latch-cargo-fixture.cmd'
+          @(
+            '@echo off'
+            "call `"$devCmd`" -arch=x64 -host_arch=x64"
+            'if errorlevel 1 exit /b %errorlevel%'
+            "pwsh -NoProfile -File `"$script`" -Binaries `"$binaries`" -FixtureRoot `"$fixture`" -Toolchain `"$toolchain`""
+            'exit /b %errorlevel%'
+          ) | Set-Content -LiteralPath $wrapper -Encoding ascii
+          & cmd.exe /c $wrapper
+          if ($LASTEXITCODE) { throw "Sandboxed Cargo fixture exited $LASTEXITCODE" }
   windows-rust:
     runs-on: windows-2025
     timeout-minutes: 90
