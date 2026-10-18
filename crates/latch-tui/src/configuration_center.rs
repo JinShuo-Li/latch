@@ -1497,25 +1497,35 @@ impl ConfigurationCenter {
                     .and_then(|entry| entry.pricing.clone())
                     .unwrap_or_default();
                 let trimmed = value.trim();
-                let parsed = if trimmed.is_empty() {
-                    None
-                } else {
-                    let parsed = trimmed.parse::<f64>().ok()?;
-                    if !parsed.is_finite() || parsed < 0.0 {
-                        return None;
-                    }
-                    Some(parsed)
-                };
                 match field {
-                    PricingField::Input => pricing.input_per_million = parsed,
-                    PricingField::Output => pricing.output_per_million = parsed,
-                    PricingField::CacheRead => pricing.cache_read_per_million = parsed,
-                    PricingField::CacheWrite => pricing.cache_write_per_million = parsed,
+                    // The currency is text; it must never be parsed as an
+                    // amount, or every non-numeric currency is rejected.
                     PricingField::Currency => {
                         if trimmed.is_empty() {
                             return None;
                         }
                         pricing.currency = trimmed.to_owned();
+                    }
+                    PricingField::Input
+                    | PricingField::Output
+                    | PricingField::CacheRead
+                    | PricingField::CacheWrite => {
+                        let parsed = if trimmed.is_empty() {
+                            None
+                        } else {
+                            let parsed = trimmed.parse::<f64>().ok()?;
+                            if !parsed.is_finite() || parsed < 0.0 {
+                                return None;
+                            }
+                            Some(parsed)
+                        };
+                        match field {
+                            PricingField::Input => pricing.input_per_million = parsed,
+                            PricingField::Output => pricing.output_per_million = parsed,
+                            PricingField::CacheRead => pricing.cache_read_per_million = parsed,
+                            PricingField::CacheWrite => pricing.cache_write_per_million = parsed,
+                            PricingField::Currency => unreachable!("handled above"),
+                        }
                     }
                 }
                 Some(CenterAction::SetModelField {
@@ -1985,10 +1995,30 @@ mod tests {
         assert_eq!(pricing.output_per_million, Some(5.5));
         assert_eq!(pricing.currency, "USD");
 
+        // The currency field is text: any currency code must be accepted and
+        // must never be parsed as an amount.
+        center.down(); // cache read
+        center.down(); // cache write
+        center.down(); // currency
+        assert_eq!(center.confirm(), Some(CenterAction::Capture));
+        assert_eq!(center.capture_spec().unwrap().label, "currency");
+        let action = center.submit_capture("EUR".into()).expect("currency edit");
+        let CenterAction::SetModelField {
+            field: ModelFieldEdit::Pricing(Some(pricing)),
+            ..
+        } = action
+        else {
+            panic!("expected pricing edit");
+        };
+        assert_eq!(pricing.currency, "EUR");
+        assert_eq!(pricing.input_per_million, Some(1.5));
+        // The center's summary still holds the pre-edit amount until the host
+        // applies the previous action and refreshes the rows; the currency
+        // edit only proves text reaches the field untouched.
+        assert_eq!(pricing.output_per_million, Some(3.0));
+
         // The last row clears the whole override.
-        for _ in 0..4 {
-            center.down();
-        }
+        center.down();
         assert_eq!(
             center.confirm(),
             Some(CenterAction::SetModelField {
