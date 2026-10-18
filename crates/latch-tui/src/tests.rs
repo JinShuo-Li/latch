@@ -1365,6 +1365,20 @@ fn diff_overlay_scrolls_toggles_raw_and_closes() {
     assert!(app.diff_overlay.is_none());
 }
 
+#[test]
+fn empty_diff_inspector_does_not_claim_unparsed_input() {
+    let mut app = App::default();
+    app.open_diff(String::new());
+    let empty = render_to_text(&mut app, 100, 20);
+    assert!(
+        !empty.contains("unparsed input shown raw"),
+        "an empty worktree diff is not unparsed input: {empty}"
+    );
+    app.open_diff("definitely not a unified diff".into());
+    let unparsed = render_to_text(&mut app, 100, 20);
+    assert!(unparsed.contains("unparsed input shown raw"), "{unparsed}");
+}
+
 fn permission_event(
     request_id: uuid::Uuid,
     resolved: Option<(bool, &str)>,
@@ -1418,6 +1432,64 @@ fn steering_submit_keeps_running_while_ctrl_c_still_cancels() {
         "half-written",
         "cancel never submits the composer contents"
     );
+}
+
+#[test]
+fn ctrl_c_reaches_the_global_handler_from_setup_surfaces() {
+    let mut app = App::default();
+    app.output(Output::SetupCatalog(vec![SetupKind {
+        kind: "deepseek".into(),
+        label: "DeepSeek".into(),
+        default_base_url: String::new(),
+        requires_base_url: false,
+        credential_label: "env:DEEPSEEK_API_KEY".into(),
+        default_model: "deepseek-flash".into(),
+        models: vec![],
+    }]));
+    app.output(Output::SetupRequired);
+    assert!(app.setup_center.is_some());
+    let action = app.on_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(
+        matches!(action, Some(Action::Quit)),
+        "the modal setup surface must not swallow Ctrl+C"
+    );
+}
+
+#[test]
+fn command_errors_are_error_cells_without_claiming_interruption() {
+    let mut app = App::default();
+    app.output(Output::Notice(
+        "error: read /nope: No such file or directory".into(),
+    ));
+    assert!(
+        !app.interrupted,
+        "a command error outside a run is not an interrupted turn"
+    );
+    assert!(matches!(
+        app.presentation.cells().last(),
+        Some(Cell::Error { text }) if text.contains("No such file")
+    ));
+    // A failed run still reports the interrupted state.
+    app.busy = true;
+    app.output(Output::Notice("error: model request failed".into()));
+    assert!(app.interrupted);
+    assert!(!app.busy);
+}
+
+#[test]
+fn context_command_answers_locally_without_forwarding() {
+    let mut app = App::default();
+    app.input.set_text("/context");
+    let action = app.submit_action();
+    assert!(action.is_none(), "the TUI answers /context itself");
+    assert_eq!(app.input.text(), "");
+    let notices = app
+        .presentation
+        .cells()
+        .iter()
+        .filter(|cell| matches!(cell, Cell::Notice { .. }))
+        .count();
+    assert_eq!(notices, 1, "exactly one context report is shown");
 }
 
 #[test]
@@ -1543,6 +1615,31 @@ fn approval_surface_owns_the_keyboard_and_emits_real_decisions() {
         app.on_key(key(KeyCode::Char('x'), KeyModifiers::NONE))
             .is_none()
             || app.input.text().is_empty()
+    );
+}
+
+#[test]
+fn approval_surface_keeps_the_decision_visible_on_short_terminals() {
+    let mut app = App::default();
+    app.output(Output::Event(Box::new(presentation_event(
+        latch_protocol::EventPayload::PermissionRequested {
+            request_id: uuid::Uuid::new_v4(),
+            tool: "shell".into(),
+            arguments: serde_json::json!({
+                "command": "sudo apt-get install --yes build-essential valgrind linux-tools-generic"
+            }),
+            reason: "outside-workspace write requires explicit approval, and this reason is long \
+                     enough to wrap across several rows on an ordinary terminal"
+                .into(),
+            capabilities: vec!["external_filesystem_write".into()],
+        },
+    ))));
+    let text = render_to_text(&mut app, 80, 24);
+    assert!(text.contains("Approve"), "{text}");
+    assert!(text.contains("Deny"), "{text}");
+    assert!(
+        text.contains("ctrl+o full request"),
+        "the key hint must survive: {text}"
     );
 }
 

@@ -259,7 +259,7 @@ pub(super) fn hint_spans(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
 /// truncated.
 pub(super) fn action_surface_lines(app: &App, width: usize, height: u16) -> Vec<Line<'static>> {
     if let Some(prompt) = &app.permission {
-        approval_surface_lines(prompt, width)
+        approval_surface_lines(prompt, width, height)
     } else if let Some(capture) = &app.capture {
         capture_surface_lines(capture, width, height)
     } else if let Some(flow) = &app.known_setup {
@@ -503,88 +503,154 @@ fn surface_text(text: String, style: Style, width: usize, indent: usize) -> Line
     )
 }
 
-fn approval_surface_lines(prompt: &PermissionPrompt, width: usize) -> Vec<Line<'static>> {
+/// The approval surface. The options and key hint form a fixed tail that is
+/// never clipped; the request preview, reason, and capability fill the variable
+/// middle inside the same half-screen budget `draw()` gives the surface, so a
+/// short terminal can never hide the decision itself.
+fn approval_surface_lines(
+    prompt: &PermissionPrompt,
+    width: usize,
+    height: u16,
+) -> Vec<Line<'static>> {
     let palette = crate::theme::palette();
     let inner = width.saturating_sub(4).max(1);
-    let mut lines = vec![surface_blank(width)];
-    lines.push(surface_text(
-        "Approval needed".into(),
-        palette.attention(),
-        width,
-        2,
-    ));
-    lines.push(surface_blank(width));
-    lines.push(surface_text(
-        prompt.tool.clone(),
-        Style::default().bold(),
-        width,
-        2,
-    ));
-
-    let (preview, truncated) = approval_preview_lines(&prompt.arguments, inner, 3);
-    for line in preview {
-        lines.push(surface_text(line, Style::default(), width, 2));
-    }
-    if truncated {
-        lines.push(surface_text(
-            "… full request: Ctrl+O".into(),
-            notice_style(),
-            width,
-            2,
-        ));
-    }
-    if !prompt.reason.trim().is_empty() {
-        lines.push(surface_blank(width));
-        for line in wrap_surface_text(&prompt.reason, inner, 2) {
-            lines.push(surface_text(
-                line,
-                notice_style().add_modifier(Modifier::ITALIC),
-                width,
-                2,
-            ));
-        }
-    }
-    if !prompt.capabilities.is_empty() {
-        let capability = format!("capability: {}", prompt.capabilities.join(", "));
-        for line in wrap_surface_text(&capability, inner, 2) {
-            lines.push(surface_text(line, palette.attention(), width, 2));
-        }
-    }
-    lines.push(surface_blank(width));
-    for (index, (label, description)) in [
-        ("Approve", "Run this operation once."),
-        ("Deny", "Skip it and tell the model what to do differently."),
-    ]
-    .iter()
-    .enumerate()
-    {
-        let selected = index == prompt.selected;
+    let budget = (height as usize / 2).max(1);
+    let option = |selected: bool, label: &str, description: &str| {
         let marker = if selected { "› " } else { "  " };
         let label_style = if selected {
             palette.selected()
         } else {
             Style::default().add_modifier(Modifier::BOLD)
         };
-        lines.push(surface_row(
+        surface_row(
             vec![
                 Span::raw("  "),
                 Span::styled(marker.to_owned(), label_style),
-                Span::styled((*label).to_owned(), label_style),
+                Span::styled(label.to_owned(), label_style),
                 Span::raw("  "),
-                Span::styled((*description).to_owned(), notice_style()),
+                Span::styled(description.to_owned(), notice_style()),
             ],
             width,
+        )
+    };
+    let mut head = vec![
+        surface_blank(width),
+        surface_text("Approval needed".into(), palette.attention(), width, 2),
+        surface_blank(width),
+        surface_text(prompt.tool.clone(), Style::default().bold(), width, 2),
+    ];
+    let hint = "enter confirm · y approve · n deny · ctrl+o full request · esc deny".to_string();
+    let mut tail = vec![
+        surface_blank(width),
+        option(prompt.selected == 0, "Approve", "Run this operation once."),
+        option(
+            prompt.selected == 1,
+            "Deny",
+            "Skip it and tell the model what to do differently.",
+        ),
+        surface_blank(width),
+        surface_text(hint.clone(), notice_style(), width, 2),
+        surface_blank(width),
+    ];
+    // Drop informational rows before a decision row is ever lost: the header
+    // first, then the separators around the options.
+    if head.len() + tail.len() > budget {
+        head.truncate(2); // title + tool
+    }
+    if head.len() + tail.len() > budget {
+        head.clear();
+    }
+    if tail.len() > budget {
+        tail = vec![
+            option(prompt.selected == 0, "Approve", "Run this operation once."),
+            option(
+                prompt.selected == 1,
+                "Deny",
+                "Skip it and tell the model what to do differently.",
+            ),
+            surface_text(hint, notice_style(), width, 2),
+        ];
+    }
+    let middle_budget = budget.saturating_sub(head.len() + tail.len());
+    let (preview, truncated) = approval_preview_lines(&prompt.arguments, inner, 3);
+    let mut preview_block: Vec<Line<'static>> = preview
+        .into_iter()
+        .map(|line| surface_text(line, Style::default(), width, 2))
+        .collect();
+    if truncated {
+        preview_block.push(surface_text(
+            "… full request: Ctrl+O".into(),
+            notice_style(),
+            width,
+            2,
         ));
     }
-    lines.push(surface_blank(width));
-    lines.push(surface_text(
-        "enter confirm · y approve · n deny · ctrl+o full request · esc deny".into(),
-        notice_style(),
-        width,
-        2,
-    ));
-    lines.push(surface_blank(width));
-    lines
+    let reason_block: Vec<Line<'static>> = if prompt.reason.trim().is_empty() {
+        Vec::new()
+    } else {
+        std::iter::once(surface_blank(width))
+            .chain(
+                wrap_surface_text(&prompt.reason, inner, 2)
+                    .into_iter()
+                    .map(|line| {
+                        surface_text(
+                            line,
+                            notice_style().add_modifier(Modifier::ITALIC),
+                            width,
+                            2,
+                        )
+                    }),
+            )
+            .collect()
+    };
+    let capability_block: Vec<Line<'static>> = if prompt.capabilities.is_empty() {
+        Vec::new()
+    } else {
+        wrap_surface_text(
+            &format!("capability: {}", prompt.capabilities.join(", ")),
+            inner,
+            2,
+        )
+        .into_iter()
+        .map(|line| surface_text(line, palette.attention(), width, 2))
+        .collect()
+    };
+    // Whole blocks are kept in display order while they fit. When nothing fits
+    // yet, the request preview is shown truncated rather than dropped.
+    let blocks = [preview_block, reason_block, capability_block];
+    let mut kept: [Vec<Line<'static>>; 3] = Default::default();
+    let mut remaining = middle_budget;
+    let mut kept_any = false;
+    for index in [0usize, 2, 1] {
+        let block = &blocks[index];
+        if block.len() <= remaining {
+            kept[index] = block.clone();
+            remaining -= block.len();
+            kept_any = true;
+        } else if !kept_any && remaining > 0 {
+            let shown = remaining.min(block.len());
+            let mut slice = block[..shown].to_vec();
+            if index == 0 && shown >= 2 {
+                // The request preview is never hidden without the Ctrl+O
+                // pointer that shows the rest.
+                slice.truncate(shown - 1);
+                slice.push(if truncated {
+                    block
+                        .last()
+                        .expect("truncated previews carry a marker")
+                        .clone()
+                } else {
+                    surface_text("… full request: Ctrl+O".into(), notice_style(), width, 2)
+                });
+            }
+            kept[index] = slice;
+            remaining = 0;
+            kept_any = true;
+        }
+    }
+    head.extend(kept.into_iter().flatten());
+    head.extend(tail);
+    head
 }
 
 /// Bounded, readable rendering of the raw approval arguments. A single
@@ -1151,7 +1217,7 @@ pub(super) fn draw_diff_overlay(
             Constraint::Length(1),
         ])
         .split(area);
-    let (title, body_lines, parsed) = {
+    let (title, body_lines, unparsed) = {
         let document = app
             .diff_overlay
             .as_ref()
@@ -1197,7 +1263,11 @@ pub(super) fn draw_diff_overlay(
         } else {
             crate::diff::diff_lines(document)
         };
-        (Line::from(title), body, document.parsed)
+        (
+            Line::from(title),
+            body,
+            !document.parsed && !document.raw.trim().is_empty(),
+        )
     };
     frame.render_widget(Paragraph::new(title), rows[0]);
     let body = Paragraph::new(body_lines).wrap(Wrap { trim: false });
@@ -1210,10 +1280,10 @@ pub(super) fn draw_diff_overlay(
     let hint = format!(
         " ↑/↓ PgUp/PgDn Home/End scroll · Ctrl+T {} · Esc close{}",
         if app.diff_raw { "semantic" } else { "raw" },
-        if parsed {
-            ""
-        } else {
+        if unparsed {
             " · unparsed input shown raw"
+        } else {
+            ""
         }
     );
     frame.render_widget(Paragraph::new(Line::styled(hint, notice_style())), rows[2]);

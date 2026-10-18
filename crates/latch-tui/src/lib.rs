@@ -469,10 +469,15 @@ impl App {
             Output::ToolResult(result) => self.presentation.apply_tool_result(&result),
             Output::Notice(text) => {
                 if text.starts_with("error:") {
-                    self.interrupted = true;
+                    // A failed run leaves the last turn interrupted; a command
+                    // or configuration error outside a run must not claim that
+                    // (nor flip Ctrl+C from cancel to quit).
+                    self.interrupted = self.busy;
                     self.busy = false;
+                    self.presentation.push_error(text);
+                } else {
+                    self.push_notice(text);
                 }
-                self.push_notice(text);
             }
             Output::Mode(mode) => {
                 self.mode = mode;
@@ -858,6 +863,17 @@ impl App {
                 return None;
             }
         }
+        // The interrupt chord is global: setup, capture, selector, and profile
+        // surfaces never swallow it, so /help's "Ctrl+C cancels a running turn,
+        // or quits when idle" stays true on every screen.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return if self.busy {
+                self.interrupted = true;
+                Some(Action::Cancel)
+            } else {
+                Some(Action::Quit)
+            };
+        }
         // Setup text capture owns the keyboard until submitted or cancelled.
         if self.capture.is_some() {
             let mut submit = false;
@@ -1101,14 +1117,6 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
-                KeyCode::Char('c') => {
-                    if self.busy {
-                        self.interrupted = true;
-                        Some(Action::Cancel)
-                    } else {
-                        Some(Action::Quit)
-                    }
-                }
                 KeyCode::Char('a') => {
                     self.input.line_home();
                     None
@@ -1558,8 +1566,12 @@ impl App {
             return None;
         }
         if command == "/context" {
+            // The CLI's one-line answer would duplicate this richer local
+            // report from two snapshots; the TUI answers with its own view.
+            self.input.take_for_submit();
             self.presentation
                 .push_notice(self.sidebar.advanced_context_text());
+            return None;
         }
         if command == "/safety" {
             self.input.take_for_submit();
