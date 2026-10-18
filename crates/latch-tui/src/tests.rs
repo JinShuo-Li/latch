@@ -950,6 +950,74 @@ fn setup_capture_places_cursor_on_the_active_input_surface() {
 }
 
 #[test]
+fn rejected_setup_values_keep_the_field_open_with_feedback() {
+    use crate::configuration_center::{ProviderModelSummary, ProviderStatus, ProviderSummary};
+    let mut app = App {
+        setup_center: Some(ConfigurationCenter::new(
+            vec![ProviderSummary {
+                id: "p".into(),
+                display_name: "P".into(),
+                kind: "deepseek".into(),
+                status: ProviderStatus::Ready,
+                model_count: 1,
+                default_model: "known".into(),
+                credential_ref: "env:KEY".into(),
+                base_url: "https://example.test/v1".into(),
+                available_models: vec!["known".into()],
+                models: vec![ProviderModelSummary {
+                    id: "known".into(),
+                    display_name: "Known".into(),
+                    enabled: true,
+                    resolved: true,
+                    ..ProviderModelSummary::default()
+                }],
+                discovered_ids: vec![],
+            }],
+            vec![],
+        )),
+        ..App::default()
+    };
+    // Providers -> provider -> Advanced -> model -> Context window.
+    for _ in 0..3 {
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // provider
+    for _ in 0..3 {
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // Advanced
+    for _ in 0..2 {
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // model
+    for _ in 0..2 {
+        app.on_key(key(KeyCode::Down, KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE)); // Context window
+    let capture = app.capture.as_ref().expect("capture opened");
+    assert_eq!(capture.spec.label, "context window (tokens)");
+
+    for ch in "abc".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+
+    let kept = app
+        .capture
+        .as_ref()
+        .expect("rejected value keeps the field");
+    assert_eq!(kept.value, "abc", "the typed value survives for correction");
+    let notices = app
+        .presentation
+        .cells()
+        .iter()
+        .filter(|cell| matches!(cell, Cell::Notice { .. }))
+        .count();
+    assert_eq!(notices, 1, "the rejection is explained");
+    assert!(render_to_text(&mut app, 90, 24).contains("was not accepted"));
+}
+
+#[test]
 fn missing_provider_opens_guided_setup_immediately() {
     let mut app = App::default();
     app.output(Output::SetupCatalog(vec![SetupKind {

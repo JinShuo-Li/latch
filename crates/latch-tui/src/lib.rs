@@ -915,12 +915,35 @@ impl App {
                 } else if let Some(flow) = self.known_setup.as_mut() {
                     flow.submit_capture(finished.value);
                 } else if self.setup_center.is_some() {
-                    let action = self
-                        .setup_center
-                        .as_mut()
-                        .and_then(|center| center.submit_capture(finished.value));
+                    // A value the field rejects must not be discarded in
+                    // silence: the flow stays on the same page, so a `None`
+                    // result that neither advances nor opens a new capture is
+                    // a rejection. Reopen the field with the typed value and
+                    // say why nothing happened.
+                    let (action, rejected) = {
+                        let center = self.setup_center.as_mut().expect("checked above");
+                        let page_before = center.page().clone();
+                        let spec = center.capture_spec();
+                        let action = center.submit_capture(finished.value.clone());
+                        let rejected = if action.is_none() {
+                            spec.filter(|_| center.page() == &page_before)
+                        } else {
+                            None
+                        };
+                        (action, rejected)
+                    };
                     if let Some(action) = action {
                         return self.dispatch_center_action(action);
+                    }
+                    if let Some(spec) = rejected {
+                        self.push_notice(format!(
+                            "{} was not accepted; correct the value and try again",
+                            spec.label
+                        ));
+                        self.capture = Some(CaptureState {
+                            spec,
+                            value: finished.value,
+                        });
                     }
                 }
             }
