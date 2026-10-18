@@ -224,9 +224,12 @@ impl PresentationModel {
                 passed,
                 detail,
             } => self.finish_validation(command, *passed, detail),
+            // Both edits and creations carry the kernel ledger's recorded
+            // deltas and a unified-diff preview; a new file must show the same
+            // evidence an edit does.
             EventPayload::FileChanged {
                 after,
-                created: false,
+                created: _,
                 owner: ChangeOwner::Latch,
                 additions,
                 deletions,
@@ -1324,6 +1327,44 @@ mod tests {
         };
         assert_eq!(files[0].additions, 1, "kernel ledger is authoritative");
         assert_eq!(files[0].deletions, 1);
+        assert_eq!(files[0].status, CellStatus::Passed);
+    }
+
+    #[test]
+    fn created_files_use_the_ledger_delta_and_preview_like_edits() {
+        let preview = "--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1,4 @@\n+one\n+two\n";
+        let model = PresentationModel::from_events(&[
+            request(
+                "w1",
+                "write",
+                json!({"path":"src/new.rs","content":"one\ntwo\nthree\nfour\nfive"}),
+            ),
+            event(EventPayload::FileChanged {
+                before: None,
+                after: FileVersion {
+                    path: "src/new.rs".into(),
+                    content_hash: "h".into(),
+                    size: 9,
+                },
+                created: true,
+                owner: latch_protocol::ChangeOwner::Latch,
+                undo_artifact: None,
+                additions: 4,
+                deletions: 0,
+                preview: preview.into(),
+                call_id: Some("w1".into()),
+            }),
+            result("w1", "write", "updated src/new.rs @ h", false),
+        ]);
+        let Cell::Patch { files } = &model.cells[0] else {
+            panic!("expected patch cell");
+        };
+        assert_eq!(files[0].additions, 4, "kernel ledger is authoritative");
+        assert_eq!(files[0].deletions, 0);
+        assert_eq!(
+            files[0].preview, preview,
+            "a created file carries the same diff evidence as an edit"
+        );
         assert_eq!(files[0].status, CellStatus::Passed);
     }
 
