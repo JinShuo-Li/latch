@@ -835,13 +835,16 @@ fn set_model_field(
 }
 
 fn parse_transport(raw: &str) -> Result<latch_kernel::config::TransportKind> {
-    Ok(match raw {
-        "chat_completions" => latch_kernel::config::TransportKind::ChatCompletions,
-        "responses" => latch_kernel::config::TransportKind::Responses,
-        "anthropic_messages" => latch_kernel::config::TransportKind::AnthropicMessages,
-        "gemini" => latch_kernel::config::TransportKind::Gemini,
-        _ => bail!("unknown custom model transport"),
-    })
+    use latch_kernel::config::TransportKind;
+    [
+        TransportKind::ChatCompletions,
+        TransportKind::Responses,
+        TransportKind::AnthropicMessages,
+        TransportKind::Gemini,
+    ]
+    .into_iter()
+    .find(|kind| kind.wire_name() == raw)
+    .ok_or_else(|| anyhow!("unknown custom model transport"))
 }
 
 fn parse_replay(raw: &str) -> Result<latch_kernel::config::ReasoningReplayPolicy> {
@@ -1730,6 +1733,25 @@ mod tests {
         assert!(text.contains("context_window_tokens = 123000"), "{text}");
         assert!(text.contains("display_name = \"Future Pro Max\""), "{text}");
 
+        // The display label and the editable transport stay distinct: an
+        // editor must preselect the wire value, not the human label.
+        set_model_field(
+            &mut context,
+            "deepseek",
+            "future-pro",
+            &ModelFieldEdit::Transport(Some("anthropic_messages".into())),
+        )
+        .unwrap();
+        let summary = context.setup_providers()[0]
+            .models
+            .iter()
+            .find(|model| model.id == "future-pro")
+            .cloned()
+            .unwrap();
+        assert_eq!(summary.transport, "messages");
+        assert_eq!(summary.transport_wire, "anthropic_messages");
+        assert!(summary.transport_configured);
+
         // Reset removes the sparse entry; catalog models keep their metadata.
         set_model_field(
             &mut context,
@@ -1961,6 +1983,11 @@ mod tests {
             .cloned()
             .unwrap();
         assert!(summary.gemini_thinking_configured);
+        assert_eq!(
+            summary.gemini_thinking_override,
+            Some(latch_ui::GeminiThinkingEdit::Budget { zero_allowed: true }),
+            "editors preselect the stored override instead of clearing it"
+        );
         assert!(
             summary
                 .gemini_thinking
@@ -2019,6 +2046,10 @@ mod tests {
             .cloned()
             .unwrap();
         assert!(!summary.gemini_thinking_configured);
+        assert_eq!(
+            summary.gemini_thinking_override, None,
+            "a cleared override stops preselecting a stored capability"
+        );
     }
 
     #[test]

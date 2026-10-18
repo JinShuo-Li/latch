@@ -76,6 +76,19 @@ impl TransportKind {
         }
     }
 
+    /// The configuration wire name shared by config files, `/setup`, and the
+    /// Web settings form. This is the string `parse_transport` accepts, not the
+    /// human label.
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "chat_completions",
+            Self::Responses => "responses",
+            Self::AnthropicMessages => "anthropic_messages",
+            Self::Gemini => "gemini",
+        }
+    }
+
     /// Which effort mapping forms this transport can serialize on its own. A
     /// form a transport cannot express is rejected at configuration
     /// validation, not silently dropped at request time. Gemini declares its

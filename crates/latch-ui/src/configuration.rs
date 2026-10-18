@@ -1,5 +1,5 @@
 //! Provider-neutral configuration display contracts.
-use crate::profile::EffortMapEdit;
+use crate::profile::{EffortMapEdit, GeminiThinkingEdit};
 use latch_protocol::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -71,6 +71,12 @@ pub struct ProviderModelSummary {
     pub from_catalog: bool,
     /// Effective transport label.
     pub transport: String,
+    /// Effective transport wire name (`chat_completions`, `responses`,
+    /// `anthropic_messages`, `gemini`): the value an editor submits. Kept
+    /// separate from the human label so a form never rewrites a configured
+    /// transport by mistaking one for the other.
+    #[serde(default)]
+    pub transport_wire: String,
     /// Whether the user explicitly set the transport.
     pub transport_configured: bool,
     pub context_window_tokens: Option<usize>,
@@ -81,6 +87,11 @@ pub struct ProviderModelSummary {
     /// Effective Gemini thinking capability summary from the CLI, when the
     /// model declares one. Display text only; no wire names.
     pub gemini_thinking: Option<String>,
+    /// The user's explicit Gemini thinking override in provider-neutral form,
+    /// when one is configured. Editors preselect from this so saving an
+    /// untouched form never clears the stored capability.
+    #[serde(default)]
+    pub gemini_thinking_override: Option<GeminiThinkingEdit>,
     pub gemini_thinking_configured: bool,
     pub input_modalities: Vec<String>,
     pub input_modalities_configured: bool,
@@ -108,12 +119,14 @@ impl Default for ProviderModelSummary {
             resolved: false,
             from_catalog: false,
             transport: String::new(),
+            transport_wire: String::new(),
             transport_configured: false,
             context_window_tokens: None,
             reasoning_replay: None,
             adaptive_thinking: false,
             adaptive_thinking_configured: false,
             gemini_thinking: None,
+            gemini_thinking_override: None,
             gemini_thinking_configured: false,
             input_modalities: Vec::new(),
             input_modalities_configured: false,

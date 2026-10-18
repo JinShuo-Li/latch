@@ -18,6 +18,15 @@ pub use known::{KnownPhase, KnownProviderFlow};
 
 pub use latch_ui::configuration::{ProviderModelSummary, ProviderStatus, ProviderSummary};
 
+/// Transport wire names in the same order as the `Transport` choice rows:
+/// row `index + 1` selects `TRANSPORTS[index]`.
+const TRANSPORTS: [&str; 4] = [
+    "chat_completions",
+    "responses",
+    "anthropic_messages",
+    "gemini",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CenterPage {
     Providers,
@@ -935,12 +944,25 @@ impl ConfigurationCenter {
                     Some(CenterAction::Capture)
                 }
                 1 => {
+                    // Preselect the configured transport; an override that
+                    // silently reverted to row 0 would rewrite the model's
+                    // wire protocol on the next save.
+                    let configured = self
+                        .model(&provider, &model)
+                        .filter(|entry| entry.transport_configured)
+                        .and_then(|entry| {
+                            TRANSPORTS
+                                .iter()
+                                .position(|wire| *wire == entry.transport_wire)
+                                .map(|index| index + 1)
+                        })
+                        .unwrap_or(0);
                     self.page = CenterPage::ModelChoice {
                         provider,
                         model,
                         kind: ModelChoiceKind::Transport,
                     };
-                    self.selected = 0;
+                    self.selected = configured;
                     None
                 }
                 2 => {
@@ -1092,10 +1114,12 @@ impl ConfigurationCenter {
                         let entry = self.model(&provider, &model)?;
                         Some(ModelFieldEdit::Efforts {
                             efforts: entry.efforts.clone(),
-                            default_effort: entry
-                                .efforts
-                                .get(self.selected.checked_sub(1)?)
-                                .copied()
+                            // Row 0 is "Provider default"; the remaining rows
+                            // map to the exposed efforts in order.
+                            default_effort: self
+                                .selected
+                                .checked_sub(1)
+                                .and_then(|index| entry.efforts.get(index).copied())
                                 .or(Some(ReasoningEffort::ProviderDefault)),
                         })
                     }
@@ -1747,6 +1771,45 @@ mod tests {
     }
 
     #[test]
+    fn transport_choice_preselects_the_configured_wire() {
+        let mut entry = provider(ProviderStatus::Ready).models.pop().unwrap();
+        entry.transport = "messages".into();
+        entry.transport_wire = "anthropic_messages".into();
+        entry.transport_configured = true;
+        let mut provider = provider(ProviderStatus::Ready);
+        provider.models = vec![entry];
+        let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
+        open_provider(&mut center);
+        center.down();
+        center.down();
+        center.down();
+        center.confirm(); // Advanced
+        center.down();
+        center.down();
+        center.confirm(); // ModelAdvanced
+        center.down();
+        center.confirm(); // Transport
+        assert_eq!(
+            center.page(),
+            &CenterPage::ModelChoice {
+                provider: "deepseek".into(),
+                model: "deepseek-flash".into(),
+                kind: ModelChoiceKind::Transport,
+            }
+        );
+        assert_eq!(center.selected, 3, "the configured wire stays highlighted");
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::SetModelField {
+                name: "deepseek".into(),
+                model: "deepseek-flash".into(),
+                field: ModelFieldEdit::Transport(Some("anthropic_messages".into())),
+            }),
+            "confirming the preselected row keeps the configured transport"
+        );
+    }
+
+    #[test]
     fn effort_map_editor_requires_every_exposed_effort() {
         let mut entry = provider(ProviderStatus::Ready).models.pop().unwrap();
         entry.efforts = vec![ReasoningEffort::Low, ReasoningEffort::High];
@@ -1816,6 +1879,60 @@ mod tests {
             EffortMapEdit::Value("low".into())
         );
         assert_eq!(map[&ReasoningEffort::High], EffortMapEdit::Disabled);
+    }
+
+    #[test]
+    fn provider_default_effort_row_restores_the_provider_default() {
+        let mut entry = provider(ProviderStatus::Ready).models.pop().unwrap();
+        entry.efforts = vec![ReasoningEffort::Low, ReasoningEffort::High];
+        entry.default_effort = ReasoningEffort::Low;
+        let mut provider = provider(ProviderStatus::Ready);
+        provider.models = vec![entry];
+        let mut center = ConfigurationCenter::new(vec![provider], vec![kind()]);
+        open_provider(&mut center);
+        center.down();
+        center.down();
+        center.down();
+        center.confirm(); // Advanced
+        center.down();
+        center.down();
+        center.confirm(); // ModelAdvanced
+        for _ in 0..9 {
+            center.down();
+        }
+        assert_eq!(center.confirm(), None, "open the Default effort page");
+        assert_eq!(
+            center.page(),
+            &CenterPage::ModelChoice {
+                provider: "deepseek".into(),
+                model: "deepseek-flash".into(),
+                kind: ModelChoiceKind::DefaultEffort,
+            }
+        );
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::SetModelField {
+                name: "deepseek".into(),
+                model: "deepseek-flash".into(),
+                field: ModelFieldEdit::Efforts {
+                    efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+                    default_effort: Some(ReasoningEffort::ProviderDefault),
+                },
+            }),
+            "the first row must clear the override instead of doing nothing"
+        );
+        center.down();
+        assert_eq!(
+            center.confirm(),
+            Some(CenterAction::SetModelField {
+                name: "deepseek".into(),
+                model: "deepseek-flash".into(),
+                field: ModelFieldEdit::Efforts {
+                    efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+                    default_effort: Some(ReasoningEffort::Low),
+                },
+            })
+        );
     }
 
     #[test]

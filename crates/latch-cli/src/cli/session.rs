@@ -20,7 +20,7 @@ use latch_kernel::{
 use latch_protocol::{EventPayload, InferenceProfile, MediaRef, Mode, ProviderId, ReasoningEffort};
 use latch_ui::EffortMapEdit;
 use latch_ui::configuration::{ProviderModelSummary, ProviderStatus, ProviderSummary};
-use latch_ui::{CatalogModel, CatalogProvider, InferenceCatalog, SetupKind};
+use latch_ui::{CatalogModel, CatalogProvider, GeminiThinkingEdit, InferenceCatalog, SetupKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -113,6 +113,27 @@ fn effort_map_edit(mapping: &latch_kernel::config::EffortMapping) -> EffortMapEd
     }
 }
 
+/// Converts a configured Gemini thinking capability into the provider-neutral
+/// editor form, so an editor can preselect the stored override instead of
+/// clearing it on save.
+fn gemini_thinking_edit(
+    capability: &latch_kernel::provider::GeminiThinkingCapability,
+) -> GeminiThinkingEdit {
+    match capability {
+        latch_kernel::provider::GeminiThinkingCapability::Levels { levels, off } => {
+            GeminiThinkingEdit::Levels {
+                levels: levels.clone(),
+                off: off.clone(),
+            }
+        }
+        latch_kernel::provider::GeminiThinkingCapability::Budget { zero_allowed } => {
+            GeminiThinkingEdit::Budget {
+                zero_allowed: *zero_allowed,
+            }
+        }
+    }
+}
+
 impl InferenceContext {
     pub fn setup_providers(&self) -> Vec<ProviderSummary> {
         let cache_root =
@@ -179,6 +200,7 @@ impl InferenceContext {
                                 resolved: model.resolved,
                                 from_catalog: catalog_model.is_some(),
                                 transport: model.transport.label().to_owned(),
+                                transport_wire: model.transport.wire_name().to_owned(),
                                 transport_configured: user
                                     .is_some_and(|user| user.transport.is_some()),
                                 context_window_tokens: model.context_window_tokens,
@@ -199,6 +221,9 @@ impl InferenceContext {
                                     .gemini_thinking
                                     .as_ref()
                                     .map(ToString::to_string),
+                                gemini_thinking_override: user
+                                    .and_then(|user| user.gemini_thinking.as_ref())
+                                    .map(gemini_thinking_edit),
                                 gemini_thinking_configured: user
                                     .is_some_and(|user| user.gemini_thinking.is_some()),
                                 input_modalities: model
