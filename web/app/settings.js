@@ -3,6 +3,7 @@ import {icon} from './icons.js';
 const $ = selector => document.querySelector(selector);
 const efforts = ['none','minimal','low','medium','high','xhigh','max'];
 const choices = (values,current) => values.map(v=>`<option value="${e(v)}" ${v===current?'selected':''}>${e(title(v))}</option>`).join('');
+const labeled = (entries,current) => entries.map(([value,label])=>`<option value="${e(value)}" ${value===current?'selected':''}>${e(label)}</option>`).join('');
 const input = (label,name,value='',type='text',extra='') => `<label class="field-label">${e(label)}<input class="form-input" name="${name}" type="${type}" value="${e(value ?? '')}" ${extra}></label>`;
 const save = label => `<button type="submit" class="primary-button">${label || 'Save change'}</button>`;
 const providers = () => metadata().setup_required && metadata().setup_paths?.config_exists===false ? [] : metadata().setup_providers || [];
@@ -23,7 +24,16 @@ export function renderSettingsStatus() {
   status.textContent=state.settingsMessage || (session().busy?'Stop or wait for the active turn before changing configuration.':'');
   status.classList.toggle('form-error',!!state.settingsError);
   status.setAttribute('role',state.settingsError?'alert':'status');
-  $('#settings-content').querySelectorAll('button[type="submit"], [data-discover], [data-new-default], [data-remove-provider], [data-confirm-remove]').forEach(button=>{button.disabled=!!state.settingsPending || !!session().busy || !!session().starting;});
+  const busy=!!state.settingsPending || !!session().busy || !!session().starting;
+  $('#settings-content').querySelectorAll('button[type="submit"], [data-discover], [data-new-default], [data-remove-provider], [data-confirm-remove]').forEach(button=>{button.disabled=busy;});
+  // Policy selects follow the effective server state: a change the server
+  // rejects (for example mid-turn) snaps back instead of lying about the
+  // active resolver.
+  for (const [id,value] of [['safety-select',metadata().safety],['permission-select',metadata().permissions]]) {
+    const select=$(`#${id}`); if(!select) continue;
+    select.disabled=busy;
+    if(value && select.value!==value) select.value=value;
+  }
 }
 export function renderSettings() {
   document.querySelectorAll('[data-settings]').forEach(b=>b.classList.toggle('selected',b.dataset.settings===state.settingsTab));
@@ -31,7 +41,7 @@ export function renderSettings() {
   if (state.settingsTab === 'general') {
     root.innerHTML = `<div class="settings-row"><div><label for="theme">Appearance</label><small>A comfortable place to focus.</small></div><select id="theme">${choices(['dark','light'],document.body.classList.contains('dark')?'dark':'light')}</select></div><div class="settings-row"><div><strong>Language</strong><small>Latch’s default interface language.</small></div><span class="fixed-value">English</span></div><div class="settings-row"><div><strong>Workspace</strong><small>Fixed to the startup directory.</small></div><span class="fixed-value">${e(state.snapshot?.workspace)}</span></div><div class="settings-row"><div><strong>Keyboard shortcuts</strong><small>Enter to send · Shift + Enter for a new line<br>Ctrl / ⌘ + K for a new conversation<br>Up / Down at an input boundary for prompt history<br>Escape to close panels</small></div></div><button class="secondary-button" data-command="/quit">Stop Web server</button>`;
   } else if (state.settingsTab === 'safety') {
-    root.innerHTML = `<div class="settings-row"><div><label for="safety-select">Safety profile</label><small>Controls which operations are permitted.</small></div><select id="safety-select">${choices(['strict','standard','autonomous'],metadata().safety || 'standard')}</select></div><div class="settings-row"><div><label for="permission-select">Permission resolver</label><small>How approval requests are resolved.</small></div><select id="permission-select">${choices(['auto','human','ai'],metadata().permissions || 'human')}</select></div><p class="settings-note">Ask and Plan remain read-only. Every command still runs inside the mandatory sandbox.</p>`;
+    root.innerHTML = `<div class="settings-row"><div><label for="safety-select">Safety profile</label><small>Controls which operations are permitted.</small></div><select id="safety-select">${choices(['strict','standard','autonomous'],metadata().safety || 'standard')}</select></div><div class="settings-row"><div><label for="permission-select">Permission resolver</label><small>How approval requests are resolved.</small></div><select id="permission-select">${labeled([['auto_approve','All approved'],['human','Approved by ask'],['ai_review','Approve for me']],metadata().permissions || 'human')}</select></div><p class="settings-note">Ask and Plan remain read-only. Every command still runs inside the mandatory sandbox.</p>`;
   } else renderProviderPage();
   renderSettingsStatus();
 }
@@ -75,7 +85,7 @@ export function renderModelPage(provider,model) {
 }
 function fieldEditor(field,m) {
   if (field === 'DisplayName') return input('Display name (empty restores default)','value',m.display_name);
-  if (field === 'Transport') return `<label class="field-label">Transport<select class="form-input" name="value"><option value="">Provider default</option>${choices(['chat_completions','responses','anthropic_messages','gemini'],m.transport_configured?m.transport:'')}</select></label>`;
+  if (field === 'Transport') return `<label class="field-label">Transport<select class="form-input" name="value"><option value="">Provider default</option>${choices(['chat_completions','responses','anthropic_messages','gemini'],m.transport_configured?(m.transport_wire||''):'')}</select></label>`;
   if (field === 'ContextWindow') return input('Context window in tokens (empty restores default)','value',m.context_window_tokens,'number','min="1"');
   if (field === 'ReasoningReplay') return `<label class="field-label">Replay policy<select class="form-input" name="value"><option value="">Provider default</option>${choices(['replay','omit'],m.reasoning_replay || '')}</select></label>`;
   if (field === 'AdaptiveThinking') return `<label class="field-label">Adaptive thinking<select class="form-input" name="value"><option value="">Provider default</option>${choices(['true','false'],m.adaptive_thinking_configured?String(m.adaptive_thinking):'')}</select></label>`;
@@ -84,7 +94,10 @@ function fieldEditor(field,m) {
   if (field === 'Efforts') return `<p class="settings-note">Changing exposed efforts may reset an incompatible effort mapping.</p>${efforts.map(v=>`<label class="checkbox-row"><input type="checkbox" name="values" value="${v}" ${m.efforts.includes(v)?'checked':''}>${title(v)}</label>`).join('')}<label class="field-label">Default effort<select class="form-input" name="default_effort">${choices(['provider_default',...efforts],m.default_effort)}</select></label>`;
   if (field === 'EffortMap') return `<p class="settings-note">Map every exposed level, or choose Automatic for all levels to restore the adapter default.</p>${m.efforts.map(v=>{const value=m.effort_map[v];const type=typeof value==='string'?value:Object.keys(value||{})[0] || 'Automatic';return `<div class="effort-map-row"><strong>${title(v)}</strong><select class="form-input" name="map_${v}">${choices(['Automatic','Value','Budget','Disabled'],type)}</select><input class="form-input" name="value_${v}" aria-label="${title(v)} mapped value" value="${e(value?.Value ?? value?.Budget ?? '')}" placeholder="Value or token budget"></div>`;}).join('')}`;
   if (field === 'Pricing') return `${input('Currency','currency',m.pricing?.currency || 'USD')}${['input_per_million','output_per_million','cache_read_per_million','cache_write_per_million'].map(v=>input(title(v),'price_'+v,m.pricing?.[v],'number','min="0" step="any"')).join('')}<label class="checkbox-row"><input type="checkbox" name="clear_pricing">Clear pricing override</label>`;
-  if (field === 'GeminiThinking') return `<label class="field-label">Thinking capability<select class="form-input" name="thinking"><option value="">Provider default</option><option value="Levels">Named levels</option><option value="Budget">Token budget</option></select></label>${input('Levels, separated by commas','levels','low, high')}${input('Off level, if supported','off')}<label class="checkbox-row"><input type="checkbox" name="zero_allowed">Budget can be zero</label>`;
+  if (field === 'GeminiThinking') {
+    const override=m.gemini_thinking_override, levels=override?.Levels, budget=override?.Budget;
+    return `<label class="field-label">Thinking capability<select class="form-input" name="thinking"><option value="" ${override?'':'selected'}>Provider default</option><option value="Levels" ${levels?'selected':''}>Named levels</option><option value="Budget" ${budget?'selected':''}>Token budget</option></select></label>${input('Levels, separated by commas','levels',levels?levels.levels.join(', '):'low, high')}${input('Off level, if supported','off',levels?.off||'')}<label class="checkbox-row"><input type="checkbox" name="zero_allowed" ${budget?.zero_allowed?'checked':''}>Budget can be zero</label>`;
+  }
   return '<p class="settings-note">Clear this model’s overrides. A custom model will be removed; built-in models return to catalog defaults.</p>';
 }
 export function settingsPlan(form) {

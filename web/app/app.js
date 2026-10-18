@@ -72,7 +72,9 @@ async function sendInput(type,data) {
   const id=await ensureSession();
   const result=await api(`/api/sessions/${id}/commands`,{method:'POST',body:{command_id:crypto.randomUUID(),instance_id:state.snapshot.instance_id,issued_at:state.snapshot.server_time+Math.floor(performance.now()-state.receivedAt),input:{type,...(data===undefined?{}:{data})}}});
   // Acceptance is not durable success; actual results arrive through events.
-  applySnapshot(await api('/api/bootstrap'));
+  // A quit begins server shutdown before it replies, so refreshing afterwards
+  // would race the closing listener and mask the deliberate stop.
+  if (type!=='quit') applySnapshot(await api('/api/bootstrap'));
   return result;
 }
 async function newChat() {if(session().busy || session().starting)return;await api('/api/sessions',{method:'POST'});$('#prompt').value='';applySnapshot(await api('/api/bootstrap'));await refreshSessions();$('#app').classList.remove('mobile-sidebar-open');$('#prompt').focus();}
@@ -90,7 +92,7 @@ async function slash(text) {
   if (name==='/attach') {if(args.length)throw new Error('Use the attachment button to select a file from your browser.');$('#file-input').click();return;}
   if (name==='/attachments') {toast(state.pendingFiles.length?state.pendingFiles.map(f=>f.name).join(', '):'No pending attachments.');return;}
   if (name==='/detach') {if(!args.length || args[0]==='all'){for(let i=state.pendingFiles.length-1;i>=0;i--)await removeFile(i);}else {const index=Number(args[0])-1;if(!Number.isInteger(index)||index<0||index>=state.pendingFiles.length)throw new Error('Use /detach <1-based index> or /detach all.');await removeFile(index);}return;}
-  if (name==='/quit'||name==='/exit') {await sendInput('quit');stopSubscription?.();state.connected=false;$('#connection-state').textContent='STOPPED';renderComposer();toast('Web server stopped.');return;}
+  if (name==='/quit'||name==='/exit') {try{await sendInput('quit');}catch{/* a failed stop request means the server is already closing */}finally{stopSubscription?.();state.connected=false;$('#connection-state').textContent='STOPPED';renderComposer();toast('Web server stopped.');}return;}
   if (name==='/diff') {delete metadata().diff;diffRequested=true;}
   const result=await sendInput('submit',{text,media:[]});
 
@@ -152,6 +154,9 @@ $('#sessions').addEventListener('change',event=>{
   if (!input) return;
   if(input.checked)state.selectedSessions.add(input.dataset.selectSession);else state.selectedSessions.delete(input.dataset.selectSession);
   renderSessions();
+  // renderSessions replaces the list; keep the toggled box focused so a
+  // keyboard user can select several conversations without re-tabbing.
+  document.querySelector(`[data-select-session="${input.dataset.selectSession}"]`)?.focus();
 });
 $('#select-visible-sessions').addEventListener('change',event=>{
   for(const s of visibleSessions())if(s.id!==session().session_id){if(event.target.checked)state.selectedSessions.add(s.id);else state.selectedSessions.delete(s.id);}
@@ -200,8 +205,10 @@ $('#stop-inline').addEventListener('click',()=>attempt(()=>sendInput('cancel')))
 for(const [id,approved] of [['approve',true],['deny',false]])$(`#${id}`).addEventListener('click',()=>attempt(async()=>{const request=session().pending_permissions?.[0];if(request)await sendInput('permission',{request_id:request.request_id,approved});}));
 $('#attach').addEventListener('click',()=>$('#file-input').click());
 $('#file-input').addEventListener('change',event=>{attempt(()=>addFiles([...event.target.files]));event.target.value='';});
-$('#composer').addEventListener('dragover',event=>event.preventDefault());
-$('#composer').addEventListener('drop',event=>{event.preventDefault();attempt(()=>addFiles([...event.dataTransfer.files]));});
+// Dropping an image anywhere attaches it; without this the browser would
+// navigate away from the app to display the dropped file.
+document.addEventListener('dragover',event=>{if([...(event.dataTransfer?.types||[])].includes('Files'))event.preventDefault();});
+document.addEventListener('drop',event=>{if(!event.dataTransfer?.files?.length)return;event.preventDefault();attempt(()=>addFiles([...event.dataTransfer.files]));});
 $('#attachments').addEventListener('click',event=>{const button=event.target.closest('[data-remove-file]');if(button)attempt(()=>removeFile(Number(button.dataset.removeFile)));});
 $('#open-settings').addEventListener('click',()=>openSettings());
 $$('[data-close]').forEach(button=>button.addEventListener('click',()=>$(`#${button.dataset.close}`).close()));

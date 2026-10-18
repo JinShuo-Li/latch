@@ -26,7 +26,7 @@ export function subscribe(onSnapshot, onConnection, onError) {
     if (closed) return;
     if (refreshing) { dirty = true; return; }
     refreshing = true;
-    try { onSnapshot(await api('/api/bootstrap')); }
+    try { onSnapshot(await api('/api/bootstrap')); onConnection(true); }
     catch (error) { onError(error); }
     finally {
       refreshing = false;
