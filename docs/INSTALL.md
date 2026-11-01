@@ -26,7 +26,7 @@ curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
 Windows, from Windows PowerShell 5.1+ or PowerShell 7:
 
 ```powershell
-& { $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm https://jinshuo-li.github.io/latch/install.ps1 | iex; $env:Path="$env:LOCALAPPDATA\Programs\Latch\bin;$env:Path"; latch --version }
+& { $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm -DisableKeepAlive https://jinshuo-li.github.io/latch/install.ps1 | iex; $env:Path="$env:LOCALAPPDATA\Programs\Latch\bin;$env:Path"; latch --version }
 ```
 
 Linux automatically selects the x86_64 or ARM64 archive and installs to `~/.local/bin`. Windows installs to
@@ -37,8 +37,8 @@ On Linux, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 On Windows, add the install directory to your **user** Path in Environment
 Variables and reopen your terminal. Close Latch before upgrading on Windows.
 
-Official Linux and Windows binary assets are available from v0.2.3. The Linux
-installer also supports checksum-listed older versioned archives. The glibc 2.35
+The current release provides all four platform archives listed below. The Unix
+installer also supports checksum-listed older versioned Linux archives. The glibc 2.35
 baseline applies to new workflow builds; older Linux archives may require the
 builder’s newer glibc.
 

@@ -414,3 +414,7 @@ Windows installer bootstrap is documented for PowerShell 5.1 and 7 with TLS 1.2,
 current-terminal PATH setup and version verification. The installer itself leaves
 PATH unchanged. Resolve redirect response properties safely under StrictMode;
 use framework SHA256 so mixed PowerShell module paths do not require Get-FileHash.
+
+Windows installer requests close their connection and retry transport failures at
+most three times; `scripts/test-install.ps1` covers recovery and exhaustion in
+both PowerShell versions. The public bootstrap uses `-DisableKeepAlive` too.

@@ -11,14 +11,20 @@ $global:LatchFixture = $root
 $global:LatchRequests = @()
 $global:LatchReleaseUrl = 'https://github.com/JinShuo-Li/latch/releases/tag/v9.8.7'
 $global:LatchResponseStyle = 'WindowsPowerShell'
+$global:LatchTransientFailures = 0
 
 function global:Invoke-RestMethod {
     param($Uri, $Headers, $TimeoutSec)
     throw 'GitHub API rate limit exceeded: installer must not use the API'
 }
 function global:Invoke-WebRequest {
-    param([switch]$UseBasicParsing, $Method, $Uri, $OutFile, $TimeoutSec)
+    param([switch]$UseBasicParsing, [switch]$DisableKeepAlive, $Method, $Uri, $OutFile, $TimeoutSec)
     $global:LatchRequests += $Uri
+    if (-not $DisableKeepAlive) { throw 'Requests must close their connection' }
+    if ($global:LatchTransientFailures -gt 0) {
+        $global:LatchTransientFailures--
+        throw [Net.WebException]::new('fixture transport interruption')
+    }
     if ($Uri -eq 'https://github.com/JinShuo-Li/latch/releases/latest') {
         if ($Method -ne 'Head') { throw 'Release lookup must use HEAD' }
         $redirectUri = if ($global:LatchReleaseUrl) { [uri]$global:LatchReleaseUrl } else { $null }
@@ -79,7 +85,14 @@ try {
     New-Fixture
     Run-Case 'latest / upgrade'
     Assert-True ($global:LatchRequests.Count -eq 3) 'Latest should resolve once and download two files'
-    Run-Case 'one-liner / environment install directory' @{} $null $true
+    $global:LatchTransientFailures = 2
+    Run-Case 'transient download interruptions recover'
+    Assert-True ($global:LatchRequests.Count -eq 5) 'Expected two retries before the three successful requests'
+    $global:LatchTransientFailures = 3
+    Run-Case 'transient download retry limit' @{} 'fixture transport interruption'
+    Assert-True ($global:LatchRequests.Count -eq 3) 'Failed downloads must stop after three attempts'
+    $global:LatchTransientFailures = 0
+    Run-Case 'one-liner / environment install directory'  @{} $null $true
     Assert-True ($global:LatchRequests[0] -eq 'https://github.com/JinShuo-Li/latch/releases/latest') 'One-liner must use the public release redirect'
     # Verify the printed current-terminal PATH guidance makes the installed command discoverable.
     $installedBin = Join-Path $root 'user bin'
@@ -138,6 +151,6 @@ try {
     $env:LATCH_VERSION = $originalVersion
     $env:LATCH_INSTALL_DIR = $originalInstallDir
     Remove-Item Function:\Invoke-RestMethod, Function:\Invoke-WebRequest
-    Remove-Variable LatchFixture, LatchRequests, LatchReleaseUrl, LatchResponseStyle -Scope Global
+    Remove-Variable LatchFixture, LatchRequests, LatchReleaseUrl, LatchResponseStyle, LatchTransientFailures -Scope Global
     if (Test-Path $root) { Remove-Item $root -Recurse -Force }
 }

@@ -11,6 +11,25 @@ function Install-Latch {
     $repo = 'https://github.com/JinShuo-Li/latch'
     $work = $null
     $staged = $null
+    function Invoke-LatchWebRequest {
+        param([string]$Uri, [string]$Method = 'Get', [string]$OutFile, [int]$TimeoutSec = 120)
+        $request = @{ Uri = $Uri; Method = $Method; TimeoutSec = $TimeoutSec; UseBasicParsing = $true; DisableKeepAlive = $true }
+        if ($OutFile) { $request.OutFile = $OutFile }
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try { return Invoke-WebRequest @request }
+            catch {
+                $transient = $false
+                for ($cause = $_.Exception; $cause; $cause = $cause.InnerException) {
+                    if ($cause.GetType().Name -in @('WebException', 'HttpRequestException', 'IOException', 'AuthenticationException')) {
+                        $transient = $true
+                    }
+                }
+                if (-not $transient -or $attempt -eq 3) { throw }
+                Write-Host "Connection interrupted; retrying ($($attempt + 1)/3)..."
+                Start-Sleep -Seconds $attempt
+            }
+        }
+    }
     try {
         if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
             throw 'Windows is required. On Linux or Apple Silicon macOS use install.sh.'
@@ -24,7 +43,7 @@ function Install-Latch {
         if ($Version -eq 'latest') {
             Write-Host 'Resolving the latest Latch release...'
             # Follow the public release redirect, avoiding the unauthenticated API quota.
-            $release = Invoke-WebRequest -UseBasicParsing -Method Head -Uri "$repo/releases/latest" -TimeoutSec 120
+            $release = Invoke-LatchWebRequest -Method Head -Uri "$repo/releases/latest" -TimeoutSec 120
             # Windows PowerShell 5.1 uses HttpWebResponse; PowerShell 7 uses HttpResponseMessage.
             $response = $release.BaseResponse
             $responseUriProperty = $response.PSObject.Properties['ResponseUri']
@@ -47,9 +66,9 @@ function Install-Latch {
         New-Item -ItemType Directory -Path $work | Out-Null
         Write-Host "Downloading Latch $Version for x86_64 Windows..."
         $archive = Join-Path $work $asset
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile $archive -TimeoutSec 300
+        Invoke-LatchWebRequest -Uri "$base/$asset" -OutFile $archive -TimeoutSec 300
         $manifest = Join-Path $work 'SHA256SUMS'
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile $manifest -TimeoutSec 120
+        Invoke-LatchWebRequest -Uri "$base/SHA256SUMS" -OutFile $manifest -TimeoutSec 120
         $pattern = '^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($asset) + '$'
         $checksums = @(Get-Content -LiteralPath $manifest | ForEach-Object { if ($_ -match $pattern) { $Matches[1] } })
         if ($checksums.Count -ne 1) { throw "Missing or invalid checksum for $asset. Nothing was installed." }

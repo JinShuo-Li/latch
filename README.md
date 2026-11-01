@@ -17,7 +17,7 @@ curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
 **Windows (PowerShell)**
 
 ```powershell
-& { $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm https://jinshuo-li.github.io/latch/install.ps1 | iex; $env:Path="$env:LOCALAPPDATA\Programs\Latch\bin;$env:Path"; latch --version }
+& { $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm -DisableKeepAlive https://jinshuo-li.github.io/latch/install.ps1 | iex; $env:Path="$env:LOCALAPPDATA\Programs\Latch\bin;$env:Path"; latch --version }
 ```
 
 The Windows command enables TLS 1.2, adds the default installation directory to
@@ -110,7 +110,7 @@ with elapsed time and time since activity. For remote use, forward with
 `ssh -N -L 7000:127.0.0.1:6006 user@remote-host`, open `http://localhost:7000`,
 and enter the token printed by the remote process.
 
-Web support is included in the Linux and Windows binaries since v0.3.0. See the [Web guide](docs/WEB_UI.md) for resume, controls and
+Web support is included in the Linux, Windows, and Apple Silicon macOS binaries. See the [Web guide](docs/WEB_UI.md) for resume, controls and
 connection details. The [review prototype](web/prototype/README.md) remains a
 standalone example; the [integration plan](docs/WEB_UI_PLAN.md) records the scope.
 
