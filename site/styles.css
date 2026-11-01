@@ -201,10 +201,7 @@ img {
 .wordmark svg {
   height:23px;
   width:23px;
-  fill:none;
-  stroke:var(--accent);
-  stroke-width:1.8;
-  stroke-linejoin:round;
+  stroke:none;
 }
 .version {
   font:11px var(--mono);
