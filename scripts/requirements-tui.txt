@@ -1,0 +1,3 @@
+# Test-only terminal emulator; not needed to build or run Latch.
+pyte==0.8.2
+wcwidth==0.2.13
