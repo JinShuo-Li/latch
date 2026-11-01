@@ -1554,20 +1554,25 @@ fn integrations_mcp_lists_and_checks_sandboxed_server_without_provider() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("protocol 2026-07-28, 1 tools"));
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn macos_native_startup_executes_sandboxed_shell() {
     let fixture = fixture(
         vec![
             Turn::ToolCall {
                 name: "shell",
-                arguments: json!({"command":"printf apple-silicon-startup-proof"}),
+                arguments: json!({"command":"cat startup-proof.txt"}),
             },
             Turn::Text("startup complete"),
         ],
         None,
         "standard",
     );
+    std::fs::write(
+        fixture.workspace.join("startup-proof.txt"),
+        "apple-silicon-startup-proof",
+    )
+    .unwrap();
     let workspace = workspace_arg(&fixture);
     let output = run_latch(
         &fixture,
@@ -1587,9 +1592,9 @@ fn macos_native_startup_executes_sandboxed_shell() {
         let body: Value = serde_json::from_str(request).unwrap();
         body["messages"].as_array().unwrap().iter().any(|message| {
             message["role"] == "tool"
-                && message["content"]
-                    .as_str()
-                    .is_some_and(|text| text.trim() == "exit 0\napple-silicon-startup-proof")
+                && message["content"].as_str().is_some_and(|text| {
+                    text.trim() == "[latch:tool:ok]\nexit 0\napple-silicon-startup-proof"
+                })
         })
     }));
     assert!(stdout_text(&output).contains("startup complete"));
