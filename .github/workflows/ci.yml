@@ -147,3 +147,11 @@ jobs:
           cargo test -p latch-cli --test cli macos_native_startup --locked -- --test-threads=1
           cargo test -p latch-cli --test cli run_text_mode_streams_assistant_text --locked
           cargo test -p latch-cli --test cli web_transport --locked -- --test-threads=1
+      - name: Start stripped and ad-hoc signed Mach-O binary
+        timeout-minutes: 1
+        run: |
+          cp target/debug/latch "$RUNNER_TEMP/latch-packaged"
+          strip "$RUNNER_TEMP/latch-packaged"
+          codesign --force --sign - "$RUNNER_TEMP/latch-packaged"
+          codesign --verify "$RUNNER_TEMP/latch-packaged"
+          "$RUNNER_TEMP/latch-packaged" --version
