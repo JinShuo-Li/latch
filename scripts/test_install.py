@@ -152,6 +152,15 @@ else:
             self.assertIn('Unsupported', self.run_installer(succeeds=False))
             self.assertFalse((self.downloads / 'requests').exists())
 
+    def test_apple_silicon_archive(self):
+        self.mock('uname', '#!/bin/sh\nif [ "$1" = -s ]; then echo Darwin; else echo arm64; fi\n')
+        asset = 'latch-aarch64-apple-darwin.tar.gz'
+        (self.downloads / ASSET).rename(self.downloads / asset)
+        manifest = self.downloads / 'SHA256SUMS'
+        manifest.write_text(manifest.read_text().replace(ASSET, asset))
+        self.assertIn('Apple Silicon', self.run_installer())
+        self.assertIn(asset, (self.downloads / 'requests').read_text())
+
     def test_bad_options_do_not_download(self):
         for args in [('--version',), ('--install-dir',), ('--unknown',), ('--version', '../bad')]:
             self.run_installer(*args, succeeds=False)

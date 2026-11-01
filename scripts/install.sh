@@ -24,16 +24,23 @@ main() {
     esac
   done
   os="$(uname -s)"; arch="$(uname -m)"
-  [[ "$os" == Linux ]] || fail "Unsupported OS: $os. Binary releases support Linux and Windows; macOS is not supported."
-  case "$arch" in
-    x86_64|amd64) target='x86_64-unknown-linux-gnu' ;;
-    aarch64|arm64) target='aarch64-unknown-linux-gnu' ;;
-    *) fail "Unsupported architecture: $arch. Linux releases support x86_64 and ARM64." ;;
+  case "$os:$arch" in
+    Linux:x86_64|Linux:amd64) target='x86_64-unknown-linux-gnu' ;;
+    Linux:aarch64|Linux:arm64) target='aarch64-unknown-linux-gnu' ;;
+    Darwin:arm64|Darwin:aarch64) target='aarch64-apple-darwin' ;;
+    *) fail "Unsupported OS/architecture: $os/$arch. Releases support Linux x86_64/ARM64, Apple Silicon macOS, and Windows x86_64." ;;
   esac
   [[ -n "$install_dir" ]] || fail 'Install directory cannot be empty.'
-  for dependency in curl tar sha256sum install mktemp; do
+  for dependency in curl tar install mktemp; do
     command -v "$dependency" >/dev/null 2>&1 || fail "Missing $dependency. Install it and retry."
   done
+  if command -v sha256sum >/dev/null 2>&1; then
+    checksum() { sha256sum "$1"; }
+  elif command -v shasum >/dev/null 2>&1; then
+    checksum() { shasum -a 256 "$1"; }
+  else
+    fail 'Missing sha256sum or shasum. Install one and retry.'
+  fi
   if [[ "$version" == latest ]]; then
     echo 'Resolving the latest Latch release…'
     release_url="$(curl --proto '=https' --proto-redir '=https' -fsSLI --retry 3 \
@@ -47,7 +54,7 @@ main() {
   asset="latch-$target.tar.gz"
   base="$repo/releases/download/$version"
   latch_install_work="$(mktemp -d)"
-  echo "Downloading Latch $version for $arch Linux…"
+  echo "Downloading Latch $version for $arch $os…"
   download "$base/SHA256SUMS" "$latch_install_work/SHA256SUMS"
   member=latch
   expected="$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset { print $1 }' "$latch_install_work/SHA256SUMS")"
@@ -60,8 +67,8 @@ main() {
   fi
   [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || fail "Missing or invalid checksum for $asset. Nothing was installed."
   download "$base/$asset" "$latch_install_work/$asset"
-  actual="$(sha256sum "$latch_install_work/$asset")"; actual="${actual%% *}"
-  [[ "${actual,,}" == "${expected,,}" ]] || fail 'SHA256 mismatch. Nothing was installed; retry or report the release.'
+  actual="$(checksum "$latch_install_work/$asset")"; actual="${actual%% *}"
+  [[ "$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')" == "$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')" ]] || fail 'SHA256 mismatch. Nothing was installed; retry or report the release.'
   mkdir "$latch_install_work/extracted"
   if [[ "$member" == latch ]]; then
     tar -xzf "$latch_install_work/$asset" -C "$latch_install_work/extracted" "$member"
@@ -73,7 +80,7 @@ main() {
   [[ ! -d "$install_dir/latch" ]] || fail "$install_dir/latch is a directory. Choose another --install-dir."
   latch_install_staged="$(mktemp "$install_dir/.latch-install.XXXXXXXX")"
   install -m 755 "$latch_install_work/extracted/latch" "$latch_install_staged"
-  mv -fT -- "$latch_install_staged" "$install_dir/latch" || fail "Cannot replace $install_dir/latch. Check directory permissions."
+  mv -f -- "$latch_install_staged" "$install_dir/latch" || fail "Cannot replace $install_dir/latch. Check directory permissions."
   latch_install_staged=''
   echo "Installed Latch $version to $install_dir/latch (SHA256 verified)."
   # Print a literal $PATH for the shell profile.
@@ -82,7 +89,11 @@ main() {
     *":$install_dir:"*) ;;
     *) printf 'Add this directory to PATH in your shell profile:\n  export PATH=%q:"$PATH"\n' "$install_dir" ;;
   esac
-  echo 'Runtime: Linux with glibc 2.35+, Bubblewrap (bwrap), ripgrep (rg), and Git.'
+  if [[ "$os" == Darwin ]]; then
+    echo 'Runtime: Apple Silicon macOS with sandbox-exec, ripgrep (rg), and Git. Run brew install ripgrep if needed.'
+  else
+    echo 'Runtime: Linux with glibc 2.35+, Bubblewrap (bwrap), ripgrep (rg), and Git.'
+  fi
   echo 'Next: run latch, use /setup to configure a provider, then run latch doctor.'
 }
 

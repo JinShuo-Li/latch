@@ -1,6 +1,6 @@
 # Latch
 
-Latch is a terminal coding agent for Linux and Windows. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.2.
+Latch is a terminal coding agent for Linux, Windows, and Apple Silicon macOS. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.2.
 
 [Website](https://jinshuo-li.github.io/latch/) · [Documentation](https://jinshuo-li.github.io/latch/docs/introduction/) · [Example configuration](config.example.toml) · [Report a problem](https://github.com/JinShuo-Li/latch/issues)
 
@@ -8,7 +8,7 @@ Latch is a terminal coding agent for Linux and Windows. It keeps sessions on dis
 
 Install the latest precompiled release for Linux (x86_64 or ARM64) or Windows (x86_64); no Rust toolchain is needed.
 
-**Linux (Bash)**
+**Linux / Apple Silicon macOS (Bash)**
 
 ```sh
 curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
@@ -34,13 +34,14 @@ directory instead if you customized the install location.
 
 Both installers require the release's SHA256 checksum and verify it before installing.
 Latest-release lookup uses GitHub's public redirect; no API token is needed.
-Linux installs to `~/.local/bin`; Windows installs to `%LOCALAPPDATA%\Programs\Latch\bin`.
+Linux and macOS install to `~/.local/bin`; Windows installs to `%LOCALAPPDATA%\Programs\Latch\bin`.
 Follow the installer's PATH instructions, then open a terminal in your project.
 [Download releases](https://github.com/JinShuo-Li/latch/releases) or see the
 [install guide](docs/INSTALL.md) for version pins, custom directories, and troubleshooting.
 The Linux installer also supports older versioned release archives.
 
 Linux needs glibc 2.35+, `bwrap` (Bubblewrap), `rg` (ripgrep), and Git on `PATH`.
+Apple Silicon macOS 14+ uses mandatory Seatbelt (`/usr/bin/sandbox-exec`), Git, and ripgrep (`brew install ripgrep`). macOS support is new in the development tree; v0.3.2 published assets do not include it. See [macOS qualification](docs/MACOS.md).
 Windows needs Git for Windows, ripgrep, and a focused NTFS workspace readable/modifiable by your account.
 The native Windows sandbox is embedded in `latch.exe`; binary installs need no MSVC, WSL, or Git Bash.
 Scoped workspace access and capability-authorized localhost networking are supported. See [Windows evidence and current limits](docs/WINDOWS_DIAGNOSTICS.md) for qualification boundaries.
@@ -87,7 +88,7 @@ prove them together; older passes remain historical after later writes.
 Linux validation preserves failures through output-filtering pipelines. On
 Windows, run validation checks separately or redirect output instead of piping it.
 
-## Web UI (Linux and Windows)
+## Web UI (Linux, Windows, and macOS)
 
 Use the English, dark-by-default browser interface with the same kernel,
 durable sessions, tools, approvals, and sandbox as the TUI:

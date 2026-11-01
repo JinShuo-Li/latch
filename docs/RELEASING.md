@@ -22,7 +22,7 @@ and the manual full-validation workflow remain separate.
    git push origin v0.3.2
    ```
 
-4. Watch the Release workflow. After all three target jobs succeed, it creates a
+4. Watch the Release workflow. After all four target jobs succeed, it creates a
    draft, uploads all assets and `SHA256SUMS`, and publishes the complete release.
    Stable tags become latest; tags with a prerelease suffix are marked prerelease
    and do not change the stable install target.
@@ -43,7 +43,7 @@ publish the Pages site but do not create binary releases.
 - Each archive contains the executable, `LICENSE`, `config.example.toml`, and
   `BUILD_INFO` (version, target, source commit, and Rust compiler version).
 - `install.sh`, `install.ps1`: the installers from the tagged commit.
-- `SHA256SUMS`: SHA256 of all three archives and the two installer scripts, with bare
+- `SHA256SUMS`: SHA256 of all four archives and the two installer scripts, with bare
   asset filenames. Installers require one exact matching manifest entry.
 
 Only the publish job receives `contents: write`; build jobs cannot publish.
@@ -94,3 +94,10 @@ pinned Markdown parser are build-only requirements; no frontend framework or
 runtime server is deployed. Version labels come from `Cargo.toml`.
 See the [site maintenance guide](../site/README.md) for content sources,
 search, optional browser checks, and genuine interface capture provenance.
+
+Apple Silicon builds run natively on `macos-14` with target
+`aarch64-apple-darwin` and a macOS 14 deployment baseline. Release checks run
+the Seatbelt tests and offline installer suite; default CI additionally starts
+the actual CLI and Web host against a loopback mock provider. The Unix package
+step emits `latch-aarch64-apple-darwin.tar.gz`. These changes do not retroactively
+add assets to v0.3.2. Signing/notarization is not configured; see [macOS](MACOS.md).

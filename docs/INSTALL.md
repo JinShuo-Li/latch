@@ -1,8 +1,9 @@
 # Install Latch
 
 Latch 0.3.2 supports Linux and Windows. Official precompiled releases target
-x86_64 Linux, ARM64 Linux, and x86_64 Windows; macOS, Windows ARM64, and
+x86_64 Linux, ARM64 Linux, and x86_64 Windows; Windows ARM64 and
 musl/Alpine binaries are not currently provided.
+The development tree additionally targets Apple Silicon macOS 14+ (`aarch64-apple-darwin`); this archive is added by the next release workflow, and is absent from published v0.3.2 assets. See [macOS support](MACOS.md).
 The binary is named `latch` on Linux and `latch.exe` on Windows.
 
 ## Install a binary
@@ -16,7 +17,7 @@ No root or administrator access is required. Review the scripts by downloading
 [install.sh](../scripts/install.sh) or [install.ps1](../scripts/install.ps1)
 first if you prefer to inspect them before running.
 
-Linux, from Bash:
+Linux or Apple Silicon macOS, from Bash:
 
 ```sh
 curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
@@ -69,6 +70,7 @@ Download the archive for your platform and `SHA256SUMS` from the same
 | --- | --- | --- |
 | Linux x86_64 | `latch-x86_64-unknown-linux-gnu.tar.gz` | glibc 2.35+ (Ubuntu 22.04+, Debian 12+, or equivalent) |
 | Linux ARM64 | `latch-aarch64-unknown-linux-gnu.tar.gz` | glibc 2.35+ (Ubuntu 22.04+, Debian 12+, or equivalent) |
+| Apple Silicon macOS | `latch-aarch64-apple-darwin.tar.gz` | macOS 14+, Seatbelt; next workflow release |
 | Windows x86_64 | `latch-x86_64-pc-windows-msvc.zip` | x64 Windows with AppContainer support and an NTFS workspace |
 
 Verify the archive hash against its exact filename in `SHA256SUMS`, using
@@ -86,6 +88,8 @@ unprivileged user namespaces enabled. Debian / Ubuntu:
 ```sh
 sudo apt update && sudo apt install bubblewrap ripgrep git
 ```
+
+Apple Silicon macOS requires `/usr/bin/sandbox-exec`, Git and ripgrep (`brew install ripgrep`). Source builds need Xcode Command Line Tools (`xcode-select --install`). No unsandboxed fallback is available.
 
 Windows requires Git for Windows and ripgrep on PATH; for example with winget:
 

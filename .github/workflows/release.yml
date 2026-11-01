@@ -1,7 +1,7 @@
 name: Release
 
 # Cut a release: update workspace.package.version and Cargo.lock, commit, then
-# git tag vX.Y.Z && git push origin vX.Y.Z. All three builds must pass before publishing.
+# git tag vX.Y.Z && git push origin vX.Y.Z. All four builds must pass before publishing.
 on:
   push:
     tags: ['v*.*.*']
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the workspace version after all three builds finish
+        description: Publish the workspace version after all four builds finish
         type: boolean
         default: false
       skip_checks:
@@ -66,6 +66,9 @@ jobs:
           - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             rustflags: ''
+          - os: macos-14
+            target: aarch64-apple-darwin
+            rustflags: ''
           # Statically link the Rust C runtime; embedded native helpers use /MT.
           - os: windows-2025
             target: x86_64-pc-windows-msvc
@@ -73,6 +76,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
       SKIP_RELEASE_CHECKS: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_checks }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -97,11 +101,17 @@ jobs:
           cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked --target ${{ matrix.target }} -- --test-threads=1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & scripts/test-install.ps1
+      - name: macOS boundary and installer checks
+        if: runner.os == 'macOS' && env.SKIP_RELEASE_CHECKS != 'true'
+        run: |
+          brew install ripgrep
+          cargo test -p latch-kernel --lib execution::macos --locked
+          python3 scripts/test_install.py
       - name: Build release binary
         shell: bash
         run: cargo build --release --locked -p latch-cli --bin latch --target ${{ matrix.target }}
-      - name: Package Linux
-        if: runner.os == 'Linux'
+      - name: Package Unix
+        if: runner.os != 'Windows'
         env:
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
           RELEASE_TARGET: ${{ matrix.target }}
@@ -158,6 +168,7 @@ jobs:
         run: |
           test -s latch-x86_64-unknown-linux-gnu.tar.gz
           test -s latch-aarch64-unknown-linux-gnu.tar.gz
+          test -s latch-aarch64-apple-darwin.tar.gz
           test -s latch-x86_64-pc-windows-msvc.zip
           test -s install.sh
           test -s install.ps1
