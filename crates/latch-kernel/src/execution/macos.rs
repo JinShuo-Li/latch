@@ -194,6 +194,9 @@ fn seatbelt_profile(profile: &SandboxProfile, scratch: &Path) -> Result<String> 
             "(allow file-write* (require-all (subpath {})",
             quoted(&root)?
         ));
+        if !profile.git_writable() {
+            rules.push_str(" (require-not (regex #\"(^|/)\\.git(/|$)\"))");
+        }
         for path in &excluded {
             let real = path.canonicalize().unwrap_or_else(|_| path.clone());
             rules.push_str(&format!(" (require-not (subpath {}))", quoted(&real)?));
@@ -371,7 +374,7 @@ mod tests {
         );
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let connect = format!("echo connected > /dev/tcp/127.0.0.1/{port}");
+        let connect = format!("/usr/bin/nc -z -G 2 127.0.0.1 {port}");
         assert!(
             !backend
                 .command(&profile, &connect)
