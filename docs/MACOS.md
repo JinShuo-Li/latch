@@ -43,3 +43,9 @@ Developer ID signature or notarization and does not disable Gatekeeper.
 
 CI qualifies macOS 15 runtime. The deployment target is macOS 14; runtime on
 macOS 14 still needs a separate native host because that hosted runner is retired.
+
+Native smoke CI also launches the actual TUI in a controlling PTY, types and
+edits prompts, checks replies and a sandboxed tool result, switches mode,
+resizes the terminal, and verifies normal exit and terminal restoration.
+The `tui-pty-macOS` artifact contains actual screen captures; see
+[TUI testing](TUI_TESTING.md).

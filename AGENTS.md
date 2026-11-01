@@ -402,3 +402,10 @@ startup against the loopback mock provider. Source builds need Xcode Command
 Line Tools; runtime needs Git and ripgrep. Installer selects
 `aarch64-apple-darwin`, uses `shasum -a 256` when needed and supports Bash 3.2.
 See `docs/MACOS.md` for qualification limits; published v0.3.2 lacks macOS assets.
+
+Real TUI startup/interaction smoke checks on Linux and Apple Silicon macOS:
+`python3 scripts/test_tui_pty.py target/debug/latch` after installing test-only
+`scripts/requirements-tui.txt` in a venv (Python 3.11+; Debian/Ubuntu needs
+`python3-venv`). CI uploads parsed screen captures and raw PTY output as
+`tui-pty-Linux` / `tui-pty-macOS`; see `docs/TUI_TESTING.md`. No provider costs or
+real credentials; Windows ConPTY remains unqualified.

@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install runtime prerequisites
         timeout-minutes: 5
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep shellcheck
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep shellcheck python3-venv
       - name: Check Linux installer and scripts
         run: |
           shellcheck scripts/install.sh scripts/fetch-references.sh scripts/test-fetch-references.sh
@@ -59,6 +59,21 @@ jobs:
       - name: Start Latch
         timeout-minutes: 1
         run: target/debug/latch --version
+
+      - name: Real TUI startup and interaction through PTY
+        timeout-minutes: 3
+        run: |
+          python3 -m venv "$RUNNER_TEMP/tui-venv"
+          "$RUNNER_TEMP/tui-venv/bin/python" -m pip install -r scripts/requirements-tui.txt
+          "$RUNNER_TEMP/tui-venv/bin/python" scripts/test_tui_pty.py target/debug/latch
+      - name: Upload real TUI screen captures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tui-pty-${{ runner.os }}
+          path: target/tui-pty/
+          if-no-files-found: warn
+          retention-days: 7
 
   windows-smoke:
     runs-on: windows-2025
@@ -155,3 +170,18 @@ jobs:
           codesign --force --sign - "$RUNNER_TEMP/latch-packaged"
           codesign --verify "$RUNNER_TEMP/latch-packaged"
           "$RUNNER_TEMP/latch-packaged" --version
+
+      - name: Real TUI startup and interaction through PTY
+        timeout-minutes: 3
+        run: |
+          python3 -m venv "$RUNNER_TEMP/tui-venv"
+          "$RUNNER_TEMP/tui-venv/bin/python" -m pip install -r scripts/requirements-tui.txt
+          "$RUNNER_TEMP/tui-venv/bin/python" scripts/test_tui_pty.py target/debug/latch
+      - name: Upload real TUI screen captures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tui-pty-${{ runner.os }}
+          path: target/tui-pty/
+          if-no-files-found: warn
+          retention-days: 7
