@@ -23,12 +23,17 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# A fresh helper acquires the controlling terminal before exec. Avoid Python
-# preexec_fn / pty.fork in a parent that runs the mock provider's threads.
+# A fresh supervisor owns the controlling terminal until it has checked
+# restoration after Latch exits. Avoid fork hooks in the threaded mock parent.
 if len(sys.argv) > 1 and sys.argv[1] == '--exec':
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
     os.chdir(sys.argv[4])
-    os.execv(sys.argv[2], [sys.argv[2], '--config', sys.argv[3]])
+    before = termios.tcgetattr(0)
+    latch = subprocess.Popen([sys.argv[2], '--config', sys.argv[3]])
+    code = latch.wait()
+    restored = termios.tcgetattr(0) == before
+    Path(sys.argv[5]).write_text(json.dumps({'exit_code': code, 'terminal_restored': restored}) + '\n')
+    sys.exit(code if code >= 0 else 128 - code)
 
 import pyte  # noqa: E402; test-only dependency, not needed by the exec helper
 
@@ -89,7 +94,8 @@ class Terminal:
         self.raw = bytearray()
         self.child = None
         self.master, self.slave = os.openpty()
-        self.original = termios.tcgetattr(self.slave)
+        self.status_path = output.resolve() / 'terminal-status.json'
+        self.status_path.unlink(missing_ok=True)
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 36, 120, 0, 0))
         self.screen = Screen(self.master)
         self.stream = pyte.ByteStream(self.screen)
@@ -100,7 +106,7 @@ class Terminal:
         try:
             self.child = subprocess.Popen(
                 [sys.executable, str(Path(__file__).resolve()), '--exec', str(binary),
-                 str(config), str(workspace)], env=env, stdin=self.slave,
+                 str(config), str(workspace), str(self.status_path)], env=env, stdin=self.slave,
                 stdout=self.slave, stderr=self.slave, start_new_session=True)
         except BaseException:
             os.close(self.master)
@@ -231,7 +237,9 @@ level = "standard"
             terminal.send('/quit\r')
             terminal.wait(lambda: terminal.child.poll() is not None, 'graceful quit')
             assert terminal.child.returncode == 0, terminal.child.returncode
-            assert termios.tcgetattr(terminal.slave) == terminal.original, 'raw mode was not restored'
+            status = json.loads(terminal.status_path.read_text())
+            assert status['exit_code'] == 0, status
+            assert status['terminal_restored'], 'raw mode was not restored'
             for enabled, disabled in ((b'\x1b[?1049h', b'\x1b[?1049l'),
                                       (b'\x1b[?2004h', b'\x1b[?2004l'),
                                       (b'\x1b[?1000h', b'\x1b[?1000l')):

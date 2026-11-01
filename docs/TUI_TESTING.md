@@ -24,8 +24,10 @@ python3 -m venv /tmp/latch-tui-venv
 
 The dependencies are test-only. They do not affect Latch builds or installs.
 Debian/Ubuntu may need `python3-venv` to create the test environment.
-The harness uses a fresh Python helper to acquire the controlling terminal
-before executing Latch, avoiding a Python fork hook in the threaded mock server.
+The harness uses a fresh Python supervisor to own the controlling terminal
+while Latch runs, avoiding a Python fork hook in the threaded mock server. It
+checks terminal restoration before the supervisor exits; macOS invalidates the
+slave terminal when its controlling session leader exits.
 Every wait is bounded and failures kill/reap the TUI process group.
 
 GitHub uploads `tui-pty-Linux` and `tui-pty-macOS` artifacts on success or failure:
@@ -36,6 +38,7 @@ GitHub uploads `tui-pty-Linux` and `tui-pty-macOS` artifacts on success or failu
 - `terminal.bin`: actual PTY output bytes, including lifecycle control sequences.
 - `mock-requests.json`: isolated mock request bodies, with no HTTP auth headers.
 - `report.json`: pass/fail, platform, architecture and checks.
+- `terminal-status.json`: real TUI exit code and the supervisor's terminal restoration check.
 - `failure.txt` / `failure.html`: the last screen when an assertion fails.
 
 These are real process captures, distinct from Ratatui's deterministic snapshot
