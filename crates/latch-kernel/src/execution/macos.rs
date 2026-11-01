@@ -408,4 +408,43 @@ mod tests {
                 .success()
         );
     }
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn native_sandbox_builds_and_runs_rust_without_network() {
+        let (_dir, mut profile) = fixture();
+        std::fs::create_dir(profile.workspace.join("src")).unwrap();
+        std::fs::write(
+            profile.workspace.join("Cargo.toml"),
+            "[package]\nname = \"seatbelt_fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            profile.workspace.join("src/main.rs"),
+            "fn main() { println!(\"native-build-proof\"); }",
+        )
+        .unwrap();
+        profile
+            .capabilities
+            .insert(Capability::WorkspaceSourceWrite);
+        let backend = MacosBackend::detect(&profile.workspace).unwrap();
+        let mut command = backend
+            .command(&profile, "cargo run --offline --quiet")
+            .unwrap();
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            command.kill_on_drop(true).output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "native-build-proof"
+        );
+    }
 }
