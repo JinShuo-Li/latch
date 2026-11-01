@@ -38,7 +38,8 @@ per-command tmpfs. Hardlink aliases, hostile concurrent filesystem changes,
 whole-home workspaces and deliberate process-group escape are not qualified;
 use a focused checkout without external hardlinks. Interactive TUI rendering,
 Gatekeeper distribution, signing and notarization still need Mac qualification.
-The workflow packages an unsigned binary; it does not disable Gatekeeper.
+The workflow ad-hoc signs the stripped binary for ARM64 execution. It has no
+Developer ID signature or notarization and does not disable Gatekeeper.
 
 CI qualifies macOS 15 runtime. The deployment target is macOS 14; runtime on
 macOS 14 still needs a separate native host because that hosted runner is retired.

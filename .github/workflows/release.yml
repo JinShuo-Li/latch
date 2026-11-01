@@ -119,6 +119,9 @@ jobs:
           mkdir -p package dist
           install -m 755 "target/$RELEASE_TARGET/release/latch" package/latch
           strip package/latch
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            codesign --force --sign - package/latch
+          fi
           if [[ "$SKIP_RELEASE_CHECKS" != true ]]; then
             test "$(package/latch --version)" = "latch ${RELEASE_TAG#v}"
           fi
