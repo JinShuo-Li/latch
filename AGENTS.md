@@ -394,3 +394,11 @@ Windows MCP stdio connections close after discovery and each call to preserve th
 native per-user recovery lock; reconnect verifies the fixed catalog before any
 execution. Stateful Windows servers need Streamable HTTP. Keep this lifecycle
 covered by `mcp_children_use_independent_clients_and_durable_results`.
+
+Apple Silicon macOS support lives in `execution/macos.rs` (Seatbelt via mandatory
+`/usr/bin/sandbox-exec`, no fallback). Native `macos-14` CI runs
+`cargo test -p latch-kernel --lib execution::macos --locked` and real CLI/Web
+startup against the loopback mock provider. Source builds need Xcode Command
+Line Tools; runtime needs Git and ripgrep. Installer selects
+`aarch64-apple-darwin`, uses `shasum -a 256` when needed and supports Bash 3.2.
+See `docs/MACOS.md` for qualification limits; published v0.3.2 lacks macOS assets.

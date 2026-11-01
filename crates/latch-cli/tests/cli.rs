@@ -1477,7 +1477,7 @@ fn extension_initialization_failure_is_a_runtime_failure() {
     );
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[path = "web/mod.rs"]
 mod web_transport;
 
@@ -1552,4 +1552,43 @@ fn integrations_mcp_lists_and_checks_sandboxed_server_without_provider() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("protocol 2026-07-28, 1 tools"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_native_startup_executes_sandboxed_shell() {
+    let fixture = fixture(
+        vec![
+            Turn::ToolCall {
+                name: "shell",
+                arguments: json!({"command":"printf apple-silicon-startup-proof"}),
+            },
+            Turn::Text("startup complete"),
+        ],
+        None,
+        "standard",
+    );
+    let workspace = workspace_arg(&fixture);
+    let output = run_latch(
+        &fixture,
+        &[
+            "run",
+            "--prompt",
+            "Run the startup probe",
+            "--workspace",
+            &workspace,
+            "--output",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert!(fixture.mock.hits() >= 2);
+    assert!(
+        fixture
+            .mock
+            .requests()
+            .iter()
+            .any(|request| request.contains("apple-silicon-startup-proof"))
+    );
+    assert!(stdout_text(&output).contains("startup complete"));
 }

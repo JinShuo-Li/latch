@@ -113,3 +113,37 @@ jobs:
           }
           latch --version
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+  macos-smoke:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned stable action
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: macos-smoke
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Runtime prerequisites
+        run: brew install ripgrep
+      - name: Compile
+        timeout-minutes: 20
+        run: |
+          test "$(uname -m)" = arm64
+          cargo test -p latch-kernel --lib --no-run --locked
+          cargo test -p latch-cli --test cli --no-run --locked
+          cargo build -p latch-cli --locked
+      - name: Seatbelt boundary and installer checks
+        timeout-minutes: 5
+        run: |
+          cargo test -p latch-kernel --lib execution::macos --locked
+          python3 scripts/test_install.py
+          target/debug/latch --version
+      - name: Real CLI and Web startup with loopback mock provider
+        timeout-minutes: 5
+        run: |
+          cargo test -p latch-cli --test cli macos_native_startup --locked -- --test-threads=1
+          cargo test -p latch-cli --test cli run_text_mode_streams_assistant_text --locked
+          cargo test -p latch-cli --test cli web_transport --locked -- --test-threads=1
