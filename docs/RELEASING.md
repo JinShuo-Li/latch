@@ -5,7 +5,7 @@ is pushed. Manual dispatch defaults to build-only. Set `publish=true` to publish
 workspace version and create its tag at the built commit if missing. Set
 `skip_checks=true` only when the operator explicitly requests building and
 publishing without runtime/installer checks. It verifies that the tag matches `workspace.package.version`, builds
-`latch` on Linux and Windows, runs platform sandbox smoke checks and offline
+`latch` on Linux, Windows, and Apple Silicon macOS, runs platform sandbox smoke checks and offline
 installer tests, and checks the packaged executable's version. Existing CI
 and the manual full-validation workflow remain separate.
 
@@ -18,8 +18,8 @@ and the manual full-validation workflow remain separate.
 3. Push the version commit, then create and push the matching tag, for example:
 
    ```sh
-   git tag v0.3.2
-   git push origin v0.3.2
+   git tag v0.3.3
+   git push origin v0.3.3
    ```
 
 4. Watch the Release workflow. After all four target jobs succeed, it creates a
@@ -37,6 +37,8 @@ publish the Pages site but do not create binary releases.
   runtime dependency. Bubblewrap, ripgrep, and Git remain system prerequisites.
 - `latch-aarch64-unknown-linux-gnu.tar.gz`: built natively on Ubuntu 22.04 ARM64
   for glibc 2.35+, with the same Linux runtime prerequisites.
+- `latch-aarch64-apple-darwin.tar.gz`: built on macOS 15 ARM64 with a macOS
+  14 deployment baseline, stripped and ad-hoc signed. See [macOS qualification](MACOS.md).
 - `latch-x86_64-pc-windows-msvc.zip`: built on the native x64 MSVC runner with
   `-C target-feature=+crt-static`. The embedded sandbox executable and DLL already
   use `/MT`. Consumers do not need the compiler, Windows SDK, or WSL.
@@ -101,4 +103,5 @@ Apple Silicon builds run natively on `macos-15` with target
 the Seatbelt tests and offline installer suite; default CI additionally starts
 the actual CLI and Web host against a loopback mock provider. The Unix package
 step emits `latch-aarch64-apple-darwin.tar.gz`. These changes do not retroactively
-add assets to v0.3.2. Signing/notarization is not configured; see [macOS](MACOS.md).
+add assets to v0.3.2. macOS binaries are ad-hoc signed after stripping;
+Developer ID signing/notarization is not configured; see [macOS](MACOS.md).

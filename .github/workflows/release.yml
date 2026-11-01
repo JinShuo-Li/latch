@@ -101,6 +101,8 @@ jobs:
           cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked --target ${{ matrix.target }} -- --test-threads=1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & scripts/test-install.ps1
+          powershell -NoProfile -File scripts/test-install.ps1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: macOS boundary and installer checks
         if: runner.os == 'macOS' && env.SKIP_RELEASE_CHECKS != 'true'
         run: |
@@ -161,6 +163,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: release-*
@@ -190,7 +193,12 @@ jobs:
             # GITHUB_TOKEN-created tags do not launch a second release workflow.
             tag_args=(--target "$GITHUB_SHA")
           fi
-          gh release create "$RELEASE_TAG" "${tag_args[@]}" --draft --title "Latch $RELEASE_TAG" --generate-notes dist/*
+          notes_args=(--generate-notes)
+          notes_file="docs/releases/${RELEASE_TAG#v}.md"
+          if [[ -f "$notes_file" ]]; then
+            notes_args=(--notes-file "$notes_file")
+          fi
+          gh release create "$RELEASE_TAG" "${tag_args[@]}" --draft --title "Latch $RELEASE_TAG" "${notes_args[@]}" dist/*
           if [[ "$RELEASE_TAG" == *-* ]]; then
             gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
           else
