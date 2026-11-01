@@ -1,12 +1,17 @@
 # Apple Silicon macOS
 
-The development tree supports native ARM64 macOS 14+ through Seatbelt. Existing
-v0.3.2 releases have no macOS archive. Build from source until a new binary
-release is published:
+Latch 0.3.3 ships native ARM64 macOS binaries through Seatbelt. Install from
+Bash with:
 
 ```sh
-xcode-select --install
-brew install ripgrep
+curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
+```
+
+Runtime prerequisites are Git, ripgrep (`brew install ripgrep`) and the system
+`/usr/bin/sandbox-exec`. For a source build, install Xcode Command Line Tools
+(`xcode-select --install`) and run:
+
+```sh
 cargo install --path crates/latch-cli --locked
 latch doctor
 latch

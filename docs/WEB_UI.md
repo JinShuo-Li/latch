@@ -1,9 +1,10 @@
-# Web UI (Linux and Windows)
+# Web UI (Linux, Windows, and macOS)
 
 The browser uses the same interactive controller and kernel as the TUI. It
 starts in English with the approved dark layout. The workspace is fixed to the
 canonical directory where `latch` starts; selecting a conversation never changes
-that directory. Web support is included in Linux and Windows binaries since v0.3.0.
+that directory. Web support is included in Linux and Windows binaries since
+v0.3.0, and Apple Silicon macOS binaries since v0.3.3.
 
 ## Start locally
 
@@ -14,11 +15,11 @@ latch --web
 latch --web --web-port 6007
 ```
 
-The server binds only `127.0.0.1`. It prints an access URL and opens the default browser with `xdg-open` on Linux
-or the Windows URL handler on Windows.
+The server binds only `127.0.0.1`. It prints an access URL and opens the default browser with `xdg-open` on Linux,
+`open` on macOS, or the Windows URL handler on Windows.
 If no desktop browser is available, open the printed URL manually. Assets are
 embedded in the binary: Python, Node, npm, and a separate frontend service are
-not runtime requirements. Linux requires `bwrap`; Windows uses the embedded AppContainer runner. Both
+not runtime requirements. Linux requires `bwrap`; Windows uses the embedded AppContainer runner. macOS uses Seatbelt. All three platforms
 require Git and ripgrep for the corresponding tools. On Windows, use a
 focused user-owned NTFS checkout. Ordinary source files use native file brokers
 without ACL changes or `WRITE_DAC`; runtime bootstrap and scratch grants still

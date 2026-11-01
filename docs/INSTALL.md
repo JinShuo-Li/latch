@@ -1,10 +1,10 @@
 # Install Latch
 
-Latch 0.3.2 supports Linux and Windows. Official precompiled releases target
-x86_64 Linux, ARM64 Linux, and x86_64 Windows; Windows ARM64 and
-musl/Alpine binaries are not currently provided.
-The development tree additionally targets Apple Silicon macOS 14+ (`aarch64-apple-darwin`); this archive is added by the next release workflow, and is absent from published v0.3.2 assets. See [macOS support](MACOS.md).
-The binary is named `latch` on Linux and `latch.exe` on Windows.
+Latch 0.3.3 supports Linux, Windows, and Apple Silicon macOS. Official
+precompiled releases target x86_64 Linux, ARM64 Linux, x86_64 Windows, and
+ARM64 macOS. Windows ARM64, Intel macOS, and musl/Alpine binaries are not provided.
+The binary is named `latch` on Linux/macOS and `latch.exe` on Windows.
+See [macOS qualification](MACOS.md) for the tested runtime and deployment baseline.
 
 ## Install a binary
 
@@ -44,17 +44,17 @@ builder’s newer glibc.
 
 ### Pin a version or choose a directory
 
-For a published release such as `v0.3.2` (replace with an actual release tag):
+For a published release such as `v0.3.3` (replace with an actual release tag):
 
 ```sh
-curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash -s -- --version v0.3.2 --install-dir "$HOME/.local/bin"
+curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash -s -- --version v0.3.3 --install-dir "$HOME/.local/bin"
 ```
 
 Download the Windows script and pass its parameters:
 
 ```powershell
 Invoke-WebRequest https://jinshuo-li.github.io/latch/install.ps1 -OutFile install.ps1
-./install.ps1 -Version v0.3.2 -InstallDir "$env:LOCALAPPDATA\Programs\Latch\bin"
+./install.ps1 -Version v0.3.3 -InstallDir "$env:LOCALAPPDATA\Programs\Latch\bin"
 ```
 
 Both scripts also accept `LATCH_VERSION` and `LATCH_INSTALL_DIR` environment
@@ -71,7 +71,7 @@ Download the archive for your platform and `SHA256SUMS` from the same
 | --- | --- | --- |
 | Linux x86_64 | `latch-x86_64-unknown-linux-gnu.tar.gz` | glibc 2.35+ (Ubuntu 22.04+, Debian 12+, or equivalent) |
 | Linux ARM64 | `latch-aarch64-unknown-linux-gnu.tar.gz` | glibc 2.35+ (Ubuntu 22.04+, Debian 12+, or equivalent) |
-| Apple Silicon macOS | `latch-aarch64-apple-darwin.tar.gz` | macOS 14+, Seatbelt; next workflow release |
+| Apple Silicon macOS | `latch-aarch64-apple-darwin.tar.gz` | macOS 14+ deployment baseline, macOS 15 tested; Seatbelt |
 | Windows x86_64 | `latch-x86_64-pc-windows-msvc.zip` | x64 Windows with AppContainer support and an NTFS workspace |
 
 Verify the archive hash against its exact filename in `SHA256SUMS`, using

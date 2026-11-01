@@ -1,5 +1,5 @@
 # Usage (PowerShell 5.1/7): see docs/INSTALL.md for the one-line bootstrap.
-# Pin: download this script, then ./install.ps1 -Version v0.3.2
+# Pin: download this script, then ./install.ps1 -Version v0.3.3
 [CmdletBinding()]
 param(
     [string]$Version = $(if ($env:LATCH_VERSION) { $env:LATCH_VERSION } else { 'latest' }),

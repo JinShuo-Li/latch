@@ -1,12 +1,12 @@
 # Latch
 
-Latch is a terminal coding agent for Linux, Windows, and Apple Silicon macOS. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.2.
+Latch is a terminal coding agent for Linux, Windows, and Apple Silicon macOS. It keeps sessions on disk and runs commands inside a mandatory platform sandbox. The current version is 0.3.3.
 
 [Website](https://jinshuo-li.github.io/latch/) · [Documentation](https://jinshuo-li.github.io/latch/docs/introduction/) · [Example configuration](config.example.toml) · [Report a problem](https://github.com/JinShuo-Li/latch/issues)
 
 ## Install
 
-Install the latest precompiled release for Linux (x86_64 or ARM64) or Windows (x86_64); no Rust toolchain is needed.
+Install the latest precompiled release for Linux (x86_64 or ARM64), Windows (x86_64), or Apple Silicon macOS; no Rust toolchain is needed.
 
 **Linux / Apple Silicon macOS (Bash)**
 
@@ -37,7 +37,7 @@ Follow the installer's PATH instructions, then open a terminal in your project.
 The Linux installer also supports older versioned release archives.
 
 Linux needs glibc 2.35+, `bwrap` (Bubblewrap), `rg` (ripgrep), and Git on `PATH`.
-Apple Silicon macOS 14+ uses mandatory Seatbelt (`/usr/bin/sandbox-exec`), Git, and ripgrep (`brew install ripgrep`). macOS support is new in the development tree; v0.3.2 published assets do not include it. See [macOS qualification](docs/MACOS.md).
+Apple Silicon macOS 14+ uses mandatory Seatbelt (`/usr/bin/sandbox-exec`), Git, and ripgrep (`brew install ripgrep`). macOS binaries are available starting with v0.3.3. See [macOS qualification](docs/MACOS.md).
 Windows needs Git for Windows, ripgrep, and a focused NTFS workspace readable/modifiable by your account.
 The native Windows sandbox is embedded in `latch.exe`; binary installs need no MSVC, WSL, or Git Bash.
 Scoped workspace access and capability-authorized localhost networking are supported. See [Windows evidence and current limits](docs/WINDOWS_DIAGNOSTICS.md) for qualification boundaries.

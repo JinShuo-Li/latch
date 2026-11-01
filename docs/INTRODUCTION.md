@@ -1,6 +1,6 @@
 # Introduction
 
-Latch is an open-source coding agent written in Rust for Linux and Windows.
+Latch is an open-source coding agent written in Rust for Linux, Windows, and Apple Silicon macOS.
 It provides a terminal interface, a local Web interface, and a machine CLI.
 You choose a model provider and supply its credential.
 
@@ -21,8 +21,8 @@ See [terminal and CLI usage](../README.md#get-started) and the
 
 ## Execution and evidence
 
-Commands run inside a mandatory platform sandbox: Bubblewrap on Linux or the
-embedded native AppContainer runner on Windows. If the sandbox is unavailable,
+Commands run inside a mandatory platform sandbox: Bubblewrap on Linux,
+Seatbelt on macOS, or the embedded native AppContainer runner on Windows. If the sandbox is unavailable,
 command execution fails. Modes, safety policy, and approval handling control
 which operations may proceed. Sandboxing does not establish that a change is
 correct; recorded validation provides evidence for the workspace state it checked.
@@ -52,7 +52,7 @@ for the implemented and deferred boundary.
 
 ## Supported platforms and limits
 
-Precompiled binaries target x86_64 and ARM64 Linux (glibc 2.35+), and x86_64 Windows. Linux needs
+Precompiled binaries target x86_64 and ARM64 Linux (glibc 2.35+), x86_64 Windows, and Apple Silicon macOS. Linux needs
 Bubblewrap, ripgrep, and Git. Windows needs Git, ripgrep, and a focused user-owned
 NTFS workspace. The native Windows sandbox is embedded in the binary.
 

@@ -1,6 +1,6 @@
 # AGENTS.md — Latch
 
-Latch is a Rust terminal coding agent for Linux and Windows (v0.3.2). Users drive
+Latch is a Rust terminal coding agent for Linux, Windows, and Apple Silicon macOS (v0.3.3). Users drive
 it through the `latch` TUI. Binary installers are in `scripts/install.{sh,ps1}`;
 `cargo install --path crates/latch-cli --locked` remains the source install path.
 
@@ -401,7 +401,7 @@ Apple Silicon macOS support lives in `execution/macos.rs` (Seatbelt via mandator
 startup against the loopback mock provider. Source builds need Xcode Command
 Line Tools; runtime needs Git and ripgrep. Installer selects
 `aarch64-apple-darwin`, uses `shasum -a 256` when needed and supports Bash 3.2.
-See `docs/MACOS.md` for qualification limits; published v0.3.2 lacks macOS assets.
+See `docs/MACOS.md` for qualification limits; macOS assets begin with v0.3.3.
 
 Real TUI startup/interaction smoke checks on Linux and Apple Silicon macOS:
 `python3 scripts/test_tui_pty.py target/debug/latch` after installing test-only

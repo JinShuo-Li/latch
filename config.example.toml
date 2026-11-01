@@ -1,6 +1,6 @@
-# Latch is Linux-first and requires the system `bwrap` (bubblewrap) binary:
-# every shell, exec_start, validation, and git inspection command runs inside
-# the mandatory sandbox. Latch refuses to execute commands unsandboxed.
+# Every command uses the mandatory platform sandbox: Bubblewrap on Linux,
+# Seatbelt (sandbox-exec) on macOS, or the embedded AppContainer on Windows.
+# Latch refuses to execute commands without its platform boundary.
 
 default_mode = "WORK"
 # Storage root defaults to ~/.latch/ (config.toml, secrets.toml, latch.sqlite3,
