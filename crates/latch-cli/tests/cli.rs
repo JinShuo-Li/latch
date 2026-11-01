@@ -1583,12 +1583,14 @@ fn macos_native_startup_executes_sandboxed_shell() {
     );
     assert!(output.status.success(), "{}", stderr_text(&output));
     assert!(fixture.mock.hits() >= 2);
-    assert!(
-        fixture
-            .mock
-            .requests()
-            .iter()
-            .any(|request| request.contains("apple-silicon-startup-proof"))
-    );
+    assert!(fixture.mock.requests().iter().any(|request| {
+        let body: Value = serde_json::from_str(request).unwrap();
+        body["messages"].as_array().unwrap().iter().any(|message| {
+            message["role"] == "tool"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|text| text.trim() == "exit 0\napple-silicon-startup-proof")
+        })
+    }));
     assert!(stdout_text(&output).contains("startup complete"));
 }
