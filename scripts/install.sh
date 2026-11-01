@@ -42,7 +42,7 @@ main() {
     fail 'Missing sha256sum or shasum. Install one and retry.'
   fi
   if [[ "$version" == latest ]]; then
-    echo 'Resolving the latest Latch release…'
+    echo 'Resolving the latest Latch release...'
     release_url="$(curl --proto '=https' --proto-redir '=https' -fsSLI --retry 3 \
       --connect-timeout 15 --max-time 120 -o /dev/null -w '%{url_effective}' "$repo/releases/latest")" \
       || fail "Cannot find the latest release. Check your connection and $repo/releases; use a source build if no binaries are published yet."
@@ -54,7 +54,7 @@ main() {
   asset="latch-$target.tar.gz"
   base="$repo/releases/download/$version"
   latch_install_work="$(mktemp -d)"
-  echo "Downloading Latch $version for $arch $os…"
+  echo "Downloading Latch $version for ${arch} ${os}..."
   download "$base/SHA256SUMS" "$latch_install_work/SHA256SUMS"
   member=latch
   expected="$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset { print $1 }' "$latch_install_work/SHA256SUMS")"
