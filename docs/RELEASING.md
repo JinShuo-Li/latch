@@ -95,7 +95,7 @@ runtime server is deployed. Version labels come from `Cargo.toml`.
 See the [site maintenance guide](../site/README.md) for content sources,
 search, optional browser checks, and genuine interface capture provenance.
 
-Apple Silicon builds run natively on `macos-14` with target
+Apple Silicon builds run natively on `macos-15` with target
 `aarch64-apple-darwin` and a macOS 14 deployment baseline. Release checks run
 the Seatbelt tests and offline installer suite; default CI additionally starts
 the actual CLI and Web host against a loopback mock provider. The Unix package

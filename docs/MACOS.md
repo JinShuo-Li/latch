@@ -25,7 +25,7 @@ environment and writable scratch; credential paths, Keychains and Latch state
 are denied. Bash startup profiles are disabled. Child processes inherit
 Seatbelt, and cancellation terminates the process group.
 
-GitHub's `macos-14` ARM64 runner compiles and runs the native boundary tests,
+GitHub's `macos-15` ARM64 runner compiles and runs the native boundary tests,
 then starts the real machine CLI and Web host using isolated state and a local
 SSE mock provider. This exercises authentication, HTTP/SSE, command execution
 and session operations without a paid provider or real credentials. Local Linux
@@ -39,3 +39,6 @@ whole-home workspaces and deliberate process-group escape are not qualified;
 use a focused checkout without external hardlinks. Interactive TUI rendering,
 Gatekeeper distribution, signing and notarization still need Mac qualification.
 The workflow packages an unsigned binary; it does not disable Gatekeeper.
+
+CI qualifies macOS 15 runtime. The deployment target is macOS 14; runtime on
+macOS 14 still needs a separate native host because that hosted runner is retired.
