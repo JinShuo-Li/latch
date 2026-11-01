@@ -147,7 +147,7 @@ fn seatbelt_profile(profile: &SandboxProfile, scratch: &Path) -> Result<String> 
         protected.push(real);
     }
     let mut rules = String::from(
-        "(version 1)\n(deny default)\n(import \"system.sb\")\n(allow process*)\n(allow sysctl-read)\n(allow file-read*)\n(allow file-write* (literal \"/dev/null\"))\n",
+        "(version 1)\n(deny default)\n(import \"system.sb\")\n(allow process-fork)\n(allow process-exec)\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n(allow file-read*)\n(allow file-write* (literal \"/dev/null\"))\n",
     );
     let mut writable = vec![scratch.to_path_buf()];
     if profile.workspace_writable() {
@@ -277,6 +277,17 @@ mod tests {
         let backend = MacosBackend::detect(&profile.workspace).unwrap();
         std::fs::write(profile.home.join(".ssh/key"), "secret").unwrap();
         std::fs::write(profile.state_dir.join("private"), "secret").unwrap();
+        let signal_host = format!("/bin/kill -0 {}", std::process::id());
+        assert!(
+            !backend
+                .command(&profile, &signal_host)
+                .unwrap()
+                .output()
+                .await
+                .unwrap()
+                .status
+                .success()
+        );
         for script in ["echo bad > denied", "echo bad > .git/HEAD"] {
             let out = backend
                 .command(&profile, script)
