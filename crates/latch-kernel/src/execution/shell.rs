@@ -65,7 +65,7 @@ mod validation_tests {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 pub(super) fn bash_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

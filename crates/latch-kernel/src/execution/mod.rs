@@ -8,6 +8,9 @@ use tokio::process::Command;
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod macos;
 mod shell;
 #[cfg(windows)]
 mod windows;
@@ -42,7 +45,9 @@ pub(crate) fn shell_executable_is_unmodelled(token: &str) -> bool {
 pub(crate) fn kill_sandbox_children(pid: Option<u32>) {
     #[cfg(target_os = "linux")]
     linux::kill_direct_children(pid);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    macos::kill_process_group(pid);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = pid;
 }
 
@@ -104,6 +109,8 @@ fn windows_secret_paths(home: &Path) -> Vec<std::path::PathBuf> {
 
 #[derive(Debug, Clone)]
 pub enum ExecutionBackend {
+    #[cfg(target_os = "macos")]
+    Macos(macos::MacosBackend),
     #[cfg(target_os = "linux")]
     Linux(linux::LinuxBackend),
     #[cfg(windows)]
@@ -114,18 +121,27 @@ impl ExecutionBackend {
     /// Read-only prerequisite check for `doctor`. Installation and a sandbox
     /// launch happen only when a task actually starts.
     pub fn inspect(workspace: &Path) -> Result<String> {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = workspace;
+            macos::MacosBackend::inspect()
+        }
         #[cfg(windows)]
         {
             let _ = workspace;
             windows::WindowsBackend::inspect()
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             Ok(Self::detect(workspace)?.status())
         }
     }
 
     pub fn detect(workspace: &Path) -> Result<Self> {
+        #[cfg(target_os = "macos")]
+        {
+            Ok(Self::Macos(macos::MacosBackend::detect(workspace)?))
+        }
         #[cfg(target_os = "linux")]
         {
             Ok(Self::Linux(linux::LinuxBackend::detect(workspace)?))
@@ -134,12 +150,14 @@ impl ExecutionBackend {
         {
             Ok(Self::Windows(windows::WindowsBackend::detect(workspace)?))
         }
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         anyhow::bail!("Latch has no execution backend for this operating system")
     }
 
     pub fn command(&self, profile: &SandboxProfile, command: &str) -> Result<Command> {
         match self {
+            #[cfg(target_os = "macos")]
+            Self::Macos(backend) => backend.command(profile, command),
             #[cfg(target_os = "linux")]
             Self::Linux(backend) => backend.command(profile, command),
             #[cfg(windows)]
@@ -156,6 +174,8 @@ impl ExecutionBackend {
         args: &[&str],
     ) -> Result<Command> {
         match self {
+            #[cfg(target_os = "macos")]
+            Self::Macos(backend) => backend.fixed_command(profile, program, args),
             #[cfg(target_os = "linux")]
             Self::Linux(backend) => backend.fixed_command(profile, program, args),
             #[cfg(windows)]
@@ -165,6 +185,8 @@ impl ExecutionBackend {
 
     pub fn status(&self) -> String {
         match self {
+            #[cfg(target_os = "macos")]
+            Self::Macos(backend) => backend.status(),
             #[cfg(target_os = "linux")]
             Self::Linux(backend) => backend.status(),
             #[cfg(windows)]

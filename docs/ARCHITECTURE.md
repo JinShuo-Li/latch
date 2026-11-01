@@ -1193,3 +1193,15 @@ See [Skills and MCP](SKILLS_AND_MCP.md) for configuration and compatibility.
 Windows MCP stdio uses initialized connections per call, validating the fixed
 catalog before execution and releasing the native recovery lock between calls.
 Linux stdio and HTTP retain their normal connection lifetimes.
+
+### Apple Silicon execution
+
+`execution/macos.rs` implements the macOS Seatbelt backend using the system
+`/usr/bin/sandbox-exec`, a deny-default profile, explicit writable roots and
+backend-owned temporary scratch. Every shell, fixed command, extension and MCP
+stdio process uses the existing execution port. Startup probes fail closed;
+`doctor` only checks runner presence. Environment variables are allowlisted,
+Latch state and conventional credentials are denied, Git metadata is protected
+without its capability, and network access requires its capability. Cancellation
+kills the sandbox process group. Web reuses the existing host and opens the
+browser with `/usr/bin/open`. Qualification and limits are in [MACOS.md](MACOS.md).

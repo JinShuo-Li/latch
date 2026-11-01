@@ -448,3 +448,13 @@ configuration changes occur. This is the existing broad Network permission,
 not a new endpoint-scoped permission; without it no socket capability is
 transferred. Raw sockets and privileged socket flags are refused. Native
 fixtures cover payloads, descendants, denials and cancellation cleanup.
+
+### macOS Seatbelt backend
+
+The Apple Silicon backend in `execution/macos.rs` maps the same `SandboxProfile`
+to deny-default Seatbelt policy. Workspace and external write roots are explicit;
+read-only calls use private build scratch. Git metadata and credential/state
+exclusions apply within writable roots. Network approval enables IP networking;
+host Unix sockets are not granted. No unsandboxed fallback exists. Native CI
+executes boundary, CLI and Web startup tests; see [MACOS.md](MACOS.md) for the
+qualification boundary. Linux and Windows mappings remain unchanged.

@@ -202,6 +202,12 @@ fn browser_command(url: &str) -> Result<tokio::process::Command> {
             .creation_flags(0x08000000);
         Ok(command)
     }
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = tokio::process::Command::new("/usr/bin/open");
+        command.arg(url);
+        Ok(command)
+    }
     #[cfg(target_os = "linux")]
     {
         let mut command = tokio::process::Command::new("xdg-open");
