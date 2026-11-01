@@ -1,4 +1,4 @@
-# Usage: irm https://jinshuo-li.github.io/latch/install.ps1 | iex
+# Usage (PowerShell 5.1/7): see docs/INSTALL.md for the one-line bootstrap.
 # Pin: download this script, then ./install.ps1 -Version v0.3.2
 [CmdletBinding()]
 param(
@@ -13,7 +13,7 @@ function Install-Latch {
     $staged = $null
     try {
         if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
-            throw 'Windows is required. On Linux use install.sh; macOS is not supported.'
+            throw 'Windows is required. On Linux or Apple Silicon macOS use install.sh.'
         }
         # PROCESSOR_ARCHITEW6432 identifies the native OS from a 32-bit PowerShell host.
         $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
@@ -26,8 +26,12 @@ function Install-Latch {
             # Follow the public release redirect, avoiding the unauthenticated API quota.
             $release = Invoke-WebRequest -UseBasicParsing -Method Head -Uri "$repo/releases/latest" -TimeoutSec 120
             # Windows PowerShell 5.1 uses HttpWebResponse; PowerShell 7 uses HttpResponseMessage.
-            $releaseUri = if ($release.BaseResponse.ResponseUri) { $release.BaseResponse.ResponseUri }
-                          else { $release.BaseResponse.RequestMessage.RequestUri }
+            $response = $release.BaseResponse
+            $responseUriProperty = $response.PSObject.Properties['ResponseUri']
+            $requestMessageProperty = $response.PSObject.Properties['RequestMessage']
+            $releaseUri = if ($responseUriProperty) { $responseUriProperty.Value }
+                          elseif ($requestMessageProperty) { $requestMessageProperty.Value.RequestUri }
+                          else { $null }
             $releaseUrl = [string]$releaseUri
             $tagPrefix = "$repo/releases/tag/"
             if (-not $releaseUrl.StartsWith($tagPrefix, [StringComparison]::Ordinal)) {
@@ -49,7 +53,17 @@ function Install-Latch {
         $pattern = '^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($asset) + '$'
         $checksums = @(Get-Content -LiteralPath $manifest | ForEach-Object { if ($_ -match $pattern) { $Matches[1] } })
         if ($checksums.Count -ne 1) { throw "Missing or invalid checksum for $asset. Nothing was installed." }
-        $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+        # Use the framework directly: Get-FileHash can be unavailable when a
+        # Windows PowerShell host inherits another PowerShell's module paths.
+        $sha = [Security.Cryptography.SHA256]::Create()
+        $stream = $null
+        try {
+            $stream = [IO.File]::OpenRead($archive)
+            $actual = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '')
+        } finally {
+            if ($stream) { $stream.Dispose() }
+            $sha.Dispose()
+        }
         if ($actual -ne $checksums[0]) { throw 'SHA256 mismatch. Nothing was installed; retry or report the release.' }
         # Extract only the named binary, never arbitrary paths from the archive.
         Add-Type -AssemblyName System.IO.Compression.FileSystem

@@ -70,7 +70,8 @@ powershell -NoProfile -File scripts/test-install.ps1
 
 The tests use real fixture archives and mocked GitHub downloads. They check
 latest/pinned selection, checksums, failures preserving existing installs,
-archive contents, architecture rejection, and temporary-file cleanup. They
+archive contents, strict-mode redirect handling, framework SHA256 verification,
+architecture rejection, and temporary-file cleanup. They
 make no network requests and do not edit PATH or user configuration.
 
 [Pages](../.github/workflows/pages.yml) builds static HTML from repository Markdown,

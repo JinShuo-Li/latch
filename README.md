@@ -17,16 +17,12 @@ curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
 **Windows (PowerShell)**
 
 ```powershell
-irm https://jinshuo-li.github.io/latch/install.ps1 | iex
+& { $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm https://jinshuo-li.github.io/latch/install.ps1 | iex; $env:Path="$env:LOCALAPPDATA\Programs\Latch\bin;$env:Path"; latch --version }
 ```
 
-The Windows installer leaves PATH unchanged. For the default install directory,
-make `latch` available in the current PowerShell terminal and verify it:
-
-```powershell
-$env:PATH = "$env:LOCALAPPDATA\Programs\Latch\bin;$env:PATH"
-latch --version
-```
+The Windows command enables TLS 1.2, adds the default installation directory to
+the current terminal PATH, and prints the installed version. It does not change
+your persistent user PATH.
 
 For future terminals, add `%LOCALAPPDATA%\Programs\Latch\bin` to your **user Path**
 in Windows Environment Variables, then reopen PowerShell. Use your chosen

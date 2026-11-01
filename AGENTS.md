@@ -409,3 +409,8 @@ Real TUI startup/interaction smoke checks on Linux and Apple Silicon macOS:
 `python3-venv`). CI uploads parsed screen captures and raw PTY output as
 `tui-pty-Linux` / `tui-pty-macOS`; see `docs/TUI_TESTING.md`. No provider costs or
 real credentials; Windows ConPTY remains unqualified.
+
+Windows installer bootstrap is documented for PowerShell 5.1 and 7 with TLS 1.2,
+current-terminal PATH setup and version verification. The installer itself leaves
+PATH unchanged. Resolve redirect response properties safely under StrictMode;
+use framework SHA256 so mixed PowerShell module paths do not require Get-FileHash.

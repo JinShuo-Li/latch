@@ -23,9 +23,9 @@ function global:Invoke-WebRequest {
         if ($Method -ne 'Head') { throw 'Release lookup must use HEAD' }
         $redirectUri = if ($global:LatchReleaseUrl) { [uri]$global:LatchReleaseUrl } else { $null }
         if ($global:LatchResponseStyle -eq 'WindowsPowerShell') {
-            return @{ BaseResponse = @{ ResponseUri = $redirectUri } }
+            return [pscustomobject]@{ BaseResponse = [pscustomobject]@{ ResponseUri = $redirectUri } }
         }
-        return @{ BaseResponse = @{ RequestMessage = @{ RequestUri = $redirectUri } } }
+        return [pscustomobject]@{ BaseResponse = [pscustomobject]@{ RequestMessage = [pscustomobject]@{ RequestUri = $redirectUri } } }
     }
     if (-not $Uri.StartsWith('https://github.com/JinShuo-Li/latch/releases/download/v9.8.7/')) { throw "Unexpected URL: $Uri" }
     Copy-Item -LiteralPath (Join-Path $global:LatchFixture ($Uri.Split('/')[-1])) -Destination $OutFile
@@ -37,7 +37,9 @@ function New-Fixture($entryName = 'latch.exe') {
     $file = Join-Path $root $entryName
     Set-Content -LiteralPath $file -Value 'new fixture binary' -NoNewline
     Compress-Archive -LiteralPath $file -DestinationPath $archive
-    $digest = (Get-FileHash $archive -Algorithm SHA256).Hash
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $digest = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($archive))).Replace('-', '') }
+    finally { $sha.Dispose() }
     "$digest  latch-x86_64-pc-windows-msvc.zip" | Set-Content (Join-Path $root 'SHA256SUMS')
 }
 function Run-Case($name, $arguments = @{}, $expectError = $null, $piped = $false) {
@@ -89,7 +91,11 @@ try {
     } finally { $env:PATH = $originalPath }
     $global:LatchResponseStyle = 'PowerShell7'
     Run-Case 'PowerShell 7 release redirect' @{} $null $true
+    Set-StrictMode -Version Latest
+    Run-Case 'PowerShell 7 strict-mode redirect' @{} $null $true
     $global:LatchResponseStyle = 'WindowsPowerShell'
+    Run-Case 'Windows PowerShell strict-mode redirect' @{} $null $true
+    Set-StrictMode -Off
     foreach ($url in @('https://example.com/releases/tag/v9.8.7', 'https://github.com/JinShuo-Li/latch/releases', '')) {
         $global:LatchReleaseUrl = $url
         Run-Case 'unexpected release redirect' @{} 'GitHub did not return a release tag'

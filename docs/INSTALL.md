@@ -26,12 +26,13 @@ curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash
 Windows, from Windows PowerShell 5.1+ or PowerShell 7:
 
 ```powershell
-irm https://jinshuo-li.github.io/latch/install.ps1 | iex
+& { $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm https://jinshuo-li.github.io/latch/install.ps1 | iex; $env:Path="$env:LOCALAPPDATA\Programs\Latch\bin;$env:Path"; latch --version }
 ```
 
 Linux automatically selects the x86_64 or ARM64 archive and installs to `~/.local/bin`. Windows installs to
-`%LOCALAPPDATA%\Programs\Latch\bin`. The scripts print PATH instructions if
-needed; they do not change shell profiles or the persistent Windows PATH.
+`%LOCALAPPDATA%\Programs\Latch\bin`. The Windows one-liner enables TLS 1.2, adds the default install directory to
+the current terminal PATH and checks the installed version. The scripts do not
+change shell profiles or the persistent Windows PATH.
 On Linux, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 On Windows, add the install directory to your **user** Path in Environment
 Variables and reopen your terminal. Close Latch before upgrading on Windows.
