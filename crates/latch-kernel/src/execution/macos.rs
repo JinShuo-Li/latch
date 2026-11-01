@@ -333,4 +333,65 @@ mod tests {
             "ok\n"
         );
     }
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn native_network_requires_capability_and_external_writes_are_scoped() {
+        let (dir, mut profile) = fixture();
+        let backend = MacosBackend::detect(&profile.workspace).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let script = format!(
+            "echo granted > {}",
+            super::super::shell::bash_quote(outside.join("proof").to_str().unwrap())
+        );
+        assert!(
+            !backend
+                .command(&profile, &script)
+                .unwrap()
+                .output()
+                .await
+                .unwrap()
+                .status
+                .success()
+        );
+        profile.external_roots.push(outside.clone());
+        assert!(
+            backend
+                .command(&profile, &script)
+                .unwrap()
+                .output()
+                .await
+                .unwrap()
+                .status
+                .success()
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.join("proof")).unwrap(),
+            "granted\n"
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let connect = format!("echo connected > /dev/tcp/127.0.0.1/{port}");
+        assert!(
+            !backend
+                .command(&profile, &connect)
+                .unwrap()
+                .output()
+                .await
+                .unwrap()
+                .status
+                .success()
+        );
+        profile.capabilities.insert(Capability::NetworkAccess);
+        assert!(
+            backend
+                .command(&profile, &connect)
+                .unwrap()
+                .output()
+                .await
+                .unwrap()
+                .status
+                .success()
+        );
+    }
 }
