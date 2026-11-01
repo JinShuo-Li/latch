@@ -1,6 +1,6 @@
 <main id="main" class="home">
   <section class="intro" aria-labelledby="intro-title">
-    <p class="eyebrow">Open-source · Linux &amp; Windows</p>
+    <p class="eyebrow">Open-source · Linux, Windows &amp; macOS</p>
     <h1 id="intro-title">Latch</h1>
     <p class="lead">A coding agent for your terminal and browser.</p>
     <p class="intro-description">Written in Rust, with mandatory command sandboxing, durable sessions, and validation tied to the workspace it checked. Use your own model provider.</p>
@@ -8,10 +8,11 @@
   </section>
   <section id="install" aria-labelledby="install-title" class="home-section">
     <div class="section-heading"><h2 id="install-title">Installation</h2><a href="docs/installation/">Full install guide →</a></div>
-    <p>Precompiled binaries for Linux x86_64/ARM64 and Windows x86_64. The installers verify SHA256 checksums.</p>
+    <p>Precompiled binaries for Linux x86_64/ARM64, Windows x86_64, and Apple Silicon macOS. The installers verify SHA256 checksums.</p>
     <div class="install-columns">
       <div><h3>Linux <span>Bash · glibc 2.35+</span></h3><pre><code class="language-sh">curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash</code></pre><p>Requires Bubblewrap, ripgrep, and Git. Installs to <code>~/.local/bin</code>; follow the installer’s PATH instructions.</p></div>
-      <div><h3>Windows <span>PowerShell</span></h3><pre><code class="language-powershell">&amp; { $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm https://jinshuo-li.github.io/latch/install.ps1 | iex; $env:Path="$env:LOCALAPPDATA\Programs\Latch\bin;$env:Path"; latch --version }</code></pre><p>Requires Git, ripgrep, and a user-owned NTFS workspace. The native sandbox is included. <a href="docs/installation/#install-a-binary">Add the install directory to your user PATH.</a></p></div>
+      <div><h3>Windows <span>PowerShell</span></h3><pre><code class="language-powershell">&amp; { $$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm https://jinshuo-li.github.io/latch/install.ps1 | iex; $$env:Path="$$env:LOCALAPPDATA\Programs\Latch\bin;$$env:Path"; latch --version }</code></pre><p>Requires Git, ripgrep, and a user-owned NTFS workspace. The native sandbox is included. <a href="docs/installation/#install-a-binary">Add the install directory to your user PATH.</a></p></div>
+      <div><h3>Apple Silicon macOS <span>Bash · ARM64</span></h3><pre><code class="language-sh">curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash</code></pre><p>Requires Git, ripgrep, and the system Seatbelt sandbox. Installs to <code>~/.local/bin</code>. <a href="docs/installation/#runtime-prerequisites">Check runtime prerequisites.</a></p></div>
     </div>
     <p class="next-step">Run <code>latch</code> in your project, use <code>/setup</code> to choose a provider and model, then check prerequisites with <code>latch doctor</code>. <a href="docs/installation/#build-from-source">Build from source →</a></p>
   </section>
