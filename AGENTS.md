@@ -418,3 +418,7 @@ use framework SHA256 so mixed PowerShell module paths do not require Get-FileHas
 Windows installer requests close their connection and retry transport failures at
 most three times; `scripts/test-install.ps1` covers recovery and exhaustion in
 both PowerShell versions. The public bootstrap uses `-DisableKeepAlive` too.
+
+Browser header version comes only from bootstrap metadata; never hardcode a
+release fallback in HTML/JS. `node scripts/test_web_view.mjs` checks missing,
+initial and updated server versions without a browser (development only).
