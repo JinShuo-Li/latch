@@ -1,4 +1,17 @@
-# Windows workspace-read status (2026-09-28)
+# Windows boundary: current support and historical evidence
+
+Current release **0.3.3** uses scoped native file brokers for ordinary workspace
+reads and writes, without WRITE_DAC or ACL changes on source objects. Runtime
+bootstrap and scratch ACL recovery remain journaled. Network-authorized TCP/UDP
+services and the Windows Web host are supported. Full-home workspaces and
+hostile races remain unqualified. See [current Windows diagnostics](../../../docs/WINDOWS_DIAGNOSTICS.md)
+and [installation](../../../docs/INSTALL.md) for current behavior and commands.
+
+## Historical workspace-read qualification (2026-09-28)
+
+This report records the earlier ACL-grant implementation. Its branch names,
+measurements and temporary recovery procedures are historical evidence, not
+instructions for installing or repairing the current release.
 
 The workspace directory-enumeration regression is fixed for grantable NTFS
 trees on `windows-native-port`. Full GitHub Actions validation passed

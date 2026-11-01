@@ -1149,10 +1149,12 @@ cache decides how cheaply we can send it** — correctness and long-horizon
 continuity outrank cache locality. **CI protects what Latch must never stop
 being. Local tests verify that the current implementation actually works.**
 
-Default CI runs Linux and Windows smoke jobs: formatting, offline installer
+Default CI runs Linux, Windows, and Apple Silicon macOS smoke jobs: formatting, offline installer
 checks, the kernel invariant tier, a real Linux Bubblewrap probe, the embedded
-Windows boundary test, Windows Web transport, and CLI build/start. Compilation
-has its own step before bounded runtime checks, with 20/35-minute Linux/Windows
+Windows boundary test, Windows/macOS Web transport, macOS Seatbelt checks,
+and CLI build/start. Linux/macOS also launch the actual TUI through a PTY,
+exercise keyboard input and sandboxed tools, and upload real screen captures. Compilation
+has its own step before bounded runtime checks, with 20/35/30-minute Linux/Windows/macOS
 job limits. New pushes cancel superseded smoke runs on the same branch or PR.
 Caches separate smoke and full-validation builds; only main writes them.
 

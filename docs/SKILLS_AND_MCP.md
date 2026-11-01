@@ -1,6 +1,6 @@
 # Agent Skills and MCP
 
-Latch v0.3.2 supports the [Agent Skills specification](https://agentskills.io/specification)
+Latch v0.3.3 supports the [Agent Skills specification](https://agentskills.io/specification)
 and MCP tool servers over sandboxed stdio and Streamable HTTP. Neither integration
 can change kernel state, grant permissions, certify evidence, or bypass the sandbox.
 The existing Latch extension protocol and SDKs are unchanged.

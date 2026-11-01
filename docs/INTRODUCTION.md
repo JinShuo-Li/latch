@@ -38,7 +38,7 @@ Read about [working safely](../README.md#working-safely),
 
 ## Integration status
 
-Agent Skills and MCP tool servers are **implemented in v0.3.2**. Skills are
+Agent Skills and MCP tool servers are **implemented** in the current release. Skills are
 instructions loaded on demand, not permission grants. MCP supports tool discovery
 and execution over sandboxed stdio or Streamable HTTP. Remote HTTP services run
 outside Latch's local sandbox. Windows stdio servers reconnect for each call;
@@ -54,7 +54,9 @@ for the implemented and deferred boundary.
 
 Precompiled binaries target x86_64 and ARM64 Linux (glibc 2.35+), x86_64 Windows, and Apple Silicon macOS. Linux needs
 Bubblewrap, ripgrep, and Git. Windows needs Git, ripgrep, and a focused user-owned
-NTFS workspace. The native Windows sandbox is embedded in the binary.
+NTFS workspace. The native Windows sandbox is embedded in the binary. Apple
+Silicon macOS uses the system Seatbelt sandbox, Git and ripgrep; macOS 15 is
+natively tested with a macOS 14 deployment baseline.
 
 Windows qualification does not cover every host or workspace: an entire live
 home directory and hostile host races remain unqualified. Read the

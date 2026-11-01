@@ -197,7 +197,7 @@ def build(output):
                                'url': f'docs/{page["slug"]}/{anchor}', 'text': plain(chunk)})
     home = Template((SITE / 'templates/home.html').read_text()).substitute(version=version)
     (output / 'index.html').write_text(frame('Terminal and browser coding agent', home, '.', '',
-        'Latch is a Rust coding agent for Linux and Windows with mandatory sandboxing, durable sessions, and evidence-based validation.', home=True))
+        'Latch is a Rust coding agent for Linux, Windows, and Apple Silicon macOS with mandatory sandboxing, durable sessions, and evidence-based validation.', home=True))
     (output / 'search-index.json').write_text(json.dumps(search, ensure_ascii=False, separators=(',', ':')))
     (output / 'docs/index.html').write_text('<!doctype html><html lang="en"><meta charset="utf-8"><title>Latch documentation</title><meta http-equiv="refresh" content="0;url=introduction/"><a href="introduction/">Latch documentation</a></html>')
     print(f'Built {len(pages)} documentation pages and {len(search)} search sections in {output}')

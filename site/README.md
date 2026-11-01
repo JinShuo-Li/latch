@@ -73,3 +73,11 @@ node scripts/capture_site_web.mjs /path/to/chromium target/release/latch
 
 Review the images and update this provenance and captions when the captured
 state changes. Never replace interface captures with generated illustrations.
+
+## Current release and historical material
+
+The site reflects v0.3.3 and the Linux, Windows and Apple Silicon macOS binaries.
+The four-cell green L mark is used by the site header, favicon and production
+Web UI; Linux/macOS share one installer card. Windows boundary investigations
+and benchmark/capture versions are labeled historical evidence. Never relabel
+an old measurement or image as a newly tested result.

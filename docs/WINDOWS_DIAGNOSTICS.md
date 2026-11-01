@@ -1,4 +1,23 @@
-# Windows findings (2026-10-09)
+# Windows support and diagnostic evidence
+
+## Current release: 0.3.3
+
+Windows x86_64 binaries include the TUI, machine CLI and Web host, with the
+embedded AppContainer runner and scoped file brokers. Ordinary source objects
+do not need WRITE_DAC or source ACL changes. Explicit Network approval enables
+local TCP/UDP services. Focused, user-owned NTFS workspaces are qualified;
+whole-home workspaces, hostile host races and Windows ConPTY remain unqualified.
+
+PowerShell 5.1 and 7 installers handle strict-mode release redirects and verify
+SHA256 through the framework. The [current install command](INSTALL.md) prepares
+the current terminal PATH. Native security, Rust runtime and Web checks passed
+[Full validation](https://github.com/JinShuo-Li/latch/actions/runs/41324261874).
+
+## Historical investigation (2026-10-09)
+
+The findings below explain earlier failures and their fixes. References to old
+installed binaries or tagged versions describe historical evidence, not the
+current download or current feature set.
 
 Earlier measurements in this investigation ran from Ubuntu 24.04 under WSL2 on a Windows host, using
 Windows PowerShell 5.1 and native `x86_64-pc-windows-msvc` Rust. Builds and mock
@@ -12,7 +31,7 @@ changes or recovery-journal removals were made. The sections below distinguish i
 
 | Symptom | Cause and evidence | Status |
 | --- | --- | --- |
-| Installed `latch.exe` rejects `--web` | Published v0.2.3 predates Web integration; current source also previously compiled the adapter and its dependencies only on Linux. | Source now enables the same adapter on Windows, with the native Windows URL handler. Updating source does not replace an old installed executable. |
+| Installed `latch.exe` rejects `--web` | The old installed v0.2.3 binary predates Web integration; earlier source compiled the adapter and its dependencies only on Linux. | Fixed in current releases: the adapter runs on Windows, with the native Windows URL handler. Updating source does not replace an old installed executable. |
 | Successful `dir /b` appears to return no file names | The shared transcript sanitizer treated every carriage return as a progress-line replacement. Windows CRLF therefore erased each completed line. The native boundary returned names correctly; the Web projection contained only `exit 0`. | Fixed in the shared renderer for both TUI and Web. CRLF is a newline; lone CR still replaces progress output. Real-binary Web enumeration regression passes. |
 | Enumeration is denied in the existing checkout | Read-only workspace opens now use a per-call host broker, authenticated against the exact Job Object and AppContainer SID. It returns only scoped read handles and never changes source ACLs. Production writes also use scoped host-mediated capabilities without source ACL mutation; sensitive objects already readable by packages require journaled sealing or fail closed. | The native `read_broker.ps1` fixture removes WRITE_DAC, verifies real shell/Git/CRT reads, rejects protected paths, outside hardlinks and forged caller/write requests, and compares source ACLs exactly. The write fixture additionally passes modify/create/rename/delete and raw namespace/ACL denials on source objects without WRITE_DAC, addressing [issue #5](https://github.com/JinShuo-Li/latch/issues/5) for scoped host-readable/modifiable local NTFS trees. |
 | Large workspaces appear frozen before even a simple command | Each call creates a fresh boundary, scans every workspace/write/read grant root, journals temporary grants, then rolls them back. Command simplicity does not remove workspace preparation cost. | Preflight stores compact identities and relative paths, avoiding one retained handle per object. Grants reopen/revalidate in batches of at most 32, and each checksummed journal record carries up to 32 exact ACL intents. Rollback now preflights and restores identities one at a time, retaining only changed directory handles needed to clean inherited grants from new descendants. Hosted Windows Full validation [37749704283](https://github.com/JinShuo-Li/latch/actions/runs/37749704283) passed the 4,096-file mutable-workspace fixture: 4,129 initial objects, 512 concurrent host files, 256 sandbox mutations, with exact ACL restoration and journal removal. Measured preflight/grant/journal/apply/rollback phases were 185 ms / 6.95 s / 18.73 s / 370 ms / 18.72 s. Production now selects a per-operation file broker, avoiding source ACL grants and rollback. The same local 4,129-object/512-host-file/256-mutation fixture passes with preflight 0.23 ms, grant 7.13 ms, journal 60.44 ms, apply 0.51 ms and rollback 51.00 ms; only five runtime/scratch ACL mutations remain. This addresses the recursive source-grant cause in [issue #4](https://github.com/JinShuo-Li/latch/issues/4); whole-home and hostile-race qualification remain open. |

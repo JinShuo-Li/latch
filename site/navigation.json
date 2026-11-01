@@ -17,7 +17,7 @@
   {"title":"Security","pages":[
     {"slug":"safety","title":"Sandbox & approvals","source":"README.md","section":"Working safely"},
     {"slug":"windows","title":"Windows qualification","source":"docs/WINDOWS_DIAGNOSTICS.md"},
-    {"slug":"windows-boundary","title":"Windows boundary status","source":"native/windows/boundary/CURRENT_STATE.md"}
+    {"slug":"windows-boundary","title":"Windows boundary history","source":"native/windows/boundary/CURRENT_STATE.md"}
   ]},
   {"title":"Extensions","pages":[
     {"slug":"skills-mcp","title":"Agent Skills & MCP","source":"docs/SKILLS_AND_MCP.md"},

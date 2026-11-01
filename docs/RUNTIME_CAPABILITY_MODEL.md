@@ -421,7 +421,7 @@ map, [`CONTINUITY.md`](CONTINUITY.md) for the default context engine's memory
 and cache semantics, [`PROTOCOL.md`](PROTOCOL.md) for the extension wire
 format.
 
-### Linux and Windows browser client
+### Linux, Windows, and macOS browser client
 
 `latch --web` is an implemented client adapter, with `--ssh <REMOTE_WEB_PORT>`
 providing the same loopback listener for SSH forwarding. The authenticated
