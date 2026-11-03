@@ -49,6 +49,14 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Select provider, model, and reasoning effort",
     },
     SlashCommand {
+        name: "/login",
+        description: "Sign in to ChatGPT subscription (device authorization)",
+    },
+    SlashCommand {
+        name: "/logout",
+        description: "Remove locally stored ChatGPT subscription tokens",
+    },
+    SlashCommand {
         name: "/setup",
         description: "Open the provider configuration center",
     },

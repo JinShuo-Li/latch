@@ -154,6 +154,8 @@ pub enum CenterCapture {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CenterAction {
     StartAdd(String),
+    SubscriptionLogin,
+    SubscriptionLogout,
     /// The host must open `ConfigurationCenter::capture_spec()`.
     Capture,
     SetCredential {
@@ -323,13 +325,26 @@ impl ConfigurationCenter {
                     .provider(id)
                     .map(|provider| provider.credential_ref.as_str())
                     .unwrap_or("");
-                vec![
-                    ("Environment variable".to_owned(), reference.to_owned()),
-                    (
-                        "Enter API key securely".to_owned(),
-                        "stored 0600 locally".to_owned(),
-                    ),
-                ]
+                if reference.starts_with("oauth:") {
+                    vec![
+                        (
+                            "Sign in / reconnect".to_owned(),
+                            "ChatGPT device authorization".to_owned(),
+                        ),
+                        (
+                            "Sign out locally".to_owned(),
+                            "keeps configuration and history".to_owned(),
+                        ),
+                    ]
+                } else {
+                    vec![
+                        ("Environment variable".to_owned(), reference.to_owned()),
+                        (
+                            "Enter API key securely".to_owned(),
+                            "stored 0600 locally".to_owned(),
+                        ),
+                    ]
+                }
             }
             CenterPage::Models(id) => {
                 let discoverable = self.provider(id).is_some_and(|provider| {
@@ -861,6 +876,13 @@ impl ConfigurationCenter {
                 }
             }
             CenterPage::Credential(id) => {
+                if self.provider(&id)?.credential_ref.starts_with("oauth:") {
+                    return Some(if self.selected == 0 {
+                        CenterAction::SubscriptionLogin
+                    } else {
+                        CenterAction::SubscriptionLogout
+                    });
+                }
                 self.capture = Some(if self.selected == 0 {
                     CenterCapture::CredentialEnv { provider: id }
                 } else {
@@ -1692,6 +1714,19 @@ mod tests {
             })
         );
         assert!(!format!("{center:?}").contains("private-value"));
+    }
+
+    #[test]
+    fn oauth_credential_editor_offers_login_and_logout_not_api_keys() {
+        let mut row = provider(ProviderStatus::Ready);
+        row.credential_ref = "oauth:openai-codex".into();
+        let mut center = ConfigurationCenter::new(vec![row], vec![kind()]);
+        open_provider(&mut center);
+        center.confirm();
+        assert_eq!(center.confirm(), Some(CenterAction::SubscriptionLogin));
+        assert!(center.capture_spec().is_none());
+        center.down();
+        assert_eq!(center.confirm(), Some(CenterAction::SubscriptionLogout));
     }
 
     #[test]

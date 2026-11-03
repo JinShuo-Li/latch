@@ -365,6 +365,7 @@ impl InferenceContext {
             ProviderKind::OpenCodeZen,
             ProviderKind::DeepSeek,
             ProviderKind::OpenAi,
+            ProviderKind::OpenAiCodex,
             ProviderKind::Anthropic,
             ProviderKind::OpenAiCompatible,
         ]

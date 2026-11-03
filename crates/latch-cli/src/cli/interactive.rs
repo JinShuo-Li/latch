@@ -267,6 +267,74 @@ pub async fn run_session(
             }
             Input::Submit { text, media } => {
                 if is_slash_command_input(&text) {
+                    let command = text.trim();
+                    if command.split_whitespace().next() == Some("/login") {
+                        if !matches!(command, "/login" | "/login openai-codex" | "/login chatgpt") {
+                            output_tx
+                                .send(Output::Notice("usage: /login [openai-codex]".into()))
+                                .await?;
+                            continue;
+                        }
+                        let result =
+                            subscription_login(&mut context, &mut input_rx, &output_tx).await;
+                        output_tx.send(Output::LoginFinished).await?;
+                        match result {
+                            Ok(true) => break,
+                            Ok(false) => {
+                                agent.set_provider_factory(context.provider_factory());
+                                output_tx
+                                    .send(Output::InferenceCatalog(context.catalog()))
+                                    .await?;
+                                output_tx
+                                    .send(Output::SetupProviders(context.setup_providers()))
+                                    .await?;
+                                send_setup_paths(&context, &output_tx).await?;
+                                if let Err(error) = apply_live_profile(
+                                    &mut agent,
+                                    &context,
+                                    InferenceProfile::new(
+                                        "openai-codex",
+                                        "",
+                                        ReasoningEffort::ProviderDefault,
+                                    ),
+                                    &output_tx,
+                                    &workspace,
+                                    resumed,
+                                )
+                                .await
+                                {
+                                    output_tx
+                                        .send(Output::Notice(format!("error: {error:#}")))
+                                        .await?;
+                                }
+                            }
+                            Err(error) => {
+                                output_tx
+                                    .send(Output::Notice(format!("error: {error:#}")))
+                                    .await?
+                            }
+                        }
+                        continue;
+                    }
+                    if command == "/logout" {
+                        match latch_kernel::oauth::ChatGptAuth::new(&context.config.state_dir)
+                            .logout()
+                            .await
+                        {
+                            Ok(()) => {
+                                output_tx
+                                    .send(Output::SetupProviders(context.setup_providers()))
+                                    .await?;
+                                output_tx.send(Output::Notice("Signed out of ChatGPT locally. Configuration and history were kept; use /model to select another provider or /login to reconnect.".into())).await?;
+                            }
+                            Err(error) => {
+                                output_tx
+                                    .send(Output::Notice(format!("error: {error:#}")))
+                                    .await?
+                            }
+                        }
+                        continue;
+                    }
                     if let Err(error) = handle_command(&mut agent, &text, &output_tx).await {
                         output_tx
                             .send(Output::Notice(format!("error: {error:#}")))
@@ -380,6 +448,47 @@ pub async fn run_session(
     drop(output_tx);
     agent.shutdown_extensions().await?;
     Ok(outcome)
+}
+
+/// Keep authentication cancellable and responsive without allowing prompts,
+/// profile mutations or a second login to race the credential/config commit.
+async fn subscription_login(
+    context: &mut InferenceContext,
+    input: &mut mpsc::Receiver<Input>,
+    tx: &mpsc::Sender<Output>,
+) -> Result<bool> {
+    let auth = latch_kernel::oauth::ChatGptAuth::new(&context.config.state_dir);
+    let cancel = CancellationToken::new();
+    let flow = async {
+        let device = auth.begin().await?;
+        tx.send(Output::LoginChallenge {
+            verification_url: latch_kernel::oauth::VERIFICATION_URL.into(),
+            user_code: device.user_code.clone(),
+        })
+        .await?;
+        auth.complete(device, cancel.clone()).await
+    };
+    tokio::pin!(flow);
+    loop {
+        tokio::select! {
+            result = &mut flow => { result?; break; }
+            next = input.recv() => match next {
+                Some(Input::Quit) | None => { cancel.cancel(); return Ok(true); }
+                Some(Input::Cancel) => { cancel.cancel(); bail!("ChatGPT sign-in cancelled"); }
+                Some(Input::Submit { text, .. }) if text.trim() == "/login cancel" => {
+                    cancel.cancel(); bail!("ChatGPT sign-in cancelled");
+                }
+                Some(Input::Submit { text, .. }) => {
+                    if !is_slash_command_input(&text) { tx.send(Output::InputReceived).await?; }
+                    tx.send(Output::Notice("Complete sign-in first, or cancel with Ctrl+C / /login cancel.".into())).await?;
+                }
+                _ => tx.send(Output::Notice("Complete sign-in first, or cancel with Ctrl+C / /login cancel.".into())).await?,
+            }
+        }
+    }
+    cli::login::configure(context)?;
+    tx.send(Output::Notice("ChatGPT subscription connected. Plan eligibility and usage limits apply; OpenAI API billing is separate.".into())).await?;
+    Ok(false)
 }
 
 enum Relay {

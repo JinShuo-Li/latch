@@ -419,6 +419,14 @@ Windows installer requests close their connection and retry transport failures a
 most three times; `scripts/test-install.ps1` covers recovery and exhaustion in
 both PowerShell versions. The public bootstrap uses `-DisableKeepAlive` too.
 
+ChatGPT subscription sign-in uses `latch login` / `/login` (OpenAI Codex device
+flow), and `latch logout` / `/logout` removes local tokens. `oauth.rs` owns the
+restricted `chatgpt-auth.toml` and cross-process refresh lock; `provider.rs` owns
+subscription Responses serialization. Keep `openai-codex` OAuth/fixed endpoint
+separate from API-key providers and never fall back to API billing. UI device
+challenges are transient, not durable events. `doctor` remains offline. Focused:
+`cargo test -p latch-kernel --lib oauth --locked`; see `docs/CHATGPT_LOGIN.md`.
+
 Browser header version comes only from bootstrap metadata; never hardcode a
 release fallback in HTML/JS. `node scripts/test_web_view.mjs` checks missing,
 initial and updated server versions without a browser (development only).

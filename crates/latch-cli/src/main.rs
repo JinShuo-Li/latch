@@ -53,6 +53,16 @@ async fn main() -> ExitCode {
         Some(Commands::Skills) => legacy_exit(cli::integrations::skills()),
         Some(Commands::Mcp { check }) => legacy_exit(cli::integrations::mcp(&args, check).await),
         Some(Commands::Doctor(doctor)) => cli::doctor::execute(&args, doctor),
+        Some(Commands::Login) => legacy_exit(
+            cli::login::execute(&args, false)
+                .await
+                .map(|()| ExitCode::SUCCESS),
+        ),
+        Some(Commands::Logout) => legacy_exit(
+            cli::login::execute(&args, true)
+                .await
+                .map(|()| ExitCode::SUCCESS),
+        ),
         Some(Commands::Migrate) => legacy_exit(migrate(&args)),
         Some(Commands::Debug { command }) => legacy_exit(debug_dispatch(&args, command)),
         None => legacy_exit(run_legacy(args).await),

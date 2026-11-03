@@ -394,6 +394,20 @@ impl App {
         match out {
             Output::Ready => self.sidebar.activity.interrupted(chrono::Utc::now()),
             Output::InputReceived => {}
+            Output::LoginChallenge {
+                verification_url,
+                user_code,
+            } => {
+                self.setup_center = None;
+                self.busy = true;
+                self.presentation.push_notice(format!(
+                    "ChatGPT sign-in: open {verification_url}\nEnter code: {user_code}\nOnly enter this code if you initiated this login. Expires in 15 minutes. Ctrl+C or /login cancel cancels."
+                ));
+                self.transcript_cache.invalidate();
+            }
+            Output::LoginFinished => {
+                self.busy = false;
+            }
             Output::StreamActivity(activity) => {
                 self.sidebar.activity.signal(activity, chrono::Utc::now())
             }
@@ -675,6 +689,18 @@ impl App {
     /// center open so the CLI can refresh the rows; terminal actions close it.
     fn dispatch_center_action(&mut self, action: CenterAction) -> Option<Action> {
         match action {
+            CenterAction::SubscriptionLogin | CenterAction::SubscriptionLogout => {
+                let text = if matches!(action, CenterAction::SubscriptionLogin) {
+                    "/login"
+                } else {
+                    "/logout"
+                };
+                self.setup_center = None;
+                Some(Action::Submit {
+                    text: text.into(),
+                    media: vec![],
+                })
+            }
             CenterAction::Capture => {
                 if let Some(spec) = self
                     .setup_center
@@ -687,6 +713,13 @@ impl App {
             }
             CenterAction::StartAdd(kind) => {
                 if let Some(selected) = self.setup_catalog.iter().find(|item| item.kind == kind) {
+                    if selected.credential_label.starts_with("oauth:") {
+                        self.setup_center = None;
+                        return Some(Action::Submit {
+                            text: "/login".into(),
+                            media: vec![],
+                        });
+                    }
                     if selected.requires_base_url {
                         self.custom_setup = Some(CustomProviderFlow::new(selected.clone()));
                     } else {

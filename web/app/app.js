@@ -28,6 +28,13 @@ function applySnapshot(snapshot) {
   if (observedSession!==snapshot.state.session_id) {settingsResultAt=null;state.settingsPending=null;state.settingsMessage='';state.settingsError=false;settingsMetadata=undefined;state.pendingFiles.forEach(f=>{if(f.url)URL.revokeObjectURL(f.url);});state.pendingFiles=[];removedImages=new Set();observedSession=snapshot.state.session_id;state.historyPosition=null;}
   for (const reference of snapshot.state.pending_attachments || []) if (!removedImages.has(reference.id) && !state.pendingFiles.some(f=>f.reference?.id===reference.id)) state.pendingFiles.push({reference,name:reference.display_name || 'Attached image'});
   renderActivity();renderHeader();renderConversation();renderComposer();renderPermission();renderFiles();
+  const challenge=metadata().login_challenge;
+  const loginDialog=$('#login-dialog');
+  if(challenge) {
+    if($('#settings-dialog').open)$('#settings-dialog').close();
+    $('#login-code').textContent=challenge.user_code;
+    if(!loginDialog.open)loginDialog.showModal();
+  } else {if(loginDialog.open)loginDialog.close();$('#login-code').textContent='';}
   const setupKey=`${snapshot.instance_id}:${snapshot.state.session_id}`;
   if(metadata().setup_required && !session().starting && setupShown!==setupKey) {setupShown=setupKey;openSettings('providers');if(metadata().setup_paths?.config_exists===false){state.settingsProvider='__new';renderSettings();}}
   if (!$('#details-panel').hidden) renderDetails();
@@ -85,6 +92,7 @@ async function slash(text) {
   const [name,...args]=text.trim().split(/\s+/);
   if (name==='/help') {showCommands();return;}
   if (name==='/setup') {openSettings('providers');return;}
+  if (name==='/login' || name==='/logout') {if($('#settings-dialog').open)$('#settings-dialog').close();}
   if (name==='/model') {showModels();addEffortSelector();return;}
   if (name==='/resume') {$('#app').classList.remove('sidebar-collapsed');$('#app').classList.add('mobile-sidebar-open');$('#session-search').focus();return;}
   if (name==='/sidebar') {setDetails($('#details-panel').hidden);return;}
@@ -139,6 +147,9 @@ async function setup(plan,after={}) {
   try {await sendInput('setup_apply',plan);}
   catch(error) {settingsResultAt=null;state.settingsPending=null;state.settingsError=true;state.settingsMessage=error.message;renderSettingsStatus();throw error;}
 }
+
+$('#cancel-login').addEventListener('click',()=>attempt(()=>sendInput('cancel')));
+$('#login-dialog').addEventListener('cancel',event=>{event.preventDefault();attempt(()=>sendInput('cancel'));});
 
 hydrateIcons();
 try{document.body.classList.toggle('dark',localStorage.getItem('latch-theme')!=='light');}catch{/* Appearance storage is optional. */}

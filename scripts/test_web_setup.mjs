@@ -13,6 +13,7 @@ const browserPath=process.argv[2];
 if(!browserPath)throw new Error('Usage: node scripts/test_web_setup.mjs /path/to/chromium');
 const model=(id)=>({id,display_name:id,efforts:['low','high'],default_effort:'low',input_modalities:['text','image']});
 const snapshot={instance_id:'test',server_time:Date.now(),workspace:'/test/workspace',version:'test',commands:[],state:{session_id:'test-session',sequence:1,busy:false,starting:false,cells:[],metadata:{setup_required:true,setup_paths:{config_exists:false,config_path:'/test/.latch/config.toml',state_root:'/test/.latch'},setup_catalog:[{kind:'opencode-go',label:'OpenCode Go',default_base_url:'https://example.test/v1',requires_base_url:false,credential_label:'env:OPENCODE_GO_API_KEY',default_model:'model-a',models:[model('model-a'),model('model-b')]}],setup_providers:[]}}};
+snapshot.state.metadata.setup_catalog.push({kind:'openai-codex',label:'ChatGPT subscription',default_base_url:'https://chatgpt.com/backend-api/codex',requires_base_url:false,credential_label:'oauth:openai-codex',default_model:'gpt-5.4',models:[model('gpt-5.4')]});
 const requests=[];
 let failSave=true;
 let holdSave=false;
@@ -43,6 +44,9 @@ const server=createServer(async(req,res)=>{
             snapshot.state.cells.push({Notice:{text:'Configuration saved'}});
           }
         } else if(command.input.type==='discover_models')snapshot.state.metadata.setup_models={provider:'opencode-go',ids:['discovered-model']};
+        else if(command.input.type==='submit' && command.input.data.text==='/login') {
+          snapshot.state.metadata.login_challenge={verification_url:'https://auth.openai.com/codex/device',user_code:'ABCD-EFGH'};snapshot.state.busy=true;
+        } else if(command.input.type==='cancel') {delete snapshot.state.metadata.login_challenge;snapshot.state.busy=false;}
         emit();
       };
       if(holdSave)finishSave=complete;else setTimeout(complete,80);
@@ -129,7 +133,27 @@ try {
   await waitFor(`!!document.querySelector('[data-settings-form="credential"]')`);
   const custom=requests.at(-1).data.Apply;
   assert.equal(custom.custom_transport,'responses');assert.deepEqual(custom.enabled_models,['private-model']);
-  await click('[data-close="settings-dialog"]');
+  await click('[data-settings-back]');await click('[data-open-provider="__new"]');
+  await change('provider_kind','openai-codex');
+  assert.equal(await evaluate(`document.querySelector('[name="credential"]')`),null);
+  assert.equal(await evaluate(`document.querySelector('[data-command="/login"]').textContent`),'Sign in with ChatGPT');
+  await click('[data-command="/login"]');
+  await waitFor(`document.querySelector('#login-dialog').open`);
+  assert.equal(await evaluate(`document.querySelector('#login-code').textContent`),'ABCD-EFGH');
+  assert.equal(await evaluate(`document.querySelector('#login-dialog a').href`),'https://auth.openai.com/codex/device');
+  assert.equal(await evaluate(`document.querySelector('#settings-dialog').open`),false);
+  assert.equal(requests.at(-1).data.text,'/login');
+  await click('#cancel-login');
+  await waitFor(`!document.querySelector('#login-dialog').open`);
+  assert.equal(requests.at(-1).type,'cancel');
+  assert.equal(await evaluate(`document.querySelector('#login-code').textContent`),'');
+  // Reconnect snapshots restore only a pending human challenge, not a transcript.
+  snapshot.state.metadata.login_challenge={verification_url:'https://auth.openai.com/codex/device',user_code:'NEW-CODE'};snapshot.state.busy=true;emit();
+  await waitFor(`document.querySelector('#login-dialog').open`);
+  await evaluate(`document.querySelector('#login-dialog').dispatchEvent(new Event('cancel',{cancelable:true}))`);
+  await waitFor(`!document.querySelector('#login-dialog').open`);
+  assert.equal(requests.at(-1).type,'cancel');
+  console.log('ChatGPT subscription UI checks passed (OAuth setup, no API-key capture, challenge, cancellation and ephemeral cleanup).');
   const tableText='| Model | Tokens | Notes |\n| :--- | ---: | :---: |\n| **中文模型** | `128000` | escaped \\| pipe |\n| `<img src=x onerror=alert(1)>` | 42 | long_'+'identifier_'.repeat(30)+' |';
   snapshot.state.cells.push({Assistant:{text:tableText}});emit();
   await waitFor(`!!document.querySelector('.markdown-table')`);

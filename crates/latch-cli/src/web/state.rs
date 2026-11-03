@@ -95,6 +95,20 @@ impl View {
             Output::InputReceived => {
                 self.queued_inputs = self.queued_inputs.saturating_sub(1);
             }
+            Output::LoginChallenge {
+                verification_url,
+                user_code,
+            } => {
+                self.busy = true;
+                self.metadata.insert(
+                    "login_challenge".into(),
+                    json!({"verification_url":verification_url,"user_code":user_code}),
+                );
+            }
+            Output::LoginFinished => {
+                self.metadata.remove("login_challenge");
+                self.busy = self.queued_inputs > 0;
+            }
             Output::StreamActivity(activity) => {
                 self.sidebar.activity.signal(activity, chrono::Utc::now())
             }
@@ -172,6 +186,25 @@ impl View {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_challenge_is_transient_not_a_transcript_cell() {
+        let mut view = View::default();
+        view.apply(Output::LoginChallenge {
+            verification_url: "https://auth.openai.com/codex/device".into(),
+            user_code: "ABCD-EFGH".into(),
+        });
+        assert!(view.busy);
+        let snapshot = view.snapshot();
+        assert_eq!(
+            snapshot["metadata"]["login_challenge"]["user_code"],
+            "ABCD-EFGH"
+        );
+        assert!(!snapshot["cells"].to_string().contains("ABCD-EFGH"));
+        view.apply(Output::LoginFinished);
+        assert!(!view.busy);
+        assert!(!view.metadata.contains_key("login_challenge"));
+    }
 
     #[test]
     fn completion_report_survives_run_end_and_snapshot_reconstruction() {

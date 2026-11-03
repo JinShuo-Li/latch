@@ -367,7 +367,12 @@ async fn submit(
                     "attachment does not belong to this session",
                 ));
             }
-            if view.busy && text.trim_start().starts_with('/') && !text.contains(['\n', '\r']) {
+            if view.busy
+                && text.trim_start().starts_with('/')
+                && !text.contains(['\n', '\r'])
+                && !(text.trim() == "/login cancel"
+                    && view.metadata.contains_key("login_challenge"))
+            {
                 return Err(ApiError::conflict(
                     "finish or cancel the active turn before running commands",
                 ));

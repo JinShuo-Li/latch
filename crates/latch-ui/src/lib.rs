@@ -63,6 +63,12 @@ pub enum Output {
     Event(Box<DurableEvent>),
     ToolResult(ToolResult),
     Notice(String),
+    /// Ephemeral human-only device authorization; never a durable event.
+    LoginChallenge {
+        verification_url: String,
+        user_code: String,
+    },
+    LoginFinished,
     Mode(Mode),
     /// Effective safety profile after a `/safety` change or resume.
     Safety(Safety),

@@ -89,6 +89,10 @@ pub enum Commands {
         #[arg(long)]
         check: bool,
     },
+    /// Sign in to a ChatGPT subscription using OpenAI device authorization.
+    Login,
+    /// Remove locally stored ChatGPT tokens (keeps configuration and history).
+    Logout,
     /// Explicitly copy a legacy XDG installation into ~/.latch.
     Migrate,
     /// Inspect internal prompt compilation and diagnostics without running a task.

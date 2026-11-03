@@ -16,6 +16,7 @@ export function credentialInput(source,env='') {
     : `${input('API key','credential','','password','required autocomplete="new-password" spellcheck="false"')}<p class="field-help">Stored privately on the Latch host. Existing keys are never displayed.</p>`;
 }
 function credentialForm(provider) {
+  if(provider.credential_ref?.startsWith('oauth:'))return `<section><h3>ChatGPT subscription</h3><p class="field-help">Sign in with your ChatGPT account. Plan eligibility and limits apply; API billing is separate.</p><button class="primary-button" data-command="/login">Sign in / reconnect</button> <button class="secondary-button" data-command="/logout">Sign out locally</button></section>`;
   const env=provider.credential_ref?.startsWith('env:')?provider.credential_ref.slice(4):'';
   return `<form data-settings-form="credential" data-provider="${e(provider.id)}"><h3>Credential</h3>${credentialFields(env?'Env':'Secret',env)}${save('Save credential')}</form>`;
 }
@@ -25,7 +26,7 @@ export function renderSettingsStatus() {
   status.classList.toggle('form-error',!!state.settingsError);
   status.setAttribute('role',state.settingsError?'alert':'status');
   const busy=!!state.settingsPending || !!session().busy || !!session().starting;
-  $('#settings-content').querySelectorAll('button[type="submit"], [data-discover], [data-new-default], [data-remove-provider], [data-confirm-remove]').forEach(button=>{button.disabled=busy;});
+  $('#settings-content').querySelectorAll('button[type="submit"], [data-discover], [data-new-default], [data-remove-provider], [data-confirm-remove], [data-command="/login"], [data-command="/logout"]').forEach(button=>{button.disabled=busy;});
   // Policy selects follow the effective server state: a change the server
   // rejects (for example mid-turn) snaps back instead of lying about the
   // active resolver.
@@ -67,6 +68,10 @@ function renderNewProvider() {
   const defaultEnv=kind?.credential_label?.replace(/^env:/,'') || '';
   let name=kind?.kind || '';
   for(let suffix=2;providers().some(p=>p.id===name);suffix++) name=`${kind.kind}-${suffix}`;
+  if(kind?.credential_label?.startsWith('oauth:')) {
+    $('#settings-content').innerHTML=`<button class="back-button" data-settings-back>← Providers</button><h3>Connect a provider</h3><label class="field-label">Provider<select class="form-input" id="new-provider-kind" name="provider_kind">${catalog.map(k=>`<option value="${e(k.kind)}" ${k.kind===selected?'selected':''}>${e(k.label)}</option>`).join('')}</select></label><p class="settings-note">Use your ChatGPT subscription through OpenAI Codex device authorization. No API key needed. Plan eligibility and usage limits apply; API billing is separate.</p><button class="primary-button" data-command="/login">Sign in with ChatGPT</button>`;
+    return;
+  }
   $('#settings-content').innerHTML = `<button class="back-button" data-settings-back>← Providers</button><form data-settings-form="new-provider"><h3>Connect a provider</h3><p class="field-help">Choose a provider, enter its credential, then select your models.</p>${metadata().setup_paths?`<p class="settings-note">Configuration: ${e(metadata().setup_paths.config_path)}</p>`:''}<label class="field-label">Provider<select class="form-input" id="new-provider-kind" name="provider_kind">${catalog.map(k=>`<option value="${e(k.kind)}" ${k.kind===selected?'selected':''}>${e(k.label)}</option>`).join('')}</select></label><h3>Credential</h3>${credentialFields('Secret',defaultEnv)}<h3>Models</h3><label class="field-label">Default model<select class="form-input" name="catalog_model">${(kind?.models||[]).map(m=>`<option value="${e(m.id)}" ${m.id===kind.default_model?'selected':''}>${e(m.display_name || m.id)}${m.input_modalities?.includes('image')?' · vision':''}</option>`).join('')}<option value="__custom">Custom model…</option></select></label><div data-new-model></div><details class="settings-section" ${kind?.requires_base_url?'open':''}><summary>Connection details</summary>${input('Instance name','name',name,'text','required')}${input('Base URL','base_url',kind?.default_base_url,'url',kind?.requires_base_url?'required':'')}<p class="field-help">Use a separate instance name for another account or endpoint.</p></details>${save('Save and use provider')}</form>`;
   renderNewModel($('#settings-content form'));
 }

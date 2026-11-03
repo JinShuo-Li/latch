@@ -3103,6 +3103,38 @@ fn model_and_setup_commands_are_unavailable_during_a_live_turn() {
 }
 
 #[test]
+fn subscription_setup_starts_login_without_an_api_key_capture() {
+    let mut app = App::default();
+    app.output(Output::SetupCatalog(vec![SetupKind {
+        kind: "openai-codex".into(),
+        label: "ChatGPT subscription".into(),
+        default_base_url: "https://chatgpt.com/backend-api/codex".into(),
+        requires_base_url: false,
+        credential_label: "oauth:openai-codex".into(),
+        default_model: "gpt-5.4".into(),
+        models: vec![],
+    }]));
+    let action = app.dispatch_center_action(CenterAction::StartAdd("openai-codex".into()));
+    assert!(
+        matches!(action, Some(Action::Submit { text, media }) if text == "/login" && media.is_empty())
+    );
+    assert!(app.known_setup.is_none());
+    assert!(app.capture.is_none());
+    assert!(SLASH_COMMANDS.iter().any(|c| c.name == "/login"));
+    app.output(Output::LoginChallenge {
+        verification_url: "https://auth.openai.com/codex/device".into(),
+        user_code: "ABCD-EFGH".into(),
+    });
+    assert!(app.busy);
+    assert!(matches!(
+        app.on_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        Some(Action::Cancel)
+    ));
+    app.output(Output::LoginFinished);
+    assert!(!app.busy);
+}
+
+#[test]
 fn setup_flow_masks_the_secret_and_emits_a_secret_plan() {
     let mut app = App::default();
     app.output(Output::SetupCatalog(vec![SetupKind {

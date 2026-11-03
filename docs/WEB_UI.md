@@ -82,6 +82,15 @@ on the host; they are never returned to the browser. Saving uses the same
 controller and validation as the TUI. On subsequent starts, Latch loads the saved
 configuration automatically.
 
+**ChatGPT subscription** is a separate setup choice: it starts `/login` instead
+of asking for an API key. A transient dialog shows OpenAI's device verification
+link, one-time code and cancellation control. Refresh/reconnect restores a
+pending challenge; completion/cancellation removes it from browser metadata.
+Tokens never cross HTTP/SSE to the browser and no authentication material enters
+durable history. `/logout` removes local tokens while keeping configuration and
+history. Plan eligibility/usage limits apply, without automatic API billing.
+See [ChatGPT sign-in](CHATGPT_LOGIN.md).
+
 Save feedback stays in the dialog. A rejected save retains the form for retry;
 a successful save clears the key and displays the updated provider. Availability
 refreshes update the current model list automatically. Unresolved models open
