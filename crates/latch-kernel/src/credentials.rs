@@ -4,7 +4,8 @@
 //! [`CredentialRef`] such as `env:DEEPSEEK_API_KEY` or `file:deepseek`. Values
 //! live in the process environment or in a dedicated secrets file under the
 //! Latch state directory with `0600` permissions. Credentials are resolved
-//! freshly for each process start; they are never written to the durable event
+//! freshly for each process start (OAuth tokens refresh at request time); they
+//! are never written to the durable event
 //! log, the model context, the transcript, or ordinary logs.
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -22,6 +23,8 @@ pub enum CredentialRef {
     File(String),
     /// Read the value from the OS credential store.
     Keyring(String),
+    /// ChatGPT subscription credentials managed by the OAuth lifecycle.
+    ChatGpt,
 }
 
 impl CredentialRef {
@@ -32,6 +35,7 @@ impl CredentialRef {
             Self::Env(name) => format!("env:{name}"),
             Self::File(name) => format!("file:{name}"),
             Self::Keyring(name) => format!("keyring:{name}"),
+            Self::ChatGpt => "oauth:openai-codex".into(),
         }
     }
 
@@ -40,6 +44,7 @@ impl CredentialRef {
     pub fn name(&self) -> &str {
         match self {
             Self::Env(name) | Self::File(name) | Self::Keyring(name) => name,
+            Self::ChatGpt => "openai-codex",
         }
     }
 
@@ -50,6 +55,7 @@ impl CredentialRef {
             Self::Env(_) => "env",
             Self::File(_) => "file",
             Self::Keyring(_) => "keyring",
+            Self::ChatGpt => "oauth",
         }
     }
 
@@ -80,9 +86,9 @@ impl FromStr for CredentialRef {
     /// field must never be accepted or persisted.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let raw = raw.trim();
-        let (scheme, name) = raw
-            .split_once(':')
-            .ok_or_else(|| "credential must be env:NAME, file:NAME, or keyring:NAME".to_owned())?;
+        let (scheme, name) = raw.split_once(':').ok_or_else(|| {
+            "credential must be env:NAME, file:NAME, keyring:NAME, or oauth:openai-codex".to_owned()
+        })?;
         let name = name.trim();
         if name.is_empty() {
             return Err("credential reference has an empty name".to_owned());
@@ -103,7 +109,11 @@ impl FromStr for CredentialRef {
             }
             "file" => Ok(Self::File(name.to_owned())),
             "keyring" => Ok(Self::Keyring(name.to_owned())),
-            _ => Err("unknown credential scheme; use env:, file:, or keyring:".to_owned()),
+            "oauth" if name == "openai-codex" => Ok(Self::ChatGpt),
+            _ => Err(
+                "unknown credential scheme; use env:, file:, keyring:, or oauth:openai-codex"
+                    .to_owned(),
+            ),
         }
     }
 }
@@ -182,6 +192,11 @@ impl CredentialStore {
         match reference {
             CredentialRef::Env(name) => Ok(std::env::var(name).ok().filter(|v| !v.is_empty())),
             CredentialRef::File(name) => Ok(self.values.get(name).cloned()),
+            CredentialRef::ChatGpt => Ok(crate::oauth::ChatGptAuth::new(
+                self.path.parent().unwrap_or_else(|| Path::new(".")),
+            )
+            .is_available()?
+            .then(|| "ChatGPT OAuth (managed)".to_owned())),
             CredentialRef::Keyring(_) => bail!(
                 "OS keyring credentials are not available in this build; \
                  use env:NAME or file:NAME (stored 0600 under the Latch state dir)"
@@ -191,6 +206,11 @@ impl CredentialStore {
 
     /// Resolves a reference or returns an actionable missing-credential error.
     pub fn require(&self, reference: &CredentialRef) -> Result<String> {
+        if matches!(reference, CredentialRef::ChatGpt) {
+            bail!(
+                "ChatGPT credentials are managed by the subscription provider; run /login or latch login to connect"
+            );
+        }
         self.resolve(reference)?.ok_or_else(|| {
             anyhow!(
                 "no credential for {}: {} is not set (run `/setup` or set it in the environment)",
@@ -200,6 +220,8 @@ impl CredentialStore {
                     CredentialRef::File(name) =>
                         format!("secret {name:?} in {}", self.path.display()),
                     CredentialRef::Keyring(name) => format!("keyring entry {name}"),
+                    CredentialRef::ChatGpt =>
+                        "ChatGPT sign-in (run /login or latch login)".to_owned(),
                 }
             )
         })

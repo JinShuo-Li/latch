@@ -1931,6 +1931,7 @@ async fn native_filesystem_tools_cannot_reach_the_state_directory() {
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(state.join("secrets.toml"), "FAKE_SECRET = true\n").unwrap();
+    std::fs::write(state.join("chatgpt-auth.toml"), "FAKE_SECRET = true\n").unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(&state, dir.path().join("alias")).unwrap();
     #[cfg(windows)]
@@ -1962,6 +1963,8 @@ async fn native_filesystem_tools_cannot_reach_the_state_directory() {
     for (tool, path) in [
         ("read_file", "state/secrets.toml"),
         ("read_file", "alias/secrets.toml"),
+        ("read_file", "state/chatgpt-auth.toml"),
+        ("read_file", "alias/chatgpt-auth.toml"),
         ("read_image", "state"),
         ("read_image", "state/secrets.toml"),
     ] {

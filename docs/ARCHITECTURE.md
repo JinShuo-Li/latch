@@ -12,7 +12,8 @@
 including steering, cancellation, human approvals, setup persistence and live
 profile changes. The terminal adapter supplies channels to that controller;
 interface contracts live in `latch-ui` and are re-exported by `latch-tui` for
-compatibility. Durable protocol and provider serialization remain unchanged.
+compatibility. Durable protocol stays provider-neutral; provider serialization
+stays in the kernel.
 
 The Linux/Windows Web adapter in `latch-cli/src/web/` embeds `web/app/` assets and supplies
 HTTP input/output channels to the same controller. Its actor owns one active
@@ -91,6 +92,36 @@ current session, limits deletion to the launch workspace and emits a change
 notification after commit. HTTP/SSE and browser projections own no durable truth.
 
 ## Providers and inference profiles
+
+### ChatGPT subscription authentication
+
+`latch-cli/src/cli/login.rs` coordinates explicit human login/logout and provider
+configuration; `interactive.rs` shares that flow between TUI and Web without
+blocking cancellation or accepting model prompts during authentication. `/login`
+selects the subscription for the live session only after token/config commit;
+existing explicit new-session defaults stay intact. Shared `LoginChallenge` and
+`LoginFinished` outputs are transient UI state, not durable protocol events.
+
+`kernel/src/oauth.rs` owns OpenAI Codex device authorization, token validation,
+restricted `chatgpt-auth.toml` storage under the resolved state directory, and
+refresh/login/logout serialization with an OS file lock. Tokens are reloaded
+at each subscription request, so independent child providers and other Latch
+processes share rotated credentials rather than stale snapshots. Failed refresh
+never deletes credentials or falls back to paid API billing. `doctor` and setup
+check credential presence offline; they never refresh tokens.
+
+The `openai-codex` provider kind is distinct from API-key `openai`. It requires
+`oauth:openai-codex`, the fixed HTTPS Codex endpoint and Responses transport;
+configuration and provider construction both refuse credential/endpoint mixing.
+`provider.rs` owns account/session headers and all subscription wire mapping,
+reusing stateless Responses history, encrypted reasoning and tool-result replay.
+Subscription streams must report terminal completion; a truncated stream is not
+success. The model catalog uses a conservative 272K subscription input budget,
+not the public API context window or API prices. Entitlement is server-owned.
+Tokens and lock files must be ordinary, unaliased files in protected state;
+model tools, extensions and sandboxed commands do not receive them. Local logout
+removes saved tokens; it does not revoke already in-flight requests or OpenAI's
+remote authorization. See [ChatGPT subscriptions](CHATGPT_LOGIN.md).
 
 `ResolvedPaths` (`kernel/src/paths.rs`) owns configuration and storage path
 discovery. New installations use a private `~/.latch/` root for config,

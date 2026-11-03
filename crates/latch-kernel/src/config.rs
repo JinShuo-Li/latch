@@ -286,6 +286,8 @@ pub enum ProviderKind {
     #[default]
     #[serde(rename = "openai")]
     OpenAi,
+    #[serde(rename = "openai-codex")]
+    OpenAiCodex,
     #[serde(rename = "anthropic")]
     Anthropic,
     #[serde(rename = "deepseek")]
@@ -303,6 +305,7 @@ impl ProviderKind {
     pub const fn id(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
+            Self::OpenAiCodex => "openai-codex",
             Self::Anthropic => "anthropic",
             Self::DeepSeek => "deepseek",
             Self::OpenCodeGo => "opencode-go",
@@ -315,6 +318,7 @@ impl ProviderKind {
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::OpenAi => "OpenAI",
+            Self::OpenAiCodex => "ChatGPT subscription",
             Self::Anthropic => "Anthropic",
             Self::DeepSeek => "DeepSeek",
             Self::OpenCodeGo => "OpenCode Go",
@@ -327,6 +331,7 @@ impl ProviderKind {
     pub const fn default_credential(self) -> &'static str {
         match self {
             Self::OpenAi => "env:OPENAI_API_KEY",
+            Self::OpenAiCodex => "oauth:openai-codex",
             Self::Anthropic => "env:ANTHROPIC_API_KEY",
             Self::DeepSeek => "env:DEEPSEEK_API_KEY",
             Self::OpenCodeGo => "env:OPENCODE_API_KEY",
@@ -342,6 +347,7 @@ impl ProviderKind {
     pub fn parse(raw: &str, base_url: Option<&str>) -> Option<Self> {
         let kind = match raw.trim().to_ascii_lowercase().as_str() {
             "openai" => Self::OpenAi,
+            "openai-codex" | "chatgpt" => Self::OpenAiCodex,
             "anthropic" => Self::Anthropic,
             "deepseek" => Self::DeepSeek,
             "opencode-go" | "opencode_go" | "opencode" => Self::OpenCodeGo,
@@ -362,6 +368,7 @@ impl ProviderKind {
     pub const fn default_base_url(self) -> &'static str {
         match self {
             Self::OpenAi => "https://api.openai.com/v1",
+            Self::OpenAiCodex => crate::oauth::BASE_URL,
             Self::Anthropic => "https://api.anthropic.com",
             Self::DeepSeek => "https://api.deepseek.com",
             Self::OpenCodeGo => "https://opencode.ai/zen/go/v1",
@@ -376,7 +383,7 @@ impl ProviderKind {
     #[must_use]
     pub const fn default_transport(self) -> TransportKind {
         match self {
-            Self::OpenAi => TransportKind::Responses,
+            Self::OpenAi | Self::OpenAiCodex => TransportKind::Responses,
             Self::Anthropic => TransportKind::AnthropicMessages,
             Self::DeepSeek | Self::OpenCodeGo | Self::OpenCodeZen | Self::OpenAiCompatible => {
                 TransportKind::ChatCompletions
@@ -961,6 +968,28 @@ impl Config {
                 reference
                     .parse::<crate::credentials::CredentialRef>()
                     .map_err(|error| anyhow::anyhow!("provider {id} credential: {error}"))?;
+            }
+            if entry.kind == ProviderKind::OpenAiCodex {
+                if entry
+                    .base_url
+                    .as_deref()
+                    .is_some_and(|url| url.trim_end_matches('/') != crate::oauth::BASE_URL)
+                    || entry
+                        .credential
+                        .as_deref()
+                        .is_some_and(|reference| reference != "oauth:openai-codex")
+                    || entry.models.values().any(|model| {
+                        model
+                            .transport
+                            .is_some_and(|transport| transport != TransportKind::Responses)
+                    })
+                {
+                    anyhow::bail!(
+                        "provider {id}: ChatGPT subscription requires the fixed Codex endpoint, oauth:openai-codex and Responses transport"
+                    );
+                }
+            } else if entry.credential.as_deref() == Some("oauth:openai-codex") {
+                anyhow::bail!("provider {id}: ChatGPT OAuth credentials require kind openai-codex");
             }
             if entry.default_model.as_deref().is_none_or(str::is_empty) {
                 anyhow::bail!("provider {id} needs a default_model");

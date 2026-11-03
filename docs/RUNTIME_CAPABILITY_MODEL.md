@@ -64,8 +64,13 @@ mechanism added under this model must preserve all of them.
    result in the same turn; a call/result transaction is never split by
    rotation or delivery. Provider-visible history is sanitized so no provider
    ever observes a dangling call or result.
-8. **Secret isolation.** Credentials resolve at process start from
-   `env:`/`file:`/`keyring:` references. Secret values never enter
+8. **Secret isolation.** API credentials resolve at process start from
+   `env:`/`file:` references (`keyring:` is reserved, unavailable in this build).
+   `oauth:openai-codex` is managed separately: subscription requests reload and
+   refresh tokens under a cross-process lock in protected state. OAuth is
+   provider authentication, not a tool permission or runtime capability grant.
+   Only a human CLI/UI action starts sign-in; no agent tool can invoke it.
+   Secret values never enter
    configuration, the durable event log, model context, transcripts, or
    ordinary logs; provider error bodies are redacted. New transports and
    backends inherit this rule, including authenticated remote clients.

@@ -12,8 +12,16 @@ default_mode = "WORK"
 # Recommended multi-provider configuration. Each provider is a named instance
 # with a symbolic credential reference; secret values never live in this file.
 #
+# ChatGPT subscription: run `latch login` or `/login` (device authorization).
+# This is separate from OpenAI API billing. Plan eligibility/limits apply.
+# [providers.openai-codex]
+# kind = "openai-codex"
+# credential = "oauth:openai-codex" # managed tokens; never paste tokens here
+# default_model = "gpt-5.4"
+# The Codex endpoint is fixed; arbitrary base_url overrides are refused.
+#
 # [providers.opencode-go]
-# kind = "opencode-go"                  # openai | anthropic | deepseek | opencode-go | opencode-zen | openai-compatible
+# kind = "opencode-go"                  # openai | openai-codex | anthropic | deepseek | opencode-go | opencode-zen | openai-compatible
 # credential = "env:OPENCODE_API_KEY"  # env:NAME | file:NAME (0600 local store).
 # keyring:NAME parses for forward compatibility but is not available in this
 # build and is never advertised by /setup.

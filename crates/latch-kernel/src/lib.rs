@@ -13,6 +13,7 @@ pub mod linediff;
 pub mod mcp;
 pub mod media;
 pub mod migration;
+pub mod oauth;
 pub mod paths;
 pub mod permissions;
 pub mod progress;

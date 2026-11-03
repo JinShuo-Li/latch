@@ -571,6 +571,7 @@ impl ModelProvider for OpenAiProvider {
 /// `store: false`, so resume never depends on server-side state.
 pub struct OpenAiResponsesProvider {
     client: Client,
+    chatgpt_auth: Option<crate::oauth::ChatGptAuth>,
     base_url: String,
     api_key: String,
     model: String,
@@ -582,10 +583,22 @@ pub struct OpenAiResponsesProvider {
     media: Option<MediaStore>,
 }
 impl OpenAiResponsesProvider {
+    /// Reload subscription credentials for every request, including children.
+    #[must_use]
+    pub fn with_chatgpt_auth(mut self, auth: crate::oauth::ChatGptAuth) -> Self {
+        self.chatgpt_auth = Some(auth);
+        self.client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("valid subscription HTTP client");
+        self
+    }
+
     #[must_use]
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
         Self {
             client: Client::new(),
+            chatgpt_auth: None,
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
             model,
@@ -661,6 +674,7 @@ impl ModelProvider for OpenAiResponsesProvider {
             supports_effort: self.supports_effort,
             effort_map: self.effort_map.clone(),
             media: self.media.clone(),
+            chatgpt_auth: self.chatgpt_auth.clone(),
         }))
     }
     async fn stream(
@@ -670,23 +684,56 @@ impl ModelProvider for OpenAiResponsesProvider {
         sink: StreamSink,
     ) -> Result<ModelResponse> {
         let effort = responses_effort_for(self.effort, self.supports_effort, &self.effort_map);
-        let body = responses_request(
+        let mut body = responses_request(
             &request,
             &self.model,
             effort.as_deref(),
             self.media.as_deref(),
         )?;
+        let mut headers = self.request_headers();
+        let api_key = if let Some(auth) = &self.chatgpt_auth {
+            let tokens = tokio::select! {
+                () = cancel.cancelled() => bail!("model request cancelled"),
+                result = auth.access() => result?,
+            };
+            headers.insert(
+                "chatgpt-account-id",
+                HeaderValue::from_str(&tokens.account_id)?,
+            );
+            headers.insert("originator", HeaderValue::from_static("latch"));
+            headers.insert(
+                "openai-beta",
+                HeaderValue::from_static("responses=experimental"),
+            );
+            headers.insert("accept", HeaderValue::from_static("text/event-stream"));
+            if let Some(session) = self.session_id {
+                let id = session.to_string();
+                headers.insert("session-id", HeaderValue::from_str(&id)?);
+                body["prompt_cache_key"] = json!(id);
+            }
+            tokens.access_token
+        } else {
+            self.api_key.clone()
+        };
         let response = tokio::select! {
             response = async {
                 let sent = self
                     .client
                     .post(format!("{}/responses", self.base_url))
-                    .bearer_auth(&self.api_key)
-                    .headers(self.request_headers())
+                    .bearer_auth(&api_key)
+                    .headers(headers)
                     .json(&body)
                     .send()
                     .await?;
-                checked_response_redacted("openai-responses", sent, &self.api_key).await
+                if self.chatgpt_auth.is_some() {
+                    match sent.status().as_u16() {
+                        401 => bail!("ChatGPT sign-in expired or was revoked; run /login again"),
+                        403 => bail!("ChatGPT subscription access denied; check Codex eligibility and account permissions"),
+                        429 => bail!("ChatGPT subscription usage limit reached; wait for your allowance to reset"),
+                        _ => {}
+                    }
+                }
+                checked_response_redacted("openai-responses", sent, &api_key).await
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
         };
@@ -696,6 +743,7 @@ impl ModelProvider for OpenAiResponsesProvider {
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut state = ResponsesStreamState::default();
+        let mut completed = false;
         loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
             let Some(chunk) = next else { break };
@@ -710,17 +758,33 @@ impl ModelProvider for OpenAiResponsesProvider {
                     continue;
                 }
                 let v: Value = serde_json::from_str(&data)?;
+                if matches!(
+                    v["type"].as_str(),
+                    Some("response.completed" | "response.done")
+                ) {
+                    completed = true;
+                    if self.chatgpt_auth.is_some()
+                        && v.pointer("/response/status")
+                            .and_then(Value::as_str)
+                            .is_some_and(|status| status != "completed")
+                    {
+                        bail!("ChatGPT response did not complete; retry the request");
+                    }
+                }
                 let events = state.apply(&v).map_err(|error| {
-                    anyhow!("{}", crate::credentials::redact(&error, &[&self.api_key]))
+                    anyhow!("{}", crate::credentials::redact(&error, &[&api_key]))
                 })?;
                 for event in events {
                     sink(event);
                 }
             }
         }
+        if self.chatgpt_auth.is_some() && !completed {
+            bail!("ChatGPT stream ended before completion; retry the request");
+        }
         let result = state
             .finish()
-            .map_err(|error| anyhow!("{}", crate::credentials::redact(&error, &[&self.api_key])))?;
+            .map_err(|error| anyhow!("{}", crate::credentials::redact(&error, &[&api_key])))?;
         sink(StreamEvent::Completed(result.clone()));
         Ok(result)
     }
@@ -775,7 +839,10 @@ impl ResponsesStreamState {
                     }
                 }
             }
-            "response.output_item.added" | "response.output_item.done" | "response.completed" => {
+            "response.output_item.added"
+            | "response.output_item.done"
+            | "response.completed"
+            | "response.done" => {
                 let items: Vec<&Value> = if let Some(item) = v.get("item") {
                     vec![item]
                 } else {
@@ -827,7 +894,10 @@ impl ResponsesStreamState {
                         _ => {}
                     }
                 }
-                if v.get("type").and_then(Value::as_str) == Some("response.completed") {
+                if matches!(
+                    v.get("type").and_then(Value::as_str),
+                    Some("response.completed" | "response.done")
+                ) {
                     self.usage = v.pointer("/response/usage").and_then(responses_usage);
                 }
             }

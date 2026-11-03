@@ -248,6 +248,33 @@ const MAX: ReasoningEffort = ReasoningEffort::Max;
 /// medium, GPT-5.5 defaults to medium, and GPT-5.4 defaults to none.
 const OPENAI_PUBLIC_CONTEXT_WINDOW: usize = 1_050_000;
 
+/// Subscription deployment metadata is deliberately separate from public API
+/// windows and billing. Account entitlement remains the server's decision.
+fn builtin_codex() -> Vec<BuiltinModel> {
+    [
+        ("gpt-5.4", "GPT-5.4 (ChatGPT)", true),
+        ("gpt-5.3-codex", "GPT-5.3 Codex (ChatGPT)", false),
+    ]
+    .into_iter()
+    .map(|(id, display_name, supports_none)| BuiltinModel {
+        id,
+        display_name,
+        context_window_tokens: Some(272_000),
+        efforts: if supports_none {
+            &[NONE, LOW, MEDIUM, HIGH, XHIGH]
+        } else {
+            &[LOW, MEDIUM, HIGH, XHIGH]
+        },
+        default_effort: MEDIUM,
+        transport: TransportKind::Responses,
+        adaptive_thinking: false,
+        replay: ReasoningReplay::Omit,
+        aliases: &[],
+        image: true,
+    })
+    .collect()
+}
+
 fn builtin_openai() -> Vec<BuiltinModel> {
     let responses = TransportKind::Responses;
     vec![
@@ -1027,6 +1054,7 @@ fn builtin_opencode_zen() -> Vec<BuiltinModel> {
 fn builtin_models(kind: ProviderKind) -> Vec<BuiltinModel> {
     match kind {
         ProviderKind::OpenAi => builtin_openai(),
+        ProviderKind::OpenAiCodex => builtin_codex(),
         ProviderKind::Anthropic => builtin_anthropic(),
         ProviderKind::DeepSeek => builtin_deepseek(),
         ProviderKind::OpenCodeGo => builtin_opencode_go(),
@@ -1601,8 +1629,45 @@ impl ProviderRegistry {
             .profiles
             .get(profile.provider.as_str())
             .ok_or_else(|| anyhow!("unknown provider {:?}", profile.provider))?;
-        let api_key = credentials.require(&provider.credential)?;
         let effort = descriptor.effective_effort(profile.effort);
+        if provider.kind == ProviderKind::OpenAiCodex {
+            if provider.base_url.trim_end_matches('/') != crate::oauth::BASE_URL
+                || provider.credential != CredentialRef::ChatGpt
+                || descriptor.transport != TransportKind::Responses
+            {
+                bail!(
+                    "ChatGPT subscription requires its fixed Codex endpoint, OAuth credential and Responses transport"
+                );
+            }
+            let auth = crate::oauth::ChatGptAuth::new(
+                credentials
+                    .path()
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new(".")),
+            );
+            if !auth.is_available()? {
+                bail!("ChatGPT is not signed in; run /login or latch login");
+            }
+            return Ok(Arc::new(
+                OpenAiResponsesProvider::new(
+                    provider.base_url.clone(),
+                    String::new(),
+                    descriptor.model.clone(),
+                )
+                .with_identity(provider.id.to_string())
+                .with_reasoning(effort, !descriptor.supported_efforts.is_empty())
+                .with_effort_map(descriptor.effort_map.clone())
+                .with_session(session_id)
+                .with_media(media)
+                .with_chatgpt_auth(auth),
+            ));
+        }
+        if provider.credential == CredentialRef::ChatGpt {
+            bail!(
+                "ChatGPT OAuth credentials may only be used by the ChatGPT subscription provider"
+            );
+        }
+        let api_key = credentials.require(&provider.credential)?;
         let supports_effort = !descriptor.supported_efforts.is_empty();
         // DeepSeek-family reasoning is toggled explicitly: `provider default`
         // omits the field, an explicit level enables thinking, and an explicit
@@ -1698,6 +1763,28 @@ mod tests {
         let config: Config = toml::from_str(toml).unwrap();
         let registry = ProviderRegistry::from_config(&config).unwrap();
         (config, registry)
+    }
+
+    #[test]
+    fn subscription_catalog_is_separate_and_credentials_cannot_be_redirected() {
+        let mut config = Config::default();
+        let mut entry = canonical_provider_entry(ProviderKind::OpenAiCodex, None);
+        entry.default_model = Some(crate::oauth::DEFAULT_MODEL.into());
+        config.providers.insert("chatgpt".into(), entry);
+        config.validate().unwrap();
+        let registry = ProviderRegistry::from_config(&config).unwrap();
+        let model = registry.model_descriptor("chatgpt", "gpt-5.4").unwrap();
+        assert_eq!(model.transport, TransportKind::Responses);
+        assert_eq!(model.context_window_tokens, Some(272_000));
+        assert!(model.pricing.is_none());
+        config.providers.get_mut("chatgpt").unwrap().base_url = Some("https://example.com".into());
+        assert!(config.validate().is_err());
+        config.providers.get_mut("chatgpt").unwrap().base_url = None;
+        config.providers.get_mut("chatgpt").unwrap().credential = Some("env:OPENAI_API_KEY".into());
+        assert!(config.validate().is_err());
+        config.providers.get_mut("chatgpt").unwrap().kind = ProviderKind::OpenAiCompatible;
+        config.providers.get_mut("chatgpt").unwrap().credential = Some("oauth:openai-codex".into());
+        assert!(config.validate().is_err());
     }
 
     #[test]
