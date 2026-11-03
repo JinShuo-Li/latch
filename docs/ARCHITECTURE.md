@@ -119,8 +119,13 @@ Subscription streams must report terminal completion; a truncated stream is not
 success. The subscription catalog is refreshed through the authenticated Codex
 `/models` endpoint after login, with a current offline fallback; its context
 windows and efforts are separate from the public API catalog and API prices.
-The catalog protocol compatibility parameter is `client_version=0.153.0`, while
-requests identify the application as Latch. Entitlement is server-owned.
+Catalog refresh resolves the official stable Codex version through GitHub's
+public release redirect (three-second timeout, no credentials and no redirects
+followed), then uses it only as the catalog `client_version`. If resolution fails,
+it uses the last version that produced a valid catalog, or the embedded `0.166.0`
+fallback. The model's `minimal_client_version` is not a sufficient discovery gate.
+Startup remains offline; requests still identify the application as Latch.
+Entitlement is server-owned.
 Tokens and lock files must be ordinary, unaliased files in protected state;
 model tools, extensions and sandboxed commands do not receive them. Local logout
 removes saved tokens; it does not revoke already in-flight requests or OpenAI's

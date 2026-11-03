@@ -21,6 +21,9 @@ const ENTRY: &str = "openai-codex";
 pub const VERIFICATION_URL: &str = "https://auth.openai.com/codex/device";
 pub const BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 pub const DEFAULT_MODEL: &str = "gpt-6.1-sol";
+// Offline fallback; interactive discovery resolves the official stable release.
+// Model minimal_client_version does not fully describe service listing gates.
+pub const CATALOG_CLIENT_VERSION: &str = "0.166.0";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OAuthTokens {
@@ -173,15 +176,20 @@ impl ChatGptAuth {
     /// Read-only account catalog, not a model inference request. The version
     /// parameter describes the supported Codex catalog protocol, not our UA.
     pub async fn models(&self) -> Result<Value> {
-        self.models_at(BASE_URL).await
+        self.models_for_version(CATALOG_CLIENT_VERSION).await
     }
 
-    async fn models_at(&self, base_url: &str) -> Result<Value> {
+    /// The version controls catalog visibility, not application identity.
+    pub async fn models_for_version(&self, client_version: &str) -> Result<Value> {
+        self.models_at(BASE_URL, client_version).await
+    }
+
+    async fn models_at(&self, base_url: &str, client_version: &str) -> Result<Value> {
         let tokens = self.access().await?;
         let mut response = self
             .client
             .get(format!("{base_url}/models"))
-            .query(&[("client_version", "0.153.0")])
+            .query(&[("client_version", client_version)])
             .bearer_auth(&tokens.access_token)
             .header("chatgpt-account-id", &tokens.account_id)
             .header("originator", "latch")
@@ -610,12 +618,13 @@ mod tests {
         )])
         .await;
         assert_eq!(
-            auth.models_at(&url).await.unwrap()["models"][0]["slug"],
+            auth.models_at(&url, CATALOG_CLIENT_VERSION).await.unwrap()["models"][0]["slug"],
             "new-model"
         );
         let requests = requests.await.unwrap();
         assert_eq!(requests.len(), 1);
-        assert!(requests[0].starts_with("GET /models?client_version=0.153.0 "));
+        assert!(requests[0].starts_with("GET /models?client_version=0.166.0 "));
+        assert!(requests[0].to_lowercase().contains("originator: latch"));
         assert!(
             requests[0]
                 .to_lowercase()
@@ -624,7 +633,7 @@ mod tests {
         let (url, requests) = mock(vec![(401, json!({"error":"refresh-secret"}))]).await;
         assert!(
             !auth
-                .models_at(&url)
+                .models_at(&url, CATALOG_CLIENT_VERSION)
                 .await
                 .unwrap_err()
                 .to_string()

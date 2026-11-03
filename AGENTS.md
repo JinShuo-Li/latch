@@ -438,8 +438,11 @@ DeepSeek, authenticated Codex). `/model refresh` updates sanitized service facts
 `/model all` clears local model filters. New setup enables the full catalog with
 one credential. Keep discovered `providers.<id>.catalog` separate from explicit
 `models` overrides; retain past descriptors for resume. No remote URLs, prompts
-or permission claims are adopted. Startup/doctor remain offline and service
-listings never guarantee account entitlement. Focused checks:
+or permission claims are adopted. Codex refresh resolves the official stable
+release redirect without credentials, falling back to the last successful catalog
+version and then the embedded version; never derive it from model minimums.
+Startup/doctor remain offline and service listings never guarantee account
+entitlement. Focused checks:
 `cargo test -p latch-cli --bin latch discovery --locked` and
 `cargo test -p latch-kernel --lib oauth --locked`.
 

@@ -55,6 +55,11 @@ subscription configuration is `gpt-6.1-sol`; existing active profiles/defaults a
 not silently changed. These are subscription entries, not copied API models.
 
 Run `/model refresh` to fetch current service metadata, then `/model` to choose.
+Refresh automatically follows the official latest stable Codex catalog version;
+GitHub lookup failures fall back to the last successful version, then an embedded
+version. This requires no local Codex installation and does not add startup
+network requests. Version lookup uses no account credentials. A stale query
+version can hide new models even when their advertised minimum version is older.
 If an older setup restricted models, `/model all` clears the local filters. Old
 5.4/5.3 descriptors are retained for resume, not presented as the complete current
 catalog. Service visibility is not a promise of plan entitlement or available

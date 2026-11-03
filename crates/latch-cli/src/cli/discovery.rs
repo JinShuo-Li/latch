@@ -102,9 +102,75 @@ pub async fn fetch(
     credentials: &CredentialStore,
     cache_root: &Path,
 ) -> Result<ProviderCatalogConfig> {
-    let catalog = fetch_remote(profile, credentials).await?;
+    let catalog = fetch_remote(profile, credentials, cache_root).await?;
     store(cache_root, profile.id.as_str(), &catalog.available)?;
     Ok(catalog)
+}
+
+const CODEX_LATEST_RELEASE: &str = "https://github.com/openai/codex/releases/latest";
+const CODEX_VERSION_CACHE: &str = "codex-catalog-version";
+
+fn stable_version(value: &str) -> bool {
+    let parts: Vec<_> = value.split('.').collect();
+    value.len() <= 32
+        && parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn release_version(location: &str) -> Option<String> {
+    let version = location.strip_prefix("https://github.com/openai/codex/releases/tag/rust-v")?;
+    stable_version(version).then(|| version.to_owned())
+}
+
+async fn catalog_client_version(cache_root: &Path, latest_url: &str) -> String {
+    let latest = async {
+        // A public, credential-free request. Inspect only GitHub's redirect;
+        // never follow arbitrary URLs or use its rate-limited release API.
+        let response = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(3))
+            .build()
+            .ok()?
+            .get(latest_url)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_redirection() {
+            return None;
+        }
+        release_version(
+            response
+                .headers()
+                .get(reqwest::header::LOCATION)?
+                .to_str()
+                .ok()?,
+        )
+    }
+    .await;
+    if let Some(version) = latest {
+        return version;
+    }
+    use std::io::Read;
+    let cached = std::fs::File::open(cache_root.join(CODEX_VERSION_CACHE))
+        .ok()
+        .and_then(|file| {
+            let mut text = String::new();
+            file.take(64).read_to_string(&mut text).ok()?;
+            stable_version(text.trim()).then(|| text.trim().to_owned())
+        });
+    cached.unwrap_or_else(|| latch_kernel::oauth::CATALOG_CLIENT_VERSION.to_owned())
+}
+
+fn remember_catalog_version(cache_root: &Path, version: &str) -> Result<()> {
+    std::fs::create_dir_all(cache_root)?;
+    let mut temp = tempfile::NamedTempFile::new_in(cache_root)?;
+    use std::io::Write;
+    temp.write_all(version.as_bytes())?;
+    temp.persist(cache_root.join(CODEX_VERSION_CACHE))
+        .map_err(|error| error.error)?;
+    Ok(())
 }
 
 pub fn supports(kind: ProviderKind) -> bool {
@@ -120,6 +186,7 @@ pub fn supports(kind: ProviderKind) -> bool {
 async fn fetch_remote(
     profile: &ProviderProfile,
     credentials: &CredentialStore,
+    cache_root: &Path,
 ) -> Result<ProviderCatalogConfig> {
     if !supports(profile.kind) {
         bail!("this provider has no supported model discovery endpoint");
@@ -131,10 +198,16 @@ async fn fetch_remote(
                 .parent()
                 .unwrap_or_else(|| Path::new(".")),
         );
-        let value = tokio::time::timeout(Duration::from_secs(15), auth.models())
-            .await
-            .context("ChatGPT model catalog timed out")??;
-        return parse_catalog(&value, profile.kind);
+        let version = catalog_client_version(cache_root, CODEX_LATEST_RELEASE).await;
+        let value =
+            tokio::time::timeout(Duration::from_secs(15), auth.models_for_version(&version))
+                .await
+                .context("ChatGPT model catalog timed out")??;
+        let catalog = parse_catalog(&value, profile.kind)?;
+        // Cache only after a successful catalog fetch/parse. Cache loss or a
+        // read-only cache directory must not invalidate the service response.
+        let _ = remember_catalog_version(cache_root, &version);
+        return Ok(catalog);
     }
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -342,6 +415,47 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stable_release_redirect_and_last_successful_version_control_catalog_visibility() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let root = tempfile::tempdir().unwrap();
+        let unavailable = "http://127.0.0.1:0";
+        assert_eq!(
+            catalog_client_version(root.path(), unavailable).await,
+            latch_kernel::oauth::CATALOG_CLIENT_VERSION
+        );
+        remember_catalog_version(root.path(), "0.165.0").unwrap();
+        assert_eq!(
+            catalog_client_version(root.path(), unavailable).await,
+            "0.165.0"
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let count = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]).to_lowercase();
+            assert!(!request.contains("authorization:"));
+            assert!(!request.contains("chatgpt-account-id:"));
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://github.com/openai/codex/releases/tag/rust-v0.167.0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        });
+        assert_eq!(catalog_client_version(root.path(), &url).await, "0.167.0");
+        server.await.unwrap();
+        // An untested candidate must not overwrite the last successful version.
+        assert_eq!(
+            catalog_client_version(root.path(), unavailable).await,
+            "0.165.0"
+        );
+        for location in [
+            "https://evil.test/rust-v0.999.0",
+            "https://github.com/openai/codex/releases/tag/rust-v0.167.0-alpha.1",
+            "https://github.com/openai/codex/releases/tag/rust-v0.167.0?extra=1",
+        ] {
+            assert!(release_version(location).is_none());
+        }
+    }
 
     #[test]
     fn live_catalog_parses_only_supported_metadata_not_urls_or_prompts() {
