@@ -19,6 +19,7 @@ pub enum KnownPhase {
 #[derive(Clone)]
 pub struct KnownProviderFlow {
     kind: SetupKind,
+    name: String,
     phase: KnownPhase,
     selected: usize,
     use_env: bool,
@@ -56,6 +57,7 @@ impl KnownProviderFlow {
         let enabled = BTreeSet::from([default_model.clone()]);
         Self {
             env_name: kind.credential_label.trim_start_matches("env:").to_owned(),
+            name: kind.kind.clone(),
             kind,
             phase: KnownPhase::Credential,
             selected: 0,
@@ -65,6 +67,11 @@ impl KnownProviderFlow {
             default_model,
             review_from_models: false,
         }
+    }
+
+    pub fn with_name(mut self, name: String) -> Self {
+        self.name = name;
+        self
     }
 
     pub fn phase(&self) -> KnownPhase {
@@ -152,7 +159,7 @@ impl KnownProviderFlow {
         vec![
             (
                 "Provider".into(),
-                format!("{} ({})", self.kind.label, self.kind.kind),
+                format!("{} ({})", self.kind.label, self.name),
             ),
             (
                 "Credential".into(),
@@ -294,7 +301,7 @@ impl KnownProviderFlow {
                     SetupCredential::Secret(self.secret.clone())
                 };
                 SetupStepOutcome::Apply(SetupPlan::Apply {
-                    name: self.kind.kind.clone(),
+                    name: self.name.clone(),
                     provider_kind: self.kind.kind.clone(),
                     base_url: None,
                     credential,

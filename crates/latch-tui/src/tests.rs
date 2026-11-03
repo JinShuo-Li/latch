@@ -3103,6 +3103,61 @@ fn model_and_setup_commands_are_unavailable_during_a_live_turn() {
 }
 
 #[test]
+fn add_provider_uses_distinct_ids_for_known_and_custom_instances() {
+    for (kind, custom) in [("deepseek", false), ("openai-compatible", true)] {
+        let mut app = App::default();
+        app.output(Output::SetupCatalog(vec![SetupKind {
+            kind: kind.into(),
+            label: kind.into(),
+            default_base_url: String::new(),
+            requires_base_url: custom,
+            credential_label: "env:KEY".into(),
+            default_model: "model".into(),
+            models: vec![CatalogModel {
+                id: "model".into(),
+                display_name: "Model".into(),
+                efforts: vec![],
+                default_effort: ReasoningEffort::ProviderDefault,
+                input_modalities: vec![],
+            }],
+        }]));
+        app.output(Output::SetupProviders(
+            [kind.to_owned(), format!("{kind}-2")]
+                .into_iter()
+                .map(|id| ProviderSummary {
+                    id,
+                    display_name: kind.into(),
+                    kind: kind.into(),
+                    status: crate::configuration_center::ProviderStatus::Ready,
+                    model_count: 1,
+                    default_model: "model".into(),
+                    credential_ref: "file:existing".into(),
+                    base_url: String::new(),
+                    available_models: vec!["model".into()],
+                    models: vec![],
+                    discovered_ids: vec![],
+                })
+                .collect(),
+        ));
+        app.dispatch_center_action(CenterAction::StartAdd(kind.into()));
+        if custom {
+            assert!(
+                format!("{:?}", app.custom_setup.as_ref().unwrap().review_lines())
+                    .contains(&format!("{kind}-3"))
+            );
+        } else {
+            let flow = app.known_setup.as_mut().unwrap();
+            flow.confirm();
+            flow.submit_capture("NEW_KEY".into());
+            flow.confirm();
+            assert!(
+                matches!(flow.confirm(), SetupStepOutcome::Apply(SetupPlan::Apply { name, .. }) if name == format!("{kind}-3"))
+            );
+        }
+    }
+}
+
+#[test]
 fn subscription_setup_starts_login_without_an_api_key_capture() {
     let mut app = App::default();
     app.output(Output::SetupCatalog(vec![SetupKind {

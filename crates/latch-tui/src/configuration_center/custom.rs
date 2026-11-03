@@ -23,6 +23,7 @@ pub enum CustomPhase {
 #[derive(Clone)]
 pub struct CustomProviderFlow {
     kind: SetupKind,
+    name: String,
     phase: CustomPhase,
     selected: usize,
     base_url: String,
@@ -64,6 +65,7 @@ impl CustomProviderFlow {
         let base_url = kind.default_base_url.clone();
         let env_name = kind.credential_label.trim_start_matches("env:").to_owned();
         Self {
+            name: kind.kind.clone(),
             kind,
             phase: CustomPhase::BaseUrl,
             selected: 0,
@@ -75,6 +77,11 @@ impl CustomProviderFlow {
             model: String::new(),
             display_name: String::new(),
         }
+    }
+
+    pub fn with_name(mut self, name: String) -> Self {
+        self.name = name;
+        self
     }
 
     pub fn phase(&self) -> CustomPhase {
@@ -148,7 +155,14 @@ impl CustomProviderFlow {
 
     pub fn review_lines(&self) -> Vec<(String, String)> {
         vec![
-            ("Provider".into(), "Custom Provider".into()),
+            (
+                "Provider".into(),
+                if self.name == self.kind.kind {
+                    "Custom Provider".into()
+                } else {
+                    format!("Custom Provider ({})", self.name)
+                },
+            ),
             ("Protocol".into(), self.transport.clone()),
             ("Base URL".into(), self.base_url.clone()),
             (
@@ -292,7 +306,7 @@ impl CustomProviderFlow {
                     SetupCredential::Secret(self.secret.clone())
                 };
                 SetupStepOutcome::Apply(SetupPlan::Apply {
-                    name: self.kind.kind.clone(),
+                    name: self.name.clone(),
                     provider_kind: self.kind.kind.clone(),
                     base_url: Some(self.base_url.clone()),
                     credential,
@@ -325,7 +339,7 @@ mod tests {
 
     #[test]
     fn custom_flow_collects_protocol_base_url_credential_model_and_saves() {
-        let mut flow = CustomProviderFlow::new(kind());
+        let mut flow = CustomProviderFlow::new(kind()).with_name("openai-compatible-2".into());
         assert!(matches!(flow.confirm(), SetupStepOutcome::Capture(_)));
         flow.submit_capture("https://example.com/v1".into());
         assert_eq!(flow.phase(), CustomPhase::Protocol);
@@ -342,6 +356,7 @@ mod tests {
         flow.submit_capture("Acme Pro".into());
         assert_eq!(flow.phase(), CustomPhase::Review);
         let SetupStepOutcome::Apply(SetupPlan::Apply {
+            name,
             provider_kind,
             base_url,
             model,
@@ -352,6 +367,7 @@ mod tests {
         else {
             panic!("expected save");
         };
+        assert_eq!(name, "openai-compatible-2");
         assert_eq!(provider_kind, "openai-compatible");
         assert_eq!(base_url.as_deref(), Some("https://example.com/v1"));
         assert_eq!(model, "acme-pro");

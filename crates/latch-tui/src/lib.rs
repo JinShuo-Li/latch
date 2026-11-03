@@ -720,10 +720,28 @@ impl App {
                             media: vec![],
                         });
                     }
+                    let mut name = selected.kind.clone();
+                    if self
+                        .setup_paths
+                        .as_ref()
+                        .is_none_or(|paths| paths.config_exists)
+                    {
+                        let mut suffix = 2;
+                        while self
+                            .setup_providers
+                            .iter()
+                            .any(|provider| provider.id == name)
+                        {
+                            name = format!("{}-{suffix}", selected.kind);
+                            suffix += 1;
+                        }
+                    }
                     if selected.requires_base_url {
-                        self.custom_setup = Some(CustomProviderFlow::new(selected.clone()));
+                        self.custom_setup =
+                            Some(CustomProviderFlow::new(selected.clone()).with_name(name));
                     } else {
-                        self.known_setup = Some(KnownProviderFlow::new(selected.clone()));
+                        self.known_setup =
+                            Some(KnownProviderFlow::new(selected.clone()).with_name(name));
                     }
                 }
                 None
