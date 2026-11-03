@@ -5942,6 +5942,22 @@ async fn the_verification_correction_cannot_loop_forever() {
     );
 }
 
+#[test]
+fn empty_integration_status_is_an_actionable_sentence() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, _, mut agent) = freshness_agent(&dir);
+    agent.skills = crate::skills::SkillCatalog::default();
+    assert!(agent.skills_status().starts_with("No Agent Skills found."));
+    assert!(agent.mcp_status().starts_with("No MCP servers available"));
+    agent
+        .skills
+        .diagnostics
+        .push("bad skill frontmatter".into());
+    assert!(agent.skills_status().contains("bad skill frontmatter"));
+    // Human-facing empty status must not add noise to the provider prompt.
+    assert!(agent.skills.context().is_empty());
+}
+
 #[tokio::test]
 async fn skills_disclosure_is_durable_and_provider_neutral() {
     let d = tempdir().unwrap();

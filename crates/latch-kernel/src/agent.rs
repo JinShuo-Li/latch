@@ -727,10 +727,21 @@ impl Agent {
         Ok(())
     }
     pub fn mcp_status(&self) -> String {
-        self.mcp.status()
+        let status = self.mcp.status();
+        if status.trim().is_empty() {
+            "No MCP servers available in this session. Add [[mcp_servers]] in config.toml to get started."
+                .into()
+        } else {
+            status
+        }
     }
     pub fn skills_status(&self) -> String {
         let mut text = self.skills.context();
+        if text.is_empty() {
+            text.push_str(
+                "No Agent Skills found. Add a SKILL.md under .latch/skills/<name>/ to get started.",
+            );
+        }
         for diagnostic in &self.skills.diagnostics {
             text.push_str(&format!("\n{diagnostic}"));
         }
