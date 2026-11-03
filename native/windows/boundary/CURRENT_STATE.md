@@ -1,6 +1,6 @@
 # Windows boundary: current support and historical evidence
 
-Current release **0.3.3** uses scoped native file brokers for ordinary workspace
+Current release **0.3.4** uses scoped native file brokers for ordinary workspace
 reads and writes, without WRITE_DAC or ACL changes on source objects. Runtime
 bootstrap and scratch ACL recovery remain journaled. Network-authorized TCP/UDP
 services and the Windows Web host are supported. Full-home workspaces and

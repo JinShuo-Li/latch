@@ -1,6 +1,6 @@
 # Windows support and diagnostic evidence
 
-## Current release: 0.3.3
+## Current release: 0.3.4
 
 Windows x86_64 binaries include the TUI, machine CLI and Web host, with the
 embedded AppContainer runner and scoped file brokers. Ordinary source objects

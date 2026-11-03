@@ -1,6 +1,6 @@
 # Apple Silicon macOS
 
-Latch 0.3.3 ships native ARM64 macOS binaries through Seatbelt. Install from
+Latch 0.3.4 ships native ARM64 macOS binaries through Seatbelt. Install from
 Bash with:
 
 ```sh
