@@ -54,7 +54,7 @@ impl KnownProviderFlow {
                 .map(|model| model.id.clone())
                 .unwrap_or_default()
         };
-        let enabled = BTreeSet::from([default_model.clone()]);
+        let enabled = kind.models.iter().map(|model| model.id.clone()).collect();
         Self {
             env_name: kind.credential_label.trim_start_matches("env:").to_owned(),
             name: kind.kind.clone(),
@@ -306,7 +306,8 @@ impl KnownProviderFlow {
                     base_url: None,
                     credential,
                     model: self.default_model.clone(),
-                    enabled_models: Some(self.enabled.iter().cloned().collect()),
+                    enabled_models: (self.enabled.len() != self.kind.models.len())
+                        .then(|| self.enabled.iter().cloned().collect()),
                     custom_model_display_name: None,
                     custom_transport: None,
                     effort: ReasoningEffort::ProviderDefault,
@@ -350,7 +351,8 @@ mod tests {
         flow.submit_capture("DEEPSEEK_API_KEY".into());
         assert_eq!(flow.phase(), KnownPhase::Models);
         flow.down();
-        flow.toggle_current_model(); // enable the second model
+        flow.toggle_current_model(); // explicitly disable the second model
+        flow.toggle_current_model(); // then enable it again
         flow.down();
         flow.confirm(); // continue
         assert_eq!(flow.phase(), KnownPhase::DefaultModel);
@@ -371,7 +373,10 @@ mod tests {
             panic!("expected save");
         };
         assert_eq!(model, "deepseek-v4-pro");
-        assert_eq!(enabled_models.unwrap().len(), 2);
+        assert!(
+            enabled_models.is_none(),
+            "all models use the open catalog, not a frozen allowlist"
+        );
         assert!(base_url.is_none());
     }
 
@@ -395,7 +400,7 @@ mod tests {
             panic!("expected save");
         };
         assert_eq!(model, "deepseek-flash");
-        assert_eq!(enabled_models.unwrap(), vec!["deepseek-flash"]);
+        assert!(enabled_models.is_none());
     }
 
     #[test]

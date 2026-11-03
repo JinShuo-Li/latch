@@ -20,7 +20,7 @@ const ISSUER: &str = "https://auth.openai.com";
 const ENTRY: &str = "openai-codex";
 pub const VERIFICATION_URL: &str = "https://auth.openai.com/codex/device";
 pub const BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-pub const DEFAULT_MODEL: &str = "gpt-5.4";
+pub const DEFAULT_MODEL: &str = "gpt-6.1-sol";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OAuthTokens {
@@ -168,6 +168,45 @@ impl ChatGptAuth {
         }
         self.save(&refreshed)?;
         Ok(refreshed)
+    }
+
+    /// Read-only account catalog, not a model inference request. The version
+    /// parameter describes the supported Codex catalog protocol, not our UA.
+    pub async fn models(&self) -> Result<Value> {
+        self.models_at(BASE_URL).await
+    }
+
+    async fn models_at(&self, base_url: &str) -> Result<Value> {
+        let tokens = self.access().await?;
+        let mut response = self
+            .client
+            .get(format!("{base_url}/models"))
+            .query(&[("client_version", "0.153.0")])
+            .bearer_auth(&tokens.access_token)
+            .header("chatgpt-account-id", &tokens.account_id)
+            .header("originator", "latch")
+            .header("user-agent", concat!("latch/", env!("CARGO_PKG_VERSION")))
+            .send()
+            .await
+            .map_err(|_| anyhow!("ChatGPT model catalog request failed"))?;
+        if !response.status().is_success() {
+            bail!(
+                "ChatGPT model catalog unavailable (HTTP {}); retry /model refresh or /login",
+                response.status()
+            );
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| anyhow!("ChatGPT model catalog read failed"))?
+        {
+            if bytes.len() + chunk.len() > 4 * 1024 * 1024 {
+                bail!("ChatGPT model catalog exceeds 4 MiB");
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| anyhow!("invalid ChatGPT model catalog"))
     }
 
     pub async fn begin(&self) -> Result<DeviceLogin> {
@@ -557,6 +596,41 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("before completion"));
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn account_catalog_uses_managed_auth_and_does_not_make_inference_calls() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = ChatGptAuth::new(root.path());
+        auth.save(&parse_tokens(&token_value(3600)).unwrap())
+            .unwrap();
+        let (url, requests) = mock(vec![(
+            200,
+            json!({"models":[{"slug":"new-model","visibility":"list"}]}),
+        )])
+        .await;
+        assert_eq!(
+            auth.models_at(&url).await.unwrap()["models"][0]["slug"],
+            "new-model"
+        );
+        let requests = requests.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /models?client_version=0.153.0 "));
+        assert!(
+            requests[0]
+                .to_lowercase()
+                .contains("chatgpt-account-id: account-test")
+        );
+        let (url, requests) = mock(vec![(401, json!({"error":"refresh-secret"}))]).await;
+        assert!(
+            !auth
+                .models_at(&url)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("refresh-secret")
+        );
+        requests.await.unwrap();
     }
 
     #[tokio::test]

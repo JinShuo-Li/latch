@@ -76,7 +76,11 @@ overrides retain their existing behavior.
 
 The setup dialog shows the actual configuration destination. Choose a provider,
 enter an API key or reference a host environment variable, then choose a default
-model, enabled models and reasoning effort from the shared catalog. Custom
+model, enabled models and reasoning effort from the shared catalog. All catalog
+models are enabled by default using the provider's one credential. `/model refresh`
+updates supported service catalogs; `/model all` clears intentional or legacy
+local subsets without changing the active profile. Service entitlements and
+quotas still apply. Custom
 endpoints expose base URL, model ID and transport. API keys are stored privately
 on the host; they are never returned to the browser. Saving uses the same
 controller and validation as the TUI. On subsequent starts, Latch loads the saved

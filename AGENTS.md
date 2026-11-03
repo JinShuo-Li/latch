@@ -433,6 +433,16 @@ separate from API-key providers and never fall back to API billing. UI device
 challenges are transient, not durable events. `doctor` remains offline. Focused:
 `cargo test -p latch-kernel --lib oauth --locked`; see `docs/CHATGPT_LOGIN.md`.
 
+Provider model discovery lives in `latch-cli/src/cli/discovery.rs` (Go/Zen,
+DeepSeek, authenticated Codex). `/model refresh` updates sanitized service facts;
+`/model all` clears local model filters. New setup enables the full catalog with
+one credential. Keep discovered `providers.<id>.catalog` separate from explicit
+`models` overrides; retain past descriptors for resume. No remote URLs, prompts
+or permission claims are adopted. Startup/doctor remain offline and service
+listings never guarantee account entitlement. Focused checks:
+`cargo test -p latch-cli --bin latch discovery --locked` and
+`cargo test -p latch-kernel --lib oauth --locked`.
+
 Browser header version comes only from bootstrap metadata; never hardcode a
 release fallback in HTML/JS. `node scripts/test_web_view.mjs` checks missing,
 initial and updated server versions without a browser (development only).

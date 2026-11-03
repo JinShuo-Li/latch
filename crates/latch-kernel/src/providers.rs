@@ -41,8 +41,7 @@ pub struct ProviderCapabilities {
     pub default_credential: &'static str,
     /// Whether the adapter attaches the stable `x-opencode-session` header.
     pub session_header: bool,
-    /// Whether the provider exposes a reliable model-list endpoint. Latch only
-    /// records the capability today; remote discovery is a later extension.
+    /// Whether Latch supports this family's read-only model-list endpoint.
     pub model_discovery: bool,
 }
 
@@ -55,7 +54,13 @@ impl ProviderCapabilities {
             default_base_url: kind.default_base_url(),
             default_credential: kind.default_credential(),
             session_header: matches!(kind, ProviderKind::OpenCodeGo),
-            model_discovery: false,
+            model_discovery: matches!(
+                kind,
+                ProviderKind::OpenCodeGo
+                    | ProviderKind::OpenCodeZen
+                    | ProviderKind::OpenAiCodex
+                    | ProviderKind::DeepSeek
+            ),
         }
     }
 }
@@ -93,11 +98,11 @@ pub struct ModelDescriptor {
     pub input_modalities: Vec<latch_protocol::InputModality>,
     pub pricing: Option<ModelPricing>,
     pub aliases: Vec<String>,
-    /// True when metadata comes from the built-in catalog or explicit user
-    /// configuration; false for the conservative unknown-model fallback.
+    /// True for inherited builtin/discovered catalog entries; explicit user
+    /// overrides preserve this provenance. False for conservative fallbacks.
     pub known: bool,
-    /// A built-in transport or an explicit user transport resolves the model.
-    /// Discovered ids and display-only custom entries stay in setup only.
+    /// A builtin, declared service or explicit user transport resolves a model.
+    /// Id-only gateway entries and display-only custom models stay in setup.
     pub resolved: bool,
 }
 
@@ -251,21 +256,35 @@ const OPENAI_PUBLIC_CONTEXT_WINDOW: usize = 1_050_000;
 /// Subscription deployment metadata is deliberately separate from public API
 /// windows and billing. Account entitlement remains the server's decision.
 fn builtin_codex() -> Vec<BuiltinModel> {
+    // Offline fallback from the Codex service catalog, not the public API
+    // catalog. Login/refresh replaces picker availability with account metadata.
     [
-        ("gpt-5.4", "GPT-5.4 (ChatGPT)", true),
-        ("gpt-5.3-codex", "GPT-5.3 Codex (ChatGPT)", false),
+        ("gpt-6.1-sol", "GPT-6.1 Sol", 272_000, LOW),
+        ("gpt-6.1-terra", "GPT-6.1 Terra", 500_000, LOW),
+        ("gpt-6-astra", "GPT-6 Astra", 272_000, LOW),
+        ("gpt-6-sol", "GPT-6 Sol", 272_000, MEDIUM),
+        ("gpt-6-luna", "GPT-6 Luna", 272_000, MEDIUM),
+        ("gpt-5.6-sol", "GPT-5.6 Sol", 272_000, LOW),
+        ("gpt-5.6-terra", "GPT-5.6 Terra", 272_000, MEDIUM),
+        ("gpt-5.6-luna", "GPT-5.6 Luna", 272_000, MEDIUM),
+        ("gpt-5.5", "GPT-5.5", 272_000, MEDIUM),
+        // Retained for old configurations/history, not advertised in the picker.
+        ("gpt-5.4", "GPT-5.4 (ChatGPT)", 272_000, MEDIUM),
+        ("gpt-5.3-codex", "GPT-5.3 Codex (ChatGPT)", 272_000, MEDIUM),
     ]
     .into_iter()
-    .map(|(id, display_name, supports_none)| BuiltinModel {
+    .map(|(id, display_name, window, default_effort)| BuiltinModel {
         id,
         display_name,
-        context_window_tokens: Some(272_000),
-        efforts: if supports_none {
+        context_window_tokens: Some(window),
+        efforts: if id == "gpt-5.4" {
             &[NONE, LOW, MEDIUM, HIGH, XHIGH]
-        } else {
+        } else if id == "gpt-5.3-codex" || id == "gpt-5.5" {
             &[LOW, MEDIUM, HIGH, XHIGH]
+        } else {
+            &[LOW, MEDIUM, HIGH, XHIGH, MAX]
         },
-        default_effort: MEDIUM,
+        default_effort,
         transport: TransportKind::Responses,
         adaptive_thinking: false,
         replay: ReasoningReplay::Omit,
@@ -1154,6 +1173,25 @@ pub fn builtin_catalog(kind: ProviderKind) -> Vec<ModelDescriptor> {
         .collect()
 }
 
+fn offline_picker_model(kind: ProviderKind, id: &str) -> bool {
+    !matches!(
+        (kind, id),
+        (
+            ProviderKind::OpenCodeGo | ProviderKind::OpenCodeZen,
+            "deepseek-v4-flash-vision-exp"
+        ) | (ProviderKind::OpenAiCodex, "gpt-5.4" | "gpt-5.3-codex")
+    )
+}
+
+/// Recommended offline setup choices; historical descriptors stay in builtin_catalog.
+#[must_use]
+pub fn builtin_setup_catalog(kind: ProviderKind) -> Vec<ModelDescriptor> {
+    builtin_catalog(kind)
+        .into_iter()
+        .filter(|model| offline_picker_model(kind, &model.model))
+        .collect()
+}
+
 /// One resolved provider instance: identity, endpoint, credential reference,
 /// and the merged model catalog.
 #[derive(Debug, Clone)]
@@ -1168,12 +1206,44 @@ pub struct ProviderProfile {
     pub model_discovery: bool,
     enabled_models: Option<Vec<String>>,
     models: BTreeMap<String, ModelDescriptor>,
+    available_ids: Option<Vec<String>>,
     aliases: BTreeMap<String, String>,
 }
 
+/// Inherited metadata before explicit model overrides, shared with setup UIs.
+#[must_use]
+pub fn configured_catalog(
+    id: &str,
+    entry: &ProviderProfileConfig,
+) -> BTreeMap<String, ModelDescriptor> {
+    let provider_id = ProviderId::new(id);
+    let kind = entry.kind;
+    let mut models: BTreeMap<_, _> = builtin_models(kind)
+        .iter()
+        .map(|builtin| {
+            (
+                builtin.id.to_owned(),
+                builtin_descriptor(&provider_id, kind, builtin),
+            )
+        })
+        .collect();
+    if let Some(catalog) = &entry.catalog {
+        for (name, metadata) in &catalog.models {
+            let mut descriptor = models
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| ModelDescriptor::unknown(&provider_id, kind, name));
+            apply_user_metadata(&mut descriptor, metadata);
+            descriptor.known = true;
+            descriptor.resolved |= metadata.transport.is_some();
+            models.insert(name.clone(), descriptor);
+        }
+    }
+    models
+}
+
 impl ProviderProfile {
-    /// Merges built-in metadata, user model overrides, and the conservative
-    /// fallback with precedence: explicit user config > built-in > conservative.
+    /// Merges model metadata: explicit user config > discovered > built-in > fallback.
     fn build(
         id: &str,
         entry: &ProviderProfileConfig,
@@ -1197,14 +1267,12 @@ impl ProviderProfile {
             .parse()
             .map_err(|error| anyhow!("provider {id}: {error}"))?;
 
-        let mut models: BTreeMap<String, ModelDescriptor> = BTreeMap::new();
+        let mut models = configured_catalog(id, entry);
         let mut aliases: BTreeMap<String, String> = BTreeMap::new();
-        for builtin in builtin_models(kind) {
-            let descriptor = builtin_descriptor(&provider_id, kind, &builtin);
+        for descriptor in models.values() {
             for alias in &descriptor.aliases {
-                aliases.insert(alias.clone(), builtin.id.to_owned());
+                aliases.insert(alias.clone(), descriptor.model.clone());
             }
-            models.insert(builtin.id.to_owned(), descriptor);
         }
         // User entries can extend the catalog with models the built-in table
         // does not know, and can override built-in metadata field by field.
@@ -1279,6 +1347,10 @@ impl ProviderProfile {
             model_discovery: entry.model_discovery,
             enabled_models: entry.enabled_models.clone(),
             models,
+            available_ids: entry
+                .catalog
+                .as_ref()
+                .map(|catalog| catalog.available.clone()),
             aliases,
         })
     }
@@ -1315,6 +1387,13 @@ impl ProviderProfile {
         }))
     }
 
+    fn picker_available(&self, id: &str) -> bool {
+        match &self.available_ids {
+            Some(ids) => ids.iter().any(|available| available == id),
+            None => offline_picker_model(self.kind, id),
+        }
+    }
+
     #[must_use]
     pub fn available_models(&self) -> Vec<&ModelDescriptor> {
         self.models
@@ -1324,17 +1403,19 @@ impl ProviderProfile {
                     .as_ref()
                     .is_none_or(|selected| selected.contains(id))
             })
+            .filter(|(id, _)| self.picker_available(id))
             .filter(|(_, model)| model.resolved)
             .map(|(_, model)| model)
             .collect()
     }
 
-    /// All catalog and custom entries, including unresolved and disabled
-    /// models. The configuration center needs these for selection editing.
+    /// Current setup candidates, including unresolved and disabled entries.
+    /// Historical descriptors remain independently available for resume.
     #[must_use]
     pub fn setup_models(&self) -> Vec<(&ModelDescriptor, bool)> {
         self.models
             .iter()
+            .filter(|(id, _)| self.picker_available(id))
             .map(|(id, model)| {
                 (
                     model,
@@ -1350,6 +1431,7 @@ impl ProviderProfile {
     pub fn configured_model_count(&self) -> usize {
         self.models
             .keys()
+            .filter(|id| self.picker_available(id))
             .filter(|id| {
                 self.enabled_models
                     .as_ref()
@@ -1453,6 +1535,7 @@ fn legacy_provider_entry(config: &Config) -> Result<(String, ProviderProfileConf
             default_model: Some(legacy.model.clone()),
             enabled_models: None,
             models,
+            catalog: None,
             model_discovery: false,
         },
     ))
@@ -1699,7 +1782,13 @@ impl ProviderRegistry {
         // `none` disables it (DeepSeek's `reasoning_effort` has no `none`).
         let thinking = if descriptor.reasoning_replay == ReasoningReplay::Replay
             && descriptor.transport == TransportKind::ChatCompletions
+            && (matches!(
+                provider.kind,
+                ProviderKind::DeepSeek | ProviderKind::OpenAiCompatible
+            ) || descriptor.model.starts_with("deepseek-"))
         {
+            // Other catalog models may replay reasoning_content without
+            // accepting DeepSeek's separate `thinking` request parameter.
             match effort {
                 ReasoningEffort::ProviderDefault => ThinkingToggle::Default,
                 ReasoningEffort::None => ThinkingToggle::Disabled,
@@ -1775,6 +1864,7 @@ pub fn canonical_provider_entry(
         default_model: None,
         enabled_models: None,
         models: BTreeMap::new(),
+        catalog: None,
         model_discovery: false,
     }
 }
@@ -2011,6 +2101,61 @@ mod tests {
         );
         let (default, _) = registry.default_profile(&config).unwrap();
         assert_eq!(default.model, "gpt-6-astra");
+    }
+
+    #[test]
+    fn subscription_picker_is_current_but_historical_descriptors_still_resolve() {
+        let (_, registry) = registry("[providers.subscription]\nkind = 'openai-codex'\n");
+        let ids: Vec<_> = registry
+            .available_models("subscription")
+            .iter()
+            .map(|model| model.model.clone())
+            .collect();
+        assert!(ids.iter().any(|id| id == "gpt-6.1-sol"));
+        assert!(ids.iter().any(|id| id == "gpt-6.1-terra"));
+        assert!(
+            !ids.iter()
+                .any(|id| id == "gpt-5.4" || id == "gpt-5.3-codex")
+        );
+        assert!(
+            registry
+                .model_descriptor("subscription", "gpt-5.4")
+                .unwrap()
+                .resolved
+        );
+        assert!(
+            !registry
+                .model_descriptor("subscription", "gpt-5.5")
+                .unwrap()
+                .supported_efforts
+                .contains(&ReasoningEffort::None)
+        );
+    }
+
+    #[test]
+    fn discovered_transport_and_thinking_are_inherited_by_sparse_user_effort_overrides() {
+        let (_, registry) = registry(
+            r#"
+            [providers.go]
+            kind = "opencode-go"
+            default_model = "gemini-next"
+            [providers.go.catalog]
+            available = ["gemini-next"]
+            [providers.go.catalog.models.gemini-next]
+            transport = "gemini"
+            efforts = ["low", "high"]
+            [providers.go.catalog.models.gemini-next.gemini_thinking]
+            mode = "levels"
+            levels = ["low", "high"]
+            [providers.go.models.gemini-next.effort_map]
+            low = { value = "low" }
+            high = { value = "high" }
+        "#,
+        );
+        let model = registry.model_descriptor("go", "gemini-next").unwrap();
+        assert!(model.resolved && model.known);
+        assert_eq!(model.transport, TransportKind::Gemini);
+        assert_eq!(model.effort_map.len(), 2);
     }
 
     #[test]
@@ -2407,7 +2552,7 @@ mod tests {
     }
 
     #[test]
-    fn opencode_go_catalog_matches_the_current_documented_list() {
+    fn opencode_go_offline_catalog_retains_history_without_advertising_retired_vision() {
         let (_config, registry) = registry(
             r#"
             [providers.opencode-go]
@@ -2423,7 +2568,6 @@ mod tests {
         models.sort();
         let mut expected = vec![
             "deepseek-v4-flash",
-            "deepseek-v4-flash-vision-exp",
             "deepseek-v4-pro",
             "deepseek-v4.1-flash",
             "glm-5.1",
@@ -2457,7 +2601,17 @@ mod tests {
             "space-bunny-free",
         ];
         expected.sort_unstable();
-        assert_eq!(models, expected, "the current OpenCode Go documented list");
+        assert_eq!(
+            models, expected,
+            "offline fallback excludes the retired vision experiment"
+        );
+        assert!(
+            registry
+                .model_descriptor("opencode-go", "deepseek-v4-flash-vision-exp")
+                .unwrap()
+                .resolved,
+            "retired names remain replayable for old sessions"
+        );
 
         // Per-model effort sets come from the Go reasoning options.
         for (model, efforts) in [

@@ -348,7 +348,10 @@ impl ConfigurationCenter {
             }
             CenterPage::Models(id) => {
                 let discoverable = self.provider(id).is_some_and(|provider| {
-                    matches!(provider.kind.as_str(), "opencode-go" | "opencode-zen")
+                    matches!(
+                        provider.kind.as_str(),
+                        "opencode-go" | "opencode-zen" | "openai-codex" | "deepseek"
+                    )
                 });
                 let Some(provider) = self.provider(id) else {
                     return Vec::new();
@@ -896,7 +899,10 @@ impl ConfigurationCenter {
                     (
                         provider.models.len(),
                         provider.default_model.clone(),
-                        matches!(provider.kind.as_str(), "opencode-go" | "opencode-zen"),
+                        matches!(
+                            provider.kind.as_str(),
+                            "opencode-go" | "opencode-zen" | "openai-codex" | "deepseek"
+                        ),
                     )
                 };
                 if self.selected < model_count {
@@ -2186,6 +2192,7 @@ mod tests {
         center.confirm(); // Unresolved cannot be enabled before Advanced resolves it.
         center.down();
         center.down();
+        center.down(); // Skip the newly supported availability refresh action.
         assert_eq!(
             center.confirm(),
             Some(CenterAction::SetEnabledModels {

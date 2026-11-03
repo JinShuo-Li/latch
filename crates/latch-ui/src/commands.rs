@@ -46,7 +46,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/model",
-        description: "Select provider, model, and reasoning effort",
+        description: "Select models; /model refresh updates catalogs, /model all enables all",
     },
     SlashCommand {
         name: "/login",

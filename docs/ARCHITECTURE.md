@@ -116,8 +116,11 @@ configuration and provider construction both refuse credential/endpoint mixing.
 `provider.rs` owns account/session headers and all subscription wire mapping,
 reusing stateless Responses history, encrypted reasoning and tool-result replay.
 Subscription streams must report terminal completion; a truncated stream is not
-success. The model catalog uses a conservative 272K subscription input budget,
-not the public API context window or API prices. Entitlement is server-owned.
+success. The subscription catalog is refreshed through the authenticated Codex
+`/models` endpoint after login, with a current offline fallback; its context
+windows and efforts are separate from the public API catalog and API prices.
+The catalog protocol compatibility parameter is `client_version=0.153.0`, while
+requests identify the application as Latch. Entitlement is server-owned.
 Tokens and lock files must be ordinary, unaliased files in protected state;
 model tools, extensions and sandboxed commands do not receive them. Local logout
 removes saved tokens; it does not revoke already in-flight requests or OpenAI's
@@ -259,14 +262,33 @@ from the catalog and Custom/Advanced declares it explicitly. Validation
 rejects a `value` map on a budget model, a `budget_tokens` map on a level
 model, and a `disabled` map when the model documents no off switch.
 
-Model availability discovery for OpenCode Go/Zen is a CLI request/response
-over the existing TUI channel: the TUI never performs network I/O, only ids
-cross the boundary, and a successful snapshot is cached as regenerable
-metadata under the resolved `cache_root` with a conservative freshness
-window. Built-in catalog metadata always wins over discovered availability
-for transport and capabilities, explicit user overrides win last, and an
-unknown discovered id becomes an unresolved setup row that Advanced must
-configure before `/model` can activate it.
+Model discovery supports OpenCode Go/Zen, DeepSeek and authenticated ChatGPT
+subscriptions. Setup/login refresh the configured service; `/model refresh` or
+setup's Refresh action updates it later. Startup and `doctor` remain offline.
+The CLI fetches bounded lists and allowlists ids, labels, declared transport,
+context, reasoning and image metadata; it ignores remote URLs, instructions,
+prices and permission claims. Id-only unknown models on multi-protocol gateways
+remain unresolved; DeepSeek/Codex use their fixed family protocols. The TUI
+and Web receive provider-neutral catalogs and never perform provider requests.
+
+Metadata precedence is explicit user overrides > discovered facts > offline
+builtins (existing Go wire routes remain pinned). Generic effort labels do not
+invent Gemini level/budget or Anthropic adaptive controls; unknown native models
+use the service default until those facts are declared in Advanced. Sanitized
+facts live in `providers.<id>.catalog`, separate from user
+`models` overrides. Each successful refresh replaces picker availability but
+retains past descriptors for resume; deleting the availability cache cannot
+break a saved model's transport. Failed/empty refreshes do not replace the saved
+catalog. OpenCode endpoints and session headers are unchanged; discovered model
+API URLs are not adopted. Service listings are not a guarantee of key entitlement,
+quota or plan availability, and grant no tool permissions.
+
+New setup enables the full catalog with one credential; a deliberate subset
+remains a local allowlist. `/model all` clears those allowlists, including old
+single-model setup filters. Retired experimental DeepSeek vision names and the
+old initial Codex-only 5.4/5.3 list are not advertised by offline pickers; their
+wire descriptors remain available to old sessions. Fresh service lists determine
+current picker availability.
 
 The TUI consumes a provider-neutral catalog from the CLI for `/model` and
 `/setup`; it never inspects base URLs, model families, or wire parameters.

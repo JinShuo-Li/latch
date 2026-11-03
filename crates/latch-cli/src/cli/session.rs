@@ -184,10 +184,16 @@ impl InferenceContext {
                 };
                 let entry = self.config.providers.get(profile.id.as_str());
                 let catalog: std::collections::BTreeMap<String, latch_kernel::ModelDescriptor> =
-                    latch_kernel::providers::builtin_catalog(profile.kind)
-                        .into_iter()
-                        .map(|descriptor| (descriptor.model.clone(), descriptor))
-                        .collect();
+                    entry
+                        .map(|entry| {
+                            latch_kernel::providers::configured_catalog(profile.id.as_str(), entry)
+                        })
+                        .unwrap_or_else(|| {
+                            latch_kernel::providers::builtin_catalog(profile.kind)
+                                .into_iter()
+                                .map(|descriptor| (descriptor.model.clone(), descriptor))
+                                .collect()
+                        });
                 ProviderSummary {
                     id: profile.id.as_str().to_owned(),
                     display_name: profile.display_name.clone(),
@@ -391,11 +397,11 @@ impl InferenceContext {
             default_base_url: kind.default_base_url().to_owned(),
             requires_base_url: kind.default_base_url().is_empty(),
             credential_label: kind.default_credential().to_owned(),
-            default_model: latch_kernel::providers::builtin_catalog(kind)
+            default_model: latch_kernel::providers::builtin_setup_catalog(kind)
                 .first()
                 .map(|descriptor| descriptor.model.clone())
                 .unwrap_or_default(),
-            models: latch_kernel::providers::builtin_catalog(kind)
+            models: latch_kernel::providers::builtin_setup_catalog(kind)
                 .iter()
                 .map(catalog_model_ref)
                 .collect(),

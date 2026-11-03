@@ -17,7 +17,7 @@ default_mode = "WORK"
 # [providers.openai-codex]
 # kind = "openai-codex"
 # credential = "oauth:openai-codex" # managed tokens; never paste tokens here
-# default_model = "gpt-5.4"
+# default_model = "gpt-6.1-sol"
 # The Codex endpoint is fixed; arbitrary base_url overrides are refused.
 #
 # [providers.opencode-go]
@@ -26,7 +26,11 @@ default_mode = "WORK"
 # keyring:NAME parses for forward compatibility but is not available in this
 # build and is never advertised by /setup.
 # default_model = "deepseek-v4-flash"
-# enabled_models = ["deepseek-v4-flash"] # optional; otherwise full catalog
+# One key enables the whole catalog; omit enabled_models for all models.
+# /model refresh updates service metadata; /model all clears local filters.
+# enabled_models = ["deepseek-v4-flash"] # optional intentional subset
+# Discovered [providers.<id>.catalog] metadata is managed by Latch; user
+# [providers.<id>.models] overrides remain separate and win field by field.
 # base_url = "https://opencode.ai/zen/go/v1"   # optional override
 #
 # [providers.opencode-go.models."deepseek-v4-flash"]

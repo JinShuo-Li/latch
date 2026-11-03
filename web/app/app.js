@@ -93,7 +93,7 @@ async function slash(text) {
   if (name==='/help') {showCommands();return;}
   if (name==='/setup') {openSettings('providers');return;}
   if (name==='/login' || name==='/logout') {if($('#settings-dialog').open)$('#settings-dialog').close();}
-  if (name==='/model') {showModels();addEffortSelector();return;}
+  if (name==='/model' && !args.length) {showModels();addEffortSelector();return;}
   if (name==='/resume') {$('#app').classList.remove('sidebar-collapsed');$('#app').classList.add('mobile-sidebar-open');$('#session-search').focus();return;}
   if (name==='/sidebar') {setDetails($('#details-panel').hidden);return;}
   if (name==='/raw') {state.raw=!state.raw;renderConversation();return;}

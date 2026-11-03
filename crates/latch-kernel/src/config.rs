@@ -273,9 +273,20 @@ pub struct ProviderProfileConfig {
     pub enabled_models: Option<Vec<String>>,
     #[serde(default)]
     pub models: BTreeMap<String, ModelConfig>,
+    /// Sanitized service metadata, separate from explicit user overrides.
+    /// Historical descriptors remain available for resume after retirement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<ProviderCatalogConfig>,
     /// Reserved for optional remote model discovery. Never required at startup.
     #[serde(default)]
     pub model_discovery: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderCatalogConfig {
+    pub available: Vec<String>,
+    #[serde(default)]
+    pub models: BTreeMap<String, ModelConfig>,
 }
 
 /// Provider wire family. Adding a provider means adding an adapter variant, a
@@ -978,11 +989,20 @@ impl Config {
                         .credential
                         .as_deref()
                         .is_some_and(|reference| reference != "oauth:openai-codex")
-                    || entry.models.values().any(|model| {
-                        model
-                            .transport
-                            .is_some_and(|transport| transport != TransportKind::Responses)
-                    })
+                    || entry
+                        .models
+                        .values()
+                        .chain(
+                            entry
+                                .catalog
+                                .iter()
+                                .flat_map(|catalog| catalog.models.values()),
+                        )
+                        .any(|model| {
+                            model
+                                .transport
+                                .is_some_and(|transport| transport != TransportKind::Responses)
+                        })
                 {
                     anyhow::bail!(
                         "provider {id}: ChatGPT subscription requires the fixed Codex endpoint, oauth:openai-codex and Responses transport"
@@ -994,7 +1014,20 @@ impl Config {
             if entry.default_model.as_deref().is_none_or(str::is_empty) {
                 anyhow::bail!("provider {id} needs a default_model");
             }
-            for (model, override_) in &entry.models {
+            if entry
+                .catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog.available.is_empty())
+            {
+                anyhow::bail!("provider {id} has an empty discovered catalog");
+            }
+            let inherited_catalog = crate::providers::configured_catalog(id, entry);
+            for (model, override_) in entry.models.iter().chain(
+                entry
+                    .catalog
+                    .iter()
+                    .flat_map(|catalog| catalog.models.iter()),
+            ) {
                 if model.trim().is_empty() {
                     anyhow::bail!("provider {id} has an empty model request id");
                 }
@@ -1022,7 +1055,22 @@ impl Config {
                         );
                     }
                 }
-                validate_effort_metadata(id, entry.kind, model, override_)?;
+                let mut effective = override_.clone();
+                if let Some(inherited) = inherited_catalog.get(model) {
+                    effective.transport = effective.transport.or(Some(inherited.transport));
+                    effective.efforts = effective
+                        .efforts
+                        .or_else(|| Some(inherited.supported_efforts.clone()));
+                    effective.adaptive_thinking = effective
+                        .adaptive_thinking
+                        .or(Some(inherited.adaptive_thinking));
+                    if effective.transport == Some(TransportKind::Gemini) {
+                        effective.gemini_thinking = effective
+                            .gemini_thinking
+                            .or_else(|| inherited.gemini_thinking.clone());
+                    }
+                }
+                validate_effort_metadata(id, entry.kind, model, &effective)?;
             }
         }
         let registry = crate::providers::ProviderRegistry::from_config(self)?;
@@ -1133,6 +1181,7 @@ impl Config {
                     default_model: Some(self.provider.model.clone()),
                     enabled_models: None,
                     models: BTreeMap::new(),
+                    catalog: None,
                     model_discovery: false,
                 },
             );

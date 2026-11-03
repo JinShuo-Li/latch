@@ -80,7 +80,7 @@ export function renderNewModel(form) {
   const selected=form.elements.catalog_model.value;
   const model=kind?.models.find(m=>m.id===selected);
   form.querySelector('[data-new-model]').innerHTML=model
-    ? `<label class="field-label">Reasoning effort<select class="form-input" name="effort">${choices(['provider_default',...model.efforts],model.default_effort)}</select></label><details class="settings-section"><summary>Enabled models</summary>${kind.models.map(m=>`<label class="checkbox-row"><input type="checkbox" name="enabled_models" value="${e(m.id)}" ${m.id===selected?'checked disabled':''}>${e(m.display_name || m.id)}</label>`).join('')}<p class="field-help">The default model is always enabled.</p></details>`
+    ? `<label class="field-label">Reasoning effort<select class="form-input" name="effort">${choices(['provider_default',...model.efforts],model.default_effort)}</select></label><details class="settings-section"><summary>Enabled models</summary>${kind.models.map(m=>`<label class="checkbox-row"><input type="checkbox" name="enabled_models" value="${e(m.id)}" checked ${m.id===selected?'disabled':''}>${e(m.display_name || m.id)}</label>`).join('')}<p class="field-help">The default model is always enabled.</p></details>`
     : `${input('Custom model ID','model','','text','required')}${input('Display name (optional)','display_name')}<label class="field-label">Transport<select class="form-input" name="transport" required><option value="">Choose a transport</option>${choices(['chat_completions','responses','anthropic_messages','gemini'],'')}</select></label><p class="field-help">Use the protocol supported by your endpoint. Model capabilities can be edited in Advanced after saving.</p>`;
 }
 export function renderModelPage(provider,model) {
@@ -115,7 +115,7 @@ export function settingsPlan(form) {
     case 'provider-default':return {SetProviderDefault:{name,model:value('model')}};
     case 'enabled-models':return {SetEnabledModels:{name,models:data.getAll('models')}};
     case 'custom-model':return {AddCustomModel:{name,model:value('model'),display_name:value('display_name')}};
-    case 'new-provider':{const model=value('catalog_model')==='__custom'?value('model'):value('catalog_model');return {Apply:{name:value('name'),provider_kind:value('provider_kind'),base_url:value('base_url') || null,credential:credential(),model,enabled_models:[...new Set([model,...data.getAll('enabled_models')])],custom_model_display_name:value('display_name') || null,custom_transport:value('transport') || null,effort:value('effort') || 'provider_default'}};}
+    case 'new-provider':{const model=value('catalog_model')==='__custom'?value('model'):value('catalog_model');return {Apply:{name:value('name'),provider_kind:value('provider_kind'),base_url:value('base_url') || null,credential:credential(),model,enabled_models:(()=>{const selected=[...new Set([model,...data.getAll('enabled_models')])];const kind=(metadata().setup_catalog||[]).find(k=>k.kind===value('provider_kind'));return kind?.models?.length && kind.models.every(m=>selected.includes(m.id)) && selected.length===kind.models.length ? null : selected;})(),custom_model_display_name:value('display_name') || null,custom_transport:value('transport') || null,effort:value('effort') || 'provider_default'}};}
     case 'model-field': {
       const field = value('field'); let edited;
       if (field === 'Reset') edited = 'Reset';

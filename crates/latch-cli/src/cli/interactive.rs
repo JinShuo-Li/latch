@@ -215,41 +215,7 @@ pub async fn run_session(
                 }
             }
             Input::DiscoverModels { provider } => {
-                let cache_root =
-                    latch_kernel::paths::ResolvedPaths::for_state(&context.config.state_dir)
-                        .cache_root;
-                let result = match context.registry.provider(&provider) {
-                    Some(profile) => {
-                        cli::discovery::fetch(profile, &context.credentials, &cache_root).await
-                    }
-                    None => Err(anyhow!("unknown provider")),
-                };
-                match result {
-                    Ok(ids) => {
-                        output_tx
-                            .send(Output::SetupModels { provider, ids })
-                            .await?;
-                    }
-                    Err(_) => match cli::discovery::cached(&cache_root, &provider) {
-                        Some(ids) => {
-                            output_tx
-                                .send(Output::Notice(
-                                    "refresh failed; showing the last known availability".into(),
-                                ))
-                                .await?;
-                            output_tx
-                                .send(Output::SetupModels { provider, ids })
-                                .await?;
-                        }
-                        None => {
-                            output_tx
-                                .send(Output::Notice(
-                                    "model refresh failed; using the built-in catalog".into(),
-                                ))
-                                .await?;
-                        }
-                    },
-                }
+                refresh_models_or_notice(&mut agent, &mut context, &provider, &output_tx).await?;
             }
             Input::Attach(path) => {
                 match ingest_attachments(&context.config, session_id, &[PathBuf::from(path)]) {
@@ -268,6 +234,42 @@ pub async fn run_session(
             Input::Submit { text, media } => {
                 if is_slash_command_input(&text) {
                     let command = text.trim();
+                    if command == "/model refresh" {
+                        let providers: Vec<_> = context
+                            .registry
+                            .available_providers()
+                            .iter()
+                            .filter(|p| cli::discovery::supports(p.kind))
+                            .map(|p| p.id.to_string())
+                            .collect();
+                        for provider in providers {
+                            refresh_models_or_notice(
+                                &mut agent,
+                                &mut context,
+                                &provider,
+                                &output_tx,
+                            )
+                            .await?;
+                        }
+                        continue;
+                    }
+                    if command == "/model all" {
+                        if let Err(error) = enable_all_models(&mut context) {
+                            output_tx
+                                .send(Output::Notice(format!("error: {error:#}")))
+                                .await?;
+                            continue;
+                        }
+                        agent.set_provider_factory(context.provider_factory());
+                        output_tx
+                            .send(Output::InferenceCatalog(context.catalog()))
+                            .await?;
+                        output_tx
+                            .send(Output::SetupProviders(context.setup_providers()))
+                            .await?;
+                        output_tx.send(Output::Notice("All supported catalog models enabled. Use /model to choose; service permissions and quotas still apply.".into())).await?;
+                        continue;
+                    }
                     if command.split_whitespace().next() == Some("/login") {
                         if !matches!(command, "/login" | "/login openai-codex" | "/login chatgpt") {
                             output_tx
@@ -281,6 +283,13 @@ pub async fn run_session(
                         match result {
                             Ok(true) => break,
                             Ok(false) => {
+                                refresh_models_or_notice(
+                                    &mut agent,
+                                    &mut context,
+                                    "openai-codex",
+                                    &output_tx,
+                                )
+                                .await?;
                                 agent.set_provider_factory(context.provider_factory());
                                 output_tx
                                     .send(Output::InferenceCatalog(context.catalog()))
@@ -450,6 +459,70 @@ pub async fn run_session(
     Ok(outcome)
 }
 
+fn enable_all_models(context: &mut InferenceContext) -> Result<()> {
+    let mut candidate = context.config_for_provider_addition()?;
+    if candidate.providers.is_empty() {
+        bail!("no configured providers; use /setup or /login first");
+    }
+    for provider in candidate.providers.values_mut() {
+        provider.enabled_models = None;
+    }
+    let path = context
+        .config_path
+        .clone()
+        .or_else(Config::default_path)
+        .ok_or_else(|| anyhow!("cannot resolve configuration path"))?;
+    candidate.validate()?;
+    let registry = ProviderRegistry::from_config(&candidate)?;
+    candidate.save(&path)?;
+    context.config = candidate;
+    context.registry = registry;
+    context.config_path = Some(path);
+    Ok(())
+}
+
+async fn refresh_models_or_notice(
+    agent: &mut Agent,
+    context: &mut InferenceContext,
+    provider: &str,
+    tx: &mpsc::Sender<Output>,
+) -> Result<()> {
+    let result = async {
+        let profile = context
+            .registry
+            .provider(provider)
+            .ok_or_else(|| anyhow!("unknown provider"))?;
+        if !cli::discovery::supports(profile.kind) {
+            return Ok(());
+        }
+        let cache_root =
+            latch_kernel::paths::ResolvedPaths::for_state(&context.config.state_dir).cache_root;
+        let catalog = cli::discovery::fetch(profile, &context.credentials, &cache_root).await?;
+        let ids = catalog.available.clone();
+        let count = ids.len();
+        cli::discovery::install(context, provider, catalog)?;
+        agent.set_provider_factory(context.provider_factory());
+        tx.send(Output::InferenceCatalog(context.catalog())).await?;
+        tx.send(Output::SetupProviders(context.setup_providers()))
+            .await?;
+        tx.send(Output::SetupModels {
+            provider: provider.into(),
+            ids,
+        })
+        .await?;
+        tx.send(Output::Notice(format!("Refreshed {provider}: {count} service-listed models. Use /model to select; /model all removes local model filters."))).await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    if let Err(error) = result {
+        tx.send(Output::Notice(format!(
+            "Model refresh unavailable for {provider}; keeping the last saved catalog: {error:#}"
+        )))
+        .await?;
+    }
+    Ok(())
+}
+
 /// Keep authentication cancellable and responsive without allowing prompts,
 /// profile mutations or a second login to race the credential/config commit.
 async fn subscription_login(
@@ -573,6 +646,10 @@ fn persist_setup(
     if entry.kind != kind {
         // A kind change invalidates kind-specific built-in model overrides.
         entry.models.clear();
+        entry.catalog = None;
+    }
+    if entry.base_url != base_url {
+        entry.catalog = None;
     }
     entry.kind = kind;
     entry.base_url = base_url;
@@ -803,7 +880,12 @@ fn set_provider_field(
         .get_mut(name)
         .ok_or_else(|| anyhow!("no provider named {name:?}"))?;
     match field {
-        ProviderFieldEdit::BaseUrl(url) => profile.base_url = url.clone(),
+        ProviderFieldEdit::BaseUrl(url) => {
+            if profile.base_url != *url {
+                profile.catalog = None;
+            }
+            profile.base_url = url.clone();
+        }
         ProviderFieldEdit::DisplayName(display) => profile.display_name = display.clone(),
     }
     save_candidate(context, candidate)
@@ -867,9 +949,9 @@ fn set_model_field(
         .get(name)
         .ok_or_else(|| anyhow!("no provider named {name:?}"))?
         .kind;
-    let from_catalog = latch_kernel::providers::builtin_catalog(kind)
-        .iter()
-        .any(|descriptor| descriptor.model == model);
+    let from_catalog =
+        latch_kernel::providers::configured_catalog(name, &candidate.providers[name])
+            .contains_key(model);
     {
         let profile = candidate
             .providers
@@ -1180,6 +1262,8 @@ async fn apply_setup(
         }
     }
     let (provider_id, model, effort) = persist_setup(context, &plan)?;
+    context.registry = ProviderRegistry::from_config(&context.config)?;
+    refresh_models_or_notice(agent, context, &provider_id, tx).await?;
     send_setup_paths(context, tx).await?;
     // Rebuild the registry from the persisted configuration so resolution
     // matches what the next process will load.

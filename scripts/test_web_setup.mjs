@@ -91,7 +91,7 @@ try {
   assert.equal(await evaluate(`document.querySelector('[name="credential"]').value`),'OPENCODE_GO_API_KEY');
   assert.equal(await evaluate(`document.querySelector('[name="credential"]').type`),'text');
   await change('source','Secret');await fill('credential','fixture-key');
-  await change('effort','high');await click('[name="enabled_models"][value="model-b"]');
+  await change('effort','high');
   await click('[data-settings-form="new-provider"] [type="submit"]');
   await waitFor(`document.querySelector('#settings-status').textContent.includes('invalid credential')`);
   assert.equal(await evaluate(`document.querySelector('[name="credential"]').value`),'fixture-key');
@@ -104,7 +104,7 @@ try {
   await new Promise(r=>setTimeout(r,100));finishSave();holdSave=false;
   await waitFor(`!!document.querySelector('[data-settings-form="credential"]')`);
   assert.equal(requests[1].data.Apply.effort,'high');
-  assert.deepEqual(requests[1].data.Apply.enabled_models,['model-a','model-b']);
+  assert.equal(requests[1].data.Apply.enabled_models,null);
   assert.equal(await evaluate(`document.querySelector('[name="credential"]').value`),'');
   await change('field','DisplayName');await fill('value','Real account');await click('[data-settings-form="provider-field"] [type="submit"]');
   await waitFor(`document.querySelector('#settings-content h3').textContent==='Real account'`);

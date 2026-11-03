@@ -333,15 +333,17 @@ builtin catalog -> discovered metadata -> user overrides
 - **Builtin catalog** is Latch-owned truth for known providers and models:
   transport, context window, effort set and default, replay policy, and input
   modalities. It ships with Latch and is never copied into `config.toml`.
-- **Discovered metadata** is availability evidence only: an id the provider
-  serves. It may mark a known catalog model as available, and it may introduce
-  an unknown id, but it never invents transport or capability facts.
-- **User overrides** win field by field and are the only layer that can resolve
-  an unknown model's transport or capabilities.
+- **Discovered metadata** is a bounded, allowlisted service catalog: ids,
+  labels and explicitly declared transport/context/effort/image facts. Unknown
+  gateway ids without protocol metadata remain unresolved; DeepSeek/Codex use
+  their fixed family protocols. Remote prompts, URLs, prices
+  and authorization claims are ignored.
+- **User overrides** win field by field over both discovery and builtins.
 
-`config.toml` therefore contains provider identity, credentials as symbolic
-references, model selections, `default_model`, and the override fields a user
-actually set — not a second catalog.
+`config.toml` keeps explicit model overrides in `models` and sanitized discovered
+facts in a separate `catalog` section. The latter retains historical descriptors
+for resume, while its `available` list drives the picker. A regenerable cache
+must never be the only source of a selected model's wire metadata.
 
 ### Models, selections, and defaults
 
@@ -421,26 +423,23 @@ a level model, and a `disabled` map when the model documents no off switch.
 
 ### Discovery
 
-Go and Zen publish `GET /models` (public, and account-filtered when a
-credential is entered). Built-in catalogs keep setup deterministic and
-offline; a refresh row asks the CLI to fetch and merge by id. The TUI never
-performs network I/O: discovery is a request/response over the existing
-channel (`Action::DiscoverModels` → `Output::SetupModels`), with a timeout and
-a fall-back to the built-in catalog.
+Go, Zen and DeepSeek expose `GET /models`; ChatGPT subscriptions use the
+authenticated Codex catalog. Listings can be global service metadata, not proof
+that every key/account is entitled to every model. Setup/login refresh supported
+services automatically. `/model refresh` and setup's Refresh action refresh them
+later; startup/doctor remain offline. All calls are bounded and read-only.
 
 Discovery is conservative:
 
-- an id in the response proves only that the provider serves that id;
-- known catalog models merge dynamic availability with their built-in
-  metadata: built-in catalog metadata wins over discovered metadata for
-  transport and capabilities, while explicit user overrides still have final
-  precedence, consistent with
-  `builtin catalog -> discovered metadata -> user overrides`;
-- unknown ids are marked `unresolved` for transport and capabilities, appear
-  only in `/setup`, and require Advanced configuration before they can be
-  activated; `/model` never presents one as ready;
-- discovery never overwrites a user override, and a failed or empty response
-  leaves configuration and the built-in catalog untouched.
+- explicit protocol metadata can resolve new gateway models; an id alone cannot
+  unless the provider family has a fixed supported protocol;
+- model facts merge as `builtin catalog -> discovered metadata -> user overrides`;
+- no remote endpoint, system instruction or permission claim is adopted;
+- a failed/empty response leaves the saved catalog intact;
+- picker availability updates without deleting old descriptors needed by resume;
+- one credential covers all models on that configured service. New setup enables
+  all catalog models, while deliberate subsets remain supported. `/model all`
+  clears local model filters without changing credentials or active profiles.
 
 ### Zen and Gemini
 

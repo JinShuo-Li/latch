@@ -48,12 +48,18 @@ installation, ChatGPT becomes the new-session default. Use `/setup` to change
 that default, and `/model` to select a model or reasoning effort. Standalone
 `latch login` saves the provider but does not change an existing session.
 
-The initial catalog includes `gpt-5.4` and `gpt-5.3-codex`. Availability depends
-on the account and service. These are subscription deployment entries, not the
-public OpenAI API catalog. The default conservative input budget is 272,000
-tokens; no API dollar prices are inferred for subscription usage. Additional
-model IDs can be configured through Advanced with the Responses transport when
-supported by your account.
+Login now reads the authenticated Codex model catalog rather than exposing only
+the original 5.4/5.3 entries. The offline fallback includes GPT-6.1 Sol/Terra,
+GPT-6 Astra/Sol/Luna, GPT-5.6 Sol/Terra/Luna and GPT-5.5. The default for a new
+subscription configuration is `gpt-6.1-sol`; existing active profiles/defaults are
+not silently changed. These are subscription entries, not copied API models.
+
+Run `/model refresh` to fetch current service metadata, then `/model` to choose.
+If an older setup restricted models, `/model all` clears the local filters. Old
+5.4/5.3 descriptors are retained for resume, not presented as the complete current
+catalog. Service visibility is not a promise of plan entitlement or available
+quota. Context/effort/image facts come from the service; user overrides win.
+No API dollar prices are inferred for subscription usage.
 
 ## Sign out
 

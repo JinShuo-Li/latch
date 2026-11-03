@@ -74,6 +74,20 @@ pub async fn execute(args: &Args, logout: bool) -> Result<()> {
         auth.complete(device, cancel.clone()).await?;
         let mut context = InferenceContext::new(config, path)?;
         configure(&mut context)?;
+        let refresh = async {
+            let profile = context
+                .registry
+                .provider("openai-codex")
+                .expect("configured provider");
+            let root =
+                latch_kernel::paths::ResolvedPaths::for_state(&context.config.state_dir).cache_root;
+            let catalog = super::discovery::fetch(profile, &context.credentials, &root).await?;
+            super::discovery::install(&mut context, "openai-codex", catalog)
+        }
+        .await;
+        if let Err(error) = refresh {
+            eprintln!("Model refresh unavailable; keeping the saved catalog: {error:#}");
+        }
         println!(
             "ChatGPT subscription connected. Select openai-codex with /model. Plan eligibility and usage limits apply; OpenAI API billing is separate."
         );
@@ -140,7 +154,10 @@ mod tests {
             context.config.inference.provider.as_deref(),
             Some("openai-codex")
         );
-        assert_eq!(context.config.inference.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(
+            context.config.inference.model.as_deref(),
+            Some(latch_kernel::oauth::DEFAULT_MODEL)
+        );
         assert_eq!(context.config.providers.len(), 1);
         assert_eq!(
             Config::load(Some(&path)).unwrap().providers["openai-codex"].kind,
