@@ -135,6 +135,21 @@ fn gemini_thinking_edit(
 }
 
 impl InferenceContext {
+    /// Additions must retain an existing legacy provider before the explicit
+    /// map disables registry fallback. Missing-config startup is not an account.
+    pub fn config_for_provider_addition(&self) -> Result<Config> {
+        let mut candidate = self.config.clone();
+        if self
+            .config_path
+            .clone()
+            .or_else(Config::default_path)
+            .is_some_and(|path| path.is_file())
+        {
+            latch_kernel::providers::materialize_legacy_provider(&mut candidate)?;
+        }
+        Ok(candidate)
+    }
+
     pub fn setup_providers(&self) -> Vec<ProviderSummary> {
         let cache_root =
             latch_kernel::paths::ResolvedPaths::for_state(&self.config.state_dir).cache_root;

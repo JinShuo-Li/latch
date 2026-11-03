@@ -1418,6 +1418,64 @@ fn apply_user_metadata(descriptor: &mut ModelDescriptor, user: &ModelConfig) {
     }
 }
 
+/// Convert the single-provider representation using exactly the same rules as
+/// registry fallback, including unknown-model transport and global overrides.
+fn legacy_provider_entry(config: &Config) -> Result<(String, ProviderProfileConfig)> {
+    let legacy = &config.provider;
+    let kind = ProviderKind::parse(&legacy.kind, legacy.base_url.as_deref())
+        .ok_or_else(|| anyhow!("unsupported provider kind {:?}", legacy.kind))?;
+    let mut models = BTreeMap::new();
+    if !builtin_models(kind)
+        .iter()
+        .any(|model| model.id == legacy.model)
+    {
+        let mut override_ = config
+            .models
+            .get(&legacy.model)
+            .cloned()
+            .unwrap_or_default();
+        override_.transport.get_or_insert(kind.default_transport());
+        models.insert(legacy.model.clone(), override_);
+    }
+    Ok((
+        kind.id().to_owned(),
+        ProviderProfileConfig {
+            kind,
+            display_name: None,
+            base_url: legacy.base_url.clone(),
+            credential: Some(
+                legacy
+                    .api_key_env
+                    .as_ref()
+                    .map(|env| format!("env:{env}"))
+                    .unwrap_or_else(|| kind.default_credential().to_owned()),
+            ),
+            default_model: Some(legacy.model.clone()),
+            enabled_models: None,
+            models,
+            model_discovery: false,
+        },
+    ))
+}
+
+/// Preserve an existing single-provider installation before adding its first
+/// explicit provider. Call only for a real configuration, never startup's
+/// synthesized fallback. Pin the old effective default before map ordering can
+/// change it. The caller stages/publishes the candidate configuration atomically.
+pub fn materialize_legacy_provider(config: &mut Config) -> Result<()> {
+    if config.providers.is_empty() {
+        let (profile, _) = ProviderRegistry::from_config(config)?.default_profile(config)?;
+        let (id, entry) = legacy_provider_entry(config)?;
+        config.providers.insert(id, entry);
+        config.inference = crate::config::InferenceConfig {
+            provider: Some(profile.provider.to_string()),
+            model: Some(profile.model),
+            effort: profile.effort,
+        };
+    }
+    Ok(())
+}
+
 /// Central provider/model catalog.
 #[derive(Clone)]
 pub struct ProviderRegistry {
@@ -1439,45 +1497,12 @@ impl ProviderRegistry {
     /// Builds the registry from configuration, migrating the legacy single
     /// `[provider]` table when no `[providers.*]` entries are present.
     pub fn from_config(config: &Config) -> Result<Self> {
-        let mut entries: BTreeMap<String, ProviderProfileConfig> = BTreeMap::new();
-        if config.providers.is_empty() {
-            let legacy = &config.provider;
-            let kind = ProviderKind::parse(&legacy.kind, legacy.base_url.as_deref())
-                .ok_or_else(|| anyhow!("unsupported provider kind {:?}", legacy.kind))?;
-            let credential = legacy
-                .api_key_env
-                .clone()
-                .map(|env| format!("env:{env}"))
-                .unwrap_or_else(|| kind.default_credential().to_owned());
-            let mut legacy_models = BTreeMap::new();
-            if !builtin_models(kind)
-                .iter()
-                .any(|model| model.id == legacy.model)
-            {
-                let mut override_ = config
-                    .models
-                    .get(&legacy.model)
-                    .cloned()
-                    .unwrap_or_default();
-                override_.transport.get_or_insert(kind.default_transport());
-                legacy_models.insert(legacy.model.clone(), override_);
-            }
-            entries.insert(
-                kind.id().to_owned(),
-                ProviderProfileConfig {
-                    kind,
-                    display_name: None,
-                    base_url: legacy.base_url.clone(),
-                    credential: Some(credential),
-                    default_model: Some(legacy.model.clone()),
-                    enabled_models: None,
-                    models: legacy_models,
-                    model_discovery: false,
-                },
-            );
+        let entries = if config.providers.is_empty() {
+            let (id, entry) = legacy_provider_entry(config)?;
+            BTreeMap::from([(id, entry)])
         } else {
-            entries = config.providers.clone();
-        }
+            config.providers.clone()
+        };
         let mut profiles = BTreeMap::new();
         for (id, entry) in &entries {
             let profile = ProviderProfile::build(id, entry, &config.models)?;
@@ -1763,6 +1788,42 @@ mod tests {
         let config: Config = toml::from_str(toml).unwrap();
         let registry = ProviderRegistry::from_config(&config).unwrap();
         (config, registry)
+    }
+
+    #[test]
+    fn legacy_materialization_preserves_custom_transport_metadata_and_default() {
+        let mut config: Config = toml::from_str(
+            r#"
+            [provider]
+            kind = "openai-compatible"
+            base_url = "https://example.test/v1"
+            api_key_env = "LEGACY_KEY"
+            model = "private-model"
+            [models.private-model]
+            context_window_tokens = 54321
+            display_name = "Private deployment"
+        "#,
+        )
+        .unwrap();
+        let before = ProviderRegistry::from_config(&config)
+            .unwrap()
+            .default_profile(&config)
+            .unwrap();
+        materialize_legacy_provider(&mut config).unwrap();
+        config.validate().unwrap();
+        let after = ProviderRegistry::from_config(&config)
+            .unwrap()
+            .default_profile(&config)
+            .unwrap();
+        assert_eq!(before, after);
+        assert_eq!(after.1.transport, TransportKind::ChatCompletions);
+        assert_eq!(
+            config.providers["openai-compatible"].credential.as_deref(),
+            Some("env:LEGACY_KEY")
+        );
+        let serialized = toml::to_string(&config).unwrap();
+        materialize_legacy_provider(&mut config).unwrap();
+        assert_eq!(serialized, toml::to_string(&config).unwrap());
     }
 
     #[test]

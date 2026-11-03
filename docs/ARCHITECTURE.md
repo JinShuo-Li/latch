@@ -141,6 +141,15 @@ the resolved location and whether the file exists. The Web adapter hides
 unpersisted fallback provider rows during onboarding and uses the shared setup
 catalog, persistence and validation for all saves. Save results remain visible
 in the dialog, and provider/model discovery updates refresh the current page.
+Adding a provider through setup or login first materializes any real legacy
+single-provider installation using the same conversion as registry fallback,
+including unknown-model transport, metadata, credential reference and effective
+new-session default. The new explicit provider map must not hide the old account.
+Missing-config startup defaults are never materialized as configured accounts.
+TUI Add provider allocates an unused instance id (`deepseek`, `deepseek-2`, …),
+matching Web setup; editing an existing provider remains an explicit operation.
+All configured families stay available together in `/model` after save and reload.
+
 Updating the active provider’s credential rebuilds its live adapter and refreshes
 the profile header when the new credential resolves; this also unlocks the
 first-run stub without requiring a second model selection.

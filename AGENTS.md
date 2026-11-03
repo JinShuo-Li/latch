@@ -419,6 +419,12 @@ Windows installer requests close their connection and retry transport failures a
 most three times; `scripts/test-install.ps1` covers recovery and exhaustion in
 both PowerShell versions. The public bootstrap uses `-DisableKeepAlive` too.
 
+Provider additions must preserve real legacy single-provider installations via
+`providers::materialize_legacy_provider`, including their effective default;
+never promote missing-config fallback accounts. TUI/Web Add provider allocates
+unused instance ids, while explicit edits retain identity. `/setup` and `/login`
+keep configured families selectable together in `/model` after reload.
+
 ChatGPT subscription sign-in uses `latch login` / `/login` (OpenAI Codex device
 flow), and `latch logout` / `/logout` removes local tokens. `oauth.rs` owns the
 restricted `chatgpt-auth.toml` and cross-process refresh lock; `provider.rs` owns

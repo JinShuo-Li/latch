@@ -12,28 +12,13 @@ use tokio_util::sync::CancellationToken;
 /// Publish configuration only after credentials have committed. Keep other
 /// configured providers and their new-session default intact.
 pub fn configure(context: &mut InferenceContext) -> Result<()> {
-    let mut candidate = context.config.clone();
+    let mut candidate = context.config_for_provider_addition()?;
     let path = context
         .config_path
         .clone()
         .or_else(Config::default_path)
         .ok_or_else(|| anyhow!("cannot resolve configuration path"))?;
-    // Preserve a legacy single-provider installation when adding its first
-    // explicit provider. A missing config is setup, not a real fallback account.
     let exists = path.exists();
-    if candidate.providers.is_empty() && exists {
-        let legacy = &candidate.provider;
-        let kind = ProviderKind::parse(&legacy.kind, legacy.base_url.as_deref())
-            .ok_or_else(|| anyhow!("unsupported legacy provider"))?;
-        let mut entry =
-            latch_kernel::providers::canonical_provider_entry(kind, legacy.base_url.clone());
-        entry.default_model = Some(legacy.model.clone());
-        entry.models = candidate.models.clone();
-        if let Some(env) = &legacy.api_key_env {
-            entry.credential = Some(format!("env:{env}"));
-        }
-        candidate.providers.insert(kind.id().into(), entry);
-    }
     let id = ProviderKind::OpenAiCodex.id();
     if candidate
         .providers
@@ -103,6 +88,44 @@ pub async fn execute(args: &Args, logout: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn login_keeps_the_legacy_account_and_its_effective_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config: Config = toml::from_str(
+            r#"
+            [provider]
+            kind = "openai-compatible"
+            base_url = "https://opencode.ai/zen/go/v1"
+            api_key_env = "GO_KEY"
+            model = "deepseek-v4-flash"
+        "#,
+        )
+        .unwrap();
+        config.state_dir = dir.path().join("state");
+        config.save(&path).unwrap();
+        let before = ProviderRegistry::from_config(&config)
+            .unwrap()
+            .default_profile(&config)
+            .unwrap();
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        configure(&mut context).unwrap();
+        assert_eq!(
+            context.registry.default_profile(&context.config).unwrap(),
+            before
+        );
+        assert!(context.config.providers.contains_key("opencode-go"));
+        assert!(context.config.providers.contains_key("openai-codex"));
+        let restored = Config::load(Some(&path)).unwrap();
+        assert_eq!(
+            ProviderRegistry::from_config(&restored)
+                .unwrap()
+                .default_profile(&restored)
+                .unwrap(),
+            before
+        );
+    }
+
     #[test]
     fn first_login_configures_a_new_installation() {
         let dir = tempfile::tempdir().unwrap();

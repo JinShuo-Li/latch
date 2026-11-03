@@ -63,6 +63,8 @@ latch
 
 On first launch, use `/setup` to choose a provider, enter or reference its API key, choose a model, and save. **Have a ChatGPT subscription?** Use `/login` (or `latch login`) to connect through OpenAI Codex device authorization—no API key needed. Subscription eligibility and usage limits apply; API billing is separate. See [ChatGPT sign-in](docs/CHATGPT_LOGIN.md).
 
+Setup adds providers without removing existing ones: OpenCode Go, DeepSeek, and ChatGPT subscription can coexist in `/model`. Use `/setup` to edit or remove an existing provider explicitly.
+
 Run `latch doctor` to check local prerequisites and configuration without contacting a model provider. `/model` changes the model for the current session. You can also run one prompt without the TUI:
 
 ```sh

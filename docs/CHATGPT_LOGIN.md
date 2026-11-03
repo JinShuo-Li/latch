@@ -41,7 +41,9 @@ cancels. The standalone CLI uses Ctrl+C. Authorization expires after 15 minutes.
 The device flow works over SSH without a local callback listener or port forward.
 
 Interactive login selects the provider for the current session. Existing
-configured providers and explicit new-session defaults are kept. On a new
+configured providers and their new-session default are kept, including legacy
+single-provider installations. OpenCode Go, DeepSeek and ChatGPT subscription
+remain selectable side by side in `/model` after setup, login and restart. On a new
 installation, ChatGPT becomes the new-session default. Use `/setup` to change
 that default, and `/model` to select a model or reasoning effort. Standalone
 `latch login` saves the provider but does not change an existing session.

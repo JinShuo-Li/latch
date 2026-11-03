@@ -566,9 +566,9 @@ fn persist_setup(
         SetupCredential::Env(name) => (CredentialRef::Env(name), None),
         SetupCredential::Secret(secret) => (CredentialRef::File(provider_id.clone()), Some(secret)),
     };
-    // Semantic update: an existing entry keeps its model metadata, display
-    // name, and discovery flag; only the fields the flow owns are replaced.
-    let mut candidate = context.config.clone();
+    // Preserve the legacy account before the explicit provider map disables
+    // fallback. Existing entries keep metadata outside this plan's ownership.
+    let mut candidate = context.config_for_provider_addition()?;
     let entry = candidate.providers.entry(provider_id.clone()).or_default();
     if entry.kind != kind {
         // A kind change invalidates kind-specific built-in model overrides.
@@ -2552,6 +2552,125 @@ mod tests {
             custom_transport: None,
             effort,
         }
+    }
+
+    #[test]
+    fn setup_and_login_keep_legacy_go_deepseek_and_subscription_selectable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config: Config = toml::from_str(
+            r#"
+            [provider]
+            kind = "openai-compatible"
+            base_url = "https://opencode.ai/zen/go/v1"
+            api_key_env = "EXISTING_GO_KEY"
+            model = "deepseek-v4-flash"
+            [models."deepseek-v4-flash"]
+            context_window_tokens = 123456
+        "#,
+        )
+        .unwrap();
+        config.state_dir = dir.path().join("state");
+        config.save(&path).unwrap();
+        let before = ProviderRegistry::from_config(&config)
+            .unwrap()
+            .default_profile(&config)
+            .unwrap();
+        let mut context = InferenceContext::new(config, Some(path.clone())).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "deepseek",
+                "deepseek",
+                SetupCredential::Secret("new-deepseek-key".into()),
+                "deepseek-v4-flash",
+                ReasoningEffort::High,
+            ),
+        )
+        .unwrap();
+        context.registry = ProviderRegistry::from_config(&context.config).unwrap();
+        assert_eq!(
+            context.registry.default_profile(&context.config).unwrap(),
+            before
+        );
+        let go = context.registry.provider("opencode-go").unwrap();
+        assert_eq!(go.base_url, "https://opencode.ai/zen/go/v1");
+        assert_eq!(go.credential.display(), "env:EXISTING_GO_KEY");
+        assert_eq!(
+            context
+                .registry
+                .model_descriptor("opencode-go", "deepseek-v4-flash")
+                .unwrap()
+                .context_window_tokens,
+            Some(123456)
+        );
+        // This only configures the subscription; no account, OAuth or network.
+        cli::login::configure(&mut context).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "deepseek-2",
+                "deepseek",
+                SetupCredential::Secret("second-deepseek-key".into()),
+                "deepseek-v4-flash",
+                ReasoningEffort::Low,
+            ),
+        )
+        .unwrap();
+        let restored = Config::load(Some(&path)).unwrap();
+        let restored = InferenceContext::new(restored, Some(path)).unwrap();
+        let ids: Vec<_> = restored
+            .catalog()
+            .providers
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(
+            ids,
+            ["deepseek", "deepseek-2", "openai-codex", "opencode-go"]
+        );
+        assert_eq!(
+            restored.registry.default_profile(&restored.config).unwrap(),
+            before
+        );
+        assert_eq!(
+            restored
+                .credentials
+                .require(&CredentialRef::File("deepseek".into()))
+                .unwrap(),
+            "new-deepseek-key"
+        );
+        assert_eq!(
+            restored
+                .credentials
+                .require(&CredentialRef::File("deepseek-2".into()))
+                .unwrap(),
+            "second-deepseek-key"
+        );
+    }
+
+    #[test]
+    fn new_installation_does_not_promote_the_fallback_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.toml");
+        let config = Config {
+            state_dir: dir.path().join("state"),
+            ..Config::default()
+        };
+        let mut context = InferenceContext::new(config, Some(path)).unwrap();
+        persist_setup(
+            &mut context,
+            &setup_plan(
+                "deepseek",
+                "deepseek",
+                SetupCredential::Secret("key".into()),
+                "deepseek-v4-flash",
+                ReasoningEffort::Low,
+            ),
+        )
+        .unwrap();
+        assert_eq!(context.config.providers.len(), 1);
+        assert!(context.config.providers.contains_key("deepseek"));
     }
 
     #[test]
