@@ -53,6 +53,10 @@ cd latch
 cargo install --path crates/latch-cli --locked
 ```
 
+To uninstall, run `latch uninstall`. The English menu defaults to keeping data
+and configuration; permanent data removal requires explicit confirmation.
+See [uninstall options](docs/INSTALL.md#uninstall).
+
 ## Get started
 
 Open a terminal in your project and run:

@@ -145,6 +145,49 @@ Cargo installs to its configured bin directory (normally `~/.cargo/bin`).
 For a local release build without installing, run `cargo build --release --locked`;
 the executable is in `target/release/`.
 
+## Uninstall
+
+Close other Latch sessions, then run:
+
+```sh
+latch uninstall
+```
+
+The English menu offers:
+
+```text
+1. Remove the program only (default)
+2. Remove the program, data, and configuration (Warning: This cannot be undone.)
+3. Cancel
+```
+
+Press Enter for option 1. It keeps configuration, credentials, and session history.
+Option 2 lists the data/configuration paths and requires typing `DELETE` before
+permanent removal. Entering anything else at that confirmation cancels. EOF also
+cancels, so a closed stdin never accepts the default automatically.
+
+The program removes its running executable and byte-identical copies in standard
+installer/Cargo bin locations. Other versions, PATH entries, package-manager
+records, environment API keys, and workspace files are not modified. Windows
+uses the built-in Windows PowerShell to finish program removal after Latch exits;
+its completion message reports scheduling rather than claiming immediate removal.
+The installation directory must be writable by the current user.
+
+Full removal covers `~/.latch`, the platform's legacy Latch config/state/cache
+locations, and configured custom storage. `--config <PATH>` additionally selects
+that configuration and its custom storage. Custom storage with unrecognized files
+or shared home/workspace roots is refused before deletion; use option 1 and clean
+those locations manually. Programs installed inside their data directories also
+require program-only removal followed by manual storage cleanup.
+Symbolic links/junctions are removed without erasing
+their external targets. Protected Windows boundary recovery journals outside
+Latch storage are retained. Deletion errors can leave a partial cleanup and are
+reported before removing the program.
+
+Regression tests use unique disposable executables. Native Windows CI checks
+deferred self-removal, and macOS CI checks a uniquely ad-hoc signed copy. Linux
+additionally exercises permanent removal of isolated new/legacy/custom storage.
+
 ## Troubleshooting
 
 - **Download returns 404 / latest cannot be found:** inspect the Releases page.

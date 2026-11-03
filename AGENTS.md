@@ -446,6 +446,15 @@ entitlement. Focused checks:
 `cargo test -p latch-cli --bin latch discovery --locked` and
 `cargo test -p latch-kernel --lib oauth --locked`.
 
+`latch uninstall` is human-only host maintenance in `latch-cli/src/cli/uninstall.rs`.
+Default removes the running binary and identical standard-install copies, keeping
+storage; option 2 lists storage and requires `DELETE`; option 3/EOF cancels.
+Never recursively erase unrecognized custom roots or follow storage symlinks,
+and never delete Windows boundary recovery journals. Windows defers executable
+removal through built-in Windows PowerShell (no agent execution fallback).
+`cargo test -p latch-cli --test uninstall --locked` uses unique disposable binaries;
+Windows/macOS smoke CI includes it. Linux also tests isolated full data removal.
+
 Browser header version comes only from bootstrap metadata; never hardcode a
 release fallback in HTML/JS. `node scripts/test_web_view.mjs` checks missing,
 initial and updated server versions without a browser (development only).

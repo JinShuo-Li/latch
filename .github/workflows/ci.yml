@@ -109,6 +109,12 @@ jobs:
         run: |
           cargo test -p latch-kernel --lib native_shell_and_fixed_git_use_embedded_boundary --locked -- --test-threads=1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Native uninstall smoke (disposable executable only)
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          cargo test -p latch-cli --test uninstall --locked -- --test-threads=1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Windows Web transport
         timeout-minutes: 8
         shell: pwsh
@@ -159,6 +165,7 @@ jobs:
       - name: Real CLI and Web startup with loopback mock provider
         timeout-minutes: 5
         run: |
+          cargo test -p latch-cli --test uninstall --locked -- --test-threads=1
           cargo test -p latch-cli --test cli macos_native_startup --locked -- --test-threads=1
           cargo test -p latch-cli --test cli run_text_mode_streams_assistant_text --locked
           cargo test -p latch-cli --test cli web_transport --locked -- --test-threads=1

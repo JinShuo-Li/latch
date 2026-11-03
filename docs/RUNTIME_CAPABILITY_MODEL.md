@@ -70,6 +70,10 @@ mechanism added under this model must preserve all of them.
    refresh tokens under a cross-process lock in protected state. OAuth is
    provider authentication, not a tool permission or runtime capability grant.
    Only a human CLI/UI action starts sign-in; no agent tool can invoke it.
+   Likewise `latch uninstall` is a human-only host maintenance command, never an
+   agent tool. Its Windows post-exit executable-removal helper does not provide
+   an unsandboxed execution backend or grant model capabilities. Data removal
+   must preserve boundary recovery journals outside application storage.
    Model discovery reuses that provider's credential for read-only catalog calls.
    Sanitized model facts are not runtime grants: remote URLs, prompts and
    permission claims are ignored, and service listings do not prove entitlement.

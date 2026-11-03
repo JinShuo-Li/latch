@@ -93,6 +93,8 @@ pub enum Commands {
     Login,
     /// Remove locally stored ChatGPT tokens (keeps configuration and history).
     Logout,
+    /// Interactively remove the program, optionally including local data and configuration.
+    Uninstall,
     /// Explicitly copy a legacy XDG installation into ~/.latch.
     Migrate,
     /// Inspect internal prompt compilation and diagnostics without running a task.

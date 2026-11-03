@@ -13,5 +13,6 @@ pub mod machine;
 pub mod output;
 pub mod session;
 pub mod sessions;
+pub mod uninstall;
 
 pub mod integrations;

@@ -63,6 +63,9 @@ async fn main() -> ExitCode {
                 .await
                 .map(|()| ExitCode::SUCCESS),
         ),
+        Some(Commands::Uninstall) => {
+            legacy_exit(cli::uninstall::execute(&args).map(|()| ExitCode::SUCCESS))
+        }
         Some(Commands::Migrate) => legacy_exit(migrate(&args)),
         Some(Commands::Debug { command }) => legacy_exit(debug_dispatch(&args, command)),
         None => legacy_exit(run_legacy(args).await),

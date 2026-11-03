@@ -139,6 +139,20 @@ config is absent, an exact live XDG config is read in place. The explicit
 and copies artifacts and secrets before publishing the new config. It writes a
 migration marker and renames legacy config and secrets to backup names so
 deleting the new config cannot reactivate the old installation.
+`latch uninstall` is explicit host maintenance in `latch-cli/src/cli/uninstall.rs`,
+not a model tool or an execution-backend fallback. Its numbered English menu
+keeps all storage by default; EOF/cancellation removes nothing. Full removal
+lists new/legacy/configured storage paths and requires `DELETE`; custom roots
+with unrelated entries or shared home/workspace scope fail before deletion.
+Symlinks/junctions are not traversed. The CLI reads only the storage selector
+from config, so provider validation and authentication are never prerequisites.
+It removes the running executable and identical standard-install copies, without
+editing PATH/package-manager records. Windows uses a credential-free, fixed
+Windows PowerShell helper to remove program files after parent exit; protected
+boundary recovery journals outside app storage are never purged. Native CI tests
+use unique disposable binaries, including paths with spaces/quotes, so the
+installed binary and real user storage cannot become test deletion targets.
+
 `latch doctor` reads the same `ResolvedPaths` result and reports every path,
 its source, and migration provenance. It prints credential references only.
 Default interactive launches require a configuration file at the resolved
