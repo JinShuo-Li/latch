@@ -1771,6 +1771,7 @@ impl ProviderRegistry {
                     .with_effort_map(descriptor.effort_map.clone())
                     .with_session(session_id)
                     .with_media(media)
+                    .with_connect_timeout_seconds(self.request_policy.connect_timeout_seconds)
                     .with_chatgpt_auth(auth),
                 ),
                 self.request_policy,
@@ -1811,6 +1812,7 @@ impl ProviderRegistry {
                     descriptor.model.clone(),
                 )
                 .with_identity(provider.id.to_string())
+                .with_connect_timeout_seconds(self.request_policy.connect_timeout_seconds)
                 .with_reasoning(effort, supports_effort, descriptor.adaptive_thinking)
                 .with_effort_map(descriptor.effort_map.clone())
                 .with_session(session_id)
@@ -1823,6 +1825,7 @@ impl ProviderRegistry {
                     descriptor.model.clone(),
                 )
                 .with_identity(provider.id.to_string())
+                .with_connect_timeout_seconds(self.request_policy.connect_timeout_seconds)
                 .with_reasoning(effort, supports_effort)
                 .with_effort_map(descriptor.effort_map.clone())
                 .with_session(session_id)
@@ -1831,6 +1834,7 @@ impl ProviderRegistry {
             TransportKind::ChatCompletions => Arc::new(
                 OpenAiProvider::new(provider.base_url.clone(), api_key, descriptor.model.clone())
                     .with_identity(provider.id.to_string())
+                    .with_connect_timeout_seconds(self.request_policy.connect_timeout_seconds)
                     .with_reasoning(effort, descriptor.reasoning_replay, supports_effort)
                     .with_thinking(thinking)
                     .with_effort_map(descriptor.effort_map.clone())
@@ -1844,6 +1848,7 @@ impl ProviderRegistry {
                     descriptor.model.clone(),
                 )
                 .with_identity(provider.id.to_string())
+                .with_connect_timeout_seconds(self.request_policy.connect_timeout_seconds)
                 .with_reasoning(effort, descriptor.reasoning_replay)
                 .with_effort_map(descriptor.effort_map.clone())
                 .with_thinking_capability(descriptor.gemini_thinking.clone())

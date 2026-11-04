@@ -20,6 +20,7 @@ mod tests;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderRequestConfig {
+    pub connect_timeout_seconds: u64,
     pub headers_timeout_seconds: u64,
     pub idle_timeout_seconds: u64,
     pub request_timeout_seconds: u64,
@@ -28,7 +29,8 @@ pub struct ProviderRequestConfig {
 impl Default for ProviderRequestConfig {
     fn default() -> Self {
         Self {
-            headers_timeout_seconds: 120,
+            connect_timeout_seconds: 15,
+            headers_timeout_seconds: 60,
             idle_timeout_seconds: 180,
             request_timeout_seconds: 1800,
         }
@@ -38,6 +40,7 @@ impl Default for ProviderRequestConfig {
 impl ProviderRequestConfig {
     pub fn validate(self) -> Result<()> {
         for (name, seconds) in [
+            ("connect_timeout_seconds", self.connect_timeout_seconds),
             ("headers_timeout_seconds", self.headers_timeout_seconds),
             ("idle_timeout_seconds", self.idle_timeout_seconds),
             ("request_timeout_seconds", self.request_timeout_seconds),
@@ -53,6 +56,7 @@ impl ProviderRequestConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeoutPhase {
+    Connect,
     Headers,
     Idle,
     Request,
@@ -67,6 +71,7 @@ pub struct ProviderTimeout {
 impl fmt::Display for ProviderTimeout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let phase = match self.phase {
+            TimeoutPhase::Connect => "establishing the connection / TLS handshake",
             TimeoutPhase::Headers => "waiting for response headers",
             TimeoutPhase::Idle => "waiting for stream activity",
             TimeoutPhase::Request => "reaching the total request deadline",
@@ -211,7 +216,18 @@ impl ModelProvider for BoundedProvider {
                 biased;
                 () = cancel.cancelled() => bail!("model request cancelled"),
                 () = tokio::time::sleep_until(total) => return Err(ProviderTimeout { phase: TimeoutPhase::Request, seconds: self.policy.request_timeout_seconds }.into()),
-                result = &mut future => return result,
+                result = &mut future => return result.map_err(|error| {
+                    if error.downcast_ref::<reqwest::Error>()
+                        .is_some_and(|error| error.is_connect() && error.is_timeout())
+                    {
+                        ProviderTimeout {
+                            phase: TimeoutPhase::Connect,
+                            seconds: self.policy.connect_timeout_seconds,
+                        }.into()
+                    } else {
+                        error
+                    }
+                }),
                 changed = progress_rx.changed(), if observing => {
                     // A custom adapter may drop its sink before finishing.
                     observing = changed.is_ok();

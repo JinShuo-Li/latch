@@ -91,10 +91,12 @@ model = "gpt-5-mini"
 # provider and additionally receives a stable x-opencode-session header.
 
 # Model network deadlines (seconds), separate from shell/validation timeouts.
-# Heartbeats reset idle only; the total deadline cannot be extended.
+# New-connection/TLS time is included in the header budget, not added to it.
+# Heartbeats/reasoning reset idle only; 180s is not a thinking-duration limit.
 # Each value must be 1..86400. See docs/PROVIDER_REQUESTS.md for retry semantics.
 [provider_request]
-headers_timeout_seconds = 120
+connect_timeout_seconds = 15
+headers_timeout_seconds = 60
 idle_timeout_seconds = 180
 request_timeout_seconds = 1800
 

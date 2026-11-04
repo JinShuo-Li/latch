@@ -309,6 +309,26 @@ impl ThinkingToggle {
     }
 }
 
+/// Bound new connections without imposing a whole-response timeout on healthy
+/// long-lived streams. Subscription clients must never follow redirects.
+fn provider_http_client(connect_seconds: u64, subscription: bool) -> Client {
+    let builder =
+        Client::builder().connect_timeout(std::time::Duration::from_secs(connect_seconds));
+    let builder = if subscription {
+        builder.redirect(reqwest::redirect::Policy::none())
+    } else {
+        builder
+    };
+    builder.build().expect("valid provider HTTP client")
+}
+
+fn default_provider_http_client() -> Client {
+    provider_http_client(
+        crate::provider_request::ProviderRequestConfig::default().connect_timeout_seconds,
+        false,
+    )
+}
+
 pub struct OpenAiProvider {
     client: Client,
     base_url: String,
@@ -325,9 +345,15 @@ pub struct OpenAiProvider {
 }
 impl OpenAiProvider {
     #[must_use]
+    pub(crate) fn with_connect_timeout_seconds(mut self, seconds: u64) -> Self {
+        self.client = provider_http_client(seconds, false);
+        self
+    }
+
+    #[must_use]
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
         Self {
-            client: Client::new(),
+            client: default_provider_http_client(),
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
             model: model.clone(),
@@ -571,6 +597,7 @@ impl ModelProvider for OpenAiProvider {
 /// `store: false`, so resume never depends on server-side state.
 pub struct OpenAiResponsesProvider {
     client: Client,
+    connect_timeout_seconds: u64,
     chatgpt_auth: Option<crate::oauth::ChatGptAuth>,
     base_url: String,
     api_key: String,
@@ -583,21 +610,27 @@ pub struct OpenAiResponsesProvider {
     media: Option<MediaStore>,
 }
 impl OpenAiResponsesProvider {
+    #[must_use]
+    pub(crate) fn with_connect_timeout_seconds(mut self, seconds: u64) -> Self {
+        self.connect_timeout_seconds = seconds;
+        self.client = provider_http_client(seconds, self.chatgpt_auth.is_some());
+        self
+    }
+
     /// Reload subscription credentials for every request, including children.
     #[must_use]
     pub fn with_chatgpt_auth(mut self, auth: crate::oauth::ChatGptAuth) -> Self {
         self.chatgpt_auth = Some(auth);
-        self.client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("valid subscription HTTP client");
+        self.client = provider_http_client(self.connect_timeout_seconds, true);
         self
     }
 
     #[must_use]
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
         Self {
-            client: Client::new(),
+            client: default_provider_http_client(),
+            connect_timeout_seconds: crate::provider_request::ProviderRequestConfig::default()
+                .connect_timeout_seconds,
             chatgpt_auth: None,
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
@@ -675,6 +708,7 @@ impl ModelProvider for OpenAiResponsesProvider {
             effort_map: self.effort_map.clone(),
             media: self.media.clone(),
             chatgpt_auth: self.chatgpt_auth.clone(),
+            connect_timeout_seconds: self.connect_timeout_seconds,
         }))
     }
     async fn stream(
@@ -1119,9 +1153,15 @@ pub struct AnthropicProvider {
 }
 impl AnthropicProvider {
     #[must_use]
+    pub(crate) fn with_connect_timeout_seconds(mut self, seconds: u64) -> Self {
+        self.client = provider_http_client(seconds, false);
+        self
+    }
+
+    #[must_use]
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
         Self {
-            client: Client::new(),
+            client: default_provider_http_client(),
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
             model,
@@ -2152,9 +2192,15 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     #[must_use]
+    pub(crate) fn with_connect_timeout_seconds(mut self, seconds: u64) -> Self {
+        self.client = provider_http_client(seconds, false);
+        self
+    }
+
+    #[must_use]
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
         Self {
-            client: Client::new(),
+            client: default_provider_http_client(),
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
             model,
@@ -3206,6 +3252,45 @@ mod tests {
             parts.iter().any(|part| part["type"] == "input_image"),
             "tool images survive alongside the status envelope"
         );
+    }
+
+    #[tokio::test]
+    async fn subscription_clients_keep_redirects_disabled_when_connect_budget_changes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for configure_first in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let auth = crate::oauth::ChatGptAuth::new(dir.path());
+            let provider =
+                OpenAiResponsesProvider::new("http://unused".into(), String::new(), "m".into());
+            let provider = if configure_first {
+                provider
+                    .with_connect_timeout_seconds(1)
+                    .with_chatgpt_auth(auth)
+            } else {
+                provider
+                    .with_chatgpt_auth(auth)
+                    .with_connect_timeout_seconds(1)
+            };
+            assert_eq!(provider.connect_timeout_seconds, 1);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/must-not-follow\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+            });
+            // Inspect the transport policy directly; no OAuth or provider call.
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                provider.client.get(format!("http://{address}")).send(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+            server.await.unwrap();
+        }
     }
 
     #[test]

@@ -438,8 +438,11 @@ challenges are transient, not durable events. `doctor` remains offline. Focused:
 `cargo test -p latch-kernel --lib oauth --locked`; see `docs/CHATGPT_LOGIN.md`.
 
 Model network policy lives in `provider_request.rs`: registry-built adapters
-have configurable `[provider_request]` header/idle/total deadlines (120/180/1800s),
-independent of command timeouts. Heartbeats renew idle, never total; retries
+have configurable `[provider_request]` connect/header/idle/total limits
+(15/60/180/1800s), independent of command timeouts. New-connection/TLS limits
+are enforced by adapter HTTP clients, inside the header budget; preserve them
+on child rebinding and OAuth client rebuilds (subscription redirects stay off).
+Heartbeats/reasoning renew idle (not a thinking-duration limit), never total; retries
 require a recognized transient error before text/tool output, and cancellation
 interrupts backoff. Keep wire/status extraction in `provider.rs`, deadline policy
 provider-neutral, and child rebinding bounded. See `docs/PROVIDER_REQUESTS.md`;

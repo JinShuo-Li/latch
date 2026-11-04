@@ -6,6 +6,7 @@ enum Behavior {
     NoHeaders,
     Idle,
     Heartbeats,
+    LongThinking,
     DropSink,
     Complete,
 }
@@ -43,6 +44,13 @@ impl ModelProvider for Stub {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 sink(StreamEvent::Activity(StreamActivity::Receiving));
             },
+            Behavior::LongThinking => {
+                for _ in 0..150 {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    sink(StreamEvent::Activity(StreamActivity::Reasoning));
+                }
+                Ok(ModelResponse::default())
+            }
             Behavior::Complete => {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 Ok(ModelResponse::default())
@@ -64,6 +72,7 @@ fn request() -> ModelRequest {
 }
 fn policy() -> ProviderRequestConfig {
     ProviderRequestConfig {
+        connect_timeout_seconds: 1,
         headers_timeout_seconds: 3,
         idle_timeout_seconds: 5,
         request_timeout_seconds: 20,
@@ -112,6 +121,43 @@ async fn heartbeats_reset_idle_but_not_the_total_deadline() {
     );
     assert_eq!(start.elapsed(), Duration::from_secs(20));
     assert!(retry_delay(&error, 0, Uuid::nil()).is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn thinking_can_exceed_180_seconds_but_complete_silence_cannot() {
+    let start = Instant::now();
+    let thinking = BoundedProvider::wrap(
+        Arc::new(Stub {
+            behavior: Behavior::LongThinking,
+            calls: Arc::default(),
+        }),
+        ProviderRequestConfig::default(),
+    );
+    assert!(
+        thinking
+            .stream(request(), CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .is_ok()
+    );
+    assert_eq!(start.elapsed(), Duration::from_secs(300));
+
+    let start = Instant::now();
+    let silent = BoundedProvider::wrap(
+        Arc::new(Stub {
+            behavior: Behavior::Idle,
+            calls: Arc::default(),
+        }),
+        ProviderRequestConfig::default(),
+    );
+    let error = silent
+        .stream(request(), CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<ProviderTimeout>().unwrap().phase,
+        TimeoutPhase::Idle
+    );
+    assert_eq!(start.elapsed(), Duration::from_secs(180));
 }
 
 #[tokio::test(start_paused = true)]
@@ -248,7 +294,7 @@ async fn all_http_adapters_obey_header_and_stream_idle_deadlines() {
                     _ => Arc::new(crate::provider::GeminiProvider::new(base, "fixture".into(), "m".into())),
                 };
                 let bounded = BoundedProvider::wrap(inner, ProviderRequestConfig {
-                    headers_timeout_seconds: 1, idle_timeout_seconds: 1, request_timeout_seconds: 5,
+                    connect_timeout_seconds: 1, headers_timeout_seconds: 1, idle_timeout_seconds: 1, request_timeout_seconds: 5,
                 });
                 let result = tokio::time::timeout(Duration::from_secs(5), bounded.stream(request(), CancellationToken::new(), Arc::new(|_| {}))).await.expect("outer watchdog");
                 let error = result.unwrap_err();
@@ -261,11 +307,118 @@ async fn all_http_adapters_obey_header_and_stream_idle_deadlines() {
     futures::future::join_all(cases).await;
 }
 
+#[tokio::test]
+async fn registry_connect_budget_bounds_tls_stalls_and_survives_child_rebinding() {
+    use tokio::io::AsyncReadExt;
+    let mut cases = Vec::new();
+    for transport in [
+        "chat_completions",
+        "responses",
+        "anthropic_messages",
+        "gemini",
+    ] {
+        for child in [false, true] {
+            cases.push(async move {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let server = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut buffer = [0; 4096];
+                    // Accept TCP and the TLS ClientHello, but never complete TLS.
+                    assert!(socket.read(&mut buffer).await.unwrap() > 0);
+                    loop {
+                        match socket.read(&mut buffer).await {
+                            Ok(0) => break,
+                            Ok(_) => {}
+                            Err(error)
+                                if matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::ConnectionReset
+                                        | std::io::ErrorKind::ConnectionAborted
+                                ) =>
+                            {
+                                break;
+                            }
+                            Err(error) => panic!("TLS fixture read: {error}"),
+                        }
+                    }
+                });
+                let text = format!(
+                    r#"
+                    [provider_request]
+                    connect_timeout_seconds = 1
+                    headers_timeout_seconds = 5
+                    [providers.fixture]
+                    kind = "openai-compatible"
+                    base_url = "https://{address}"
+                    credential = "file:fixture"
+                    default_model = "m"
+                    [providers.fixture.models.m]
+                    transport = "{transport}"
+                "#
+                );
+                let config: crate::config::Config = toml::from_str(&text).unwrap();
+                let registry = crate::providers::ProviderRegistry::from_config(&config).unwrap();
+                let dir = tempfile::tempdir().unwrap();
+                let mut credentials =
+                    crate::credentials::CredentialStore::open(dir.path().join("secrets.toml"))
+                        .unwrap();
+                credentials.set("fixture", "fixture-key").unwrap();
+                let (profile, descriptor) = registry
+                    .resolve_profile(&latch_protocol::InferenceProfile::new(
+                        "fixture",
+                        "m",
+                        latch_protocol::ReasoningEffort::ProviderDefault,
+                    ))
+                    .unwrap();
+                let provider = registry
+                    .build_provider(&profile, &descriptor, &credentials, Uuid::new_v4(), None)
+                    .unwrap();
+                let provider = if child {
+                    provider.for_session(Uuid::new_v4()).unwrap()
+                } else {
+                    provider
+                };
+                let result = tokio::time::timeout(
+                    Duration::from_secs(8),
+                    provider.stream(request(), CancellationToken::new(), Arc::new(|_| {})),
+                )
+                .await
+                .expect("outer watchdog");
+                let error = result.unwrap_err();
+                let timeout = error
+                    .downcast_ref::<ProviderTimeout>()
+                    .expect("typed connection timeout");
+                assert_eq!(
+                    timeout.phase,
+                    TimeoutPhase::Connect,
+                    "{transport}, child={child}: {error}"
+                );
+                assert_eq!(timeout.seconds, 1);
+                assert!(error.to_string().contains("TLS handshake"));
+                assert!(retry_delay(&error, 0, Uuid::nil()).is_some());
+                tokio::time::timeout(Duration::from_secs(2), server)
+                    .await
+                    .expect("TLS connection released")
+                    .unwrap();
+            });
+        }
+    }
+    futures::future::join_all(cases).await;
+}
+
 #[test]
 fn defaults_and_config_validation_are_backward_compatible() {
     let config: crate::config::Config = toml::from_str("").unwrap();
     assert_eq!(config.provider_request, ProviderRequestConfig::default());
+    assert_eq!(config.provider_request.connect_timeout_seconds, 15);
+    assert_eq!(config.provider_request.headers_timeout_seconds, 60);
+    let previous: crate::config::Config =
+        toml::from_str("[provider_request]\nheaders_timeout_seconds = 120").unwrap();
+    assert_eq!(previous.provider_request.connect_timeout_seconds, 15);
+    assert_eq!(previous.provider_request.headers_timeout_seconds, 120);
     for key in [
+        "connect_timeout_seconds",
         "headers_timeout_seconds",
         "idle_timeout_seconds",
         "request_timeout_seconds",

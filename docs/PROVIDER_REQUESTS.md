@@ -9,35 +9,46 @@ TUI, Web and machine CLI use the same kernel policy.
 
 ```toml
 [provider_request]
-headers_timeout_seconds = 120
+connect_timeout_seconds = 15
+headers_timeout_seconds = 60
 idle_timeout_seconds = 180
 request_timeout_seconds = 1800
 ```
 
 | Limit | Meaning |
 | --- | --- |
+| Connect | Maximum time to establish a new connection, including DNS/TCP, proxy negotiation and TLS. Reusing an existing connection does not start a new connection budget. |
 | Headers | Maximum wait from starting an adapter request until it signals a successful HTTP response, including credential access, request preparation, connection/TLS, upload and response-header processing. Error-body reads are covered too. |
 | Idle | Maximum silence after connection. Any received stream bytes (including SSE keepalives), reasoning activity, text, tool fragments or usage reset this deadline. |
 | Request | Absolute deadline per adapter attempt, including the header and streaming phases. Heartbeats cannot extend it. |
 
 Every value must be an integer from 1 to 86,400 seconds. Zero does not disable a
-limit. A shorter total deadline wins over a longer phase deadline. Existing
-configurations get these defaults without migration. Increase the limits for a
+limit. The connection budget is contained within the header budget, not added
+to it: with defaults, a failed connection stops at about 15 seconds, while a
+connected server has at most 60 seconds from the start of the attempt to return
+headers. A shorter header or total deadline still wins. These limits do not
+impose a 15-second lifetime on an established stream. Existing configurations
+get the new defaults for omitted fields without migration; explicit values
+(such as an existing 120-second header override) remain unchanged. Increase the limits for a
 provider with unusually long silent reasoning periods; silence does not prove
-that a model has stopped thinking. These are local resource limits, not claims
-about provider-side completion.
+that a model has stopped thinking. In particular, 180 seconds is **not a thinking
+time limit**: reasoning bytes or SSE heartbeats renew idle, so thinking can
+continue for more than 180 seconds. Only uninterrupted silence expires that
+deadline. On expiry the partial response is not treated as success; it is dropped
+locally. Before text/tool output, the normal bounded retry policy still applies.
+These are local resource limits, not claims about provider-side completion.
 
 Cancellation interrupts request waits and retry backoff. Expiry drops the
 adapter future and its HTTP stream; the kernel does not leave a detached
-network reader running. Diagnostics distinguish waiting for headers, waiting
-for stream activity, and the absolute deadline. They do not include credentials.
+network reader running. Diagnostics distinguish connection/TLS timeout, waiting
+for headers, waiting for stream activity, and the absolute deadline. They do not include credentials.
 
 ## Conservative automatic retries
 
 The agent permits at most two automatic retries, and only before semantic
 output begins. Retryable failures are:
 
-- Header or stream-idle timeout (not the absolute request deadline).
+- Connection/TLS, header or stream-idle timeout (not the absolute request deadline).
 - Recognized connection, transport timeout or response-body I/O errors.
 - HTTP 408, 429, 500, 502, 503 and 504.
 
@@ -71,8 +82,9 @@ does not promise provider-side exactly-once execution or billing.
   typed timeout facts and retry classification.
 - `providers.rs`: applies the policy when constructing adapters; child rebinding
   preserves both policy and adapter-specific session identity.
-- `provider.rs`: provider wire formats and sanitized HTTP status/Retry-After
-  extraction. OpenCode Go endpoint, model selection and stable session header
+- `provider.rs`: HTTP client connection limits, provider wire formats and
+  sanitized HTTP status/Retry-After extraction. Subscription clients keep their
+  no-redirect policy when connection limits are configured. OpenCode Go endpoint, model selection and stable session header
   are unchanged.
 - `agent.rs`: output-aware retry admission, durable attempt recording and
   cancellable backoff. No failed response dispatches tools.
@@ -89,3 +101,8 @@ Paused-clock fixtures cover phase deadlines, heartbeat renewal, absolute
 limits, cancellation and rebinding. Real loopback HTTP fixtures stall both
 before headers and after connection across Chat Completions, Responses,
 Anthropic and Gemini, and verify that timeout releases the TCP connection.
+Additional registry-built root/child fixtures accept TCP but never finish TLS,
+proving the configured connection deadline expires before the header deadline.
+Paused-clock reasoning fixtures run past 180 seconds successfully with activity,
+while a truly silent stream expires at 180 seconds. Subscription HTTP clients
+are checked to keep redirects disabled in either configuration order.

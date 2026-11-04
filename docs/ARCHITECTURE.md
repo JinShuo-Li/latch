@@ -1056,9 +1056,12 @@ dirty work is captured at startup and never conflated with Latch's changes.
 
 ## Providers
 
-`provider_request.rs` bounds registry-built adapters with independent header
-(120s), stream-idle (180s) and absolute attempt (1800s) deadlines, configurable
-under `[provider_request]`. Activity/heartbeat bytes reset idle, never the total
+`provider_request.rs` bounds registry-built adapters with header (60s),
+stream-idle (180s) and absolute attempt (1800s) deadlines, configurable under
+`[provider_request]`. Adapter HTTP clients additionally bound new connections
+(including TLS) to 15s, contained within the header budget rather than added to
+it; reused connections do not restart this budget. Activity/heartbeat bytes
+reset idle (not a thinking-duration limit), never the total
 deadline. Cancellation drops the request future; child rebinding retains the
 policy and adapter identity. The agent retries only recognized transient errors
 before semantic output, with bounded exponential backoff and Retry-After;
