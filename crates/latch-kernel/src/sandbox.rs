@@ -16,6 +16,7 @@ use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::process::Command;
 
 /// A capability the kernel can reason about and grant to one sandboxed call.
@@ -85,7 +86,6 @@ impl Capability {
             self,
             Self::ExternalFilesystemWrite
                 | Self::GitMetadataWrite
-                | Self::NetworkAccess
                 | Self::RemoteSideEffect
                 | Self::UnknownCapability
         )
@@ -180,6 +180,8 @@ pub struct SandboxProfile {
     pub capabilities: CapabilitySet,
     /// External roots explicitly approved for this call, mounted writable.
     pub external_roots: Vec<PathBuf>,
+    /// Linux scratch is isolated per session, even when children share a runner.
+    pub(crate) scratch_namespace: Option<uuid::Uuid>,
 }
 
 impl SandboxProfile {
@@ -196,12 +198,18 @@ impl SandboxProfile {
             state_dir,
             capabilities,
             external_roots: Vec::new(),
+            scratch_namespace: None,
         }
     }
 
     #[must_use]
     pub fn with_external_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.external_roots = roots;
+        self
+    }
+
+    pub(crate) fn with_session(mut self, session_id: uuid::Uuid) -> Self {
+        self.scratch_namespace = Some(session_id);
         self
     }
 
@@ -254,6 +262,7 @@ pub struct SandboxProbe {
 #[derive(Debug, Clone)]
 pub struct SandboxRunner {
     bwrap: PathBuf,
+    scratch: Arc<tempfile::TempDir>,
 }
 
 impl SandboxRunner {
@@ -263,7 +272,14 @@ impl SandboxRunner {
     /// back to the host.
     pub fn detect(workspace: &Path) -> Result<Self> {
         let probe = probe(workspace)?;
-        Ok(Self { bwrap: probe.bwrap })
+        Ok(Self {
+            bwrap: probe.bwrap,
+            scratch: Arc::new(
+                tempfile::Builder::new()
+                    .prefix("latch-sandbox-")
+                    .tempdir()?,
+            ),
+        })
     }
 
     #[must_use]
@@ -274,6 +290,17 @@ impl SandboxRunner {
     /// Builds the bwrap invocation for one call. Every mount is explicit; the
     /// host root is bound read-only first and narrowed afterwards.
     pub fn command(&self, profile: &SandboxProfile, command: &str) -> Result<Command> {
+        let scratch_root = self
+            .scratch
+            .path()
+            .canonicalize()
+            .context("resolve sandbox scratch")?;
+        let scratch = scratch_root.join(
+            profile
+                .scratch_namespace
+                .map_or_else(|| "default".to_owned(), |id| id.to_string()),
+        );
+        std::fs::create_dir_all(&scratch).context("create session sandbox scratch")?;
         // Resolve on the host before constructing mounts. Masking the real
         // directory also hides paths through symlinked state-dir aliases.
         let state_dir = std::fs::canonicalize(&profile.state_dir).with_context(|| {
@@ -315,12 +342,12 @@ impl SandboxRunner {
             cmd.arg("--unshare-net");
         }
         // Baseline: host filesystem read-only, minimal /dev, fresh /proc and
-        // private writable /tmp. /run is masked so system and session sockets
+        // session-private writable /tmp. /run is masked so system and session sockets
         // (D-Bus, Docker, SSH/GPG agents) are not reachable.
         cmd.args(["--ro-bind", "/", "/"]);
         cmd.args(["--dev", "/dev"]);
         cmd.args(["--proc", "/proc"]);
-        cmd.args(["--tmpfs", "/tmp"]);
+        cmd.arg("--bind").arg(&scratch).arg("/tmp");
         cmd.args(["--tmpfs", "/run"]);
         if is_real_directory(Path::new("/var/run")) {
             cmd.args(["--tmpfs", "/var/run"]);
@@ -362,6 +389,12 @@ impl SandboxRunner {
                 cmd.args(["--ro-bind", "/dev/null"]).arg(target);
             }
         }
+        // Hide the backing directory as well as its parent namespace. Otherwise
+        // a workspace/external mount (or TMPDIR outside /tmp) could expose other
+        // sessions or allow a command to replace a future bind source.
+        if mount_exposes(&scratch_root, profile) {
+            cmd.arg("--tmpfs").arg(&scratch_root);
+        }
         // Minimal environment: no host secrets leak through variables.
         cmd.arg("--clearenv");
         cmd.args(["--setenv", "HOME"]).arg(&profile.home);
@@ -369,6 +402,9 @@ impl SandboxRunner {
         cmd.args(["--setenv", "TMPDIR", "/tmp"]);
         cmd.args(["--setenv", "XDG_RUNTIME_DIR", "/tmp/latch-runtime"]);
         cmd.args(["--setenv", "LATCH_SANDBOX", "1"]);
+        for (key, value) in crate::execution::network_environment(profile) {
+            cmd.args(["--setenv", key]).arg(value);
+        }
         for key in [
             "TERM", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "USER", "LOGNAME",
         ] {
@@ -388,7 +424,7 @@ impl SandboxRunner {
             }
         }
         // A read-only workspace still gets controlled build output: cargo and
-        // friends write into the private scratch tmpfs instead of the sources.
+        // friends write into the session scratch directory instead of the sources.
         if !profile.workspace_writable() {
             cmd.args(["--setenv", "CARGO_TARGET_DIR", "/tmp/latch-target"]);
             cmd.args(["--setenv", "PYTHONDONTWRITEBYTECODE", "1"]);
@@ -601,6 +637,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_tmp_survives_commands_without_exposing_host_or_other_sessions() {
+        let dir = tempdir().unwrap();
+        let mut runner = SandboxRunner::detect(dir.path()).expect("required sandbox");
+        // Force the backing directory into a visible workspace to cover its
+        // original host path as well as the /tmp bind destination.
+        runner.scratch = Arc::new(tempfile::tempdir_in(dir.path()).unwrap());
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let first = base_profile(dir.path(), &home).with_session(uuid::Uuid::new_v4());
+        let second = base_profile(dir.path(), &home).with_session(uuid::Uuid::new_v4());
+        let host_marker = tempfile::NamedTempFile::new_in("/tmp").unwrap();
+        let output = run(
+            &runner,
+            &first,
+            "printf retained > /tmp/latch-note && mkdir -p \"$CARGO_TARGET_DIR\" && printf cached > \"$CARGO_TARGET_DIR/cache\"",
+        )
+        .await;
+        assert!(output.status.success(), "{:?}", output);
+        let output = run(
+            &runner.clone(),
+            &first,
+            "cat /tmp/latch-note \"$CARGO_TARGET_DIR/cache\"",
+        )
+        .await;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"retainedcached");
+        let output = run(
+            &runner,
+            &second,
+            &format!(
+                "test ! -e /tmp/latch-note && test ! -e '{}' && test -z \"$(ls '{}')\"",
+                host_marker.path().display(),
+                runner.scratch.path().display(),
+            ),
+        )
+        .await;
+        assert!(output.status.success(), "{:?}", output);
+        // Private scratch must not turn a read-only workspace into a write mount.
+        assert!(
+            !run(&runner, &first, "echo no > forbidden.txt")
+                .await
+                .status
+                .success()
+        );
+        let backing = runner.scratch.path().to_path_buf();
+        drop(runner);
+        assert!(
+            !backing.exists(),
+            "scratch is removed when its runner closes"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_standard_command_can_connect_to_loopback_without_network_hint() {
+        use tokio::io::AsyncReadExt;
+        let dir = tempdir().unwrap();
+        let runner = SandboxRunner::detect(dir.path()).expect("required sandbox");
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // The classifier does not infer network from Bash's /dev/tcp syntax.
+        let command = format!("exec 3<>/dev/tcp/127.0.0.1/{port}; printf hello >&3; exec 3>&-");
+        let classification = crate::safety::classify(
+            "shell",
+            &serde_json::json!({"command":command}),
+            crate::safety::Context {
+                mode: latch_protocol::Mode::Ask,
+                safety: latch_protocol::Safety::Standard,
+                workspace: dir.path(),
+                outside: crate::config::OutsidePolicy::Ask,
+                workspace_write: true,
+            },
+        );
+        assert_eq!(classification.decision, crate::safety::Decision::Allow);
+        let mut profile = base_profile(dir.path(), &home);
+        profile.capabilities = classification.capabilities;
+        let output = run(&runner, &profile, &command).await;
+        assert!(output.status.success(), "{:?}", output);
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            stream.read_to_end(&mut received).await.unwrap();
+            received
+        })
+        .await
+        .unwrap();
+        assert_eq!(received, b"hello");
+    }
+
+    #[tokio::test]
     async fn sensitive_host_sockets_are_not_exposed() {
         let Some(runner) = runner() else {
             return;
@@ -779,6 +906,7 @@ mod tests {
         .with_external_roots(vec![state_dir.clone()]);
         let command = SandboxRunner {
             bwrap: PathBuf::from("bwrap"),
+            scratch: Arc::new(tempdir().unwrap()),
         }
         .command(&profile, "true")
         .unwrap();

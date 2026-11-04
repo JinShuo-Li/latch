@@ -891,10 +891,12 @@ Three orthogonal controls compose into one pipeline:
 `safety::classify` owns capability classification: workspace read/source/
 metadata writes, Git metadata, external filesystem writes, network, remote side
 effects, privileged and destructive operations, extension execution, and
-unknown capabilities. External writes, Git metadata mutation, network, and
-remote side effects always classify as `Ask` first, even under Autonomous +
-All approved; hard deny (privileged/system-destructive) is independent of both
-profile and resolver and cannot be granted. Explicit capability requests
+unknown capabilities. External writes, Git metadata mutation, and remote side
+effects always classify as `Ask` first, even under Autonomous + All approved.
+Shell, validation and managed-process commands receive `NetworkAccess` by
+default under Standard/Autonomous, including scripts and dependency tools;
+Strict requires a requested or inferred network capability and approval. Hard
+deny (privileged/system-destructive) is independent of both profile and resolver and cannot be granted. Explicit capability requests
 (`capabilities: ["network"]`) are parsed from tool arguments; unknown names
 become `UnknownCapability` -> `Deny` because no executable sandbox grant exists.
 
@@ -997,14 +999,28 @@ set; failure is stored as an actionable refusal and shell/exec/validation/git
 inspection all fail rather than running unsandboxed. A `SandboxProfile` binds
 the host root read-only, mounts the workspace explicitly (read-only for
 inspection; writable with `.git` remounted read-only unless `GitMetadataWrite`
-was granted), adds call-scoped external writable roots, provides private tmpfs
-`/tmp` and `/run`, masks home credentials, clears the environment, and isolates
-user/PID/IPC/UTS namespaces plus network (re-shared only when the profile
-grants it). Kernel-internal bookkeeping (`git status`, `git show`, drift
+was granted), adds call-scoped external writable roots, binds a session-private
+writable `/tmp` and mounts a private tmpfs `/run`, masks home credentials, clears
+the environment, and isolates user/PID/IPC/UTS namespaces plus network (re-shared only when the profile
+grants it). Network-authorized processes inherit only an allowlist of proxy
+and CA environment settings alongside the existing runtime environment.
+Kernel-internal bookkeeping (`git status`, `git show`, drift
 snapshots) and `search` run fixed, Bash-quoted inspection commands through the
 same backend. Extension hosts start through the same
 sandbox with a read-only workspace and network; their individual tool arguments
 remain a cooperative boundary, documented rather than overclaimed.
+
+Linux scratch is owned by the runner and partitioned by session id, including
+child sessions. Its original host backing path is also masked so a visible
+workspace cannot expose another session’s scratch or replace bind sources.
+Shell commands can reuse `/tmp` files and read-only build output
+across calls; scratch is cleaned when the runner closes and is not restored after
+a restart. Explicit `/tmp` shell writes do not ask for an external host mount;
+they write into this private namespace. An explicit `external_write` capability
+with an identifiable `/tmp` target instead requests a call-scoped host mount
+through normal approval. Host temporary files stay hidden unless
+a workspace or approved external mount explicitly exposes them. Native file tools
+remain workspace-scoped; use shell for temporary files.
 
 Every command and extension profile carries the configured Latch state directory.
 The sandbox resolves its real path and masks the whole directory after workspace

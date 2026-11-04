@@ -307,10 +307,21 @@ fn classify_command(tool: &str, args: &Value, context: Context<'_>) -> Classific
     let mut capabilities = CapabilitySet::new();
     capabilities.insert(Capability::WorkspaceRead);
     capabilities.insert(Capability::BuildArtifactWrite);
+    // Dependencies and scripts can open sockets without naming a known network
+    // tool. Grant the normal developer network surface up front; Strict keeps
+    // its explicit capability/approval path.
+    if context.safety != Safety::Strict {
+        capabilities.insert(Capability::NetworkAccess);
+    }
     if context.mode.can_mutate() {
         capabilities.insert(Capability::WorkspaceSourceWrite);
     }
-    if let Some(path) = inferred_external_write(&command, context.workspace) {
+    let requested = requested_capabilities(args);
+    if let Some(path) = inferred_external_write(
+        &command,
+        context.workspace,
+        requested.contains(Capability::ExternalFilesystemWrite),
+    ) {
         if system_destructive_target(&path) {
             capabilities.insert(Capability::DestructiveOperation);
             return Classification::deny(
@@ -344,7 +355,7 @@ fn classify_command(tool: &str, args: &Value, context: Context<'_>) -> Classific
             );
         }
         let mut capabilities = capabilities;
-        capabilities.extend(&requested_capabilities(args));
+        capabilities.extend(&requested);
         capabilities.extend(&inferred_command_capabilities(&command));
         return Classification::ask(
             capabilities,
@@ -353,7 +364,7 @@ fn classify_command(tool: &str, args: &Value, context: Context<'_>) -> Classific
             "external filesystem write requires explicit approval",
         );
     }
-    capabilities.extend(&requested_capabilities(args));
+    capabilities.extend(&requested);
     capabilities.extend(&inferred_command_capabilities(&command));
     if capabilities.contains(Capability::ExternalFilesystemWrite) {
         return Classification::deny(
@@ -391,7 +402,7 @@ fn safety_decision(capabilities: &CapabilitySet, context: Context<'_>) -> Decisi
     if capabilities.contains(Capability::UnknownCapability) {
         return Decision::Deny("unknown capability has no executable sandbox grant".into());
     }
-    if capabilities.contains(Capability::NetworkAccess) && context.safety != Safety::Autonomous {
+    if capabilities.contains(Capability::NetworkAccess) && context.safety == Safety::Strict {
         return Decision::Ask("network access requires explicit approval".into());
     }
     if context.safety == Safety::Strict
@@ -810,9 +821,22 @@ fn system_destructive_target(path: &Path) -> bool {
 /// A conservative best-effort detection of a shell command that names an
 /// absolute write target outside the workspace. The sandbox is the real
 /// boundary; this exists so the capability escalation becomes an `Ask`.
-pub(crate) fn inferred_external_write(command: &str, workspace: &Path) -> Option<PathBuf> {
+fn inferred_external_write(
+    command: &str,
+    workspace: &Path,
+    host_write_requested: bool,
+) -> Option<PathBuf> {
     let path = inferred_write_target(command)?;
     if path.starts_with(workspace) {
+        return None;
+    }
+    // Linux /tmp is a private sandbox mount, not a host write grant. Normalize
+    // traversal lexically in the sandbox namespace, without resolving host
+    // symlinks that are not visible in that mount.
+    if !host_write_requested
+        && cfg!(target_os = "linux")
+        && crate::workspace_path::lexical_normalize(&path).starts_with("/tmp")
+    {
         return None;
     }
     Some(path)
@@ -1330,12 +1354,107 @@ mod tests {
             context(Mode::Work, Safety::Strict, workspace),
         );
         assert!(matches!(strict.decision, Decision::Ask(_)));
+        let standard = classify(
+            "shell",
+            &json!({"command": "curl https://example.test"}),
+            context(Mode::Work, Safety::Standard, workspace),
+        );
+        assert!(matches!(standard.decision, Decision::Allow));
         let autonomous = classify(
             "shell",
             &json!({"command": "curl https://example.test"}),
             context(Mode::Work, Safety::Autonomous, workspace),
         );
         assert!(matches!(autonomous.decision, Decision::Allow));
+    }
+
+    #[test]
+    fn scripts_and_builds_receive_default_network_but_inspection_tools_do_not() {
+        for safety in [Safety::Standard, Safety::Autonomous] {
+            for mode in [Mode::Ask, Mode::Plan, Mode::Work] {
+                for tool in ["shell", "validate", "exec_start"] {
+                    let classified = classify(
+                        tool,
+                        &json!({"command": "python3 fetch_dependencies.py"}),
+                        context(mode, safety, test_workspace()),
+                    );
+                    if tool == "exec_start" && mode != Mode::Work {
+                        assert!(matches!(classified.decision, Decision::Deny(_)));
+                    } else {
+                        assert!(matches!(classified.decision, Decision::Allow));
+                        assert!(classified.capabilities.contains(Capability::NetworkAccess));
+                    }
+                }
+            }
+        }
+        for (tool, args) in [
+            ("shell", json!({"command": "python3 fetch_dependencies.py"})),
+            ("search", json!({"query": "TODO"})),
+            ("git_status", json!({})),
+        ] {
+            let classified = classify(
+                tool,
+                &args,
+                context(Mode::Ask, Safety::Strict, test_workspace()),
+            );
+            assert!(!classified.capabilities.contains(Capability::NetworkAccess));
+        }
+        for safety in [Safety::Strict, Safety::Standard, Safety::Autonomous] {
+            let classified = classify(
+                "shell",
+                &json!({"command": "git push origin main"}),
+                context(Mode::Work, safety, test_workspace()),
+            );
+            assert!(matches!(classified.decision, Decision::Ask(_)));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shell_scratch_writes_need_no_external_host_mount() {
+        for mode in [Mode::Ask, Mode::Plan, Mode::Work] {
+            for command in [
+                "echo hello > /tmp/note",
+                "mkdir /tmp/build",
+                "touch /tmp/../tmp/file",
+            ] {
+                let mut ctx = context(mode, Safety::Standard, test_workspace());
+                ctx.outside = OutsidePolicy::Deny;
+                let classified = classify("shell", &json!({"command":command}), ctx);
+                assert!(
+                    matches!(classified.decision, Decision::Allow),
+                    "{command}: {:?}",
+                    classified.decision
+                );
+                assert!(classified.external_roots.is_empty());
+                assert!(
+                    !classified
+                        .capabilities
+                        .contains(Capability::ExternalFilesystemWrite)
+                );
+            }
+        }
+        let classified = classify(
+            "shell",
+            &json!({"command":"echo no > /tmp/../opt/latch-note"}),
+            context(Mode::Work, Safety::Standard, test_workspace()),
+        );
+        assert!(matches!(classified.decision, Decision::Ask(_)));
+        assert!(
+            classified
+                .capabilities
+                .contains(Capability::ExternalFilesystemWrite)
+        );
+        let classified = classify(
+            "shell",
+            &json!({"command":"echo host > /tmp/latch-host/file", "capabilities":["external_write"]}),
+            context(Mode::Work, Safety::Standard, test_workspace()),
+        );
+        assert!(matches!(classified.decision, Decision::Ask(_)));
+        assert_eq!(
+            classified.external_roots,
+            vec![PathBuf::from("/tmp/latch-host")]
+        );
     }
 
     #[test]
@@ -1371,7 +1490,11 @@ mod tests {
     #[test]
     fn command_external_write_is_detected() {
         let workspace = test_workspace();
-        let outside = workspace.parent().unwrap().join("outside/file.txt");
+        let outside = if cfg!(target_os = "linux") {
+            PathBuf::from("/opt/latch-policy-outside/file.txt")
+        } else {
+            workspace.parent().unwrap().join("outside/file.txt")
+        };
         let command = format!(
             "echo hi > {}",
             outside.display().to_string().replace('\\', "/")

@@ -122,7 +122,7 @@ impl PromptCompiler {
                 "latch.permissions",
                 130,
                 true,
-                "Shell runs in a mandatory sandbox: request network, Git metadata mutation, or outside-writable paths explicitly in tool arguments (for example `capabilities: [\"network\"]`) so the kernel can classify them.",
+                "Sandboxed shell: Standard/Autonomous allow network; Strict needs `capabilities: [\"network\"]` approval. Request Git/external writes explicitly. Linux shell /tmp lasts until restart.",
             ),
             fragment(
                 "latch.subagents",

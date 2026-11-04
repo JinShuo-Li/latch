@@ -6,6 +6,35 @@ use anyhow::Result;
 use std::path::Path;
 use tokio::process::Command;
 
+/// Ordinary proxy/CA settings are needed for dependency downloads on managed
+/// networks. Only network-authorized processes inherit this bounded allowlist.
+pub(crate) fn network_environment(
+    profile: &SandboxProfile,
+) -> impl Iterator<Item = (&'static str, std::ffi::OsString)> + '_ {
+    [
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+    ]
+    .into_iter()
+    .filter_map(|key| {
+        if profile.network() {
+            std::env::var_os(key).map(|value| (key, value))
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(any(target_os = "macos", all(test, unix)))]

@@ -249,7 +249,12 @@ classification, search prerequisite discovery, and platform process cleanup.
 `workspace_path.rs` shares alias-safe resolution and platform file-alias
 checks between tools and execution.
 Linux delegates to the mandatory Bubblewrap runner in
-`sandbox.rs`; Windows uses the embedded `native/windows/boundary/` runner,
+`sandbox.rs`; Standard/Autonomous shell, validation and managed commands receive
+network by default, while Strict requires explicit network approval. Network
+profiles inherit a bounded proxy/CA environment allowlist. Linux `/tmp` is
+runner-owned, session-partitioned scratch shared across calls and removed at
+runner close; shell writes there do not authorize host `/tmp` writes. Native
+file tools remain workspace-scoped. Windows uses the embedded `native/windows/boundary/` runner,
 `cmd.exe`, a per-call AppContainer, a write-restricted token, durable ACL
 recovery, and a Job Object. It has no unsandboxed or local-account fallback.
 The native runner is built by

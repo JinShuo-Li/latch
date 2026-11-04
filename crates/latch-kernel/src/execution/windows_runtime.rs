@@ -120,6 +120,7 @@ impl NativeRuntime {
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .current_dir(&self.runtime)
             .env_clear()
+            .envs(super::network_environment(profile))
             .stdin(Stdio::null())
             .kill_on_drop(true);
         process

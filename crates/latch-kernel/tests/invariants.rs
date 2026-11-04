@@ -41,6 +41,52 @@ use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
 #[test]
+fn default_command_network_does_not_grant_host_writes_or_remote_mutation() {
+    use latch_kernel::sandbox::Capability;
+    let workspace = tempdir().unwrap();
+    let context = SafetyContext {
+        mode: Mode::Ask,
+        safety: Safety::Standard,
+        workspace: workspace.path(),
+        outside: OutsidePolicy::Ask,
+        workspace_write: true,
+    };
+    let classify = |tool, args| latch_kernel::safety::classify(tool, &args, context);
+    let command = classify("shell", json!({"command":"python3 fetch_dependencies.py"}));
+    assert_eq!(command.decision, SafetyDecision::Allow);
+    assert!(command.capabilities.contains(Capability::NetworkAccess));
+    assert!(
+        !command
+            .capabilities
+            .contains(Capability::WorkspaceSourceWrite)
+    );
+    assert!(
+        !command
+            .capabilities
+            .contains(Capability::ExternalFilesystemWrite)
+    );
+    assert!(command.external_roots.is_empty());
+    assert!(matches!(
+        classify("shell", json!({"command":"git push origin main"})).decision,
+        SafetyDecision::Ask(_)
+    ));
+    let strict = latch_kernel::safety::classify(
+        "shell",
+        &json!({"command":"curl https://example.test"}),
+        SafetyContext {
+            safety: Safety::Strict,
+            ..context
+        },
+    );
+    assert!(matches!(strict.decision, SafetyDecision::Ask(_)));
+    assert!(
+        !classify("git_status", json!({}))
+            .capabilities
+            .contains(Capability::NetworkAccess)
+    );
+}
+
+#[test]
 fn lsp_is_optional_observation_with_no_write_or_network_authority() {
     use latch_kernel::sandbox::Capability;
     let config: latch_kernel::config::Config = toml::from_str("").unwrap();

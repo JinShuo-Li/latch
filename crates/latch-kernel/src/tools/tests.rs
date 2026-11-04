@@ -115,6 +115,22 @@ fn configured_state_dir_reaches_commands_extensions_and_children() {
     );
     assert_eq!(executor.extension_sandbox_profile().state_dir, state_dir);
     assert_eq!(
+        executor.extension_sandbox_profile().scratch_namespace,
+        Some(session)
+    );
+    let child_session = Uuid::new_v4();
+    let child = executor.for_child(child_session).unwrap();
+    assert_eq!(
+        child
+            .sandbox_profile(&call("shell", json!({"command":"pwd"})))
+            .scratch_namespace,
+        Some(child_session)
+    );
+    assert_eq!(
+        child.extension_sandbox_profile().scratch_namespace,
+        Some(child_session)
+    );
+    assert_eq!(
         executor
             .for_child(Uuid::new_v4())
             .unwrap()
@@ -1619,6 +1635,7 @@ async fn approved_shell_external_write_uses_only_its_call_scoped_mount() {
         "external-shell",
         "shell",
         json!({
+            "capabilities": ["external_write"],
             "command": if cfg!(windows) { format!("echo approved > {}", target.display()) } else { format!("printf approved > {}", target.display()) }
         }),
     );

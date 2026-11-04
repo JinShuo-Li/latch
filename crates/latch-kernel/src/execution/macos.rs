@@ -70,6 +70,7 @@ impl MacosBackend {
             )
             .env("TMPDIR", &scratch)
             .env("LATCH_SANDBOX", "1")
+            .envs(super::network_environment(profile))
             .stdin(Stdio::null());
         for key in [
             "TERM",

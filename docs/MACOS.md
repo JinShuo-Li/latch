@@ -25,7 +25,8 @@ qualified. The Unix installer chooses ARM64 on Darwin, verifies SHA256 using
 
 The execution boundary uses `/usr/bin/sandbox-exec` and refuses to run if its
 startup probe fails. Workspace writes, Git metadata writes, external roots and
-IP networking follow existing capability approval. Commands inherit a minimal
+IP networking follow capability policy (command networking is allowed by default
+in Standard/Autonomous; Strict requires approval). Commands inherit a minimal
 environment and writable scratch; credential paths, Keychains and Latch state
 are denied. Bash startup profiles are disabled. Child processes inherit
 Seatbelt, and cancellation terminates the process group.

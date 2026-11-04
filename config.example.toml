@@ -112,7 +112,9 @@ request_timeout_seconds = 1800
 
 [safety]
 # Strict | Standard | Autonomous. Safety decides Allow/Ask/Deny; it never
-# changes what the Mode permits.
+# changes what the Mode permits. Standard/Autonomous commands can use the
+# network by default; Strict requires explicit network capability and approval.
+# Linux commands share a private /tmp for this running session.
 level = "standard"
 
 [permissions]

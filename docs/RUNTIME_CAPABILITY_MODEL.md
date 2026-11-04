@@ -353,7 +353,9 @@ Capability: kind `service`, owner `Service(name)`, lifetime `Run`, scope
 exposure as durable provenance, serves it through an authenticated channel,
 and tears it down on run cancellation or session close. Raw socket passthrough
 is not a capability; the declared hosts/ports bound what may be exposed, and
-network access remains an `Ask` under Strict/Standard.
+Strict network access remains an `Ask`. Standard/Autonomous command profiles
+grant network by default; this does not implement the future endpoint-scoped
+service exposure port.
 
 ### MCP integration
 
@@ -487,7 +489,27 @@ fixtures cover payloads, descendants, denials and cancellation cleanup.
 The Apple Silicon backend in `execution/macos.rs` maps the same `SandboxProfile`
 to deny-default Seatbelt policy. Workspace and external write roots are explicit;
 read-only calls use private build scratch. Git metadata and credential/state
-exclusions apply within writable roots. Network approval enables IP networking;
+exclusions apply within writable roots. A network capability enables IP networking;
 host Unix sockets are not granted. No unsandboxed fallback exists. Native CI
 executes boundary, CLI and Web startup tests; see [MACOS.md](MACOS.md) for the
 qualification boundary. Linux and Windows mappings remain unchanged.
+
+### Command network defaults and Linux scratch
+
+Standard/Autonomous shell, validation and managed-process calls include the
+network capability even when a script or dependency tool hides its socket use.
+Strict retains explicit network classification and approval. Network-authorized
+processes inherit a bounded proxy/CA environment allowlist. Fixed inspection and
+LSP profiles remain offline; MCP approvals and known remote-side-effect approvals
+are unchanged. Network capability is broad IP access, not an endpoint filter or
+a guarantee that arbitrary scripts have no remote side effects.
+
+Linux `/tmp` is a writable private directory partitioned by session id within
+the execution runner, shared by that session’s command calls and extension host.
+It is removed when the runner closes and is not durable resume state. Explicit
+shell writes there need no external host write grant. Explicit `external_write`
+requests for identifiable `/tmp` targets retain normal host-mount approval.
+Host `/tmp` contents remain hidden unless exposed through the workspace or an
+approved external root. The original scratch backing path is masked even when
+its parent is exposed, preserving isolation between sessions. Kernel-native file
+tools remain workspace-scoped. Windows and macOS scratch mappings are unchanged.

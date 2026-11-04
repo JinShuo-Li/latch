@@ -222,6 +222,7 @@ impl ToolExecutor {
             self.state_dir.clone(),
             capabilities,
         )
+        .with_session(self.session_id)
     }
     pub fn sandbox_runner_for_extension(&self) -> Result<ExecutionBackend> {
         self.sandbox_runner()
@@ -270,6 +271,7 @@ impl ToolExecutor {
             capabilities,
         )
         .with_external_roots(external_roots)
+        .with_session(self.session_id)
     }
     /// Records the scoped capability grant a resolver approved for one call.
     /// Grants are single-use and never override a hard deny.

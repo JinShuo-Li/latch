@@ -310,3 +310,11 @@ prompt, provider serialization, whole-unit rollover or recall. Disconnect retain
 MCP schemas for the session so it cannot invalidate the cached tool prefix.
 Possible external mutations commit before execution and stale older validation.
 See [Skills and MCP](SKILLS_AND_MCP.md) for configuration and compatibility.
+
+## Temporary command files
+
+Linux command scratch (`/tmp`, also `$TMPDIR`) is private to each session and
+shared across its commands while the execution runner is alive. It is cleaned
+when the runner closes, is not durable evidence, and is not restored on resume
+after a restart. Save files needed for future turns or resumed work in the
+workspace; preserve validation/evidence through the existing durable tools.
