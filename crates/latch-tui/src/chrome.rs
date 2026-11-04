@@ -3,6 +3,22 @@
 
 use super::transcript::{blink_tool_markers, notice_style};
 use super::*;
+use ratatui::{
+    layout::Margin,
+    widgets::{Block, BorderType, Borders},
+};
+
+/// Keep chrome away from terminal edges without starving very small screens.
+fn screen_content(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    area.inner(Margin {
+        horizontal: if area.width >= 20 { 2 } else { 0 },
+        vertical: u16::from(area.height >= 10),
+    })
+}
+
+fn composer_text_width(width: u16) -> usize {
+    width.saturating_sub(6).max(1) as usize
+}
 
 /// Responsive chrome rows around the composer.
 ///
@@ -1098,14 +1114,33 @@ pub(super) fn draw_composer(
     } else {
         notice_style()
     };
-    // The composer is a neutral band, not a box: a two-column prompt gutter and
-    // a one-column right margin keep text aligned with user-message rows.
-    const GUTTER: usize = 2;
-    let inner_width = (area.width as usize).saturating_sub(GUTTER + 1).max(1);
+    // Border, breathing room, then the two-cell prompt gutter. On tiny
+    // terminals omit the frame rather than sacrificing the editor body.
+    let framed = chrome.top > 0 && chrome.rule > 0 && area.width >= 8;
+    let content_area = if framed {
+        ratatui::layout::Rect {
+            x: area.x + 1,
+            width: area.width - 2,
+            ..area
+        }
+    } else {
+        area
+    };
+    let gutter = if framed { 3 } else { 2 };
+    let inner_width = if framed {
+        composer_text_width(area.width)
+    } else {
+        area.width.saturating_sub(3).max(1) as usize
+    };
     let body_height = chrome.body.max(1) as usize;
     app.last_input_width = inner_width;
     app.last_input_height = body_height;
-    app.composer_body = area;
+    app.composer_body = ratatui::layout::Rect {
+        x: content_area.x + gutter as u16,
+        y: area.y + chrome.spacer + chrome.top,
+        width: inner_width as u16,
+        height: chrome.body,
+    };
     app.input.reconcile_viewport(inner_width, body_height);
 
     let layout = app.input.layout(inner_width);
@@ -1120,8 +1155,8 @@ pub(super) fn draw_composer(
                 .sum::<usize>();
         let mut spans = vec![Span::raw(" ".repeat(indent))];
         spans.extend(content);
-        if used < area.width as usize {
-            spans.push(Span::raw(" ".repeat(area.width as usize - used)));
+        if used < content_area.width as usize {
+            spans.push(Span::raw(" ".repeat(content_area.width as usize - used)));
         }
         Line::from(spans).style(surface)
     };
@@ -1172,23 +1207,34 @@ pub(super) fn draw_composer(
             },
         )];
         spans.extend(content);
-        lines.push(band(spans, 0));
+        lines.push(band(spans, usize::from(framed)));
     }
     for _ in 0..chrome.gap {
         lines.push(band(Vec::new(), 0));
     }
     if chrome.meta > 0 {
-        let meta = composer_meta_line(
-            app,
-            (area.width as usize).saturating_sub(GUTTER),
-            sidebar_shown,
-        );
-        lines.push(band(meta.spans, GUTTER));
+        let meta = composer_meta_line(app, inner_width, sidebar_shown);
+        lines.push(band(meta.spans, gutter));
     }
     for _ in 0..chrome.rule {
         lines.push(band(Vec::new(), 0));
     }
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines), content_area);
+    if framed {
+        let border_area = ratatui::layout::Rect {
+            y: area.y + chrome.spacer,
+            height: area.height.saturating_sub(chrome.spacer),
+            ..area
+        };
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(notice_style())
+                .style(surface),
+            border_area,
+        );
+    }
 
     // The terminal cursor is only placed while it is inside the visible body;
     // a viewport scrolled away hides it rather than pinning it to an edge.
@@ -1196,8 +1242,8 @@ pub(super) fn draw_composer(
         let row = body_start + (cursor_row - viewport);
         // The prompt gutter precedes the first text cell; clamp to the right
         // margin so it never runs past the band.
-        let col = (GUTTER + cursor_col).min(area.width.saturating_sub(2) as usize) as u16;
-        let position = (area.x + col, area.y + row as u16);
+        let col = (gutter + cursor_col).min(content_area.width.saturating_sub(2) as usize) as u16;
+        let position = (content_area.x + col, area.y + row as u16);
         frame.set_cursor_position(position);
         app.last_cursor = Some(position);
     }
@@ -1290,8 +1336,9 @@ pub(super) fn draw_diff_overlay(
 }
 
 pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
-    let area = frame.area();
-    app.last_width = area.width;
+    let screen = frame.area();
+    let area = screen_content(screen);
+    app.last_width = screen.width;
     app.last_cursor = None;
     let palette_active = app.palette.active(&app.input);
     let candidates = if palette_active {
@@ -1307,10 +1354,10 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         .as_ref()
         .is_some_and(|prompt| prompt.expanded);
     let sidebar_shown =
-        sidebar_visible(area.width, app.sidebar_override) && !overlay_open && !request_open;
+        sidebar_visible(screen.width, app.sidebar_override) && !overlay_open && !request_open;
     let sidebar_cols = sidebar_width(area.width, sidebar_shown);
 
-    let composer_inner = area.width.saturating_sub(3).max(1) as usize;
+    let composer_inner = composer_text_width(area.width);
     let content_rows = app.input.total_visual_rows(composer_inner);
     let palette_rows = if palette_active {
         candidates.len().min(MAX_PALETTE_ROWS) as u16
@@ -1402,11 +1449,11 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         }
         if sidebar_cols > 0 && panes.len() > 1 {
             let sidebar_area = panes[1];
-            let inner_width = sidebar_area.width.saturating_sub(2);
+            let inner_width = sidebar_area.width.saturating_sub(4);
             let lines = app.sidebar.render_lines(inner_width, sidebar_area.height);
             let content_area = ratatui::layout::Rect {
-                x: sidebar_area.x + 1,
-                width: sidebar_area.width.saturating_sub(1),
+                x: sidebar_area.x + 2,
+                width: inner_width,
                 ..sidebar_area
             };
             frame.render_widget(Paragraph::new(lines), content_area);

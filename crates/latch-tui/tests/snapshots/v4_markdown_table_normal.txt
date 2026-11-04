@@ -1,24 +1,24 @@
-• Here is the plan:                                                                                 
                                                                                                     
-  Step                        Owner     Status                                                      
-  ────────────────────────────────────────────                                                      
+  • Here is the plan:                                                                               
                                                                                                     
-  Inspect the failing tests   Latch       done                                                      
+    Step                        Owner     Status                                                    
+    ────────────────────────────────────────────                                                    
                                                                                                     
-  Patch the parser            Latch     active                                                      
+    Inspect the failing tests   Latch       done                                                    
                                                                                                     
-  Verify with cargo test      Kernel   pending                                                      
+    Patch the parser            Latch     active                                                    
                                                                                                     
-                                                                                                    
-                                                                                                    
+    Verify with cargo test      Kernel   pending                                                    
                                                                                                     
                                                                                                     
                                                                                                     
-› Ask Latch…                                                                                        
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │ › Ask Latch…                                                                                 │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │   WORK · deepseek-flash/low · main · std · ask                                         ready │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯  
+  enter send  ctrl+j newline  ctrl+p commands                                                       
+  /tmp/latch-ui                                                                       latch v0.3.4  
                                                                                                     
-                                                                                                    
-                                                                                                    
-  WORK · deepseek-flash/low · main · std · ask                                                 ready
-                                                                                                    
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.3.4

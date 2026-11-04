@@ -1,20 +1,20 @@
                                                                                                     
-Latch                                                                                               
-a quiet terminal coding agent                                                                       
                                                                                                     
-Type a request · /help for commands                                                                 
+  Latch                                                                                             
+  a quiet terminal coding agent                                                                     
                                                                                                     
-                                                                                                    
-                                                                                                    
-                                                                                                    
-• Interrupted                                                                                       
+  Type a request · /help for commands                                                               
                                                                                                     
                                                                                                     
-› Ask Latch…                                                                                        
+  • Interrupted                                                                                     
                                                                                                     
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │ › Ask Latch…                                                                                 │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │   WORK · deepseek-flash/low · main · std · ask                                               │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯  
+  enter send  ctrl+j newline  ctrl+p commands                                                       
+  /tmp/latch-ui                                                                       latch v0.3.4  
                                                                                                     
-                                                                                                    
-  WORK · deepseek-flash/low · main · std · ask                                                      
-                                                                                                    
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.3.4

@@ -1,24 +1,24 @@
-• Module     Responsibility         Notes               
-  ──────────────────────────────────────────────────────
                                                         
-  composer   scrollable             keeps the cursor    
-             multiline editor       visible while       
-             viewport               wrapping            
+  • Module     Responsibility       Notes               
+    ──────────────────────────────────────────────────  
                                                         
-  sidebar    responsive session     hidden below 110    
-             state                  columns             
+    composer   scrollable           keeps the cursor    
+               multiline editor     visible while       
+               viewport             wrapping            
                                                         
-                                                        
-                                                        
+    sidebar    responsive           hidden below 110    
+               session state        columns             
                                                         
                                                         
                                                         
                                                         
-› Ask Latch…                                            
+  ╭──────────────────────────────────────────────────╮  
+  │ › Ask Latch…                                     │  
+  │                                                  │  
+  │                                                  │  
+  │                                                  │  
+  │   WORK · deepseek-flash/low · main · std   ready │  
+  ╰──────────────────────────────────────────────────╯  
+  ctrl+p commands                                       
+  /tmp/latch-ui                           latch v0.3.4  
                                                         
-                                                        
-                                                        
-  WORK · deepseek-flash/low · main · std · ask     ready
-                                                        
-ctrl+p commands                                         
-/tmp/latch-ui                               latch v0.3.4

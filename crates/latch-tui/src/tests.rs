@@ -866,14 +866,14 @@ fn multiline_paste_places_the_cursor_on_the_visible_composer_row() {
 
     terminal.draw(|frame| draw(frame, &mut app)).unwrap();
 
-    // The cursor is on the second pasted line inside the composer body:
-    // top border + border/padding columns + cursor display column.
+    // A short terminal scrolls the second pasted line into the one-row body.
     let body = app.composer_body;
     assert_eq!(app.input.cursor(), (1, 3));
-    assert_eq!(app.last_cursor, Some((body.x + 2 + 3, body.y + 1)));
+    assert_eq!(app.input.viewport(), 1);
+    assert_eq!(app.last_cursor, Some((body.x + 3, body.y)));
     terminal
         .backend_mut()
-        .assert_cursor_position((body.x + 2 + 3, body.y + 1));
+        .assert_cursor_position((body.x + 3, body.y));
 }
 
 #[test]
@@ -925,7 +925,7 @@ fn setup_capture_places_cursor_on_the_active_input_surface() {
         .lines()
         .position(|line| line.contains("(type a value)"))
         .unwrap() as u16;
-    assert_eq!(app.last_cursor, Some((2, row)));
+    assert_eq!(app.last_cursor, Some((4, row)));
     for ch in "secret".chars() {
         app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
     }
@@ -935,7 +935,7 @@ fn setup_capture_places_cursor_on_the_active_input_surface() {
         .lines()
         .position(|line| line.contains("••••••"))
         .unwrap() as u16;
-    assert_eq!(app.last_cursor, Some((8, row)));
+    assert_eq!(app.last_cursor, Some((10, row)));
     assert_eq!(app.input.text(), "prompt remains separate");
 
     app.capture = Some(CaptureState::new(CaptureSpec {
@@ -1112,7 +1112,7 @@ fn discovery_output_merges_ids_without_changing_live_model_catalog() {
 }
 
 #[test]
-fn composer_is_a_neutral_band_with_a_prompt_gutter() {
+fn composer_has_a_padded_rounded_frame_and_prompt_gutter() {
     let backend = ratatui::backend::TestBackend::new(48, 12);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::default();
@@ -1123,12 +1123,10 @@ fn composer_is_a_neutral_band_with_a_prompt_gutter() {
     let text = buffer_text(buffer);
     let rows: Vec<&str> = text.lines().collect();
     let area = app.composer_body;
-    // No decorative border: the composer reads as a surface band.
+    assert!(text.contains("  ╭─"), "{text}");
+    assert!(text.contains("  ╰─"), "{text}");
     for row in &rows[area.y as usize..(area.y + area.height) as usize] {
-        assert!(
-            !row.contains('╭') && !row.contains('│') && !row.contains('╰'),
-            "{row:?}"
-        );
+        assert!(row.starts_with("  │ ") && row.ends_with(" │  "), "{row:?}");
     }
     // Every composer cell carries the neutral surface, and the prompt gutter
     // marks the input row.
@@ -1139,11 +1137,11 @@ fn composer_is_a_neutral_band_with_a_prompt_gutter() {
             assert_eq!(cell.style().bg, surface, "composer band is continuous");
         }
     }
-    let body_row = rows[area.y as usize + 1];
-    assert!(body_row.starts_with("› "), "{body_row:?}");
+    let body_row = rows[area.y as usize];
+    assert!(body_row.starts_with("  │ › "), "{body_row:?}");
     // The empty composer leaves the cursor on the first text cell, directly
     // before the placeholder — never one column inside it.
-    assert_eq!(app.last_cursor, Some((area.x + 2, area.y + 1)));
+    assert_eq!(app.last_cursor, Some((area.x, area.y)));
 }
 
 #[test]
@@ -3653,7 +3651,7 @@ fn sidebar_reports_real_reasoning_and_keeps_elapsed_time_during_silence() {
             assert_eq!(buffer.cell((x + 2, y as u16)).unwrap().symbol(), "T");
         }
     }
-    assert_eq!(indicators, vec![200 - sidebar_width(200, true) + 1, 0]);
+    assert_eq!(indicators, vec![200 - sidebar_width(196, true), 2]);
     app.output(Output::AssistantDelta("Public response".into()));
     assert!(render_to_text(&mut app, 200, 40).contains("Writing response"));
     app.output(Output::Cancelling);
@@ -3959,7 +3957,7 @@ fn hanging_resize_and_sidebar_toggle_recompute_actual_visual_rows() {
     ] {
         app.sidebar_override = Some(sidebar);
         let _ = render_to_text(&mut app, width, 28);
-        let viewport = width - sidebar_width(width, sidebar);
+        let viewport = width - 4 - sidebar_width(width - 4, sidebar);
         let lines = transcript_lines(
             app.presentation.cells(),
             None,
@@ -3981,7 +3979,7 @@ fn hanging_resize_and_sidebar_toggle_recompute_actual_visual_rows() {
     let _ = render_to_text(&mut app, 48, 28);
     assert_eq!(
         app.content_rows,
-        semantic_visual_height(app.presentation.cells(), None, true, 48)
+        semantic_visual_height(app.presentation.cells(), None, true, 44)
     );
     assert!(app.scroll <= app.content_rows.saturating_sub(app.viewport_rows));
 }
@@ -3997,10 +3995,10 @@ fn sidebar_divider_is_one_glyph_and_style_across_content_and_resize() {
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(width, 56)).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let buffer = terminal.backend().buffer();
-        let x = width - sidebar_width(width, true);
-        let first = buffer.cell((x, 0)).unwrap();
+        let x = width - 2 - sidebar_width(width - 4, true);
+        let first = buffer.cell((x, 1)).unwrap();
         let mut count = 0;
-        for y in 0..56 {
+        for y in 1..55 {
             let cell = buffer.cell((x, y)).unwrap();
             if cell.symbol() != "│" {
                 break;
@@ -4108,10 +4106,13 @@ fn activity_dot_is_blue_and_aligned_while_tool_dots_blink() {
                 ("• Running cargo check", Color::Yellow),
                 ("• Building", Color::Blue),
             ] {
-                if row.starts_with(label) {
+                if row
+                    .strip_prefix("  ")
+                    .is_some_and(|row| row.starts_with(label))
+                {
                     labels += 1;
-                    assert_eq!(buffer.cell((0, y as u16)).unwrap().fg, color);
-                    assert_ne!(buffer.cell((2, y as u16)).unwrap().symbol(), " ");
+                    assert_eq!(buffer.cell((2, y as u16)).unwrap().fg, color);
+                    assert_ne!(buffer.cell((4, y as u16)).unwrap().symbol(), " ");
                 }
             }
         }

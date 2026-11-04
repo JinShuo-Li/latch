@@ -1,16 +1,16 @@
                                                 
-Latch                                           
-a quiet terminal coding agent                   
                                                 
-Type a request · /help for commands             
+  Latch                                         
+  a quiet terminal coding agent                 
                                                 
-                                                
-                                                
-                                                
-› a narrow but usable composer                  
+  Type a request · /help for commands           
                                                 
                                                 
-  WORK · deepseek-flash/low · main · std   ready
                                                 
-ctrl+p commands                                 
-/tmp/latch-ui                       latch v0.3.4
+  ╭──────────────────────────────────────────╮  
+  │ › a narrow but usable composer           │  
+  │                                          │  
+  │   WORK · deepseek-flash/low        ready │  
+  ╰──────────────────────────────────────────╯  
+  ctrl+p commands                               
+                                                

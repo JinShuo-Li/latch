@@ -1,20 +1,20 @@
-• Running cargo test --workspace                                                                    
+                                                                                                    
+  • Running cargo test --workspace                                                                  
                                                                                                     
                                                                                                     
                                                                                                     
                                                                                                     
                                                                                                     
                                                                                                     
+  • Running tests · cargo test --workspace                                                          
                                                                                                     
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │ › Ask Latch…                                                                                 │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │   WORK · deepseek-flash/low · main · std · ask                                               │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯  
+  enter steer  ctrl+j newline  ctrl+p commands                                                      
+  /tmp/latch-ui                                                                       latch v0.3.4  
                                                                                                     
-• Running tests · cargo test --workspace                                                            
-                                                                                                    
-                                                                                                    
-› Ask Latch…                                                                                        
-                                                                                                    
-                                                                                                    
-                                                                                                    
-  WORK · deepseek-flash/low · main · std · ask                                                      
-                                                                                                    
-enter steer  ctrl+j newline  ctrl+p commands                                                        
-/tmp/latch-ui                                                                           latch v0.3.4

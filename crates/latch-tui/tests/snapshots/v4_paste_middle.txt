@@ -1,11 +1,9 @@
                                                                                                     
-Latch                                                                                               
-a quiet terminal coding agent                                                                       
                                                                                                     
-Type a request · /help for commands                                                                 
+  Latch                                                                                             
+  a quiet terminal coding agent                                                                     
                                                                                                     
-                                                                                                    
-                                                                                                    
+  Type a request · /help for commands                                                               
                                                                                                     
                                                                                                     
                                                                                                     
@@ -15,16 +13,18 @@ Type a request · /help for commands
                                                                                                     
                                                                                                     
                                                                                                     
-  pasted line 42                                                                                  ↑ 
-  pasted line 43                                                                                    
-  pasted line 44                                                                                    
-  pasted line 45                                                                                    
-  pasted line 46                                                                                    
-  pasted line 47                                                                                    
-  pasted line 48                                                                                    
-  pasted line 49                                                                                    
                                                                                                     
-  WORK · deepseek-flash/low · main · std · ask                                                 ready
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │   pasted line 43                                                                           ↑ │  
+  │   pasted line 44                                                                             │  
+  │   pasted line 45                                                                             │  
+  │   pasted line 46                                                                             │  
+  │   pasted line 47                                                                             │  
+  │   pasted line 48                                                                             │  
+  │   pasted line 49                                                                             │  
+  │                                                                                              │  
+  │   WORK · deepseek-flash/low · main · std · ask                                         ready │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯  
+  enter send  ctrl+j newline  ctrl+p commands                                                       
+  /tmp/latch-ui                                                                       latch v0.3.4  
                                                                                                     
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.3.4

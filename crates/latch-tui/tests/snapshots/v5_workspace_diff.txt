@@ -1,24 +1,24 @@
-• Workspace diff                                                                                    
-  1 file  +1 −1                                                                                     
-M src/calc.rs                                                                                       
-index 1111111..2222222 100644                                                                       
-@@ -1,5 +1,5 @@                                                                                     
- pub fn add(a: i32, b: i32) -> i32 {                                                                
-     let base = 10;                                                                                 
--    base + a + b                                                                                   
-+    base + a - b                                                                                   
- }                                                                                                  
+                                                                                                    
+  • Workspace diff                                                                                  
+    1 file  +1 −1                                                                                   
+  M src/calc.rs                                                                                     
+  index 1111111..2222222 100644                                                                     
+  @@ -1,5 +1,5 @@                                                                                   
+   pub fn add(a: i32, b: i32) -> i32 {                                                              
+       let base = 10;                                                                               
+  -    base + a + b                                                                                 
+  +    base + a - b                                                                                 
+   }                                                                                                
                                                                                                     
                                                                                                     
                                                                                                     
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │ › Ask Latch…                                                                                 │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │   WORK · deepseek-flash/low · main · std · ask                                         ready │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯  
+  enter send  ctrl+j newline  ctrl+p commands                                                       
+  /tmp/latch-ui                                                                       latch v0.3.4  
                                                                                                     
-                                                                                                    
-                                                                                                    
-› Ask Latch…                                                                                        
-                                                                                                    
-                                                                                                    
-                                                                                                    
-  WORK · deepseek-flash/low · main · std · ask                                                 ready
-                                                                                                    
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.3.4

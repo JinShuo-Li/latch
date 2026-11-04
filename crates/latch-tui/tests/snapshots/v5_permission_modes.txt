@@ -1,30 +1,30 @@
                                                                                                     
-Latch                                                                                               
-a quiet terminal coding agent                                                                       
                                                                                                     
-Type a request · /help for commands                                                                 
+  Latch                                                                                             
+  a quiet terminal coding agent                                                                     
                                                                                                     
-                                                                                                    
-                                                                                                    
+  Type a request · /help for commands                                                               
                                                                                                     
                                                                                                     
                                                                                                     
                                                                                                     
-  Permissions                                                                                       
                                                                                                     
-  › Ask for approval (current)  Latch asks before operations that require approval.                 
-    Approve for me  Latch's reviewer decides eligible requests on your behalf.                      
-    Auto approve  Eligible operations proceed automatically with recorded provenance.               
+    Permissions                                                                                     
                                                                                                     
-  ↑↓ select · enter apply · esc cancel                                                              
+    › Ask for approval (current)  Latch asks before operations that require approval.               
+      Approve for me  Latch's reviewer decides eligible requests on your behalf.                    
+      Auto approve  Eligible operations proceed automatically with recorded provenance.             
                                                                                                     
-                                                                                                    
-                                                                                                    
-› Ask Latch…                                                                                        
+    ↑↓ select · enter apply · esc cancel                                                            
                                                                                                     
                                                                                                     
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │ › Ask Latch…                                                                                 │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │   WORK · deepseek-flash/low · main · std · ask                                         ready │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯  
+  enter send  ctrl+j newline  ctrl+p commands                                                       
+  /tmp/latch-ui                                                                       latch v0.3.4  
                                                                                                     
-  WORK · deepseek-flash/low · main · std · ask                                                 ready
-                                                                                                    
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.3.4

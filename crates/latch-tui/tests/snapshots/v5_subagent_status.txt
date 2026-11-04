@@ -1,30 +1,30 @@
-• Spawned `audit-locks`                                                                                                                                     │deepseek-flash                             
-  └ child session running                                                                                                                                   │WORK · 0 turns · 0s                        
-                                                                                                                                                            │on main                                    
-• Child agent `audit-locks` completed                                                                                                                       │                                           
-  └ Found two unsynchronized locks.                                                                                                                         │ACTIVITY                                   
-                                                                                                                                                            │• Preparing request                        
-                                                                                                                                                            │  0s in phase · 0s quiet                   
-                                                                                                                                                            │                                           
-                                                                                                                                                            │TASK                                       
-                                                                                                                                                            │InProgress                                 
-                                                                                                                                                            │Implementation unchanged                   
-                                                                                                                                                            │Validation pending                         
-                                                                                                                                                            │                                           
-                                                                                                                                                            │CHILDREN                                   
-                                                                                                                                                            │0 active · 1 known                         
-                                                                                                                                                            │✓ audit-locks [explorer]                   
-                                                                                                                                                            │  Found two unsynchronized locks.          
-                                                                                                                                                            │                                           
-                                                                                                                                                            │CONTEXT                                    
-                                                                                                                                                            │                                           
                                                                                                                                                                                                         
+  • Spawned `audit-locks`                                                                                                                                 │ deepseek-flash                              
+    └ child session running                                                                                                                               │ WORK · 0 turns · 0s                         
+                                                                                                                                                          │ on main                                     
+  • Child agent `audit-locks` completed                                                                                                                   │                                             
+    └ Found two unsynchronized locks.                                                                                                                     │ ACTIVITY                                    
+                                                                                                                                                          │ • Preparing request                         
+                                                                                                                                                          │   0s in phase · 0s quiet                    
+                                                                                                                                                          │                                             
+                                                                                                                                                          │ TASK                                        
+                                                                                                                                                          │ InProgress                                  
+                                                                                                                                                          │ Implementation unchanged                    
+                                                                                                                                                          │ Validation pending                          
+                                                                                                                                                          │                                             
+                                                                                                                                                          │ CHILDREN                                    
+                                                                                                                                                          │ 0 active · 1 known                          
+                                                                                                                                                          │ ✓ audit-locks [explorer]                    
+                                                                                                                                                          │   Found two unsynchronized locks.           
+                                                                                                                                                          │                                             
                                                                                                                                                                                                         
-› Ask Latch…                                                                                                                                                                                            
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │ › Ask Latch…                                                                                                                                                                                     │  
+  │                                                                                                                                                                                                  │  
+  │                                                                                                                                                                                                  │  
+  │                                                                                                                                                                                                  │  
+  │   WORK · deepseek-flash/low · main · std · ask                                                                                                                                             ready │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  
+  enter send  ctrl+j newline  ctrl+p commands                                                                                                                                                           
+  /tmp/latch-ui                                                                                                                                                                           latch v0.3.4  
                                                                                                                                                                                                         
-                                                                                                                                                                                                        
-                                                                                                                                                                                                        
-  WORK · deepseek-flash/low · main · std · ask                                                                                                                                                     ready
-                                                                                                                                                                                                        
-enter send  ctrl+j newline  ctrl+p commands                                                                                                                                                             
-/tmp/latch-ui                                                                                                                                                                               latch v0.3.4

@@ -1,34 +1,34 @@
-                                                                                            │                           
-Latch                                                                                       │WORK · 0 turns             
-a quiet terminal coding agent                                                               │                           
-                                                                                            │TASK                       
-Type a request · /help for commands                                                         │InProgress                 
-                                                                                            │Implementation unchanged   
-                                                                                            │Validation pending         
-                                                                                            │                           
-                                                                                            │CONTEXT                    
-                                                                                            │                           
-                                                                                            │                           
-                                                                                            │                           
                                                                                                                         
-  Setup · OpenAI · Save                                                                                                 
+                                                                                           │                            
+  Latch                                                                                    │ WORK · 0 turns             
+  a quiet terminal coding agent                                                            │                            
+                                                                                           │ TASK                       
+  Type a request · /help for commands                                                      │ InProgress                 
+                                                                                           │ Implementation unchange    
+                                                                                           │ Validation pending         
+                                                                                           │                            
+                                                                                           │ CONTEXT                    
+                                                                                           │                            
                                                                                                                         
-  › Save provider  config and secret staged                                                                             
-    Cancel                                                                                                              
+    Setup · OpenAI · Save                                                                                               
                                                                                                                         
-  Provider   OpenAI (openai)                                                                                            
-  Credential secure local storage (value hidden)                                                                        
-  Models     gpt-5.5                                                                                                    
-  Default    gpt-5.5                                                                                                    
+    › Save provider  config and secret staged                                                                           
+      Cancel                                                                                                            
                                                                                                                         
-  ↑↓ select · enter choose · esc back                                                                                   
+    Provider   OpenAI (openai)                                                                                          
+    Credential secure local storage (value hidden)                                                                      
+    Models     gpt-5.5                                                                                                  
+    Default    gpt-5.5                                                                                                  
                                                                                                                         
+    ↑↓ select · enter choose · esc back                                                                                 
                                                                                                                         
-› Ask Latch…                                                                                                            
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │ › Ask Latch…                                                                                                     │  
+  │                                                                                                                  │  
+  │                                                                                                                  │  
+  │                                                                                                                  │  
+  │   WORK · std · ask                                                                                         ready │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  
+  enter send  ctrl+j newline  ctrl+p commands                                                                           
+  .                                                                                                       latch v0.3.4  
                                                                                                                         
-                                                                                                                        
-                                                                                                                        
-  WORK · std · ask                                                                                                 ready
-                                                                                                                        
-enter send  ctrl+j newline  ctrl+p commands                                                                             
-.                                                                                                           latch v0.3.4

@@ -1,24 +1,24 @@
                                                                                                     
-› Fix the failing test without changing the public API.                                             
+                                                                                                    
+  › Fix the failing test without changing the public API.                                           
                                                                                                     
                                                                                                     
-• I'll inspect the failing case and patch it.                                                       
+  • I'll inspect the failing case and patch it.                                                     
                                                                                                     
-  • read the parser                                                                                 
+    • read the parser                                                                               
                                                                                                     
-  • keep the API stable                                                                             
-                                                                                                    
-                                                                                                    
-                                                                                                    
+    • keep the API stable                                                                           
                                                                                                     
                                                                                                     
                                                                                                     
                                                                                                     
-› Ask Latch…                                                                                        
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │ › Ask Latch…                                                                                 │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │                                                                                              │  
+  │   WORK · deepseek-flash/low · main · std · ask                                         ready │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯  
+  enter send  ctrl+j newline  ctrl+p commands                                                       
+  /tmp/latch-ui                                                                       latch v0.3.4  
                                                                                                     
-                                                                                                    
-                                                                                                    
-  WORK · deepseek-flash/low · main · std · ask                                                 ready
-                                                                                                    
-enter send  ctrl+j newline  ctrl+p commands                                                         
-/tmp/latch-ui                                                                           latch v0.3.4

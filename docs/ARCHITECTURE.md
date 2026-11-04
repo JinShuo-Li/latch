@@ -1184,14 +1184,19 @@ terminals and multiplexers from translating wheel events into composer history
 keys. `LATCH_MOUSE_CAPTURE=0` opts out; native text selection typically uses
 Shift-drag while capture is active. Alternate-screen, paste, and mouse modes are
 left symmetrically.
+The TUI reserves two columns at each screen edge and one row above and below
+on ordinary terminals, dropping these margins on very small screens. The
+composer uses a muted rounded frame, internal padding and a two-cell prompt
+gutter; its wrap width, cursor and mouse viewport use the actual editor bounds.
+The sidebar retains its quiet divider with padding on both sides of its text.
 The idle composer keeps a three-row editor body when space permits, with
 metadata, hints, and a workspace/version footer. Layout chrome drops before
 the editor body shrinks on short terminals; multiline input grows within a
 bounded viewport. The startup screen uses a small Latch title without a pixel
 wordmark. The palette (`latch-tui::theme`) centralizes every
 surface, status, and diff decision and degrades to semantic foregrounds without
-backgrounds on ANSI-16. User messages, the composer, and action surfaces share
-a neutral band; assistant messages use the terminal background and a faint
+backgrounds on ANSI-16. User messages, the framed composer, and action surfaces
+share a neutral surface; assistant messages use the terminal background and a faint
 gutter. Approvals and `/safety`/`/permissions` selection render above the
 composer. A compact status row reports running work derived from authoritative
 state; running and completed tool cells remain visible in the transcript.
