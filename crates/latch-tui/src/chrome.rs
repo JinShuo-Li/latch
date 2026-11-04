@@ -1108,7 +1108,6 @@ pub(super) fn draw_composer(
         && app.setup_center.is_none()
         && app.profile_selector.is_none()
         && app.selector.is_none();
-    let surface = palette.surface();
     let prompt_style = if focused {
         palette.accent()
     } else {
@@ -1158,7 +1157,7 @@ pub(super) fn draw_composer(
         if used < content_area.width as usize {
             spans.push(Span::raw(" ".repeat(content_area.width as usize - used)));
         }
-        Line::from(spans).style(surface)
+        Line::from(spans)
     };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -1230,18 +1229,9 @@ pub(super) fn draw_composer(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(notice_style())
-                .style(surface),
+                .border_style(notice_style()),
             border_area,
         );
-        // Terminal backgrounds fill whole cells, even behind rounded glyphs.
-        // Leave the four corner cells on the terminal background so the
-        // neutral surface does not protrude beyond the rounded outline.
-        for x in [border_area.left(), border_area.right() - 1] {
-            for y in [border_area.top(), border_area.bottom() - 1] {
-                frame.buffer_mut()[(x, y)].set_bg(Color::Reset);
-            }
-        }
     }
 
     // The terminal cursor is only placed while it is inside the visible body;

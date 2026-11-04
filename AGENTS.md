@@ -306,7 +306,8 @@ all input/output events. Tables measure styled spans, keep fixed
 column origins, and separate records with one blank row. Ctrl+T retains full
 command/output details.
 TUI chrome uses adaptive outer margins (two columns/one row on ordinary
-terminals), a padded rounded composer and a padded sidebar. Keep wrapping,
+terminals), a padded rounded composer with no background fill, and a padded
+sidebar. Keep wrapping,
 cursor positions, mouse hit bounds and transcript cache widths tied to the
 inset content rectangles rather than the full terminal dimensions.
 Mouse capture defaults on to prevent wheel-to-arrow history navigation;

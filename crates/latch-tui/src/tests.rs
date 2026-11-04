@@ -1128,13 +1128,11 @@ fn composer_has_a_padded_rounded_frame_and_prompt_gutter() {
     for row in &rows[area.y as usize..(area.y + area.height) as usize] {
         assert!(row.starts_with("  │ ") && row.ends_with(" │  "), "{row:?}");
     }
-    // Every composer cell carries the neutral surface, and the prompt gutter
-    // marks the input row.
-    let surface = crate::theme::palette().surface().bg;
+    // Keep the terminal background throughout the editor and rounded frame.
     for y in area.y..area.y + area.height {
         for x in area.x..area.x + area.width {
             let cell = buffer.cell((x, y)).expect("in bounds");
-            assert_eq!(cell.style().bg, surface, "composer band is continuous");
+            assert_eq!(cell.bg, Color::Reset, "composer has no background fill");
         }
     }
     let mut corners = 0;
@@ -1153,7 +1151,7 @@ fn composer_has_a_padded_rounded_frame_and_prompt_gutter() {
                 } else {
                     x - 1
                 };
-                assert_eq!(buffer[(inward, y)].bg, surface.unwrap_or(Color::Reset));
+                assert_eq!(buffer[(inward, y)].bg, Color::Reset);
             }
         }
     }

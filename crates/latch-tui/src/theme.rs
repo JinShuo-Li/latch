@@ -87,7 +87,7 @@ impl Palette {
         }
     }
 
-    /// Neutral band behind user messages, action surfaces, and the composer.
+    /// Neutral band behind user messages and action surfaces.
     #[must_use]
     pub fn surface(self) -> Style {
         if !self.has_backgrounds() {
