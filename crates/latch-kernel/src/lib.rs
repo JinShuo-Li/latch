@@ -19,6 +19,7 @@ pub mod permissions;
 pub mod progress;
 pub mod prompt;
 pub mod provider;
+pub mod provider_request;
 pub mod providers;
 pub mod safety;
 pub mod sandbox;

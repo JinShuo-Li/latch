@@ -1056,6 +1056,17 @@ dirty work is captured at startup and never conflated with Latch's changes.
 
 ## Providers
 
+`provider_request.rs` bounds registry-built adapters with independent header
+(120s), stream-idle (180s) and absolute attempt (1800s) deadlines, configurable
+under `[provider_request]`. Activity/heartbeat bytes reset idle, never the total
+deadline. Cancellation drops the request future; child rebinding retains the
+policy and adapter identity. The agent retries only recognized transient errors
+before semantic output, with bounded exponential backoff and Retry-After;
+permanent/unknown failures and absolute deadlines do not retry. HTTP status and
+redacted diagnostics are extracted in `provider.rs`; wire serialization and
+durable conversation schemas do not change. Shell/validation limits remain
+independent. See [model request deadlines and retries](PROVIDER_REQUESTS.md).
+
 OpenAI-compatible chat completions and Anthropic Messages translate only at the
 API boundary. Durable state remains provider-neutral. Assistant reasoning
 (`reasoning_content`) is persisted and replayed verbatim by reasoning-capable

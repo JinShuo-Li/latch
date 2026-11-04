@@ -230,7 +230,7 @@ the same log. These changes add no capability or unsandboxed execution path.
 
 | Port | Status | Today's mechanism | Planned contract shape |
 |---|---|---|---|
-| `ProviderAdapter` | **implemented as `ModelProvider`** | `provider.rs` (`OpenAiProvider`, `OpenAiResponsesProvider`, `AnthropicProvider`), `ProviderRegistry`, `ProviderFactory` | Keep the trait; add adapters, not a second abstraction |
+| `ProviderAdapter` | **implemented as `ModelProvider`** | `provider.rs` (`OpenAiProvider`, `OpenAiResponsesProvider`, `AnthropicProvider`), `ProviderRegistry`, `ProviderFactory`; `provider_request.rs` applies cancellable phase/total deadlines | Keep the trait; add adapters, not a second abstraction. Deadlines/retry policy grant no capabilities and never authorize tool execution; see [request policy](PROVIDER_REQUESTS.md) |
 | `ToolProvider` | **implemented as `ToolExecutor` + extension/MCP registration** | `tools.rs` dispatch; `extension.rs` and `mcp.rs` registered tools; kernel tools in `agent/request.rs` | A future `ToolProvider` port sources tool definitions + execution into the same dispatch and policy pipeline |
 | `ContextEngine` | **implemented** (`context.rs`) | `ContinuityEngine`; `ContextEngineFactory` propagates the policy to all child sessions (default: continuity) | New implementations replace the default at root and child level; contract stable |
 | `Coordinator` | **partially implemented, concrete** | `AgentSupervisor` (execution/lifecycle), `GroupCoordinator` (durable claims/mailbox) | A `Coordinator` port would let an alternative coordination strategy plug in while root truth, child sessions, and group durability stay kernel-owned |

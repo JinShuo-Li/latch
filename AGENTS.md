@@ -437,6 +437,15 @@ separate from API-key providers and never fall back to API billing. UI device
 challenges are transient, not durable events. `doctor` remains offline. Focused:
 `cargo test -p latch-kernel --lib oauth --locked`; see `docs/CHATGPT_LOGIN.md`.
 
+Model network policy lives in `provider_request.rs`: registry-built adapters
+have configurable `[provider_request]` header/idle/total deadlines (120/180/1800s),
+independent of command timeouts. Heartbeats renew idle, never total; retries
+require a recognized transient error before text/tool output, and cancellation
+interrupts backoff. Keep wire/status extraction in `provider.rs`, deadline policy
+provider-neutral, and child rebinding bounded. See `docs/PROVIDER_REQUESTS.md`;
+focused checks: `cargo test -p latch-kernel --lib provider_request --locked` and
+`cargo test -p latch-kernel --lib model_retr --locked`.
+
 Provider model discovery lives in `latch-cli/src/cli/discovery.rs` (Go/Zen,
 DeepSeek, authenticated Codex). `/model refresh` updates sanitized service facts;
 `/model all` clears local model filters. New setup enables the full catalog with

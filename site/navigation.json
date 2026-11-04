@@ -13,6 +13,7 @@
   {"title":"Configuration","pages":[
     {"slug":"configuration","title":"Setup & providers","source":"docs/DESIGN.md","section":"Configuration and setup"},
     {"slug":"chatgpt-login","title":"ChatGPT subscription","source":"docs/CHATGPT_LOGIN.md"},
+    {"slug":"provider-requests","title":"Request timeouts & retries","source":"docs/PROVIDER_REQUESTS.md"},
     {"slug":"config-reference","title":"Configuration reference","source":"config.example.toml"}
   ]},
   {"title":"Security","pages":[

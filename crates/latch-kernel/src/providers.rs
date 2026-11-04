@@ -1565,6 +1565,7 @@ pub struct ProviderRegistry {
     profiles: BTreeMap<String, ProviderProfile>,
     /// The profile selected when the user has not chosen one.
     default_provider: String,
+    request_policy: crate::provider_request::ProviderRequestConfig,
 }
 
 impl std::fmt::Debug for ProviderRegistry {
@@ -1580,6 +1581,7 @@ impl ProviderRegistry {
     /// Builds the registry from configuration, migrating the legacy single
     /// `[provider]` table when no `[providers.*]` entries are present.
     pub fn from_config(config: &Config) -> Result<Self> {
+        config.provider_request.validate()?;
         let entries = if config.providers.is_empty() {
             let (id, entry) = legacy_provider_entry(config)?;
             BTreeMap::from([(id, entry)])
@@ -1601,6 +1603,7 @@ impl ProviderRegistry {
         Ok(Self {
             profiles,
             default_provider,
+            request_policy: config.provider_request,
         })
     }
 
@@ -1756,18 +1759,21 @@ impl ProviderRegistry {
             if !auth.is_available()? {
                 bail!("ChatGPT is not signed in; run /login or latch login");
             }
-            return Ok(Arc::new(
-                OpenAiResponsesProvider::new(
-                    provider.base_url.clone(),
-                    String::new(),
-                    descriptor.model.clone(),
-                )
-                .with_identity(provider.id.to_string())
-                .with_reasoning(effort, !descriptor.supported_efforts.is_empty())
-                .with_effort_map(descriptor.effort_map.clone())
-                .with_session(session_id)
-                .with_media(media)
-                .with_chatgpt_auth(auth),
+            return Ok(crate::provider_request::BoundedProvider::wrap(
+                Arc::new(
+                    OpenAiResponsesProvider::new(
+                        provider.base_url.clone(),
+                        String::new(),
+                        descriptor.model.clone(),
+                    )
+                    .with_identity(provider.id.to_string())
+                    .with_reasoning(effort, !descriptor.supported_efforts.is_empty())
+                    .with_effort_map(descriptor.effort_map.clone())
+                    .with_session(session_id)
+                    .with_media(media)
+                    .with_chatgpt_auth(auth),
+                ),
+                self.request_policy,
             ));
         }
         if provider.credential == CredentialRef::ChatGpt {
@@ -1845,7 +1851,10 @@ impl ProviderRegistry {
                 .with_media(media.clone()),
             ),
         };
-        Ok(provider_impl)
+        Ok(crate::provider_request::BoundedProvider::wrap(
+            provider_impl,
+            self.request_policy,
+        ))
     }
 }
 

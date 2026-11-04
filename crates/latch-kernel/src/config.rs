@@ -17,6 +17,9 @@ pub struct Config {
     /// Default inference profile (provider, model, reasoning effort).
     #[serde(default)]
     pub inference: InferenceConfig,
+    /// Model network deadlines, independent of shell/validation timeouts.
+    #[serde(default)]
+    pub provider_request: crate::provider_request::ProviderRequestConfig,
     #[serde(default)]
     pub default_mode: Mode,
     #[serde(default = "default_state_dir")]
@@ -935,6 +938,7 @@ impl Default for Config {
             provider: ProviderConfig::default(),
             providers: BTreeMap::new(),
             inference: InferenceConfig::default(),
+            provider_request: crate::provider_request::ProviderRequestConfig::default(),
             default_mode: Mode::Work,
             state_dir: default_state_dir(),
             safety: SafetyConfig::default(),
@@ -953,6 +957,7 @@ impl Config {
     /// Validate user-owned config fields before a new setup transaction is
     /// staged. Provider adapters still enforce their own wire constraints.
     pub fn validate(&self) -> Result<()> {
+        self.provider_request.validate()?;
         let mut names = std::collections::BTreeSet::new();
         for server in &self.mcp_servers {
             server.validate()?;

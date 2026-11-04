@@ -31,6 +31,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(windows)'.dependencies]
 winsafe = { version = "0.0.29", default-features = false, features = ["kernel"] }

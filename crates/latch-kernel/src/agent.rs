@@ -35,7 +35,7 @@ use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -1357,9 +1357,28 @@ impl Agent {
     ) -> Result<latch_protocol::ModelResponse> {
         let mut last = None;
         for attempt in 0..=self.max_model_retries {
+            if cancel.is_cancelled() {
+                bail!("model request cancelled");
+            }
+            let output_started = Arc::new(AtomicBool::new(false));
+            let started = output_started.clone();
+            let downstream = sink.clone();
+            let attempt_sink: StreamSink = Arc::new(move |event| {
+                if matches!(&event, StreamEvent::TextDelta(text) if !text.is_empty())
+                    || matches!(
+                        &event,
+                        StreamEvent::ToolCallDelta(_)
+                            | StreamEvent::Completed(_)
+                            | StreamEvent::Activity(latch_protocol::StreamActivity::ToolCall)
+                    )
+                {
+                    started.store(true, Ordering::Relaxed);
+                }
+                downstream(event);
+            });
             match self
                 .provider
-                .stream(request.clone(), cancel.clone(), sink.clone())
+                .stream(request.clone(), cancel.clone(), attempt_sink)
                 .await
             {
                 Ok(mut r) => {
@@ -1370,6 +1389,17 @@ impl Agent {
                     return Ok(r);
                 }
                 Err(e) if attempt < self.max_model_retries && !cancel.is_cancelled() => {
+                    if output_started.load(Ordering::Relaxed) {
+                        let diagnostic = format!(
+                            "{e}; automatic retry suppressed: the response already began; retry manually if needed"
+                        );
+                        return Err(e.context(diagnostic));
+                    }
+                    let Some(delay) =
+                        crate::provider_request::retry_delay(&e, attempt, self.session_id)
+                    else {
+                        return Err(e);
+                    };
                     self.store.append(
                         self.session_id,
                         EventPayload::FailureAttempt {
@@ -1379,9 +1409,7 @@ impl Agent {
                     )?;
                     last = Some(e);
                     tokio::select! {
-                        () = tokio::time::sleep(
-                            std::time::Duration::from_millis(100 * 2u64.pow(attempt)),
-                        ) => {}
+                        () = tokio::time::sleep(delay) => {}
                         () = cancel.cancelled() => {
                             return Err(anyhow!("model request cancelled"));
                         }

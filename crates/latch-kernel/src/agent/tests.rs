@@ -468,6 +468,131 @@ async fn fail_then_pass_validation_supersedes_completion() {
     assert!(agent.failure_lineages().is_empty());
 }
 
+struct RetryProbe {
+    calls: std::sync::atomic::AtomicUsize,
+    status: u16,
+    partial: Option<StreamEvent>,
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for RetryProbe {
+    fn name(&self) -> &str {
+        "retry-probe"
+    }
+    fn model(&self) -> &str {
+        "test"
+    }
+    async fn stream(
+        &self,
+        _: ModelRequest,
+        _: CancellationToken,
+        sink: StreamSink,
+    ) -> Result<ModelResponse> {
+        if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+            if let Some(event) = &self.partial {
+                sink(event.clone());
+            }
+            return Err(crate::provider_request::ProviderHttpError {
+                status: self.status,
+                retry_after: None,
+                message: "sanitized provider failure".into(),
+            }
+            .into());
+        }
+        Ok(ModelResponse::default())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn model_retries_only_transient_failures_before_semantic_output() {
+    for (status, partial, expected_calls) in [
+        (503, None, 2),
+        (401, None, 1),
+        (403, None, 1),
+        (400, None, 1),
+        (503, Some(StreamEvent::TextDelta("partial".into())), 1),
+        (
+            503,
+            Some(StreamEvent::Activity(
+                latch_protocol::StreamActivity::ToolCall,
+            )),
+            1,
+        ),
+        (
+            503,
+            Some(StreamEvent::ToolCallDelta(ToolCall {
+                id: "call".into(),
+                name: "shell".into(),
+                arguments: json!({}),
+            })),
+            1,
+        ),
+    ] {
+        let dir = tempdir().unwrap();
+        let (store, sid, mut agent) = policy_agent(&dir, PermissionConfig::default(), vec![]);
+        let probe = Arc::new(RetryProbe {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            status,
+            partial,
+        });
+        agent.provider = probe.clone();
+        let request = ModelRequest {
+            system: String::new(),
+            messages: vec![],
+            tools: vec![],
+        };
+        let result = agent
+            .call_with_retry(request, CancellationToken::new(), Arc::new(|_| {}))
+            .await;
+        assert_eq!(probe.calls.load(Ordering::Relaxed), expected_calls);
+        assert_eq!(result.is_ok(), expected_calls == 2);
+        let attempts = store
+            .events(sid)
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::FailureAttempt { .. }))
+            .count();
+        assert_eq!(attempts, expected_calls - 1);
+        if probe.partial.is_some() {
+            let message = result.unwrap_err().to_string();
+            assert!(
+                message.contains("sanitized provider failure")
+                    && message.contains("retry suppressed"),
+                "{message}"
+            );
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn model_retry_backoff_cancels_without_a_second_submission() {
+    let dir = tempdir().unwrap();
+    let (_, _, mut agent) = policy_agent(&dir, PermissionConfig::default(), vec![]);
+    let probe = Arc::new(RetryProbe {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        status: 503,
+        partial: None,
+    });
+    agent.provider = probe.clone();
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        trigger.cancel();
+    });
+    let request = ModelRequest {
+        system: String::new(),
+        messages: vec![],
+        tools: vec![],
+    };
+    let error = agent
+        .call_with_retry(request, cancel, Arc::new(|_| {}))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("cancelled"));
+    assert_eq!(probe.calls.load(Ordering::Relaxed), 1);
+}
+
 fn freshness_agent(dir: &tempfile::TempDir) -> (EventStore, Uuid, Agent) {
     std::fs::write(dir.path().join("x.txt"), "old").unwrap();
     policy_agent(dir, PermissionConfig::default(), vec![])

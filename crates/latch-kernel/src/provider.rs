@@ -2402,16 +2402,43 @@ async fn checked_response_redacted(
     if status.is_success() {
         return Ok(response);
     }
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| retry_after_delay(value, chrono::Utc::now()));
     let body = response.text().await.unwrap_or_default();
     let body = if secret.is_empty() {
         body
     } else {
         crate::credentials::redact(&body, &[secret])
     };
-    bail!(
-        "{provider} request failed with HTTP {}: {}",
-        status.as_u16(),
-        bound_error_body(&body)
+    Err(crate::provider_request::ProviderHttpError {
+        status: status.as_u16(),
+        retry_after,
+        message: format!(
+            "{provider} request failed with HTTP {}: {}",
+            status.as_u16(),
+            bound_error_body(&body)
+        ),
+    }
+    .into())
+}
+
+fn retry_after_delay(
+    value: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<std::time::Duration> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(std::time::Duration::from_secs(seconds.min(60)));
+    }
+    let date = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    Some(
+        date.signed_duration_since(now)
+            .to_std()
+            .unwrap_or_default()
+            .min(std::time::Duration::from_secs(60)),
     )
 }
 
@@ -3179,6 +3206,27 @@ mod tests {
             parts.iter().any(|part| part["type"] == "input_image"),
             "tool images survive alongside the status envelope"
         );
+    }
+
+    #[test]
+    fn retry_after_accepts_seconds_and_http_dates_with_a_hard_cap() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        for (value, seconds) in [
+            ("12", 12),
+            ("999999", 60),
+            ("Thu, 01 Jan 2026 00:00:12 GMT", 12),
+            ("Thu, 01 Jan 2026 00:05:00 GMT", 60),
+            ("Wed, 31 Dec 2025 23:59:59 GMT", 0),
+        ] {
+            assert_eq!(
+                retry_after_delay(value, now),
+                Some(std::time::Duration::from_secs(seconds)),
+                "{value}"
+            );
+        }
+        assert!(retry_after_delay("invalid", now).is_none());
     }
 
     #[test]
