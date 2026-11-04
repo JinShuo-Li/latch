@@ -7,7 +7,9 @@ It does not call a paid provider or use a real credential.
 
 The test reads and parses the actual terminal escape stream with pyte. It
 checks the reconstructed screen for startup, composer text and backspace,
-two rendered replies, PLAN mode, and a redraw from 120×36 to 92×30. A real
+two rendered replies, PLAN mode, and a redraw from 120×36 to 92×30. It also
+asserts outer margins, all four rounded input corners, editor padding and cursor
+alignment, and padded sidebar contents before the sidebar collapses on resize. A real
 sandboxed `cat proof.txt` must return its fixture contents to the mock provider.
 The input prompts must reach the provider after editing. `/quit` must exit 0,
 restore the original terminal attributes, and disable the alternate screen,

@@ -179,6 +179,25 @@ class Terminal:
             os.close(self.slave)
 
 
+def assert_padded_chrome(terminal, input_text, sidebar):
+    """Check the actual terminal grid, not just the presence of UI labels."""
+    rows = terminal.screen.display
+    assert not rows[0].strip() and not rows[-1].strip(), 'missing vertical margins'
+    assert all(not row[:2].strip() and not row[-2:].strip() for row in rows), 'missing horizontal margins'
+    top = next(index for index, row in enumerate(rows) if row.startswith('  ╭─'))
+    bottom = next(index for index, row in enumerate(rows) if row.startswith('  ╰─'))
+    assert rows[top].endswith('╮  ') and rows[bottom].endswith('╯  '), 'missing rounded corners'
+    assert rows[top + 1].startswith('  │ › ' + (input_text or 'Ask Latch')), 'missing editor padding'
+    assert all(row.startswith('  │ ') and row.endswith(' │  ')
+               for row in rows[top + 1:bottom]), 'broken input frame'
+    assert (terminal.screen.cursor.x, terminal.screen.cursor.y) == (6 + len(input_text), top + 1), 'misaligned input cursor'
+    divider_rows = [row for row in rows[:top] if '│' in row]
+    assert bool(divider_rows) == sidebar, 'unexpected sidebar visibility'
+    for row in divider_rows:
+        divider = row.index('│')
+        assert row[divider + 1] == ' ' and not row[-4:].strip(), 'missing sidebar padding'
+
+
 def exercise(binary, output):
     with tempfile.TemporaryDirectory(prefix='latch-tui-pty-') as temp:
         root = Path(temp)
@@ -209,12 +228,14 @@ level = "standard"
             terminal = Terminal(binary, config, workspace, output)
             terminal.wait(lambda: 'pty-mock' in terminal.text and 'Ask Latch' in terminal.text,
                           'startup screen')
+            assert_padded_chrome(terminal, '', sidebar=True)
             terminal.capture('01-startup')
             terminal.send('TUI_PROMPT_ONEX')
             terminal.wait(lambda: 'TUI_PROMPT_ONEX' in terminal.text, 'typed composer text')
             terminal.send('\x7f')
             terminal.wait(lambda: 'TUI_PROMPT_ONE' in terminal.text
                           and 'TUI_PROMPT_ONEX' not in terminal.text, 'backspace edit')
+            assert_padded_chrome(terminal, 'TUI_PROMPT_ONE', sidebar=True)
             terminal.capture('02-composer')
             terminal.send('\r')
             terminal.wait(lambda: 'PTY reply one verified' in terminal.text, 'first model reply')
@@ -233,6 +254,7 @@ level = "standard"
                           and 'pty-mock' not in terminal.screen.display[0]
                           and 'PTY reply two verified' in terminal.text,
                           'redraw after terminal resize')
+            assert_padded_chrome(terminal, '', sidebar=False)
             terminal.capture('06-resized')
             terminal.send('/quit\r')
             terminal.wait(lambda: terminal.child.poll() is not None, 'graceful quit')
@@ -259,7 +281,8 @@ level = "standard"
             report = dict(status='passed', platform=platform.platform(), architecture=platform.machine(),
                           mock_requests=len(requests), checks=['startup', 'composer edit', 'submit',
                           'sandboxed shell', 'rendered replies', 'follow-up', 'mode switch',
-                          'resize', 'quit', 'terminal restoration'])
+                          'resize', 'rounded input frame', 'screen and sidebar padding',
+                          'input cursor alignment', 'quit', 'terminal restoration'])
             (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
             print(json.dumps(report, indent=2))
         except BaseException:
