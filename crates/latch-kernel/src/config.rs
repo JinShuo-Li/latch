@@ -36,6 +36,9 @@ pub struct Config {
     pub extensions: Vec<ExtensionConfig>,
     #[serde(default)]
     pub mcp_servers: Vec<crate::mcp::McpServerConfig>,
+    /// Optional operator-installed, read-only language intelligence servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lsp_servers: Vec<crate::lsp::LspServerConfig>,
     /// Central lifecycle deadlines for extension hosts, in whole seconds.
     /// Extensions are operator-installed but not trusted to answer forever:
     /// every stage that waits on one is bounded (see
@@ -947,6 +950,7 @@ impl Default for Config {
             failure: FailureConfig::default(),
             extensions: vec![],
             mcp_servers: vec![],
+            lsp_servers: vec![],
             extension_lifecycle: ExtensionLifecycleConfig::default(),
             models: BTreeMap::new(),
         }
@@ -959,6 +963,7 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         self.provider_request.validate()?;
         let mut names = std::collections::BTreeSet::new();
+        crate::lsp::validate_configs(&self.lsp_servers)?;
         for server in &self.mcp_servers {
             server.validate()?;
             if !names.insert(&server.name) {
@@ -1143,6 +1148,7 @@ impl Config {
             config.state_dir = paths.state_root;
         }
         let mut names = std::collections::BTreeSet::new();
+        crate::lsp::validate_configs(&config.lsp_servers)?;
         for server in &config.mcp_servers {
             server.validate()?;
             if !names.insert(&server.name) {

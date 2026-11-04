@@ -705,14 +705,17 @@ pub async fn build_agent(
         config.safety.level,
     );
     let artifacts = artifact_root(config, session_id);
-    let tools = runtime(ToolExecutor::new_with_state_dir(
-        workspace.to_path_buf(),
-        artifacts.clone(),
-        config.state_dir.clone(),
-        store.clone(),
-        session_id,
-        policy,
-    ))?;
+    let tools = runtime(
+        ToolExecutor::new_with_state_dir(
+            workspace.to_path_buf(),
+            artifacts.clone(),
+            config.state_dir.clone(),
+            store.clone(),
+            session_id,
+            policy,
+        )
+        .and_then(|tools| tools.with_lsp_servers(config.lsp_servers.clone())),
+    )?;
     if resume {
         // Restore durable change ownership before anything can mutate.
         let count = runtime(tools.restore_ownership().await)?;

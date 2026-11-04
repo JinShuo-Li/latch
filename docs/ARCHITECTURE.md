@@ -1054,6 +1054,27 @@ blob for previously clean files) and explicit non-reversible markers otherwise;
 non-Git workspaces get an honest "detection unavailable" marker. Pre-existing
 dirty work is captured at startup and never conflated with Latch's changes.
 
+## Optional language intelligence
+
+`lsp.rs` owns operator configuration, a single lazy client per session, and
+advisory snapshot results; `lsp/{protocol,query}.rs` own bounded Content-Length
+JSON-RPC, server-request refusal, document synchronization and semantic result
+normalization. `tools/language.rs` integrates ordinary durable tool events,
+read-only/no-network `ExecutionBackend` profiles and the existing file observation
+ledger. External drift detected by LSP stales prior validation exactly as file
+reads do. Durable cross-session mutation cursors invalidate disposable indexes
+without reading full conversation history or introducing a new projection.
+
+The optional schema and language list are fixed at session construction; process
+startup/failure/stop never changes tools. Language lists live in session context,
+not the stable provider system field. Children have independent lazy clients;
+resume reconstructs them, retaining previous tool results in history. The
+`tools.lsp` runtime declaration is workspace-scoped with read and extension-execution
+permissions only. Unix caches one client, Windows closes it after every query
+to avoid pinning native recovery. Session extension shutdown also closes LSP.
+No server edit, command, diagnostic or index status grants kernel truth, writes
+or validation. See [LSP workflow and limits](LSP.md).
+
 ## Providers
 
 `provider_request.rs` bounds registry-built adapters with header (60s),

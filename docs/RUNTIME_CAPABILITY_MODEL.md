@@ -372,6 +372,27 @@ authorization or the Context Engine contract. The existing `tools.kernel` and
 MCP does not create a new kernel control port. See [Skills and MCP](SKILLS_AND_MCP.md)
 for protocol versions, limits and unsupported optional features.
 
+### Optional LSP language intelligence
+
+Operator-configured stdio language servers are `Tools` capabilities, not a new
+backend port. `tools.lsp` is declared only when configured, owned by the session
+and scoped to its fixed workspace with `WorkspaceRead` + `ExtensionExecution`.
+Strict safety requires approval for queries; status/stop need no server execution.
+Actual process profiles never grant network, workspace writes or external roots,
+even if a resolver supplies broader grants. Servers inherit the mandatory backend
+and protected paths; server requests cannot add tools, execute commands, apply
+edits or change workspace scope.
+
+`lsp.rs` and `lsp/{protocol,query}.rs` own bounded protocol and disposable snapshot
+state; `tools/language.rs` owns durable tool dispatch/observation integration.
+Diagnostics are advisory source observations, never Passed evidence. Detected
+external drift uses the shared file ledger to stale historical validation;
+workspace mutations from any session invalidate the cached client. No LSP state
+is a memory boundary or canonical task state. Child handles are independent,
+resume is lazy reconstruction, and shutdown/cancellation release processes.
+Windows clients are per-query to preserve the native recovery lock. See
+[LSP configuration, lifecycle and qualification limits](LSP.md).
+
 ## 8. Implemented now vs deferred
 
 | Concern | State |

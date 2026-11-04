@@ -591,7 +591,7 @@ impl Agent {
             evidence: &self.evidence,
             failures: &self.failures,
             system: prompt.stable,
-            session_context: prompt.session,
+            session_context: format!("{}{}", prompt.session, self.tools.lsp_context()),
             budget: self.materialize_budget(reserved),
             extension_context: "",
             reground: None,
@@ -650,6 +650,20 @@ impl Agent {
             workspace_scope,
             executor_permissions,
         );
+        if self.tools.lsp_configured() {
+            let mut permissions = CapabilitySet::new();
+            permissions.insert(Capability::WorkspaceRead);
+            permissions.insert(Capability::ExtensionExecution);
+            declare(
+                "tools.lsp",
+                CapabilityKind::Tools,
+                owner.clone(),
+                CapabilityScope::Workspace {
+                    root: self.workspace.clone(),
+                },
+                permissions,
+            );
+        }
         declare(
             "context.engine",
             CapabilityKind::Context,
@@ -751,6 +765,7 @@ impl Agent {
         self.mcp.shutdown().await
     }
     pub async fn shutdown_extensions(&mut self) -> Result<()> {
+        self.tools.shutdown_lsp().await;
         if let Some(supervisor) = &self.supervisor {
             supervisor.close_all().await?;
         }
@@ -1128,7 +1143,7 @@ impl Agent {
                 evidence: &self.evidence,
                 failures: &self.failures,
                 system: prompt.stable,
-                session_context: prompt.session,
+                session_context: format!("{}{}", prompt.session, self.tools.lsp_context()),
                 budget,
                 extension_context: &extension_json,
                 // Progress re-ground and the verification correction travel the

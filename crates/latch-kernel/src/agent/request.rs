@@ -31,6 +31,7 @@ impl Agent {
 
     pub(crate) fn tool_definitions(&self) -> Vec<ToolDefinition> {
         let mut tools = agent_tool_definitions();
+        tools.extend(self.tools.language_definitions());
         tools.extend(
             self.extensions
                 .tools()

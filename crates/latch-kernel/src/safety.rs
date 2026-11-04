@@ -127,6 +127,21 @@ pub fn classify(tool: &str, args: &Value, context: Context<'_>) -> Classificatio
             capabilities.insert(Capability::WorkspaceRead);
             Classification::allow(capabilities, format!("{tool} (workspace read)"))
         }
+        "lsp" => {
+            let mut classification = if matches!(
+                args.get("action").and_then(Value::as_str),
+                Some("status" | "stop")
+            ) {
+                Classification::allow(CapabilitySet::new(), "LSP lifecycle (read-only)".into())
+            } else {
+                extension_classification(context.safety)
+            };
+            classification
+                .capabilities
+                .insert(Capability::WorkspaceRead);
+            classification.operation = "LSP language intelligence (read-only, no network)".into();
+            classification
+        }
         "patch" | "write" => classify_file_write(tool, args, context),
         "undo" | "checkpoint" => {
             let mut capabilities = CapabilitySet::new();

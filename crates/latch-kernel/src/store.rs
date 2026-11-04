@@ -1015,6 +1015,18 @@ impl EventStore {
         )
     }
 
+    /// Cheap invalidation cursor for disposable language-server indexes. This
+    /// is not validation evidence and never materializes conversation history.
+    pub(crate) fn workspace_language_revision(&self, workspace: &Path) -> Result<u64> {
+        Ok(self.conn()?.query_row(
+            "SELECT COALESCE(MAX(e.rowid),0) FROM events e JOIN sessions s ON s.id=e.session_id
+             WHERE s.workspace=?1 AND e.kind IN ('workspace_mutation_possible','shell_mutation_observed',
+               'change_reverted','external_file_change_detected','file_changed','process_started','process_exited')",
+            [workspace.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Workspace-wide mutation/lifecycle stream in durable insertion order.
     /// Root and child sessions share a workspace, so a per-session sequence
     /// cannot be used as a verification generation.

@@ -10,6 +10,7 @@ pub mod credentials;
 pub mod execution;
 pub mod extension;
 pub mod linediff;
+pub mod lsp;
 pub mod mcp;
 pub mod media;
 pub mod migration;

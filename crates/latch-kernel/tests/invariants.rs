@@ -40,6 +40,50 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
+#[test]
+fn lsp_is_optional_observation_with_no_write_or_network_authority() {
+    use latch_kernel::sandbox::Capability;
+    let config: latch_kernel::config::Config = toml::from_str("").unwrap();
+    assert!(config.lsp_servers.is_empty());
+    assert!(
+        !ToolExecutor::definitions()
+            .iter()
+            .any(|tool| tool.name == "lsp")
+    );
+    for mode in [Mode::Ask, Mode::Plan, Mode::Work] {
+        for safety in [Safety::Standard, Safety::Strict] {
+            let classified = latch_kernel::safety::classify(
+                "lsp",
+                &json!({"action":"definition","capabilities":["network","edit"]}),
+                SafetyContext {
+                    mode,
+                    safety,
+                    workspace: Path::new("."),
+                    outside: OutsidePolicy::Deny,
+                    workspace_write: true,
+                },
+            );
+            assert!(classified.capabilities.contains(Capability::WorkspaceRead));
+            assert!(
+                classified
+                    .capabilities
+                    .contains(Capability::ExtensionExecution)
+            );
+            assert!(!classified.capabilities.contains(Capability::NetworkAccess));
+            assert!(
+                !classified
+                    .capabilities
+                    .contains(Capability::WorkspaceSourceWrite)
+            );
+            assert!(classified.external_roots.is_empty());
+            assert_eq!(
+                matches!(classified.decision, SafetyDecision::Ask(_)),
+                safety == Safety::Strict
+            );
+        }
+    }
+}
+
 fn response(text: &str, calls: Vec<ToolCall>) -> ModelResponse {
     ModelResponse {
         text: text.into(),

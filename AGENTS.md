@@ -471,6 +471,16 @@ removal through built-in Windows PowerShell (no agent execution fallback).
 `cargo test -p latch-cli --test uninstall --locked` uses unique disposable binaries;
 Windows/macOS smoke CI includes it. Linux also tests isolated full data removal.
 
+Optional LSP configuration/lifecycle belongs to `lsp.rs`, bounded JSON-RPC and
+snapshots to `lsp/{protocol,query}.rs`, dispatch to `tools/language.rs`. No new
+Rust dependencies or required language servers: one lazy read-only/no-network
+client per session, independent children, per-query Windows clients (recovery
+lock). Keep schema/context absent when unconfigured and stable when configured.
+Server edits/commands are refused; diagnostics never certify validation. LSP
+observations share the file drift ledger, and workspace mutation cursors invalidate
+indexes. See `docs/LSP.md`. Focused: `cargo test -p latch-kernel --lib lsp --locked`;
+optional real clangd: `cargo test -p latch-kernel --lib real_clangd --locked -- --ignored`.
+
 Browser header version comes only from bootstrap metadata; never hardcode a
 release fallback in HTML/JS. `node scripts/test_web_view.mjs` checks missing,
 initial and updated server versions without a browser (development only).

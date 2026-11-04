@@ -90,6 +90,16 @@ model = "gpt-5-mini"
 # OpenCode Go (base_url under https://opencode.ai/zen/go/v1) uses the same
 # provider and additionally receives a stable x-opencode-session header.
 
+# Optional operator-installed language server; starts lazily, read-only/offline.
+# Omit this section for no extra tool schema/process. See docs/LSP.md.
+# [[lsp_servers]]
+# name = "clangd"
+# command = "clangd"
+# args = ["--background-index=false", "--clang-tidy=false", "--enable-config=false"]
+# extensions = ["cpp", "hpp"]
+# language_id = "cpp"
+# timeout_seconds = 30
+
 # Model network deadlines (seconds), separate from shell/validation timeouts.
 # New-connection/TLS time is included in the header budget, not added to it.
 # Heartbeats/reasoning reset idle only; 180s is not a thinking-duration limit.

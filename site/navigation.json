@@ -23,6 +23,7 @@
   ]},
   {"title":"Extensions","pages":[
     {"slug":"skills-mcp","title":"Agent Skills & MCP","source":"docs/SKILLS_AND_MCP.md"},
+    {"slug":"lsp","title":"Language intelligence (LSP)","source":"docs/LSP.md"},
     {"slug":"extension-protocol","title":"Extension protocol","source":"docs/PROTOCOL.md"}
   ]},
   {"title":"Architecture","pages":[

@@ -174,6 +174,11 @@ Latch is independent software and has no runtime dependency on the upstream proj
 
 Latch discovers Agent Skills in `.latch/skills`, `.agents/skills`, `.claude/skills`
 and their user-level equivalents, loading instructions and resources on demand.
+Optional operator-installed language servers add semantic definitions, references,
+types, symbols and diagnostics through one `lsp` tool. Servers start only on demand,
+with read-only workspace access and no network; no LSP schema or process is added
+when unconfigured. Diagnostics never replace validation. See [language intelligence](docs/LSP.md).
+
 Operator-configured MCP servers provide tools over sandboxed stdio or Streamable
 HTTP with modern and legacy protocol support. Inspect them with `latch skills`,
 `latch mcp --check`, `/skills`, and `/mcp`. See [setup and security boundaries](docs/SKILLS_AND_MCP.md).

@@ -77,6 +77,15 @@ impl ToolExecutor {
     /// read-only inspection tools.
     async fn observe_file(&self, path: &Path, bytes: &[u8]) -> Result<FileVersion> {
         let version = version(&self.workspace, path, bytes)?;
+        self.observe_version(path, version).await
+    }
+
+    /// Share external-drift tracking with bounded LSP document observations.
+    pub(super) async fn observe_version(
+        &self,
+        path: &Path,
+        version: FileVersion,
+    ) -> Result<FileVersion> {
         let previous = self
             .observations
             .lock()

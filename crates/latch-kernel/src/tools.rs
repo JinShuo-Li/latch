@@ -1,5 +1,6 @@
 mod files;
 mod git;
+mod language;
 mod ownership;
 mod policy;
 mod process;
@@ -68,6 +69,7 @@ pub struct ToolExecutor {
     /// dependency is unavailable, so `search` fails with that message instead
     /// of a bare `No such file or directory`.
     search_runtime: Arc<std::sync::RwLock<Option<String>>>,
+    lsp: Arc<crate::lsp::LspManager>,
 }
 /// Outcome of one bounded shell execution.
 #[derive(Debug)]
@@ -157,6 +159,7 @@ impl ToolExecutor {
             grants: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sandbox: Arc::new(std::sync::RwLock::new(sandbox)),
             search_runtime: Arc::new(std::sync::RwLock::new(search_runtime)),
+            lsp: Arc::default(),
         })
     }
     /// Creates a session-scoped executor for a child agent while retaining the
@@ -187,6 +190,7 @@ impl ToolExecutor {
             grants: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sandbox: self.sandbox.clone(),
             search_runtime: self.search_runtime.clone(),
+            lsp: Arc::new(self.lsp.fresh()),
         })
     }
     /// Actionable message when the `rg` runtime dependency is unavailable;
@@ -512,6 +516,7 @@ impl ToolExecutor {
             other => match other {
                 "read_file" => self.read_file(call).await,
                 "search" => self.search(call).await,
+                "lsp" => self.language_query(call, &cancel).await,
                 "read_artifact" => self.read_artifact(call).await,
                 "exec_start" => self.process_start(call).await,
                 "exec_poll" => self.process_poll(call).await,
