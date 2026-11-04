@@ -246,6 +246,9 @@ wire images.
 `execution/` owns the platform backend boundary used by command-starting tools
 and extension hosts, plus shell guidance, conservative read-only command
 classification, search prerequisite discovery, and platform process cleanup.
+Shell drift keeps dirty-path baselines separate from bounded undo-byte captures;
+uncaptured pre-existing dirt must never be attributed to a later command.
+Shell mutation audits stay durable and in the sidebar without transcript notices.
 `workspace_path.rs` shares alias-safe resolution and platform file-alias
 checks between tools and execution.
 Linux delegates to the mandatory Bubblewrap runner in

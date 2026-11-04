@@ -263,7 +263,7 @@ impl ToolExecutor {
             .run_process_inner(&profile, command, timeout_seconds, cancel)
             .await?;
         if drift {
-            self.classify_drift(command, before.as_deref()).await?;
+            self.classify_drift(command, before.as_ref()).await?;
         }
         Ok(ProcessOutput {
             success: status.success(),

@@ -266,9 +266,9 @@ impl PresentationModel {
             EventPayload::ChangeReverted { path, .. } => {
                 self.push_notice(format!("Reverted {path}"));
             }
-            EventPayload::ShellMutationObserved { paths, .. } if !paths.is_empty() => {
-                self.push_notice(format!("Command changed {}", paths.join(", ")));
-            }
+            // Shell mutation evidence belongs to the durable ledger and the
+            // changes sidebar. Routine audit events are not transcript notices.
+            EventPayload::ShellMutationObserved { .. } => {}
             // The only child-agent event that exists in root history: the
             // compact semantic report delivered at a safe model boundary. It
             // renders as one compact cell; the child transcript stays in its
@@ -1082,6 +1082,19 @@ mod tests {
                 },
             }
         })
+    }
+
+    #[test]
+    fn shell_mutation_audits_do_not_create_repeated_transcript_notices() {
+        let mut model = PresentationModel::default();
+        for _ in 0..2 {
+            model.apply_event(&event(EventPayload::ShellMutationObserved {
+                command: "inspect chapters".into(),
+                reversible: false,
+                paths: vec!["mathnote_cn.pdf".into(), "mathnote_en.pdf".into()],
+            }));
+        }
+        assert!(model.cells().is_empty());
     }
 
     #[test]

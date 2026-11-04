@@ -600,6 +600,14 @@ A command that passes while certification is blocked returns `BLOCKED`, the
 process ids and owning sessions, and the recovery action. It remains historical
 Passed evidence, never current certification.
 
+Shell drift snapshots retain the full dirty-path baseline separately from their
+bounded pre-command byte captures. A large file or a path beyond the capture
+budget remains pre-existing dirt, never a clean HEAD file or a new command
+creation. Uncaptured baseline paths produce durable detection-unavailable
+evidence rather than fabricated ownership or unsafe undo bytes. Shell mutation
+audits remain in durable history and the changes sidebar; they do not add
+routine `Command changed` notices to TUI/Web transcripts.
+
 Completion state and loop termination are deliberately separate. A `complete`
 claim sets the terminal flag only so the loop can exit in the same turn; the
 loop resolves it against the derived completion, and only `Verified` ends the

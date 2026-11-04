@@ -3,6 +3,14 @@
 
 use super::*;
 
+/// The dirty-path baseline is separate from the bounded undo bytes. A path
+/// skipped by capture limits was already dirty; it must never be mistaken for
+/// a clean HEAD file or a newly created file in the next command.
+pub(super) struct DirtySnapshot {
+    paths: HashSet<PathBuf>,
+    captured: Vec<(PathBuf, Vec<u8>)>,
+}
+
 impl ToolExecutor {
     pub async fn preexisting_change_count(&self) -> usize {
         self.ledger.lock().await.initial.len()
@@ -189,7 +197,7 @@ impl ToolExecutor {
     /// Captures the pre-command state of dirty and untracked files for drift
     /// classification. `Ok(None)` means the workspace is not a Git worktree and
     /// honest drift detection is unavailable.
-    pub(super) async fn snapshot_dirty(&self) -> Result<Option<Vec<(PathBuf, Vec<u8>)>>> {
+    pub(super) async fn snapshot_dirty(&self) -> Result<Option<DirtySnapshot>> {
         let listing = git_porcelain(&self.sandbox_runner()?, &self.workspace, &self.state_dir)?;
         let Some(listing) = listing else {
             return Ok(None);
@@ -212,7 +220,10 @@ impl ToolExecutor {
             }
             captured.push((path.clone(), bytes));
         }
-        Ok(Some(captured))
+        Ok(Some(DirtySnapshot {
+            paths: listing.into_iter().collect(),
+            captured,
+        }))
     }
     /// Classifies paths a shell command mutated as shell-originated change.
     ///
@@ -226,7 +237,7 @@ impl ToolExecutor {
     pub(super) async fn classify_drift(
         &self,
         command: &str,
-        before: Option<&[(PathBuf, Vec<u8>)]>,
+        before: Option<&DirtySnapshot>,
     ) -> Result<()> {
         let mark_unavailable = |executor: &Self| -> Result<()> {
             executor.store.append(
@@ -247,7 +258,7 @@ impl ToolExecutor {
             return mark_unavailable(self);
         };
         let listing = listing.unwrap_or_default();
-        let before_paths: HashSet<&Path> = before.iter().map(|(path, _)| path.as_path()).collect();
+        let before_paths = &before.paths;
         let after_paths: HashSet<&Path> = listing.iter().map(|path| path.as_path()).collect();
         let mut candidates: Vec<PathBuf> = listing
             .iter()
@@ -256,13 +267,14 @@ impl ToolExecutor {
             .collect();
         candidates.extend(
             before
+                .captured
                 .iter()
                 .filter(|(path, _)| !after_paths.contains(path.as_path()))
                 .map(|(path, _)| path.clone()),
         );
         // Files that were already dirty before the command count as changed
         // when their captured content no longer matches disk.
-        for (path, bytes) in before {
+        for (path, bytes) in &before.captured {
             if after_paths.contains(path.as_path())
                 && before_paths.contains(path.as_path())
                 && tokio::fs::read(path)
@@ -285,7 +297,11 @@ impl ToolExecutor {
                 continue;
             }
             let current = tokio::fs::read(&path).await.ok();
-            let before_bytes = match before.iter().find(|(candidate, _)| **candidate == path) {
+            let before_bytes = match before
+                .captured
+                .iter()
+                .find(|(candidate, _)| **candidate == path)
+            {
                 Some((_, bytes)) => Some(bytes.clone()),
                 None => {
                     // The file was clean before the command: its worktree
@@ -383,6 +399,12 @@ impl ToolExecutor {
                     paths: untrackable,
                 },
             )?;
+        }
+        if before.paths.len() != before.captured.len() {
+            // Detection is incomplete for uncaptured pre-existing dirt. Keep
+            // that fact durable without assigning old changes to this command
+            // or manufacturing undo bytes from HEAD.
+            mark_unavailable(self)?;
         }
         Ok(())
     }

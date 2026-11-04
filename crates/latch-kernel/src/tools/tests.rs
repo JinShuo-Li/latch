@@ -1407,6 +1407,70 @@ async fn shell_mutation_is_classified_as_shell_owned_and_undoable() {
 }
 
 #[tokio::test]
+async fn uncaptured_preexisting_dirt_is_never_reassigned_to_inspection_commands() {
+    let d = tempdir().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(d.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    for index in 0..330 {
+        std::fs::write(d.path().join(format!("dirty-{index:03}.txt")), "existing").unwrap();
+    }
+    for name in ["mathnote_cn.pdf", "mathnote_en.pdf"] {
+        std::fs::write(d.path().join(name), vec![b'x'; 1024 * 1024 + 1]).unwrap();
+    }
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(d.path()).unwrap();
+    let executor = ToolExecutor::new(
+        d.path().into(),
+        d.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, d.path().into(), PermissionConfig::default()),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let before = executor.snapshot_dirty().await.unwrap();
+        executor
+            .classify_drift("inspect chapter counts", before.as_ref())
+            .await
+            .unwrap();
+    }
+    assert_eq!(executor.latch_change_count().await, 0);
+    let events = store.events(session).unwrap();
+    assert!(!events.iter().any(|event| match &event.payload {
+        EventPayload::FileChanged {
+            owner: ChangeOwner::Shell,
+            ..
+        } => true,
+        EventPayload::ShellMutationObserved { paths, .. } => !paths.is_empty(),
+        _ => false,
+    }));
+    assert!(events.iter().any(|event| matches!(&event.payload, EventPayload::ShellMutationObserved { paths, reversible: false, .. } if paths.is_empty())));
+    // A genuinely changed captured file still gets its actual pre-command
+    // bytes for undo, even when the rest of the dirty baseline is uncaptured.
+    let before = executor.snapshot_dirty().await.unwrap();
+    std::fs::write(d.path().join("dirty-000.txt"), "changed").unwrap();
+    executor
+        .classify_drift("edit one small file", before.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(executor.latch_change_count().await, 1);
+    let undone = executor
+        .execute(&call("undo", json!({})), CancellationToken::new())
+        .await;
+    assert!(!undone.is_error, "{}", undone.output);
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("dirty-000.txt")).unwrap(),
+        "existing"
+    );
+}
+
+#[tokio::test]
 async fn non_git_shell_mutation_is_marked_non_reversible() {
     let d = tempdir().unwrap();
     let store = EventStore::open_memory().unwrap();
