@@ -119,7 +119,9 @@ preventing queued old versioned diagnostic reports from looking current.
 Diagnostics use pull when advertised, otherwise push. Versioned reports must
 match the document snapshot. Unversioned reports are explicitly tagged
 `push-unversioned-freshness-not-proven`; no error list, empty result or progress
-notification certifies complete indexing or correctness. A push-only server that
+notification certifies complete indexing or correctness. Every query explicitly
+returns `index_completeness: "unknown"`; neither background indexing nor project
+coverage is inferred from successful navigation. A push-only server that
 never publishes diagnostics times out explicitly rather than fabricating success.
 
 Server `workspace/applyEdit` requests are refused, command execution and dynamic

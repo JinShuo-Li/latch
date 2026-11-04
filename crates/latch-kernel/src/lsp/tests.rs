@@ -174,6 +174,7 @@ async fn sandboxed_navigation_filters_paths_denies_server_edits_and_syncs_extern
         assert_eq!(value["omitted_unavailable_or_external"], 1);
         assert_eq!(value["items"][0]["range"]["start"]["line"], 1);
         assert_eq!(value["advisory"], true);
+        assert_eq!(value["index_completeness"], "unknown");
     }
     assert_eq!(
         fixture
@@ -200,6 +201,17 @@ async fn sandboxed_navigation_filters_paths_denies_server_edits_and_syncs_extern
             .query(json!({"action":"diagnostics","path":"a.rs"}))
             .await["items"][0]["message"],
         "bar"
+    );
+    assert!(
+        fixture
+            .store
+            .events(fixture.session)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(
+                event.payload,
+                EventPayload::ExternalFileChangeDetected { .. }
+            ))
     );
     fixture.tools.shutdown_lsp().await;
 }

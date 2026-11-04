@@ -181,7 +181,7 @@ impl LspManager {
             return String::new();
         }
         format!(
-            "\nLanguage intelligence available via lsp ({}). Prefer definition/references for symbol identity, symbols for structure, hover for types, diagnostics for feedback. Queries start sandboxed servers lazily; results are advisory, not validation. Use line plus symbol to avoid guessing columns.\n",
+            "\nLanguage intelligence available via lsp ({}). Prefer definition/references for symbol identity, symbols for structure, hover for types, diagnostics for feedback. Queries start sandboxed servers lazily; results are advisory, not validation. Index completeness is unknown; never infer whole-project coverage or background indexing. Use line plus symbol to avoid guessing columns. After a startup failure, fall back to search/read_file rather than trying another LSP action.\n",
             servers.join("; ")
         )
     }
@@ -243,8 +243,9 @@ impl LspManager {
             let versions = client.check_snapshots(scope).await?;
             result["server"] = json!(config.name);
             result["advisory"] = json!(true);
+            result["index_completeness"] = json!("unknown");
             result["note"] = json!(
-                "Advisory snapshot; empty results do not prove absence or complete indexing. Use validate for certification."
+                "Advisory snapshot; indexing completeness and background indexing are not measured. Do not claim whole-project coverage or absence from these results. Use validate for certification."
             );
             result["freshness"] = json!("queried-document-snapshot");
             // Windows' native boundary recovery lock cannot be held while idle.
