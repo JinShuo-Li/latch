@@ -89,7 +89,7 @@ impl Client {
                 "textDocument":{"synchronization":{"dynamicRegistration":false,"didSave":true},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"definition":{"linkSupport":true},"hover":{"contentFormat":["plaintext","markdown"]},"diagnostic":{"dynamicRegistration":false},"publishDiagnostics":{"versionSupport":true}},
                 "window":{"workDoneProgress":true}
             }
-        })).await?;
+        })).await.with_context(|| format!("initialize LSP {} failed: verify the installed server command/configuration; use search/read_file if unavailable", config.name))?;
         client.capabilities = initialized
             .get("capabilities")
             .cloned()

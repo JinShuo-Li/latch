@@ -263,6 +263,30 @@ async fn pull_diagnostics_and_unavailable_servers_are_explicit() {
         )
         .await;
     assert!(result.is_error && result.output.contains("search/read_file"));
+    let mut missing_config = config("normal");
+    missing_config.command = "/latch-no-such-language-server".into();
+    let missing = fixture
+        .tools
+        .clone()
+        .with_lsp_servers(vec![missing_config])
+        .unwrap();
+    let result = missing
+        .execute(
+            &ToolCall {
+                id: "missing-binary".into(),
+                name: "lsp".into(),
+                arguments: json!({"action":"symbols","path":"a.rs"}),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        result.is_error
+            && result.output.contains("installed server")
+            && result.output.contains("search/read_file"),
+        "{}",
+        result.output
+    );
 }
 #[tokio::test]
 #[ignore = "optional local qualification: requires clangd and a C++ toolchain"]
