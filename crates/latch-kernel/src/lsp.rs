@@ -181,7 +181,7 @@ impl LspManager {
             return String::new();
         }
         format!(
-            "\nLanguage intelligence available via lsp ({}). Prefer definition/references for symbol identity, symbols for structure, hover for types, diagnostics for feedback. Queries start sandboxed servers lazily; results are advisory, not validation. Index completeness is unknown; never infer whole-project coverage or background indexing. Use line plus symbol to avoid guessing columns. After a startup failure, fall back to search/read_file rather than trying another LSP action.\n",
+            "\nLanguage intelligence available via lsp ({}). Prefer definition/references for symbol identity, symbols for structure, hover for types, diagnostics for feedback. Queries start sandboxed servers lazily; results are advisory, not validation. Index completeness is unknown; never infer whole-project coverage or background indexing. Use line plus symbol to avoid guessing columns. After a startup failure, fall back to search/read_file rather than trying another LSP action. For navigation/explanation requests, answer the user in final text with concrete symbols, file/line locations, types and limitations before calling complete; tool results and complete alone are not an answer.\n",
             servers.join("; ")
         )
     }

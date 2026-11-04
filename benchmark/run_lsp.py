@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sqlite3
@@ -126,6 +127,14 @@ int main() {
     return outcome["exit_code"] == 0 and not outcome["timed_out"]
 
 
+def has_navigation_answer(text):
+    """A minimal answer-presence check, not an LLM or semantic correctness grader."""
+    text = text.lower()
+    return ("main.cpp" in text and "quote" in text and re.search(r"\bint\b", text) is not None
+            and re.search(r"\b2\b", text) is not None and re.search(r"\b6\b", text) is not None
+            and ("double" in text or "floating" in text))
+
+
 def execute(root, name, prompt, mode, options, provider, env):
     case = root / name
     case.mkdir(mode=0o700)
@@ -170,8 +179,10 @@ def execute(root, name, prompt, mode, options, provider, env):
         final = json.loads(outcome["stdout"])
     except json.JSONDecodeError:
         final = {}
+    answered = mode == "repair" or has_navigation_answer(final.get("result", {}).get("text") or "")
     summary = {"case": name, "completed": completed, "status": final.get("status"), "independent_acceptance": accepted,
-               "useful_lsp_or_fallback": useful, "passed": completed and accepted and useful,
+               "answer_reported": answered,
+               "useful_lsp_or_fallback": useful, "passed": completed and accepted and useful and answered,
                "lsp_actions": [c["arguments"].get("action") for c in lsp], "lsp_errors": lsp_errors,
                "tool_calls": len(calls), "validation_passes": sum(bool(v.get("passed")) for v in validations),
                "elapsed_seconds": outcome["wall_seconds"], "usage": final.get("usage", {}).get("graph", {})}

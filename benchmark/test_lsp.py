@@ -35,6 +35,11 @@ class LspPilotTests(unittest.TestCase):
         with patch.dict(os.environ, {"FIXTURE_LSP_KEY": "env-secret"}):
             self.assertEqual(run_lsp.credential({}, {"credential": "env:FIXTURE_LSP_KEY"}, None), "env-secret")
 
+    def test_navigation_requires_a_user_answer_not_only_completion(self):
+        self.assertFalse(run_lsp.has_navigation_answer("Kernel completion report: no changed files"))
+        self.assertFalse(run_lsp.has_navigation_answer("I'll inspect quote references"))
+        self.assertTrue(run_lsp.has_navigation_answer("main.cpp:2 declares int quote(int), called at main.cpp:6; double quote is separate"))
+
     def test_event_extraction_matches_durable_protocol(self):
         with tempfile.TemporaryDirectory() as root:
             state = Path(root)

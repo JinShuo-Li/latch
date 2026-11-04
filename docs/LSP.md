@@ -111,6 +111,8 @@ positions are exclusive. Locations outside the workspace, protected state and
 file aliases/hardlinks are omitted. Use `read_file` to inspect a returned location
 before a guarded edit; LSP does not supply a write authorization or base hash.
 
+Navigation answers must report concrete symbols, file/line locations, types and
+limitations to the user before completion; tool results alone are not an answer.
 A useful loop is **navigate → inspect → edit → diagnostics → validate**. Snapshot
 checks cover all opened documents; changes during a query fail or mark its result
 stale. Changing an imported opened buffer also re-versions unchanged buffers,

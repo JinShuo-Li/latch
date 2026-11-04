@@ -265,6 +265,10 @@ Each case has a 240-second wall limit and at most 12 model turns, with retry bud
 one; transient retries may issue additional requests. There is no monetary price
 ceiling. Independent repair acceptance runs a hidden C++ harness in a separate,
 offline, credential-free sandbox and checks additional integer/floating inputs.
+Navigation acceptance also requires a user-facing answer mentioning the concrete
+file, integer symbol/type and relevant lines, rather than just a completion report.
+This is an answer-presence heuristic, not a semantic answer grader; review final
+answers and tool traces before publishing results.
 Results, configs, databases and traces stay in private ignored `benchmark/runs/lsp`;
 publish only reviewed aggregate evidence. One run is a usability qualification,
 not a success-rate or agent-ranking benchmark. See [LSP design and limits](../docs/LSP.md).
