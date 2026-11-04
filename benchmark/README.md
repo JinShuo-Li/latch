@@ -234,3 +234,37 @@ DeepSeek direct-API rates recorded in the comparison report; they are hypothetic
 prices applied to Go token usage, not actual OpenCode Go invoices. A single case
 or one sample per threshold cannot establish a universal optimum; repeat the
 promising candidates and account for independent patch correctness.
+
+## LSP model-usability pilot (Linux / WSL, opt-in and paid)
+
+`run_lsp.py` exercises real language-server tool use with the configured OpenCode
+Go account and `deepseek-v4.1-flash`, in disposable workspaces with private state.
+It requires Python 3.11+, Git, Bubblewrap, clangd, a C++ compiler and a release
+Latch binary. No language server is downloaded. Three scenarios cover overload
+navigation, diagnostics plus guarded repair/validation, and a missing-server
+fallback. Prompts describe semantic tasks rather than scripted RPC arguments.
+
+```sh
+# Offline runner/acceptance checks; no provider traffic:
+python3 benchmark/test_lsp.py
+# Paid: explicitly select your existing configuration and secrets file:
+python3 benchmark/run_lsp.py --live --source-config <config.toml> --secrets <secrets.toml>
+# Rerun only an interrupted scenario:
+python3 benchmark/run_lsp.py --live --source-config <config.toml> --secrets <secrets.toml> --case missing_server_fallback
+```
+
+The default provider id is `opencode-go`; `--provider` selects another configured
+instance of that family. The source credential is resolved in memory and passed
+through a dedicated environment reference, never copied into generated config or
+reports. File credentials require `--secrets` if the source has implicit state
+paths; environment credentials need no secrets-file argument. Existing user
+config/state is never modified. Language-server processes receive the backend's
+minimal environment, not the provider credential.
+
+Each case has a 240-second wall limit and at most 12 model turns, with retry budget
+one; transient retries may issue additional requests. There is no monetary price
+ceiling. Independent repair acceptance runs a hidden C++ harness in a separate,
+offline, credential-free sandbox and checks additional integer/floating inputs.
+Results, configs, databases and traces stay in private ignored `benchmark/runs/lsp`;
+publish only reviewed aggregate evidence. One run is a usability qualification,
+not a success-rate or agent-ranking benchmark. See [LSP design and limits](../docs/LSP.md).

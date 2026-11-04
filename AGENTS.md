@@ -480,6 +480,10 @@ Server edits/commands are refused; diagnostics never certify validation. LSP
 observations share the file drift ledger, and workspace mutation cursors invalidate
 indexes. See `docs/LSP.md`. Focused: `cargo test -p latch-kernel --lib lsp --locked`;
 optional real clangd: `cargo test -p latch-kernel --lib real_clangd --locked -- --ignored`.
+Paid Linux/WSL model qualification: `python3 benchmark/run_lsp.py --live --source-config
+<config> --secrets <secrets>` (configured OpenCode Go/DeepSeek V4.1 Flash, clangd,
+C++ compiler; private ignored evidence). Offline: `python3 benchmark/test_lsp.py`.
+See `benchmark/README.md` for budgets and single-case reruns.
 
 Browser header version comes only from bootstrap metadata; never hardcode a
 release fallback in HTML/JS. `node scripts/test_web_view.mjs` checks missing,
