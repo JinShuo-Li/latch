@@ -8,7 +8,13 @@ pub(super) fn checked_path(scope: &Scope, raw: &str) -> Result<PathBuf> {
         bail!("invalid or oversized LSP path");
     }
     let path = crate::workspace_path::resolve_workspace_path(&scope.workspace, raw)?;
-    if crate::workspace_path::file_alias_may_escape(&path) {
+    let alias = crate::workspace_path::file_alias_may_escape(&path);
+    #[cfg(unix)]
+    let alias = {
+        use std::os::unix::fs::MetadataExt;
+        alias || std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.nlink() > 1)
+    };
+    if alias {
         bail!("LSP refuses file aliases/hardlinks");
     }
     let mut protected = crate::sandbox::secret_paths(&dirs::home_dir().unwrap_or_default());
@@ -427,6 +433,27 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn state_paths_and_aliases_are_never_navigation_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(state.join("secret.rs"), "private").unwrap();
+        let scope = Scope {
+            workspace: dir.path().canonicalize().unwrap(),
+            state_dir: state,
+        };
+        assert!(checked_path(&scope, "state/secret.rs").is_err());
+        assert!(checked_path(&scope, "../outside.rs").is_err());
+        std::fs::write(dir.path().join("normal.rs"), "public").unwrap();
+        std::fs::hard_link(dir.path().join("normal.rs"), dir.path().join("alias.rs")).unwrap();
+        assert!(checked_path(&scope, "alias.rs").is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&scope.state_dir, dir.path().join("state-alias")).unwrap();
+            assert!(checked_path(&scope, "state-alias/secret.rs").is_err());
+        }
+    }
     #[test]
     fn unicode_positions_and_ambiguous_symbols_are_checked() {
         let text = "// 😀测试\nlet x = foo(); foo();\n";
