@@ -164,3 +164,9 @@ edits/commands, external changes, versions, workspace mutation invalidation,
 independent children, persistent results, cancellation, deadlines, pull/push
 reports and fallback. The real clangd fixture distinguishes overloaded functions
 and refreshes diagnostics. Neither requires model credentials.
+
+The [real-model qualification report](../benchmark/reports/2026-11-04-lsp/README.md)
+records actual OpenCode Go / DeepSeek V4.1 Flash calls on WSL2. Configured-server
+navigation and repair passed; strict overall acceptance was 2/3 because one
+missing-server fallback ended without a substantive final answer. It is not a
+claim of all-platform or large-project qualification.
