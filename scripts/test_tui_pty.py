@@ -180,6 +180,18 @@ class Terminal:
 
 
 def assert_padded_chrome(terminal, input_text, sidebar):
+    # A PTY read can end halfway through a frame (especially on macOS).
+    # Keep pumping until all geometry and the final cursor move have arrived.
+    def complete():
+        try:
+            check_padded_chrome(terminal, input_text, sidebar)
+            return True
+        except (AssertionError, StopIteration):
+            return False
+    terminal.wait(complete, 'complete padded chrome and input cursor')
+
+
+def check_padded_chrome(terminal, input_text, sidebar):
     """Check the actual terminal grid, not just the presence of UI labels."""
     rows = terminal.screen.display
     assert not rows[0].strip() and not rows[-1].strip(), 'missing vertical margins'
