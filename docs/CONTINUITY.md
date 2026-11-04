@@ -318,3 +318,14 @@ shared across its commands while the execution runner is alive. It is cleaned
 when the runner closes, is not durable evidence, and is not restored on resume
 after a restart. Save files needed for future turns or resumed work in the
 workspace; preserve validation/evidence through the existing durable tools.
+
+## Completion answers
+
+A root `complete` call records a claim; its tool result must reach the model
+before the run relies on a user-facing final answer. A bounded reporting
+instruction is stored through `KernelContext`, and the actual final answer is
+a durable `AssistantMessageCompleted` event. An empty answer after tools gets
+the same reporting opportunity. If it still yields no answer or repeats terminal
+completion, a durable kernel-authored `CompletionReport` preserves the real
+completion and evidence status without inventing an assistant response or pass.
+Live and resumed interfaces render these same events.

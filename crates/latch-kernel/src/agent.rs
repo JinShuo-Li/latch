@@ -104,8 +104,8 @@ pub struct Agent {
     /// image is never silently dropped for a text-only model.
     input_modalities: Vec<InputModality>,
     /// Set when the current turn executed `complete` and the kernel-derived
-    /// completion is terminal. Lets the loop exit in the same turn instead of
-    /// spending another provider request on a summary already produced.
+    /// completion is terminal. The root still gets a reporting turn after the
+    /// tool results; child turns can return their existing semantic summary.
     terminal_complete: bool,
     /// True when a kernel-owned workspace mutation was recorded during the
     /// current run. Derived only from durable `FileChanged` events, never from
@@ -1079,6 +1079,8 @@ impl Agent {
         // resumed supervision stay identical.
         self.observe_progress_events()?;
         let mut final_text = String::new();
+        let mut completion_reply_requested = false;
+        let mut executed_tools = false;
         let mut turns = 0u32;
         // Retrieval query for the next request. A newly injected steer is the
         // authority for what older material is relevant; ordinary continuation
@@ -1104,11 +1106,13 @@ impl Agent {
             // the order it was submitted.
             let queued = self.steering.drain();
             if !queued.is_empty() {
+                completion_reply_requested = false;
                 self.record_steers(&queued, &sink).await?;
                 steer_query = Some(steer_query_text(&queued));
             }
             let agent_messages = self.child_mailbox.drain();
             if !agent_messages.is_empty() {
+                completion_reply_requested = false;
                 self.record_agent_messages(&agent_messages, &sink).await?;
                 steer_query = Some(
                     agent_messages
@@ -1118,10 +1122,13 @@ impl Agent {
                         .join("\n"),
                 );
             }
-            self.deliver_agent_notifications(&sink)?;
+            let notifications = self.deliver_agent_notifications(&sink)?;
             // Group messages are delivered at the same safe boundary as child
             // reports: never between an assistant tool call and its results.
-            self.deliver_group_messages(&sink)?;
+            let group_messages = self.deliver_group_messages(&sink)?;
+            if notifications > 0 || group_messages > 0 {
+                completion_reply_requested = false;
+            }
             let query = steer_query
                 .take()
                 .or_else(|| (turns == 1).then(|| effective_user_text.clone()));
@@ -1136,6 +1143,13 @@ impl Agent {
             let extension_tokens = self.estimator.estimate(&extension_json);
             let budget = self.materialize_budget(tools_tokens.saturating_add(extension_tokens));
             let prompt = PromptCompiler::compile(self.mode, &self.workspace)?;
+            let mut reground = self.combined_reground_instruction().unwrap_or_default();
+            if completion_reply_requested {
+                if !reground.is_empty() {
+                    reground.push_str("\n\n");
+                }
+                reground.push_str("Kernel reporting check: tool results are now available. Give the user a final answer addressing the original request, using the actual changes and validation results; state any remaining limitations honestly. A tool status alone is not a user-facing answer.");
+            }
             let ctx = self.continuity.materialize(ContextRequest {
                 session_id: self.session_id,
                 state: self.state.state(),
@@ -1150,7 +1164,7 @@ impl Agent {
                 // same durable kernel-context channel. Both are kernel-owned
                 // instructions, never user input, and the engine dedups them by
                 // body so neither is emitted twice inside a cache epoch.
-                reground: self.combined_reground_instruction().as_deref(),
+                reground: (!reground.is_empty()).then_some(reground.as_str()),
             })?;
             let mut stats = ctx.stats.clone();
             stats.tools_tokens = tools_tokens;
@@ -1269,6 +1283,9 @@ impl Agent {
                 }
                 let notifications = self.deliver_agent_notifications(&sink)?;
                 let group_messages = self.deliver_group_messages(&sink)?;
+                if !agent_messages.is_empty() || notifications > 0 || group_messages > 0 {
+                    completion_reply_requested = false;
+                }
                 if late.is_empty()
                     && agent_messages.is_empty()
                     && notifications == 0
@@ -1282,14 +1299,26 @@ impl Agent {
                     // unverified change. A run that mutated nothing (read-only
                     // or explanatory work) exits here exactly as before.
                     if self.take_verification_correction() {
+                        self.steering.open();
                         continue;
+                    }
+                    if self.agent_depth == 0 && executed_tools && response.text.trim().is_empty() {
+                        if !completion_reply_requested {
+                            self.verification_correction = None;
+                            completion_reply_requested = true;
+                            self.steering.open();
+                            continue;
+                        }
+                        self.append_completion_report(start, &mut final_text, &sink)?;
                     }
                     break;
                 }
                 if !late.is_empty() {
+                    completion_reply_requested = false;
                     self.record_steers(&late, &sink).await?;
                     steer_query = Some(steer_query_text(&late));
                 }
+                self.steering.open();
                 continue;
             }
             for call in &response.tool_calls {
@@ -1297,6 +1326,7 @@ impl Agent {
             }
             let calls = response.tool_calls.clone();
             let tool_results = self.execute_batch(calls, cancel.clone(), &sink).await?;
+            executed_tools = true;
             // Publish tool-appended durable events before the display results,
             // keeping live consumers in exact durable order.
             self.forward_appended_events(&sink)?;
@@ -1305,12 +1335,10 @@ impl Agent {
             }
             self.supervise_failures(&response.tool_calls, &tool_results, &sink)?;
             self.supervise_progress(&sink)?;
-            // Terminal-complete fast path: when this turn executed `complete`
-            // and the kernel-derived completion is terminal, the assistant text
-            // emitted in the same turn is the final answer. Do not spend another
-            // provider request on a summary that already exists. The safe
-            // boundary handshake still applies: accepted steering, child
-            // messages, and undelivered child reports keep the run open.
+            // `complete` records a claim, not a user-facing answer. Let the root
+            // see its actual tool results before reporting. Bound this extra
+            // opportunity so repeated completion calls cannot create a loop.
+            // Steering and child notifications still take priority.
             if self.terminal_complete {
                 self.terminal_complete = false;
                 // `Verified` is the only completion that ends the run on the
@@ -1336,33 +1364,57 @@ impl Agent {
                 }
                 let notifications = self.deliver_agent_notifications(&sink)?;
                 let group_messages = self.deliver_group_messages(&sink)?;
+                if !agent_messages.is_empty() || notifications > 0 || group_messages > 0 {
+                    completion_reply_requested = false;
+                }
                 if late.is_empty()
                     && agent_messages.is_empty()
                     && notifications == 0
                     && group_messages == 0
                 {
                     if correction {
+                        self.steering.open();
                         continue;
                     }
-                    if response.text.trim().is_empty() {
-                        self.sync_completion(&sink)?;
-                        let report = self.completion_report(start)?;
-                        if !final_text.is_empty() {
-                            final_text.push_str("\n\n");
-                        }
-                        final_text.push_str(&report);
-                        self.emit(EventPayload::CompletionReport { text: report }, &sink)?;
+                    if self.agent_depth == 0 && !completion_reply_requested {
+                        self.verification_correction = None;
+                        completion_reply_requested = true;
+                        self.steering.open();
+                        continue;
+                    }
+                    if response.text.trim().is_empty()
+                        || (self.agent_depth == 0 && completion_reply_requested)
+                    {
+                        self.append_completion_report(start, &mut final_text, &sink)?;
                     }
                     break;
                 }
                 if !late.is_empty() {
+                    completion_reply_requested = false;
                     self.record_steers(&late, &sink).await?;
                     steer_query = Some(steer_query_text(&late));
                 }
+                self.steering.open();
                 continue;
             }
         }
         Ok(final_text)
+    }
+
+    fn append_completion_report(
+        &mut self,
+        start: u64,
+        final_text: &mut String,
+        sink: &AgentEventSink,
+    ) -> Result<()> {
+        self.sync_completion(sink)?;
+        let report = self.completion_report(start)?;
+        if !final_text.is_empty() {
+            final_text.push_str("\n\n");
+        }
+        final_text.push_str(&report);
+        self.emit(EventPayload::CompletionReport { text: report }, sink)?;
+        Ok(())
     }
     async fn call_with_retry(
         &self,

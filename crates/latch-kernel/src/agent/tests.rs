@@ -3298,6 +3298,123 @@ fn gate_complete_script() -> Vec<ModelResponse> {
 }
 
 #[tokio::test]
+async fn root_completion_always_gets_an_answer_after_the_actual_tool_results() {
+    for pre_tool_text in ["", "I will finish after checking."] {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent, provider) = gate_agent(
+            &d,
+            vec![
+                tool_response(
+                    "Checking.",
+                    "v1",
+                    "validate",
+                    json!({"requirement":"fixture check","command":"echo ok"}),
+                ),
+                tool_response(
+                    pre_tool_text,
+                    "c1",
+                    "complete",
+                    json!({"implementation_done":true}),
+                ),
+                final_response("The requested review is complete. The fixture check passed."),
+            ],
+            99,
+        );
+        let live = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = live.clone();
+        let answer = agent
+            .run(
+                "Review the English version and explain improvements.",
+                CancellationToken::new(),
+                Arc::new(move |output| {
+                    if let AgentOutput::Durable(event) = output {
+                        seen.lock().unwrap().push(*event);
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(answer.ends_with("The fixture check passed."));
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[2].messages.iter().any(|message| {
+            message.role == "tool"
+                && message
+                    .content
+                    .contains("kernel-derived completion: Verified")
+        }));
+        assert!(
+            requests[2]
+                .messages
+                .iter()
+                .any(|message| message.content.contains("Kernel reporting check"))
+        );
+        let events = store.events(sid).unwrap();
+        assert_eq!(agent.state().completion, CompletionState::Verified);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::CompletionReport { .. }))
+        );
+        for recorded in [&events, &*live.lock().unwrap()] {
+            assert!(recorded.iter().any(|event| matches!(&event.payload,
+                EventPayload::AssistantMessageCompleted { text, tool_calls, .. }
+                if tool_calls.is_empty() && text.ends_with("The fixture check passed.")
+            )));
+        }
+    }
+}
+
+#[tokio::test]
+async fn empty_answer_after_validation_gets_a_reporting_turn_without_fabricating_a_claim() {
+    let d = tempdir().unwrap();
+    let (_store, _sid, mut agent, provider) = gate_agent(
+        &d,
+        vec![
+            tool_response(
+                "Checking.",
+                "v1",
+                "validate",
+                json!({"requirement":"fixture check","command":"echo ok"}),
+            ),
+            final_response(""),
+            final_response("The review found these improvements; the fixture check passed."),
+        ],
+        99,
+    );
+    let answer = agent
+        .run(
+            "Review the English version.",
+            CancellationToken::new(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.requests.lock().unwrap().len(), 3);
+    assert!(answer.ends_with("the fixture check passed."));
+    assert!(!agent.state().implementation_done);
+}
+
+#[tokio::test]
+async fn steering_during_the_completion_answer_is_still_accepted() {
+    let d = tempdir().unwrap();
+    let mut responses = gate_complete_script();
+    responses.push(final_response("Included the requested explanation."));
+    let (_store, _sid, mut agent, provider) = gate_agent(&d, responses, 3);
+    provider
+        .steer
+        .lock()
+        .unwrap()
+        .push("Also explain what changed.".into());
+    let answer = agent
+        .run("Start.", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert_eq!(provider.requests.lock().unwrap().len(), 4);
+    assert!(answer.ends_with("Included the requested explanation."));
+}
+
+#[tokio::test]
 async fn late_steering_prevents_premature_terminal_complete() {
     let d = tempdir().unwrap();
     let (_store, _sid, mut agent, provider) = gate_agent(&d, gate_complete_script(), 2);
@@ -3383,6 +3500,7 @@ async fn terminal_complete_never_exits_with_a_pending_permission() {
             "complete",
             json!({"implementation_done": true}),
         ),
+        final_response("The outside write was not approved."),
     ];
     let (_store, sid, mut agent, provider) = gate_agent(&d, responses, 99);
     agent
@@ -3391,8 +3509,8 @@ async fn terminal_complete_never_exits_with_a_pending_permission() {
         .unwrap();
     assert_eq!(
         provider.requests.lock().unwrap().len(),
-        2,
-        "terminal complete exits without a summary request"
+        3,
+        "the reporting turn must not leave an unresolved approval"
     );
     let store = agent.store.clone();
     let events = store.events(sid).unwrap();
@@ -5666,12 +5784,15 @@ async fn durable_completion_report_survives_live_projection_and_resume() {
     let (store, sid, mut agent) = policy_agent(
         &dir,
         PermissionConfig::default(),
-        vec![tool_response(
-            "",
-            "complete",
-            "complete",
-            json!({"implementation_done":true}),
-        )],
+        vec![
+            tool_response(
+                "",
+                "complete",
+                "complete",
+                json!({"implementation_done":true}),
+            ),
+            final_response(""),
+        ],
     );
     let live = Arc::new(std::sync::Mutex::new(Vec::new()));
     let observed = live.clone();
@@ -5700,7 +5821,7 @@ async fn durable_completion_report_survives_live_projection_and_resume() {
     };
     assert_eq!(reports(&events), reports(&live.lock().unwrap()));
     assert_eq!(reports(&events).len(), 1);
-    assert_eq!(model_request_count(&events), 1);
+    assert_eq!(model_request_count(&events), 2);
     assert!(crate::session::replay_items(&events).iter().any(|item| matches!(item,
         latch_protocol::DisplayItem::KernelNotice { text } if text.contains("Kernel completion report")
     )));
@@ -5710,7 +5831,7 @@ async fn durable_completion_report_survives_live_projection_and_resume() {
 }
 
 #[tokio::test]
-async fn empty_complete_summary_uses_kernel_facts_without_another_model_request() {
+async fn empty_reporting_response_falls_back_to_kernel_facts() {
     let d = tempdir().unwrap();
     let (store, sid, mut agent) = policy_agent(
         &d,
@@ -5726,6 +5847,7 @@ async fn empty_complete_summary_uses_kernel_facts_without_another_model_request(
                 }),
             ),
             tool_response("", "c1", "complete", json!({"implementation_done":true})),
+            final_response(""),
         ],
     );
     let output = agent
@@ -5736,7 +5858,7 @@ async fn empty_complete_summary_uses_kernel_facts_without_another_model_request(
     assert!(output.contains("added.txt"), "{output}");
     assert!(output.contains("file exists"), "{output}");
     let events = store.events(sid).unwrap();
-    assert_eq!(model_request_count(&events), 3);
+    assert_eq!(model_request_count(&events), 4);
     let reports: Vec<_> = events
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::CompletionReport { .. }))
@@ -5757,7 +5879,7 @@ async fn empty_complete_summary_uses_kernel_facts_without_another_model_request(
                 EventPayload::AssistantMessageCompleted { .. }
             ))
             .count(),
-        3
+        4
     );
 }
 
@@ -5782,6 +5904,7 @@ async fn empty_complete_summary_reports_stale_evidence_as_unverified() {
             write_new_file_response("w1"),
             tool_response("", "c1", "complete", json!({"implementation_done":true})),
             tool_response("", "c2", "complete", json!({"implementation_done":true})),
+            final_response(""),
         ],
     );
     let output = agent
@@ -5798,7 +5921,7 @@ async fn empty_complete_summary_reports_stale_evidence_as_unverified() {
         agent.state().completion,
         CompletionState::ImplementedNotVerified
     );
-    assert_eq!(model_request_count(&store.events(sid).unwrap()), 4);
+    assert_eq!(model_request_count(&store.events(sid).unwrap()), 5);
 }
 
 #[tokio::test]
@@ -5811,6 +5934,7 @@ async fn a_mutation_without_complete_gets_one_opportunity_to_record_its_claim() 
             write_new_file_response("w1"),
             final_response("Added the file."),
             complete_response("c1"),
+            final_response("Added the file; verification is unavailable."),
         ],
     );
     agent
@@ -5823,7 +5947,7 @@ async fn a_mutation_without_complete_gets_one_opportunity_to_record_its_claim() 
         CompletionState::ImplementedNotVerified
     );
     let events = store.events(sid).unwrap();
-    assert_eq!(model_request_count(&events), 3);
+    assert_eq!(model_request_count(&events), 4);
     assert_eq!(verification_correction_count(&events), 1);
 }
 
@@ -5848,6 +5972,7 @@ async fn a_verified_command_without_an_implementation_claim_still_gets_correctio
             ),
             final_response("Added and checked the file."),
             complete_response("c1"),
+            final_response("Added and verified."),
         ],
     );
     agent
@@ -5856,7 +5981,7 @@ async fn a_verified_command_without_an_implementation_claim_still_gets_correctio
         .unwrap();
     assert_eq!(agent.state().completion, CompletionState::Verified);
     let events = store.events(sid).unwrap();
-    assert_eq!(model_request_count(&events), 4);
+    assert_eq!(model_request_count(&events), 5);
     assert_eq!(verification_correction_count(&events), 1);
 }
 
@@ -5946,11 +6071,12 @@ async fn a_passing_validation_still_terminates_as_verified() {
             final_response("Done and verified."),
         ],
     );
-    agent
+    let answer = agent
         .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
         .await
         .unwrap();
 
+    assert!(answer.ends_with("Done and verified."), "{answer}");
     assert_eq!(agent.state().completion, CompletionState::Verified);
     let events = store.events(sid).unwrap();
     assert_eq!(
@@ -5958,8 +6084,8 @@ async fn a_passing_validation_still_terminates_as_verified() {
         0,
         "verified work needs no correction"
     );
-    // `complete` on verified work still ends the run in its own turn.
-    assert_eq!(model_request_count(&events), 3);
+    // A separate text answer follows the committed completion result.
+    assert_eq!(model_request_count(&events), 4);
 }
 
 #[tokio::test]
@@ -5967,7 +6093,7 @@ async fn a_run_that_mutated_nothing_can_finish_unverified() {
     let d = tempdir().unwrap();
     // A read-only or explanatory task may legitimately require no validation.
     // It mutates nothing, so the correction never applies and the claim is
-    // honored immediately even though completion is not `Verified`.
+    // followed by a user-facing answer even without `Verified`.
     let (store, sid, mut agent) = policy_agent(
         &d,
         PermissionConfig::default(),
@@ -5995,7 +6121,7 @@ async fn a_run_that_mutated_nothing_can_finish_unverified() {
         0,
         "no mutation means nothing to verify"
     );
-    assert_eq!(model_request_count(&events), 1);
+    assert_eq!(model_request_count(&events), 2);
 }
 
 #[tokio::test]
@@ -6035,7 +6161,7 @@ async fn the_correction_can_never_promote_an_unverified_run_to_verified() {
 async fn the_verification_correction_cannot_loop_forever() {
     let d = tempdir().unwrap();
     // A model that keeps claiming completion must not be able to spin: the
-    // second claim is honored, still unverified.
+    // correction and reporting opportunities are both bounded, still unverified.
     let (store, sid, mut agent) = policy_agent(
         &d,
         PermissionConfig::default(),
@@ -6059,8 +6185,8 @@ async fn the_verification_correction_cannot_loop_forever() {
         1,
         "the correction is one-shot"
     );
-    // write, complete (correction), complete (honored) — then the run ends.
-    assert_eq!(model_request_count(&events), 3);
+    // write, complete (correction), complete (reporting), complete — stop.
+    assert_eq!(model_request_count(&events), 4);
     assert_eq!(
         agent.state().completion,
         CompletionState::ImplementedNotVerified

@@ -345,6 +345,9 @@ Memory/cache invariants (do not violate):
   mode) is the first provider-visible message, so `system` + tools stays
   cacheable across sessions and mode switches; keep `PromptCompiler`'s
   `stable`/`session` split and `ContextEngine`'s `session_context` intact.
+- Root `complete` is a claim, not the final user answer. Give the model a bounded
+  reporting opportunity after tool results; preserve steering and use durable
+  `CompletionReport` facts only if reporting stays empty or repeats completion.
 - Transitions that must survive resume fail closed: a live state change must not
   be reported successful before its durable event commits.
 - A Passed validation certifies only its durable workspace generation. Edits

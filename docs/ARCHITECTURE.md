@@ -608,29 +608,32 @@ evidence rather than fabricated ownership or unsafe undo bytes. Shell mutation
 audits remain in durable history and the changes sidebar; they do not add
 routine `Command changed` notices to TUI/Web transcripts.
 
-Completion state and loop termination are deliberately separate. A `complete`
-claim sets the terminal flag only so the loop can exit in the same turn; the
-loop resolves it against the derived completion, and only `Verified` ends the
-run on the strength of its own claim. When the kernel has recorded a
-workspace mutation during the run — read from durable `FileChanged` events and
-never from model-authored `touched_files` — and completion is still
-`InProgress` (missing the implementation claim) or `ImplementedNotVerified`,
-the loop spends exactly one corrective turn instead
-of exiting: the instruction travels the same durable `KernelContext` re-ground
-channel as progress supervision, asking the model to validate the change or
-record why verification is unavailable. A one-shot flag bounds it, so a model
-that keeps claiming completion is honored on the next claim and the run still
-ends `ImplementedNotVerified`. A run that mutated nothing exits immediately;
-an empty required-validation set is never by itself a reason to keep going.
+Completion state and loop termination are deliberately separate. `complete`
+records the implementation claim and derives completion from current kernel
+facts; its pre-tool text is not treated as the root's final answer. After an
+eligible root completion, the loop gives the model one reporting opportunity
+with the actual tool results and a durable `KernelContext` instruction to answer
+the user's request. An empty text-only response after tool execution receives
+the same bounded opportunity, including validation without `complete`. Accepted
+steering, child messages and reports remain higher priority and can reopen work.
+Child turns retain their existing semantic-report completion path.
 
-If a terminal `complete` response contains no summary text, the kernel commits
-a `CompletionReport` event with the derived completion state, files changed by
-Latch, shells or extensions during this run, current required-validation
-statuses, and recorded blockers. TUI, Web, machine events and resume all retain
-this kernel notice. Stale evidence is reported as unverified. This report adds
-no provider turn or fabricated assistant event and does not change completion
-truth. Concurrent process events and loop events reach live consumers once in
-durable sequence order.
+When the kernel has recorded a workspace mutation during the run — read from
+durable `FileChanged` events, never model-authored `touched_files` — and completion
+is still `InProgress` or `ImplementedNotVerified`, it first spends at most one
+corrective turn asking for missing implementation claims or current validation.
+That instruction uses the same durable `KernelContext` channel as progress
+supervision. Neither a reporting request nor its answer creates a completion
+claim or passing evidence. Read-only/explanatory answers need no validation.
+
+If the reporting opportunity still returns empty text or another terminal
+`complete` instead of an answer, the kernel commits a `CompletionReport` with
+the derived completion, files changed during this run, current required-validation
+statuses and recorded blockers. Repeated completion calls cannot keep requesting
+reporting turns. Stale evidence remains unverified. TUI, Web, machine events and
+resume retain the actual assistant answer or this explicitly kernel-authored
+fallback; no assistant response is fabricated. Concurrent process events and loop
+events reach live consumers once in durable sequence order.
 
 ## State, memory, and supervision
 

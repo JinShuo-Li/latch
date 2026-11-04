@@ -224,7 +224,10 @@ active writer ids and owners, and suppresses retries against an unchanged
 writer blocker after the retry budget. Suppression creates no passing evidence
 and never removes requirements. Durable `CompletionReport` events are kernel
 presentation facts, not provider responses; every UI reconstructs them from
-the same log. These changes add no capability or unsandboxed execution path.
+the same log. Root completion records the claim without replacing the final
+answer: the model gets a bounded reporting opportunity after the actual tool
+results, and a still-empty answer or repeated completion receives the durable
+kernel fallback. Reporting grants no capability and creates no validation pass. These changes add no capability or unsandboxed execution path.
 
 ### Port map: implemented now vs intentionally deferred
 

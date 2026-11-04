@@ -172,9 +172,9 @@ impl Agent {
                 } else {
                     self.state.set_implementation_done(implemented);
                     self.sync_completion(sink)?;
-                    // The model claimed completion and the kernel derived a
-                    // terminal, verified-or-implemented state. The loop may exit
-                    // in this same turn; `Blocked` still earns a reporting turn.
+                    // The kernel-derived state is eligible to finish. The root
+                    // loop still requests a user-facing answer after this result;
+                    // a completion claim is not itself that answer.
                     if matches!(
                         self.state.state().completion,
                         CompletionState::Verified | CompletionState::ImplementedNotVerified
@@ -185,7 +185,7 @@ impl Agent {
                     tool_ok(
                         call,
                         format!(
-                            "implementation claim recorded; kernel-derived completion: {:?}\n{}",
+                            "implementation claim recorded; kernel-derived completion: {:?}\n{}\nNow answer the user's request in text using the actual validation results and remaining limitations.",
                             self.state.state().completion,
                             summarize_state(self.state.state())
                         ),

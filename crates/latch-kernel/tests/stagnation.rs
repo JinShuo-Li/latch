@@ -347,6 +347,10 @@ async fn reread_after_guarded_mutation_is_allowed() {
                 json!({"implementation_done":true}),
             )],
         )),
+        step(response(
+            "The edit is complete; verification is unavailable.",
+            vec![],
+        )),
     ]);
     let (mut agent, store, session) = fresh_agent(
         &dir,
@@ -579,6 +583,10 @@ async fn reground_breaks_the_loop() {
                 "complete",
                 json!({"implementation_done":true}),
             )],
+        )),
+        step(response(
+            "The edit is complete; verification is unavailable.",
+            vec![],
         )),
     ]);
     let (mut agent, store, session) = fresh_agent(

@@ -644,13 +644,12 @@ async fn resumed_failure_state_survives() {
 
 /// Deterministic runtime regression fixture (NOT a live-model proof): a
 /// one-file fix is driven through the short proportional path by a scripted
-/// provider. The kernel must not add turns of its own, and terminal-complete
-/// must end the run in the same assistant turn: four provider requests total
-/// (read, patch, validate, complete) with no separate summary request. A real
+/// provider. Four tool turns (read, patch, validate, complete) are followed by
+/// the user-facing answer after the model has received the completion result. A real
 /// model's choice to take this path is exercised only by the opt-in live
 /// benchmark, never here.
 #[tokio::test]
-async fn trivial_one_file_fix_is_a_deterministic_four_request_fixture() {
+async fn trivial_one_file_fix_finishes_with_a_user_facing_answer() {
     let dir = tempdir().unwrap();
     let workspace = dir.path().join("sample");
     std::fs::create_dir(&workspace).unwrap();
@@ -687,6 +686,7 @@ async fn trivial_one_file_fix_is_a_deterministic_four_request_fixture() {
                 json!({"implementation_done":true}),
             )],
         ),
+        response("Fixed app.txt and verified the exact content.", vec![]),
     ];
     let provider = Arc::new(RecordingProvider::new(scripted));
     let tools = ToolExecutor::new(
@@ -722,13 +722,12 @@ async fn trivial_one_file_fix_is_a_deterministic_four_request_fixture() {
     );
     assert_eq!(agent.state().completion, CompletionState::Verified);
 
-    // Terminal-complete ends the run in the same assistant turn: read, patch,
-    // validate, complete; no fifth request for the final summary.
+    // The model receives all four tool results before its final answer.
     let requests = provider.requests();
     assert_eq!(
         requests.len(),
-        4,
-        "terminal complete must not spend a summary-only model request"
+        5,
+        "completion must be followed by a user-facing answer"
     );
     let events = store.events(session).unwrap();
     let final_assistant = events
@@ -737,13 +736,13 @@ async fn trivial_one_file_fix_is_a_deterministic_four_request_fixture() {
         .find_map(|event| match &event.payload {
             EventPayload::AssistantMessageCompleted {
                 text, tool_calls, ..
-            } if tool_calls.iter().any(|call| call.name == "complete") => Some(text.clone()),
+            } if tool_calls.is_empty() => Some(text.clone()),
             _ => None,
         })
-        .expect("assistant turn that invoked complete");
+        .expect("final assistant answer without tool calls");
     assert!(
         final_assistant.contains("verified the exact content"),
-        "the final answer travels in the same assistant turn as complete: {final_assistant:?}"
+        "the final answer follows the actual completion result: {final_assistant:?}"
     );
     let tools_used: Vec<String> = store
         .events(session)
@@ -998,6 +997,10 @@ async fn external_edit_blocks_undo_after_resume() {
                 "complete",
                 json!({"implementation_done":true}),
             )],
+        ),
+        response(
+            "The requested edits are complete; no validation was run.",
+            vec![],
         ),
     ];
     let provider = Arc::new(FakeProvider::scripted(scripted));
@@ -1689,6 +1692,10 @@ async fn broad_work_proceeds_without_any_scope_review() {
                 "complete",
                 json!({"implementation_done":true}),
             )],
+        ),
+        response(
+            "The requested edits are complete; no validation was run.",
+            vec![],
         ),
     ];
     let provider = Arc::new(FakeProvider::scripted(scripted));
