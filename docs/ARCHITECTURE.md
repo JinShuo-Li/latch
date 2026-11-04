@@ -1187,7 +1187,9 @@ left symmetrically.
 The TUI reserves two columns at each screen edge and one row above and below
 on ordinary terminals, dropping these margins on very small screens. The
 composer uses a muted rounded frame, internal padding and a two-cell prompt
-gutter; its wrap width, cursor and mouse viewport use the actual editor bounds.
+gutter; its four corner cells retain the terminal background so the neutral
+surface does not spill past the rounded outline. Its wrap width, cursor and
+mouse viewport use the actual editor bounds.
 The sidebar retains its quiet divider with padding on both sides of its text.
 The idle composer keeps a three-row editor body when space permits, with
 metadata, hints, and a workspace/version footer. Layout chrome drops before

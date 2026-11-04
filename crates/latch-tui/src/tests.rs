@@ -1137,6 +1137,27 @@ fn composer_has_a_padded_rounded_frame_and_prompt_gutter() {
             assert_eq!(cell.style().bg, surface, "composer band is continuous");
         }
     }
+    let mut corners = 0;
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            if matches!(cell.symbol(), "╭" | "╮" | "╰" | "╯") {
+                corners += 1;
+                assert_eq!(
+                    cell.bg,
+                    Color::Reset,
+                    "surface must not spill past a corner"
+                );
+                let inward = if matches!(cell.symbol(), "╭" | "╰") {
+                    x + 1
+                } else {
+                    x - 1
+                };
+                assert_eq!(buffer[(inward, y)].bg, surface.unwrap_or(Color::Reset));
+            }
+        }
+    }
+    assert_eq!(corners, 4);
     let body_row = rows[area.y as usize];
     assert!(body_row.starts_with("  │ › "), "{body_row:?}");
     // The empty composer leaves the cursor on the first text cell, directly

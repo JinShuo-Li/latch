@@ -1234,6 +1234,14 @@ pub(super) fn draw_composer(
                 .style(surface),
             border_area,
         );
+        // Terminal backgrounds fill whole cells, even behind rounded glyphs.
+        // Leave the four corner cells on the terminal background so the
+        // neutral surface does not protrude beyond the rounded outline.
+        for x in [border_area.left(), border_area.right() - 1] {
+            for y in [border_area.top(), border_area.bottom() - 1] {
+                frame.buffer_mut()[(x, y)].set_bg(Color::Reset);
+            }
+        }
     }
 
     // The terminal cursor is only placed while it is inside the visible body;
