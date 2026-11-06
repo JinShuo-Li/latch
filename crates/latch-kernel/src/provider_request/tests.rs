@@ -268,6 +268,111 @@ fn only_transient_statuses_retry_with_bounded_backoff() {
 }
 
 #[tokio::test]
+async fn protocol_completion_does_not_wait_for_connection_close_and_eof_is_not_success() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for transport in 0..4 {
+        for complete in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 4096];
+                let mut received = Vec::new();
+                loop {
+                    let n = socket.read(&mut buffer).await.unwrap();
+                    assert!(n > 0);
+                    received.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&received[..end]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|value| value.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if received.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n").await.unwrap();
+                if complete {
+                    let frame = match transport {
+                        0 => {
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n"
+                        }
+                        1 => {
+                            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}}\n\n"
+                        }
+                        2 => {
+                            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"
+                        }
+                        _ => {
+                            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n"
+                        }
+                    };
+                    socket
+                        .write_all(format!("{:x}\r\n{frame}\r\n", frame.len()).as_bytes())
+                        .await
+                        .unwrap();
+                    // Intentionally leave the HTTP body open after protocol completion.
+                    while socket.read(&mut buffer).await.unwrap() != 0 {}
+                } else {
+                    // A clean HTTP EOF without a terminal protocol event is
+                    // still an interrupted model response, eligible for retry
+                    // only when no semantic output was observed.
+                    socket.write_all(b"0\r\n\r\n").await.unwrap();
+                }
+            });
+            let provider: Arc<dyn ModelProvider> = match transport {
+                0 => Arc::new(crate::provider::OpenAiProvider::new(
+                    base,
+                    "fixture".into(),
+                    "m".into(),
+                )),
+                1 => Arc::new(crate::provider::OpenAiResponsesProvider::new(
+                    base,
+                    "fixture".into(),
+                    "m".into(),
+                )),
+                2 => Arc::new(crate::provider::AnthropicProvider::new(
+                    base,
+                    "fixture".into(),
+                    "m".into(),
+                )),
+                _ => Arc::new(crate::provider::GeminiProvider::new(
+                    base,
+                    "fixture".into(),
+                    "m".into(),
+                )),
+            };
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                provider.stream(request(), CancellationToken::new(), Arc::new(|_| {})),
+            )
+            .await
+            .expect("terminal event must release the stream");
+            if complete {
+                assert_eq!(result.unwrap().text, "ok", "transport {transport}");
+            } else {
+                let error = result.unwrap_err();
+                assert!(
+                    error.to_string().contains("before completion"),
+                    "transport {transport}: {error:#}"
+                );
+                assert!(retry_delay(&error, 0, Uuid::nil()).is_some());
+            }
+            tokio::time::timeout(Duration::from_secs(2), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn all_http_adapters_obey_header_and_stream_idle_deadlines() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut cases = Vec::new();

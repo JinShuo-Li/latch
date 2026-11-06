@@ -93,6 +93,11 @@ notification after commit. HTTP/SSE and browser projections own no durable truth
 
 ## Providers and inference profiles
 
+Model adapters stop at terminal protocol events and reject premature EOF.
+Structured transient stream failures obey the same output-aware retry gate as
+HTTP failures. Sanitized failure causes persist in `ModelRequestFinished.error`;
+older events omit that optional field. See [provider requests](PROVIDER_REQUESTS.md).
+
 ### ChatGPT subscription authentication
 
 `latch-cli/src/cli/login.rs` coordinates explicit human login/logout and provider

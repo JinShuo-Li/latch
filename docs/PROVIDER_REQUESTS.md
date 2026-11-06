@@ -49,10 +49,11 @@ The agent permits at most two automatic retries, and only before semantic
 output begins. Retryable failures are:
 
 - Connection/TLS, header or stream-idle timeout (not the absolute request deadline).
-- Recognized connection, transport timeout or response-body I/O errors.
+- Recognized connection, transport timeout or response-body I/O errors, including connection reset, broken pipe and unexpected EOF.
+- A stream closed without its terminal protocol event, or an explicit transient stream error code (such as server overload).
 - HTTP 408, 429, 500, 502, 503 and 504.
 
-Authentication, permission, invalid-request and unknown errors fail directly.
+Authentication, permission, invalid-request, quota and unknown errors fail directly.
 ChatGPT subscription usage-limit diagnostics remain non-retryable: Latch does
 not switch to API-key billing or reinterpret account limits as temporary
 network failures.
@@ -75,6 +76,21 @@ A timeout cannot prove that the remote server abandoned an accepted request;
 a retry can incur additional provider usage even before output arrives. This
 policy bounds local waiting and avoids replaying visible partial output. It
 does not promise provider-side exactly-once execution or billing.
+
+## Stream termination and diagnostics
+
+Adapters stop at protocol completion (`[DONE]`, Responses completion, Anthropic
+`message_stop`, or Gemini `finishReason`) rather than waiting for the HTTP
+connection to close. Chat Completions also accepts clean EOF after a nonempty
+`finish_reason`. A clean EOF without completion is an interrupted response,
+never an empty success or permission to execute partially received tools.
+The same output-aware retry gate applies to both HTTP and stream errors.
+
+Transport diagnostics retain the underlying I/O/TLS cause while removing the
+request URL; service error messages redact the credential. Failed requests
+persist the sanitized diagnostic in `ModelRequestFinished.error`, so session
+history can distinguish causes instead of recording only `stop_reason=error`.
+Older events without that optional field remain readable.
 
 ## Ownership and checks
 

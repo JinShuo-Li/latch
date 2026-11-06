@@ -457,7 +457,9 @@ on child rebinding and OAuth client rebuilds (subscription redirects stay off).
 Heartbeats/reasoning renew idle (not a thinking-duration limit), never total; retries
 require a recognized transient error before text/tool output, and cancellation
 interrupts backoff. Keep wire/status extraction in `provider.rs`, deadline policy
-provider-neutral, and child rebinding bounded. See `docs/PROVIDER_REQUESTS.md`;
+provider-neutral, and child rebinding bounded. Stop at terminal stream events;
+reject premature EOF and retry explicit transient stream codes only before output.
+Persist sanitized causes in optional `ModelRequestFinished.error`. See `docs/PROVIDER_REQUESTS.md`;
 focused checks: `cargo test -p latch-kernel --lib provider_request --locked` and
 `cargo test -p latch-kernel --lib model_retr --locked`.
 

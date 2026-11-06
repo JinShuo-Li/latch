@@ -485,7 +485,7 @@ impl ModelProvider for OpenAiProvider {
                     .headers(self.request_headers())
                     .json(&body)
                     .send()
-                    .await?;
+                    .await.map_err(transport_error)?;
                 checked_response_redacted("openai-compatible", sent, &self.api_key).await
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
@@ -500,10 +500,11 @@ impl ModelProvider for OpenAiProvider {
         let mut calls: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
         let mut stop = "stop".to_string();
         let mut usage = None;
-        loop {
+        let mut finished = false;
+        'stream: loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
             let Some(chunk) = next else { break };
-            let chunk = chunk?;
+            let chunk = chunk.map_err(transport_error)?;
             if !chunk.is_empty() {
                 sink(StreamEvent::Activity(
                     latch_protocol::StreamActivity::Receiving,
@@ -511,11 +512,16 @@ impl ModelProvider for OpenAiProvider {
             }
             for data in decoder.push(&chunk) {
                 if data == "[DONE]" {
-                    continue;
+                    finished = true;
+                    break 'stream;
                 }
                 let v: Value = serde_json::from_str(&data)?;
                 if let Some(error) = v.get("error") {
-                    bail!("OpenAI-compatible stream error: {error}");
+                    return Err(stream_service_error(
+                        "OpenAI-compatible",
+                        error,
+                        &self.api_key,
+                    ));
                 }
                 if let Some(u) = v.get("usage") {
                     usage = openai_usage(u);
@@ -529,6 +535,7 @@ impl ModelProvider for OpenAiProvider {
                 };
                 if let Some(s) = choice.get("finish_reason").and_then(Value::as_str) {
                     stop = s.into();
+                    finished = true;
                 }
                 let delta = &choice["delta"];
                 if let Some(t) = delta.get("content").and_then(Value::as_str) {
@@ -564,6 +571,9 @@ impl ModelProvider for OpenAiProvider {
                     }
                 }
             }
+        }
+        if !finished {
+            return Err(interrupted_stream("OpenAI-compatible"));
         }
         let tool_calls = calls
             .into_values()
@@ -758,7 +768,7 @@ impl ModelProvider for OpenAiResponsesProvider {
                     .headers(headers)
                     .json(&body)
                     .send()
-                    .await?;
+                    .await.map_err(transport_error)?;
                 if self.chatgpt_auth.is_some() {
                     match sent.status().as_u16() {
                         401 => bail!("ChatGPT sign-in expired or was revoked; run /login again"),
@@ -778,10 +788,10 @@ impl ModelProvider for OpenAiResponsesProvider {
         let mut decoder = SseDecoder::default();
         let mut state = ResponsesStreamState::default();
         let mut completed = false;
-        loop {
+        'stream: loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
             let Some(chunk) = next else { break };
-            let chunk = chunk?;
+            let chunk = chunk.map_err(transport_error)?;
             if !chunk.is_empty() {
                 sink(StreamEvent::Activity(
                     latch_protocol::StreamActivity::Receiving,
@@ -805,16 +815,26 @@ impl ModelProvider for OpenAiResponsesProvider {
                         bail!("ChatGPT response did not complete; retry the request");
                     }
                 }
+                if matches!(v["type"].as_str(), Some("error" | "response.failed")) {
+                    let error = v
+                        .pointer("/response/error")
+                        .or_else(|| v.get("error"))
+                        .unwrap_or(&v);
+                    return Err(stream_service_error("OpenAI Responses", error, &api_key));
+                }
                 let events = state.apply(&v).map_err(|error| {
                     anyhow!("{}", crate::credentials::redact(&error, &[&api_key]))
                 })?;
                 for event in events {
                     sink(event);
                 }
+                if completed {
+                    break 'stream;
+                }
             }
         }
-        if self.chatgpt_auth.is_some() && !completed {
-            bail!("ChatGPT stream ended before completion; retry the request");
+        if !completed {
+            return Err(interrupted_stream("OpenAI Responses"));
         }
         let result = state
             .finish()
@@ -1277,7 +1297,7 @@ impl ModelProvider for AnthropicProvider {
                         self.media.as_deref(),
                     )?)
                     .send()
-                    .await?;
+                    .await.map_err(transport_error)?;
                 checked_response_redacted("anthropic", sent, &self.api_key).await
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
@@ -1302,10 +1322,11 @@ impl ModelProvider for AnthropicProvider {
             cache_miss_tokens: None,
             reasoning_tokens: None,
         };
-        loop {
+        let mut finished = false;
+        'stream: loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
             let Some(chunk) = next else { break };
-            let chunk = chunk?;
+            let chunk = chunk.map_err(transport_error)?;
             if !chunk.is_empty() {
                 sink(StreamEvent::Activity(
                     latch_protocol::StreamActivity::Receiving,
@@ -1315,7 +1336,15 @@ impl ModelProvider for AnthropicProvider {
                 let v: Value = serde_json::from_str(&data)?;
                 match v.get("type").and_then(Value::as_str) {
                     Some("error") => {
-                        bail!("Anthropic stream error: {}", v.get("error").unwrap_or(&v))
+                        return Err(stream_service_error(
+                            "Anthropic",
+                            v.get("error").unwrap_or(&v),
+                            &self.api_key,
+                        ));
+                    }
+                    Some("message_stop") => {
+                        finished = true;
+                        break 'stream;
                     }
                     Some("message_start") => {
                         usage.input_tokens = v
@@ -1461,6 +1490,9 @@ impl ModelProvider for AnthropicProvider {
                     _ => {}
                 }
             }
+        }
+        if !finished {
+            return Err(interrupted_stream("Anthropic"));
         }
         let tool_calls = calls
             .into_values()
@@ -2315,7 +2347,7 @@ impl ModelProvider for GeminiProvider {
                 } else {
                     sent = sent.header("x-goog-api-key", &self.api_key);
                 }
-                let sent = sent.send().await?;
+                let sent = sent.send().await.map_err(transport_error)?;
                 checked_response_redacted("gemini", sent, &self.api_key).await
             } => response?,
             () = cancel.cancelled() => bail!("model request cancelled"),
@@ -2326,10 +2358,10 @@ impl ModelProvider for GeminiProvider {
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut state = GeminiStreamState::default();
-        loop {
+        'stream: loop {
             let next = tokio::select! {()=cancel.cancelled()=>bail!("model request cancelled"),v=bytes.next()=>v};
             let Some(chunk) = next else { break };
-            let chunk = chunk?;
+            let chunk = chunk.map_err(transport_error)?;
             if !chunk.is_empty() {
                 sink(StreamEvent::Activity(
                     latch_protocol::StreamActivity::Receiving,
@@ -2341,13 +2373,22 @@ impl ModelProvider for GeminiProvider {
                 }
                 let value: Value = serde_json::from_str(&data)
                     .map_err(|error| anyhow!("invalid Gemini stream frame: {error}"))?;
+                if let Some(error) = value.get("error") {
+                    return Err(stream_service_error("Gemini", error, &self.api_key));
+                }
                 let events = state.apply(&value).map_err(|error| {
                     anyhow!("{}", crate::credentials::redact(&error, &[&self.api_key]))
                 })?;
                 for event in events {
                     sink(event);
                 }
+                if state.finish_reason.is_some() {
+                    break 'stream;
+                }
             }
+        }
+        if state.finish_reason.is_none() {
+            return Err(interrupted_stream("Gemini"));
         }
         let result = state.finish().map_err(|error| anyhow!("{error}"))?;
         sink(StreamEvent::Completed(result.clone()));
@@ -2879,6 +2920,53 @@ pub fn anthropic_request(request: &ModelRequest, model: &str) -> Result<Value> {
     anthropic_request_with_config(request, model, AnthropicConfig::default(), None)
 }
 
+/// Keep the typed transport cause for retry admission and expose its actual
+/// I/O/TLS cause without retaining a potentially credential-bearing URL.
+fn transport_error(error: reqwest::Error) -> anyhow::Error {
+    let error = anyhow::Error::new(error.without_url());
+    let diagnostic = format!("{error:#}");
+    error.context(diagnostic)
+}
+
+fn interrupted_stream(provider: &str) -> anyhow::Error {
+    crate::provider_request::ProviderStreamError {
+        retryable: true,
+        message: format!(
+            "{provider} stream ended before completion (connection closed without a terminal event)"
+        ),
+    }
+    .into()
+}
+
+fn stream_service_error(provider: &str, error: &Value, secret: &str) -> anyhow::Error {
+    // Only explicit protocol codes admit retry; free-form messages (including
+    // account/usage-limit prose) never grant it.
+    let retryable = ["type", "code", "status"].iter().any(|key| {
+        error.get(key).is_some_and(|value| {
+            matches!(
+                value.as_str(),
+                Some(
+                    "server_error"
+                        | "internal_error"
+                        | "overloaded_error"
+                        | "rate_limit_error"
+                        | "rate_limit_exceeded"
+                        | "INTERNAL"
+                        | "UNAVAILABLE"
+                )
+            ) || matches!(value.as_u64(), Some(408 | 429 | 500 | 502 | 503 | 504))
+        })
+    });
+    crate::provider_request::ProviderStreamError {
+        retryable,
+        message: crate::credentials::redact(
+            &format!("{provider} stream error: {error}"),
+            &[secret],
+        ),
+    }
+    .into()
+}
+
 #[derive(Default)]
 struct SseDecoder {
     buffer: Vec<u8>,
@@ -3328,6 +3416,29 @@ mod tests {
         assert!(d.push(b"data: {\"a\":").is_empty());
         assert_eq!(d.push(b"1}\n\n"), ["{\"a\":1}"]);
         assert_eq!(d.push(b"data: ok\r\n\r\n"), ["ok"]);
+    }
+
+    #[test]
+    fn stream_errors_retry_only_explicit_transient_codes_and_redact_secrets() {
+        for code in ["overloaded_error", "server_error", "rate_limit_error"] {
+            let error = stream_service_error(
+                "fixture",
+                &json!({"type": code, "message": "fixture-secret"}),
+                "fixture-secret",
+            );
+            assert!(!error.to_string().contains("fixture-secret"));
+            assert!(crate::provider_request::retry_delay(&error, 0, Uuid::nil()).is_some());
+        }
+        for code in [
+            "usage_limit_reached",
+            "insufficient_quota",
+            "authentication_error",
+            "invalid_request_error",
+            "unknown",
+        ] {
+            let error = stream_service_error("fixture", &json!({"code": code}), "fixture-secret");
+            assert!(crate::provider_request::retry_delay(&error, 0, Uuid::nil()).is_none());
+        }
     }
     /// CR-09 regression: a CRLF-terminated frame followed by an LF-terminated
     /// one must not be merged by preferring the later `\n\n` delimiter.

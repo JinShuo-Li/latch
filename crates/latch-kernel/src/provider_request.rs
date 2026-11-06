@@ -99,6 +99,20 @@ impl fmt::Display for ProviderHttpError {
 }
 impl std::error::Error for ProviderHttpError {}
 
+/// A wire adapter recognized an interrupted stream or a structured service
+/// error. Retry admission still belongs to the agent's output-aware gate.
+#[derive(Debug)]
+pub(crate) struct ProviderStreamError {
+    pub retryable: bool,
+    pub message: String,
+}
+impl fmt::Display for ProviderStreamError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for ProviderStreamError {}
+
 /// Unknown failures are not evidence that resubmitting is safe. The caller
 /// additionally refuses retries after any semantic output has begun.
 pub(crate) fn retry_delay(error: &anyhow::Error, attempt: u32, session: Uuid) -> Option<Duration> {
@@ -112,9 +126,29 @@ pub(crate) fn retry_delay(error: &anyhow::Error, attempt: u32, session: Uuid) ->
             return None;
         }
         None
+    } else if let Some(stream) = error.downcast_ref::<ProviderStreamError>() {
+        if !stream.retryable {
+            return None;
+        }
+        None
     } else {
         let transport = error.downcast_ref::<reqwest::Error>()?;
-        if !(transport.is_connect() || transport.is_timeout() || transport.is_body()) {
+        let interrupted_io = error.chain().any(|cause| {
+            cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+                matches!(
+                    io.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::UnexpectedEof
+                )
+            })
+        });
+        if !(transport.is_connect()
+            || transport.is_timeout()
+            || transport.is_body()
+            || interrupted_io)
+        {
             return None;
         }
         None

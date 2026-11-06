@@ -1090,6 +1090,9 @@ pub enum EventPayload {
     },
     ModelRequestFinished {
         stop_reason: String,
+        /// Sanitized failure diagnostic; absent in older logs and on success.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     ToolRequested {
         call: ToolCall,

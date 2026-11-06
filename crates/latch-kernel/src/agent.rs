@@ -1236,6 +1236,7 @@ impl Agent {
                     self.emit(
                         EventPayload::ModelRequestFinished {
                             stop_reason: "error".into(),
+                            error: Some(error.to_string()),
                         },
                         &sink,
                     )?;
@@ -1258,6 +1259,7 @@ impl Agent {
             self.emit(
                 EventPayload::ModelRequestFinished {
                     stop_reason: response.stop_reason.clone(),
+                    error: None,
                 },
                 &sink,
             )?;
