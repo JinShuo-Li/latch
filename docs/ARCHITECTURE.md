@@ -613,32 +613,35 @@ evidence rather than fabricated ownership or unsafe undo bytes. Shell mutation
 audits remain in durable history and the changes sidebar; they do not add
 routine `Command changed` notices to TUI/Web transcripts.
 
-Completion state and loop termination are deliberately separate. `complete`
-records the implementation claim and derives completion from current kernel
-facts; its pre-tool text is not treated as the root's final answer. After an
-eligible root completion, the loop gives the model one reporting opportunity
-with the actual tool results and a durable `KernelContext` instruction to answer
-the user's request. An empty text-only response after tool execution receives
-the same bounded opportunity, including validation without `complete`. Accepted
-steering, child messages and reports remain higher priority and can reopen work.
-Child turns retain their existing semantic-report completion path.
+Completion state is derived from evidence; a successful run cannot bypass its
+required validation. Every attempt to finish a mutable (WORK) run, including a
+plain text response without `complete`, checks current requirements, workspace
+generation and active writers. Missing, failed, unavailable or stale
+requirements return a durable `KernelContext` correction naming the gaps. The
+check repeats until satisfied; there is no one-shot escape. Mutation provenance
+is reconstructed from the log at run start, so cancellation or a provider
+failure cannot erase the obligation on continuation/resume. A read-only
+explanation with no validation obligations can still finish directly, and ASK or
+PLAN runs are never gated on requirements they cannot discharge: those
+obligations belong to the later WORK run. Cancellation, provider failure and an
+explicitly configured turn limit remain error exits, not verified completion.
 
-When the kernel has recorded a workspace mutation during the run — read from
-durable `FileChanged` events, never model-authored `touched_files` — and completion
-is still `InProgress` or `ImplementedNotVerified`, it first spends at most one
-corrective turn asking for missing implementation claims or current validation.
-That instruction uses the same durable `KernelContext` channel as progress
-supervision. Neither a reporting request nor its answer creates a completion
-claim or passing evidence. Read-only/explanatory answers need no validation.
+Validation commits its tool result before any re-ground instruction, preserving
+the call/result transaction so the model can see the failure it must repair.
 
-If the reporting opportunity still returns empty text or another terminal
-`complete` instead of an answer, the kernel commits a `CompletionReport` with
-the derived completion, files changed during this run, current required-validation
-statuses and recorded blockers. Repeated completion calls cannot keep requesting
-reporting turns. Stale evidence remains unverified. TUI, Web, machine events and
-resume retain the actual assistant answer or this explicitly kernel-authored
-fallback; no assistant response is fabricated. Concurrent process events and loop
-events reach live consumers once in durable sequence order.
+After reading actual validation results, the model submits its user reply in
+`complete.final_answer`. Once the whole tool batch and validation gate succeed,
+and queued steering/child/group messages have been handled, the kernel commits
+that model-authored text as one `AssistantMessageCompleted` event. TUI, Web,
+machine output and resume use the existing assistant projection. No additional
+provider request is needed. A later write in the same batch invalidates the
+answer; pending input discards it and reopens work.
+
+Legacy completion calls without the slot retain a bounded reporting turn after
+tool results. If reporting stays empty or repeats completion, the durable
+kernel-authored `CompletionReport` supplies facts, but only after the same
+validation gate. Reporting never creates a pass or bypasses a requirement.
+Concurrent process and loop events reach live consumers once in durable order.
 
 ## State, memory, and supervision
 

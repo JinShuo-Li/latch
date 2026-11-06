@@ -3,6 +3,14 @@
 use anyhow::{Result, anyhow, bail};
 use std::path::{Path, PathBuf};
 
+/// Outside-scope fixtures must be outside the shared /tmp root as well.
+#[cfg(test)]
+pub(crate) fn external_test_dir() -> tempfile::TempDir {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-external");
+    std::fs::create_dir_all(&root).unwrap();
+    tempfile::tempdir_in(root.canonicalize().unwrap()).unwrap()
+}
+
 /// Resolve aliases on the deepest existing ancestor without accepting a
 /// dangling symlink as a missing leaf.
 pub(crate) fn resolve_real_path(path: &Path) -> Option<PathBuf> {

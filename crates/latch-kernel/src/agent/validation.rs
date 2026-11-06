@@ -233,6 +233,19 @@ impl Agent {
             artifact_id: output.artifact_id,
             media: Vec::new(),
         };
+        // Finish the tool transaction before emitting user-visible re-ground
+        // instructions. Otherwise history sanitation would drop this result
+        // because an instruction split the assistant call from its reply.
+        let payload = if result.is_error {
+            EventPayload::ToolFailed {
+                result: result.clone(),
+            }
+        } else {
+            EventPayload::ToolCompleted {
+                result: result.clone(),
+            }
+        };
+        self.emit(payload, sink)?;
         // 4. The validation's own failure lineage is supervised against the
         //    result body, the exact text a resumed session replays — so live
         //    and restored supervision count identically.
@@ -261,16 +274,6 @@ impl Agent {
                 )?;
             }
         }
-        let payload = if result.is_error {
-            EventPayload::ToolFailed {
-                result: result.clone(),
-            }
-        } else {
-            EventPayload::ToolCompleted {
-                result: result.clone(),
-            }
-        };
-        self.emit(payload, sink)?;
         Ok(result)
     }
 

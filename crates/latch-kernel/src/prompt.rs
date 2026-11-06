@@ -104,13 +104,13 @@ impl PromptCompiler {
                 "core.communication",
                 90,
                 true,
-                "Open with one action sentence; then stay quiet until a finding or blocker. Do not narrate each step, announce tool calls, or repeat tool output. Never restate the plan. Include a nonempty summary with complete in the same assistant message; the run may end immediately. State what changed or was found, what passed, and any limitation. Cite paths, not diffs.",
+                "Open with one action sentence; then stay quiet until a finding or blocker. Do not narrate each step, announce tool calls, or repeat tool output. Never restate the plan. Put the final reply only in complete.final_answer after validation. State what changed or was found, what passed, and any limitation. Cite paths, not diffs.",
             ),
             fragment(
                 "latch.kernel_truth",
                 110,
                 true,
-                "validation truth is the kernel's. validate records evidence and derives completion; a failure is superseded by its new pass. Refresh several requirements in one command with their exact names in requirements. record_evidence accepts only pending or unavailable; passed and failed are kernel-owned. No current passes: IMPLEMENTED, NOT VERIFIED. After validation, call complete with implementation_done=true.",
+                "validation truth is the kernel's. validate records evidence and derives completion; a failure is superseded by its new pass. Refresh several requirements in one command with their exact names in requirements. record_evidence accepts only pending or unavailable; passed and failed are kernel-owned. After validation, call complete with implementation_done=true and final_answer. Required checks must pass before ending.",
             ),
             fragment(
                 "latch.context_and_staleness",
@@ -428,7 +428,7 @@ mod tests {
             "hash from that read",
             "validate",
             "record_evidence",
-            "IMPLEMENTED, NOT VERIFIED",
+            "Required checks must pass",
             "re-ground",
             "stale",
             "capabilities",
@@ -487,7 +487,7 @@ mod tests {
             "narration discipline must be explicit"
         );
         assert!(
-            communication.contains("nonempty summary with complete in the same assistant message")
+            communication.contains("complete.final_answer")
                 && p.fragment("latch.kernel_truth")
                     .unwrap()
                     .content

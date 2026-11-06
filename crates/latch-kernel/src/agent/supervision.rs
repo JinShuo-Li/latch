@@ -3,13 +3,8 @@
 
 use super::*;
 
-/// Kernel-owned instruction issued at most once per run when implementation has
-/// changed the workspace but the run is about to end with no passing
-/// validation. It never asserts the work is wrong and never asks for more than
-/// the kernel can justify: it asks for the evidence the model is responsible
-/// for producing, and names the honest exit when verification genuinely is not
-/// available.
-const VERIFICATION_CORRECTION: &str = "Kernel verification check: this run changed the workspace, but its implementation claim or current verification is missing. If implementation is done, run any missing validation (refresh several named requirements with one covering command and requirements), then call complete with implementation_done=true. If verification is unavailable, record_evidence and report why. If no validation is appropriate, explain why and record the implementation claim.";
+/// Required validation is a terminal gate, not a one-shot suggestion.
+const VERIFICATION_CORRECTION: &str = "Kernel verification check: completion is withheld until required validation is current and passed. Run missing/failed/stale validation with validate (refresh several exact names with one covering command and requirements), then call complete with implementation_done=true and final_answer. A completion claim, final text, or unavailable observation cannot bypass validation. Resolve active workspace writers before revalidating.";
 
 /// Repeated certification blockers are the same failed attempt even when the
 /// model changes the proving command or its successful output. Use the same
@@ -27,14 +22,8 @@ pub(super) fn validation_failure_output(output: &str) -> &str {
 /// not made by this run, so neither counts as the implementation changing the
 /// workspace.
 fn is_workspace_mutation(payload: &EventPayload) -> bool {
-    matches!(
-        payload,
-        EventPayload::FileChanged { owner, .. }
-            if !matches!(
-                owner,
-                latch_protocol::ChangeOwner::External | latch_protocol::ChangeOwner::PreExisting
-            )
-    )
+    matches!(payload, EventPayload::FileChanged { owner, .. }
+        if !matches!(owner, latch_protocol::ChangeOwner::External | latch_protocol::ChangeOwner::PreExisting))
 }
 
 /// The global row id of the newest such event is the workspace generation. A
@@ -116,7 +105,7 @@ impl Agent {
                 // Kernel-owned mutation state: the workspace really changed,
                 // asserted from the durable log rather than from the model's
                 // own `touched_files`.
-                self.run_mutated_workspace = true;
+                self.workspace_mutation_seen = true;
             }
             self.progress.observe_event(event);
         }
@@ -124,27 +113,43 @@ impl Agent {
         Ok(())
     }
 
-    /// Issues the one-shot verification correction for this run.
-    ///
-    /// Returns true when the loop should spend one more turn asking for the
-    /// evidence a terminal claim is missing. Every condition is kernel-owned:
-    /// the completion state is kernel-derived, and the mutation is read from
-    /// durable change events. An empty `required_validations` is deliberately
-    /// not itself a failure — a read-only, explanatory, or documentation task
-    /// may legitimately require none, and such a run mutates nothing, so it
-    /// never reaches this path.
+    /// Every attempt to finish is checked against current durable evidence.
+    /// Read-only explanations without obligations need no invented validation.
+    /// ASK/PLAN runs cannot discharge an obligation either: requirements they
+    /// record are future WORK, so gating them here would only block the answer.
     pub(super) fn take_verification_correction(&mut self) -> bool {
-        if self.verification_correction_issued
-            || !self.run_mutated_workspace
-            || !matches!(
-                self.state.state().completion,
-                CompletionState::InProgress | CompletionState::ImplementedNotVerified
-            )
-        {
+        if !self.mode.can_mutate() {
+            self.verification_correction = None;
             return false;
         }
-        self.verification_correction_issued = true;
-        self.verification_correction = Some(VERIFICATION_CORRECTION.to_owned());
+        let state = self.state.state();
+        let mut missing = state
+            .required_validations
+            .iter()
+            .filter(|requirement| {
+                self.evidence.status_for_completion(requirement) != Some(EvidenceStatus::Passed)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if self.workspace_mutation_seen {
+            if !state.implementation_done {
+                missing.push("implementation_done claim".into());
+            }
+            if state.required_validations.is_empty() {
+                missing.push("a validation command covering the changed workspace".into());
+            }
+        }
+        if !self.active_managed_processes.is_empty() {
+            missing.push("workspace writers must exit before revalidation".into());
+        }
+        if missing.is_empty() {
+            self.verification_correction = None;
+            return false;
+        }
+        self.verification_correction = Some(format!(
+            "{VERIFICATION_CORRECTION}\nUnfulfilled: {}",
+            missing.join("; ")
+        ));
         true
     }
 

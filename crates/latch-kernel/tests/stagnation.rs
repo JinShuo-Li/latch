@@ -338,18 +338,28 @@ async fn reread_after_guarded_mutation_is_allowed() {
             "re-reading",
             vec![call("r2", "read_file", json!({"path":"a.txt"}))],
         )),
-        step(response("done", vec![])),
         step(response(
-            "Acknowledging the completion correction.",
+            "Checking the edit.",
             vec![call(
-                "complete-1",
-                "complete",
-                json!({"implementation_done":true}),
+                "validate-1",
+                "validate",
+                json!({
+                    "requirement":"edited text matches",
+                    "command": if cfg!(windows) {
+                        "python -c \"from pathlib import Path; assert Path('a.txt').read_text() == 'beta'\""
+                    } else {
+                        "test \"$(cat a.txt)\" = beta"
+                    }
+                }),
             )],
         )),
         step(response(
-            "The edit is complete; verification is unavailable.",
-            vec![],
+            "",
+            vec![call(
+                "complete-1",
+                "complete",
+                json!({"implementation_done":true,"final_answer":"Fixed and checked a.txt."}),
+            )],
         )),
     ]);
     let (mut agent, store, session) = fresh_agent(
@@ -575,18 +585,28 @@ async fn reground_breaks_the_loop() {
                 json!({"path":"a.txt","base_hash":hash,"old":"alpha","new":"fixed"}),
             )],
         )),
-        step(response("done", vec![])),
         step(response(
-            "Acknowledging the completion correction.",
+            "Checking the edit.",
             vec![call(
-                "complete-1",
-                "complete",
-                json!({"implementation_done":true}),
+                "validate-1",
+                "validate",
+                json!({
+                    "requirement":"edited text matches",
+                    "command": if cfg!(windows) {
+                        "python -c \"from pathlib import Path; assert Path('a.txt').read_text() == 'fixed'\""
+                    } else {
+                        "test \"$(cat a.txt)\" = fixed"
+                    }
+                }),
             )],
         )),
         step(response(
-            "The edit is complete; verification is unavailable.",
-            vec![],
+            "",
+            vec![call(
+                "complete-1",
+                "complete",
+                json!({"implementation_done":true,"final_answer":"Fixed and checked a.txt."}),
+            )],
         )),
     ]);
     let (mut agent, store, session) = fresh_agent(

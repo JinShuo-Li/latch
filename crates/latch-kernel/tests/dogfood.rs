@@ -597,10 +597,12 @@ async fn resumed_failure_state_survives() {
         continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
         retry_budget: 3,
     });
-    agent
+    agent.set_max_model_turns(Some(4));
+    let error = agent
         .run("stall", CancellationToken::new(), Arc::new(|_| {}))
         .await
-        .unwrap();
+        .unwrap_err();
+    assert!(error.to_string().contains("circuit breaker"));
     assert_eq!(agent.failure_lineages(), vec![("tests pass".to_owned(), 2)]);
     drop(agent);
 
@@ -989,18 +991,21 @@ async fn external_edit_blocks_undo_after_resume() {
                 json!({"path":"app.txt","base_hash":digest("bug"),"old":"bug","new":"good"}),
             )],
         ),
-        response("done", vec![]),
         response(
-            "Acknowledging the completion correction.",
+            "Checking the edit.",
             vec![call(
-                "complete-1",
-                "complete",
-                json!({"implementation_done":true}),
+                "validate-1",
+                "validate",
+                json!({"requirement":"fixture exact-content check","command":exact_content_command()}),
             )],
         ),
         response(
-            "The requested edits are complete; no validation was run.",
-            vec![],
+            "",
+            vec![call(
+                "complete-1",
+                "complete",
+                json!({"implementation_done":true,"final_answer":"Fixed and checked app.txt."}),
+            )],
         ),
     ];
     let provider = Arc::new(FakeProvider::scripted(scripted));
@@ -1682,20 +1687,27 @@ async fn broad_work_proceeds_without_any_scope_review() {
         "write",
         json!({"path":"src/big.rs","content": big}),
     ));
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let validation = format!(
+        "{python} -c \"from pathlib import Path; assert all(Path('src/file%d.rs' % i).is_file() for i in range(12)); assert Path('Cargo.toml').is_file(); assert len(Path('src/big.rs').read_text().splitlines()) == 600\""
+    );
     let scripted = vec![
         response("Applying the broad change.", calls),
-        response("Done.", vec![]),
         response(
-            "Acknowledging the completion correction.",
+            "Checking the generated files.",
             vec![call(
-                "complete-1",
-                "complete",
-                json!({"implementation_done":true}),
+                "validate-1",
+                "validate",
+                json!({"requirement":"all broad-change files are present","command":validation}),
             )],
         ),
         response(
-            "The requested edits are complete; no validation was run.",
-            vec![],
+            "",
+            vec![call(
+                "complete-1",
+                "complete",
+                json!({"implementation_done":true,"final_answer":"Applied and checked the broad change."}),
+            )],
         ),
     ];
     let provider = Arc::new(FakeProvider::scripted(scripted));

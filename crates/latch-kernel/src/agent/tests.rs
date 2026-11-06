@@ -2335,7 +2335,7 @@ async fn encrypted_reasoning_survives_durable_persistence_and_resume_materializa
 async fn approved_outside_write_executes_and_denied_write_does_not() {
     use crate::config::OutsidePolicy;
     let workspace_dir = tempdir().unwrap();
-    let outside_dir = tempdir().unwrap();
+    let outside_dir = crate::workspace_path::external_test_dir();
     let outside_path = outside_dir.path().join("outside.txt");
 
     for approve in [true, false] {
@@ -2393,6 +2393,7 @@ async fn approved_outside_write_executes_and_denied_write_does_not() {
             continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
             retry_budget: 2,
         });
+        agent.set_max_model_turns(Some(3));
         agent.enable_interactive_permissions();
         let broker = agent.permission_broker();
         let run = agent.run("write outside", CancellationToken::new(), Arc::new(|_| {}));
@@ -2407,7 +2408,11 @@ async fn approved_outside_write_executes_and_denied_write_does_not() {
             panic!("agent never requested approval");
         };
         let (result, ()) = tokio::join!(run, approver);
-        result.unwrap();
+        if approve {
+            assert!(result.unwrap_err().to_string().contains("circuit breaker"));
+        } else {
+            result.unwrap();
+        }
         let events = store.events(sid).unwrap();
         assert!(
             events
@@ -2446,8 +2451,8 @@ async fn approved_outside_write_executes_and_denied_write_does_not() {
 async fn duplicate_provider_call_ids_cannot_share_one_approval() {
     use crate::config::OutsidePolicy;
     let workspace_dir = tempdir().unwrap();
-    let outside_a = tempdir().unwrap();
-    let outside_b = tempdir().unwrap();
+    let outside_a = crate::workspace_path::external_test_dir();
+    let outside_b = crate::workspace_path::external_test_dir();
     let path_a = outside_a.path().join("a.txt");
     let path_b = outside_b.path().join("b.txt");
     let store = EventStore::open_memory().unwrap();
@@ -2500,6 +2505,7 @@ async fn duplicate_provider_call_ids_cannot_share_one_approval() {
         continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
         retry_budget: 2,
     });
+    agent.set_max_model_turns(Some(3));
     agent.enable_interactive_permissions();
     let broker = agent.permission_broker();
     let run = agent.run(
@@ -2524,7 +2530,7 @@ async fn duplicate_provider_call_ids_cannot_share_one_approval() {
         panic!("agent did not request approval for both duplicate-id calls");
     };
     let (result, ()) = tokio::join!(run, approver);
-    result.unwrap();
+    assert!(result.unwrap_err().to_string().contains("circuit breaker"));
     let events = store.events(sid).unwrap();
     let requests = events
         .iter()
@@ -2624,7 +2630,7 @@ async fn try_new_propagates_supervisor_reconstruction_errors() {
 #[tokio::test]
 async fn non_interactive_ask_is_denied_with_a_durable_record() {
     let workspace_dir = tempdir().unwrap();
-    let outside_dir = tempdir().unwrap();
+    let outside_dir = crate::workspace_path::external_test_dir();
     let outside_path = outside_dir.path().join("outside.txt");
     let store = EventStore::open_memory().unwrap();
     let sid = store.create_session(workspace_dir.path()).unwrap();
@@ -2866,7 +2872,7 @@ fn permission_events(events: &[Event]) -> Vec<PermissionRecord> {
 async fn external_effects_are_asked_even_under_autonomous_auto_approve() {
     use crate::config::OutsidePolicy;
     let d = tempdir().unwrap();
-    let outside = tempdir().unwrap();
+    let outside = crate::workspace_path::external_test_dir();
     let target = outside.path().join("note.txt");
     let mut responses = tool_then_final(
         "w1",
@@ -2883,11 +2889,12 @@ async fn external_effects_are_asked_even_under_autonomous_auto_approve() {
         },
         responses,
     );
+    agent.set_max_model_turns(Some(3));
     agent.set_safety(Safety::Autonomous).unwrap();
     agent
         .run("write outside", CancellationToken::new(), Arc::new(|_| {}))
         .await
-        .unwrap();
+        .unwrap_err();
 
     let events = store.events(sid).unwrap();
     let requests = permission_events(&events);
@@ -3487,12 +3494,13 @@ async fn queued_child_message_prevents_premature_terminal_complete() {
 #[tokio::test]
 async fn terminal_complete_never_exits_with_a_pending_permission() {
     let d = tempdir().unwrap();
+    let outside = crate::workspace_path::external_test_dir();
     let responses = vec![
         tool_response(
             "writing outside",
             "p1",
             "write",
-            json!({"path":"../outside.txt","content":"x"}),
+            json!({"path":outside.path().join("outside.txt"),"content":"x"}),
         ),
         tool_response(
             "done",
@@ -5653,12 +5661,7 @@ fn completion_gate_requires_required_tasks_resolved() {
     assert!(root.terminal_complete);
 }
 
-// --- Verification is separate from loop termination. -------------------------
-//
-// `Verified` is the only completion that ends a run on the strength of its own
-// claim. An implementation claim that mutated the workspace but never passed a
-// validation is still a real, honestly-labelled state; the kernel spends at
-// most one turn asking for the missing evidence before honoring it.
+// --- Required verification gates successful termination. --------------------
 
 /// One assistant turn with no tool calls: the model's final answer.
 fn final_response(text: &str) -> ModelResponse {
@@ -5680,7 +5683,7 @@ fn model_request_count(events: &[Event]) -> usize {
         .count()
 }
 
-/// Durable kernel-context turns carrying the one-shot verification correction.
+/// Durable kernel-context turns carrying the verification correction.
 fn verification_correction_count(events: &[Event]) -> usize {
     events
         .iter()
@@ -5884,74 +5887,6 @@ async fn empty_reporting_response_falls_back_to_kernel_facts() {
 }
 
 #[tokio::test]
-async fn empty_complete_summary_reports_stale_evidence_as_unverified() {
-    let d = tempdir().unwrap();
-    let command = if cfg!(windows) {
-        "python -c \"assert True\""
-    } else {
-        "python3 -c \"assert True\""
-    };
-    let (store, sid, mut agent) = policy_agent(
-        &d,
-        PermissionConfig::default(),
-        vec![
-            tool_response(
-                "Checking.",
-                "v1",
-                "validate",
-                json!({"requirement":"check", "command":command}),
-            ),
-            write_new_file_response("w1"),
-            tool_response("", "c1", "complete", json!({"implementation_done":true})),
-            tool_response("", "c2", "complete", json!({"implementation_done":true})),
-            final_response(""),
-        ],
-    );
-    let output = agent
-        .run("Add a file.", CancellationToken::new(), Arc::new(|_| {}))
-        .await
-        .unwrap();
-    assert!(output.contains("ImplementedNotVerified"), "{output}");
-    assert!(
-        output.to_ascii_lowercase().contains("unverified"),
-        "{output}"
-    );
-    assert!(output.contains("check"), "{output}");
-    assert_eq!(
-        agent.state().completion,
-        CompletionState::ImplementedNotVerified
-    );
-    assert_eq!(model_request_count(&store.events(sid).unwrap()), 5);
-}
-
-#[tokio::test]
-async fn a_mutation_without_complete_gets_one_opportunity_to_record_its_claim() {
-    let d = tempdir().unwrap();
-    let (store, sid, mut agent) = policy_agent(
-        &d,
-        PermissionConfig::default(),
-        vec![
-            write_new_file_response("w1"),
-            final_response("Added the file."),
-            complete_response("c1"),
-            final_response("Added the file; verification is unavailable."),
-        ],
-    );
-    agent
-        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
-        .await
-        .unwrap();
-    assert!(agent.state().implementation_done);
-    assert_eq!(
-        agent.state().completion,
-        CompletionState::ImplementedNotVerified
-    );
-    let events = store.events(sid).unwrap();
-    assert_eq!(model_request_count(&events), 4);
-    assert_eq!(verification_correction_count(&events), 1);
-}
-
-#[tokio::test]
 async fn a_verified_command_without_an_implementation_claim_still_gets_correction() {
     let d = tempdir().unwrap();
     let command = if cfg!(windows) {
@@ -5983,71 +5918,6 @@ async fn a_verified_command_without_an_implementation_claim_still_gets_correctio
     let events = store.events(sid).unwrap();
     assert_eq!(model_request_count(&events), 5);
     assert_eq!(verification_correction_count(&events), 1);
-}
-
-#[tokio::test]
-async fn an_unverified_mutation_is_not_terminal_on_the_completion_claim_alone() {
-    let d = tempdir().unwrap();
-    let (store, sid, mut agent) = policy_agent(
-        &d,
-        PermissionConfig::default(),
-        vec![
-            write_new_file_response("w1"),
-            complete_response("c1"),
-            final_response("Added the file; I could not verify it."),
-        ],
-    );
-    agent
-        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        agent.state().completion,
-        CompletionState::ImplementedNotVerified,
-        "an unvalidated mutation stays honestly unverified"
-    );
-    let events = store.events(sid).unwrap();
-    // The claim alone did not end the run: the kernel spent its one correction
-    // turn, so three requests were made rather than two.
-    assert_eq!(model_request_count(&events), 3);
-    assert_eq!(
-        verification_correction_count(&events),
-        1,
-        "the kernel asked once for the missing evidence"
-    );
-}
-
-#[tokio::test]
-async fn the_run_exits_with_exactly_one_verification_opportunity() {
-    let d = tempdir().unwrap();
-    let (store, sid, mut agent) = policy_agent(
-        &d,
-        PermissionConfig::default(),
-        vec![
-            write_new_file_response("w1"),
-            complete_response("c1"),
-            final_response("Still skipping validation."),
-            // Never reached: the run is already bounded.
-            final_response("A further answer."),
-        ],
-    );
-    agent
-        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
-        .await
-        .unwrap();
-
-    let events = store.events(sid).unwrap();
-    assert_eq!(
-        verification_correction_count(&events),
-        1,
-        "one corrective opportunity, never more"
-    );
-    assert_eq!(model_request_count(&events), 3);
-    assert_eq!(
-        agent.state().completion,
-        CompletionState::ImplementedNotVerified
-    );
 }
 
 #[tokio::test]
@@ -6124,73 +5994,404 @@ async fn a_run_that_mutated_nothing_can_finish_unverified() {
     assert_eq!(model_request_count(&events), 2);
 }
 
-#[tokio::test]
-async fn the_correction_can_never_promote_an_unverified_run_to_verified() {
-    let d = tempdir().unwrap();
-    let (store, sid, mut agent) = policy_agent(
-        &d,
-        PermissionConfig::default(),
-        vec![
-            write_new_file_response("w1"),
-            complete_response("c1"),
-            final_response("No validation was run."),
-        ],
-    );
-    agent
-        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
-        .await
-        .unwrap();
+fn final_slot(id: &str, answer: &str) -> ModelResponse {
+    tool_response(
+        "",
+        id,
+        "complete",
+        json!({"implementation_done":true,"final_answer":answer}),
+    )
+}
 
-    let events = store.events(sid).unwrap();
-    assert!(
-        !events.iter().any(|event| matches!(
-            &event.payload,
-            EventPayload::CompletionChanged { completion } if *completion == CompletionState::Verified
-        )),
-        "only kernel validation evidence can produce Verified"
-    );
-    assert_eq!(
-        agent.state().completion,
-        CompletionState::ImplementedNotVerified
-    );
-    // No validation ran, so no requirement can claim a pass.
-    assert!(agent.state().required_validations.is_empty());
+fn file_validation(id: &str) -> ModelResponse {
+    tool_response(
+        "",
+        id,
+        "validate",
+        json!({"requirement":"file exists","command":if cfg!(windows) { "if exist added.txt (exit /b 0) else (exit /b 1)" } else { "test -f added.txt" }}),
+    )
 }
 
 #[tokio::test]
-async fn the_verification_correction_cannot_loop_forever() {
+async fn final_answer_slot_publishes_once_after_validation_and_survives_replay() {
     let d = tempdir().unwrap();
-    // A model that keeps claiming completion must not be able to spin: the
-    // correction and reporting opportunities are both bounded, still unverified.
     let (store, sid, mut agent) = policy_agent(
         &d,
         PermissionConfig::default(),
         vec![
-            write_new_file_response("w1"),
-            complete_response("c1"),
-            complete_response("c2"),
-            complete_response("c3"),
-            complete_response("c4"),
-            final_response("unused"),
+            write_new_file_response("w"),
+            file_validation("v"),
+            final_slot("c", "Added and verified."),
         ],
     );
-    agent
-        .run("Add added.txt.", CancellationToken::new(), Arc::new(|_| {}))
+    let live = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = live.clone();
+    let answer = agent
+        .run(
+            "Add a file",
+            CancellationToken::new(),
+            Arc::new(move |output| {
+                if let AgentOutput::Durable(event) = output {
+                    observed.lock().unwrap().push(*event);
+                }
+            }),
+        )
         .await
         .unwrap();
-
+    assert_eq!(answer, "Added and verified.");
     let events = store.events(sid).unwrap();
     assert_eq!(
-        verification_correction_count(&events),
-        1,
-        "the correction is one-shot"
+        model_request_count(&events),
+        3,
+        "no post-completion provider call"
     );
-    // write, complete (correction), complete (reporting), complete — stop.
+    for recorded in [&events, &*live.lock().unwrap()] {
+        assert_eq!(recorded.iter().filter(|e| matches!(&e.payload, EventPayload::AssistantMessageCompleted { text, tool_calls, .. } if text == &answer && tool_calls.is_empty())).count(), 1);
+        assert!(
+            !recorded
+                .iter()
+                .any(|e| matches!(&e.payload, EventPayload::CompletionReport { .. }))
+        );
+    }
+    let decoded: Vec<Event> =
+        serde_json::from_str(&serde_json::to_string(&events).unwrap()).unwrap();
+    assert_eq!(
+        crate::session::replay_items(&decoded),
+        crate::session::replay_items(&events)
+    );
+}
+
+#[tokio::test]
+async fn incomplete_validation_rejects_repeated_claims_and_plain_answers_until_repaired() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w"),
+            final_slot("c1", "premature one"),
+            final_response("I am finished even without validation."),
+            final_slot("c2", "premature two"),
+            file_validation("v"),
+            final_slot("c3", "Verified now."),
+        ],
+    );
+    let answer = agent
+        .run("Add a file", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert_eq!(answer, "Verified now.");
+    assert_eq!(agent.state().completion, CompletionState::Verified);
+    let events = store.events(sid).unwrap();
+    assert_eq!(model_request_count(&events), 6);
+    assert!(verification_correction_count(&events) >= 1);
+    assert!(!events.iter().any(|e| matches!(&e.payload, EventPayload::AssistantMessageCompleted { text, .. } if text.starts_with("premature"))));
+}
+
+#[tokio::test]
+async fn stale_validation_and_same_batch_mutation_cannot_publish_the_final_slot() {
+    let d = tempdir().unwrap();
+    let mut batch = tool_response(
+        "",
+        "v",
+        "validate",
+        json!({"requirement":"file exists","command":"echo ok"}),
+    );
+    batch
+        .tool_calls
+        .extend(write_new_file_response("w").tool_calls);
+    batch
+        .tool_calls
+        .extend(final_slot("c1", "stale answer").tool_calls);
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            batch,
+            final_slot("c2", "still stale"),
+            file_validation("v2"),
+            final_slot("c3", "Current evidence."),
+        ],
+    );
+    assert_eq!(
+        agent
+            .run("Add a file", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap(),
+        "Current evidence."
+    );
+    let events = store.events(sid).unwrap();
     assert_eq!(model_request_count(&events), 4);
+    assert!(!events.iter().any(|e| matches!(&e.payload, EventPayload::AssistantMessageCompleted { text, .. } if text == "stale answer" || text == "still stale")));
+}
+
+#[tokio::test]
+async fn failed_validation_result_survives_reground_in_provider_history() {
+    let d = tempdir().unwrap();
+    let mut responses = (1..=3)
+        .map(|attempt| {
+            tool_response(
+                "",
+                &format!("failed-{attempt}"),
+                "validate",
+                json!({"requirement":"check","command":"exit 1"}),
+            )
+        })
+        .collect::<Vec<_>>();
+    responses.push(tool_response(
+        "",
+        "passed",
+        "validate",
+        json!({"requirement":"check","command":"echo ok"}),
+    ));
+    responses.push(final_slot("finished", "Check passed."));
+    let (store, sid, mut agent) = policy_agent(&d, PermissionConfig::default(), responses);
+    agent
+        .run("Check it", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+    let events = store.events(sid).unwrap();
+    assert!(events.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::RegroundRequested { signature } if signature == "check"
+    )));
+    let messages = context_messages(&view_for(events));
+    let failure = messages
+        .iter()
+        .position(|message| message.tool_call_id.as_deref() == Some("failed-3"))
+        .expect("the actual failure must reach the model even when re-grounding");
+    assert!(messages[failure].is_error);
+    assert!(messages[failure].content.contains("FAILED requirements"));
+    assert!(messages[failure + 1..].iter().any(|message| {
+        message.role == "user" && message.content.contains("Kernel re-ground required")
+    }));
+}
+
+#[tokio::test]
+async fn required_validation_is_a_gate_even_without_a_mutation_or_completion_claim() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            tool_response(
+                "",
+                "t",
+                "task_update",
+                json!({"required_validations":["check"]}),
+            ),
+            final_response("Done without a complete call."),
+            final_slot("c1", "Missing pass"),
+            tool_response(
+                "",
+                "v1",
+                "validate",
+                json!({"requirement":"check","command":"exit 1"}),
+            ),
+            final_slot("c2", "Failed check"),
+            tool_response(
+                "",
+                "v2",
+                "validate",
+                json!({"requirement":"check","command":"echo ok"}),
+            ),
+            final_slot("c3", "Check passed."),
+        ],
+    );
+    assert_eq!(
+        agent
+            .run("Check it", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap(),
+        "Check passed."
+    );
+    assert_eq!(model_request_count(&store.events(sid).unwrap()), 7);
+}
+
+/// A plan or inspection declares the validation it intends to run later. That
+/// obligation belongs to the WORK run that can discharge it; blocking the
+/// read-only answer on it would stall ASK and PLAN permanently.
+#[tokio::test]
+async fn read_only_modes_answer_while_their_recorded_requirements_await_work() {
+    for mode in [Mode::Ask, Mode::Plan] {
+        let d = tempdir().unwrap();
+        let (store, sid, mut agent) = policy_agent(
+            &d,
+            PermissionConfig::default(),
+            vec![
+                tool_response(
+                    "",
+                    "t",
+                    "task_update",
+                    json!({"required_validations":["existing suite passes"]}),
+                ),
+                final_response("Fix add, then run the existing suite."),
+            ],
+        );
+        agent.set_mode(mode).unwrap();
+        assert_eq!(
+            agent
+                .run("Plan it", CancellationToken::new(), Arc::new(|_| {}))
+                .await
+                .unwrap(),
+            "Fix add, then run the existing suite."
+        );
+        let events = store.events(sid).unwrap();
+        assert_eq!(model_request_count(&events), 2, "{mode}");
+        assert_eq!(verification_correction_count(&events), 0, "{mode}");
+        assert!(
+            agent
+                .state()
+                .required_validations
+                .iter()
+                .any(|requirement| requirement == "existing suite passes"),
+            "{mode}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn verification_never_fails_open_when_the_model_keeps_skipping_checks() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w"),
+            final_slot("c1", "one"),
+            final_slot("c2", "two"),
+            final_slot("c3", "three"),
+        ],
+    );
+    agent.set_max_model_turns(Some(4));
+    let error = agent
+        .run("Add a file", CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("circuit breaker"));
+    let events = store.events(sid).unwrap();
+    assert_eq!(model_request_count(&events), 4);
+    assert!(!events.iter().any(|e| matches!(&e.payload, EventPayload::CompletionReport { .. }) || matches!(&e.payload, EventPayload::RunCompleted { outcome, .. } if outcome == "completed")));
     assert_eq!(
         agent.state().completion,
         CompletionState::ImplementedNotVerified
     );
+}
+
+#[tokio::test]
+async fn final_answer_slot_yields_to_late_steering() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent, provider) = gate_agent(
+        &d,
+        vec![
+            final_slot("c1", "outdated reply"),
+            final_slot("c2", "Reply to the new request."),
+        ],
+        1,
+    );
+    provider
+        .steer
+        .lock()
+        .unwrap()
+        .push("Use the new request instead.".into());
+    assert_eq!(
+        agent
+            .run("Explain", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap(),
+        "Reply to the new request."
+    );
+    let events = store.events(sid).unwrap();
+    assert_eq!(model_request_count(&events), 2);
+    assert!(!events.iter().any(|e| matches!(&e.payload, EventPayload::AssistantMessageCompleted { text, .. } if text == "outdated reply")));
+}
+
+#[tokio::test]
+async fn interrupted_mutation_keeps_its_validation_gate_after_reconstruction() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            write_new_file_response("w"),
+            final_slot("c", "unverified reply"),
+        ],
+    );
+    agent.set_max_model_turns(Some(2));
+    assert!(
+        agent
+            .run("Add a file", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .is_err()
+    );
+    let state = agent.state().clone();
+    let evidence = agent.evidence.entries().to_vec();
+    let mut resumed = Agent::new(AgentRuntime {
+        session_id: sid,
+        workspace: d.path().into(),
+        mode: Mode::Work,
+        store: store.clone(),
+        tools: agent.tools.clone(),
+        provider: Arc::new(FakeProvider::scripted(vec![
+            final_slot("c2", "still unverified"),
+            file_validation("v"),
+            final_slot("c3", "Verified after resume."),
+        ])),
+        continuity: ContinuityEngine::new(store.clone(), ContextConfig::default()),
+        retry_budget: 2,
+    });
+    resumed.restore_state(state);
+    resumed.restore_evidence(evidence).unwrap();
+    drop(agent);
+    assert_eq!(
+        resumed
+            .run("Continue", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap(),
+        "Verified after resume."
+    );
+    assert_eq!(model_request_count(&store.events(sid).unwrap()), 5);
+    assert_eq!(resumed.state().completion, CompletionState::Verified);
+}
+
+#[tokio::test]
+async fn unavailable_evidence_is_not_a_validation_bypass() {
+    let d = tempdir().unwrap();
+    let (store, sid, mut agent) = policy_agent(
+        &d,
+        PermissionConfig::default(),
+        vec![
+            tool_response(
+                "",
+                "t",
+                "task_update",
+                json!({"required_validations":["check"]}),
+            ),
+            tool_response(
+                "",
+                "e",
+                "record_evidence",
+                json!({"claim":"check","status":"unavailable","detail":"not checked"}),
+            ),
+            final_slot("c1", "Skipping the check."),
+            final_response("Stop anyway."),
+            tool_response(
+                "",
+                "v",
+                "validate",
+                json!({"requirement":"check","command":"echo ok"}),
+            ),
+            final_slot("c2", "Checked now."),
+        ],
+    );
+    assert_eq!(
+        agent
+            .run("Check", CancellationToken::new(), Arc::new(|_| {}))
+            .await
+            .unwrap(),
+        "Checked now."
+    );
+    assert_eq!(model_request_count(&store.events(sid).unwrap()), 6);
 }
 
 #[test]

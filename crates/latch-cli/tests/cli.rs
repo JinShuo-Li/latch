@@ -193,6 +193,9 @@ fn fixture_with_mock(mock: MockProvider, safety: &str, extra_config: &str) -> Fi
         "state_dir = {state}\n\
          default_mode = \"WORK\"\n\
          \n\
+         [failure]\n\
+         max_model_turns = 20\n\
+         \n\
          [providers.mock]\n\
          kind = \"openai-compatible\"\n\
          base_url = \"{base}\"\n\
@@ -335,6 +338,33 @@ fn workspace_arg(fixture: &Fixture) -> String {
 }
 
 #[test]
+fn run_text_prints_the_committed_final_slot_once() {
+    let fixture = fixture(
+        vec![Turn::ToolCall {
+            name: "complete",
+            arguments: json!({"implementation_done":true,"final_answer":"Final slot reply."}),
+        }],
+        None,
+        "standard",
+    );
+    let output = run_latch(
+        &fixture,
+        &[
+            "run",
+            "--prompt",
+            "explain",
+            "--workspace",
+            &workspace_arg(&fixture),
+            "--output",
+            "text",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert_eq!(stdout_text(&output).trim(), "Final slot reply.");
+    assert_eq!(fixture.mock.hits(), 1);
+}
+
+#[test]
 fn run_text_mode_streams_assistant_text() {
     let fixture = fixture(vec![Turn::Text("hello from mock")], None, "standard");
     let workspace = workspace_arg(&fixture);
@@ -437,9 +467,16 @@ fn durable_task_state_is_reported_after_the_model_updates_it() {
             },
             Turn::ToolCall {
                 name: "complete",
-                arguments: json!({"implementation_done": true}),
+                arguments: json!({"implementation_done": true, "final_answer":"premature"}),
             },
-            Turn::Text("finished"),
+            Turn::ToolCall {
+                name: "validate",
+                arguments: json!({"requirement":"unit tests pass", "command":"echo ok"}),
+            },
+            Turn::ToolCall {
+                name: "complete",
+                arguments: json!({"implementation_done":true, "final_answer":"finished"}),
+            },
         ],
         None,
         "standard",
@@ -461,12 +498,18 @@ fn durable_task_state_is_reported_after_the_model_updates_it() {
     let value = stdout_json(&output);
     assert_eq!(value["status"], "completed");
     // The durable state the kernel actually holds, not the run outcome.
-    assert_eq!(value["task"]["completion"], "implemented_not_verified");
+    assert_eq!(value["task"]["completion"], "verified");
     assert_eq!(value["task"]["goal"], "implement the change");
-    assert_eq!(value["task"]["evidence_count"], 1);
-    assert_eq!(value["task"]["validation"]["passed"], 0);
+    assert_eq!(value["task"]["evidence_count"], 2);
+    assert_eq!(value["task"]["validation"]["passed"], 1);
     assert_eq!(value["task"]["validation"]["failed"], 0);
-    assert_eq!(value["task"]["validation"]["pending"], 1);
+    assert_eq!(value["task"]["validation"]["pending"], 0);
+    assert_eq!(value["result"]["text"], "finished");
+    assert_eq!(
+        fixture.mock.hits(),
+        5,
+        "the premature slot must return for validation"
+    );
 }
 
 const ROOT_MARKER: &str = "ROOT-ORCHESTRATE-MARKER-7";
@@ -734,7 +777,15 @@ fn jsonl_is_valid_on_every_line_and_ends_with_final() {
                 name: "write",
                 arguments: json!({"path": "note.txt", "content": "note"}),
             },
-            Turn::Text("done"),
+            Turn::Text("Checking the note."),
+            Turn::ToolCall {
+                name: "validate",
+                arguments: json!({"requirement":"note exists", "command":if cfg!(windows) { "if exist note.txt (exit /b 0) else (exit /b 1)" } else { "test -f note.txt" }}),
+            },
+            Turn::ToolCall {
+                name: "complete",
+                arguments: json!({"implementation_done":true,"final_answer":"done"}),
+            },
         ],
         None,
         "standard",
@@ -766,7 +817,7 @@ fn jsonl_is_valid_on_every_line_and_ends_with_final() {
     assert!(
         lines
             .iter()
-            .any(|line| line["type"] == "text_delta" && line["text"] == "done")
+            .any(|line| line["type"] == "text_delta" && line["text"] == "Checking the note.")
     );
     assert!(
         lines
@@ -781,12 +832,14 @@ fn jsonl_is_valid_on_every_line_and_ends_with_final() {
     assert_eq!(tool["status"], "ok");
     let final_record = lines.last().unwrap();
     assert_eq!(final_record["result"]["status"], "completed");
-    // The text-only fixture ignores the kernel's one corrective turn after
-    // editing. Both responses stream, but neither supplies a completion claim.
-    assert_eq!(final_record["result"]["result"]["text"], "donedone");
-    assert_eq!(final_record["result"]["task"]["completion"], "in_progress");
+    assert_eq!(final_record["result"]["result"]["text"], "done");
+    assert_eq!(final_record["result"]["task"]["completion"], "verified");
     assert!(fixture.workspace.join("note.txt").exists());
-    assert_eq!(fixture.mock.hits(), 3);
+    assert_eq!(
+        fixture.mock.hits(),
+        4,
+        "no extra request after the final slot"
+    );
 }
 
 #[test]

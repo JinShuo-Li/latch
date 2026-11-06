@@ -161,7 +161,13 @@ impl Agent {
                 // the active group still holds required unfinished work. The
                 // gate never applies to optional or cancelled tasks, and it
                 // never applies to a child's own turn completion.
-                if implemented
+                if call
+                    .arguments
+                    .get("final_answer")
+                    .is_some_and(|answer| answer.as_str().is_none_or(|text| text.trim().is_empty()))
+                {
+                    tool_error(call, "final_answer must be nonempty text".into())
+                } else if implemented
                     && self.agent_depth == 0
                     && let Some(blocker) = self.group_completion_blocker()
                 {
@@ -172,9 +178,8 @@ impl Agent {
                 } else {
                     self.state.set_implementation_done(implemented);
                     self.sync_completion(sink)?;
-                    // The kernel-derived state is eligible to finish. The root
-                    // loop still requests a user-facing answer after this result;
-                    // a completion claim is not itself that answer.
+                    // The run loop checks the entire batch and pending steering
+                    // before publishing the submitted final_answer.
                     if matches!(
                         self.state.state().completion,
                         CompletionState::Verified | CompletionState::ImplementedNotVerified
@@ -185,7 +190,7 @@ impl Agent {
                     tool_ok(
                         call,
                         format!(
-                            "implementation claim recorded; kernel-derived completion: {:?}\n{}\nNow answer the user's request in text using the actual validation results and remaining limitations.",
+                            "implementation claim recorded; kernel-derived completion: {:?}\n{}\nThe kernel will publish final_answer after checking current validation and pending input. Missing validation must be completed before finishing.",
                             self.state.state().completion,
                             summarize_state(self.state.state())
                         ),

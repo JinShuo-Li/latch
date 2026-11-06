@@ -321,11 +321,17 @@ workspace; preserve validation/evidence through the existing durable tools.
 
 ## Completion answers
 
-A root `complete` call records a claim; its tool result must reach the model
-before the run relies on a user-facing final answer. A bounded reporting
-instruction is stored through `KernelContext`, and the actual final answer is
-a durable `AssistantMessageCompleted` event. An empty answer after tools gets
-the same reporting opportunity. If it still yields no answer or repeats terminal
-completion, a durable kernel-authored `CompletionReport` preserves the real
-completion and evidence status without inventing an assistant response or pass.
-Live and resumed interfaces render these same events.
+The model submits the final user reply in `complete.final_answer` after observing
+validation results. After the complete tool batch and pending input checks, the
+kernel publishes the text once as a durable `AssistantMessageCompleted` event;
+no reporting request is needed. Missing, failed, unavailable or stale required
+validation keeps returning a durable correction to a mutable (WORK) run,
+regardless of its completion claim or final prose. ASK and PLAN are read-only,
+so requirements they record are obligations for the later WORK run and never
+block their own answer. Interrupted mutation obligations survive continuation and
+resume through the durable log; no retry count bypasses them.
+
+Legacy completion without a final-answer slot retains one reporting opportunity.
+A still-empty response can receive a kernel-authored `CompletionReport`, subject
+to the same validation gate. Neither path invents evidence. Live and resumed
+interfaces render the same events.

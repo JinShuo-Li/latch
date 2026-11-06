@@ -345,9 +345,13 @@ Memory/cache invariants (do not violate):
   mode) is the first provider-visible message, so `system` + tools stays
   cacheable across sessions and mode switches; keep `PromptCompiler`'s
   `stable`/`session` split and `ContextEngine`'s `session_context` intact.
-- Root `complete` is a claim, not the final user answer. Give the model a bounded
-  reporting opportunity after tool results; preserve steering and use durable
-  `CompletionReport` facts only if reporting stays empty or repeats completion.
+- `complete.final_answer` is the model's final user reply after validation. Publish
+  it once after the whole batch and pending steering checks. Incomplete required
+  validation always returns a mutable (WORK) run to the agent, with or without a
+  completion claim; read-only ASK/PLAN answers are never gated on requirements
+  they cannot discharge. Interruption/resume cannot erase mutation obligations.
+  Legacy calls without the slot retain bounded reporting/fallback, subject to the
+  same validation gate.
 - Transitions that must survive resume fail closed: a live state change must not
   be reported successful before its durable event commits.
 - A Passed validation certifies only its durable workspace generation. Edits

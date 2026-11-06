@@ -224,10 +224,15 @@ active writer ids and owners, and suppresses retries against an unchanged
 writer blocker after the retry budget. Suppression creates no passing evidence
 and never removes requirements. Durable `CompletionReport` events are kernel
 presentation facts, not provider responses; every UI reconstructs them from
-the same log. Root completion records the claim without replacing the final
-answer: the model gets a bounded reporting opportunity after the actual tool
-results, and a still-empty answer or repeated completion receives the durable
-kernel fallback. Reporting grants no capability and creates no validation pass. These changes add no capability or unsandboxed execution path.
+the same log. `complete.final_answer` holds the model's final user reply after
+validation; the kernel publishes it once after the full batch and pending input
+checks. Missing, failed, unavailable or stale required validation always returns
+to a mutable (WORK) run for repair, even without a completion claim. Read-only
+ASK/PLAN answers are not gated: requirements recorded there belong to the WORK
+run that can discharge them. Interrupted mutation obligations survive resume.
+Legacy calls without the slot retain a bounded reporting opportunity and kernel
+fallback, subject to the same gate. Reporting grants no capability and creates no
+validation pass.
 
 ### Port map: implemented now vs intentionally deferred
 

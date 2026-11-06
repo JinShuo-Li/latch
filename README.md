@@ -80,12 +80,11 @@ latch -p "Explain this repository"
 ```
 
 Resume or manage saved sessions with `latch --resume` or `/resume` in the TUI. Use Ctrl+Space to mark sessions, Delete to remove the selected row or marked sessions, and confirm with `y`. For scripts, use `latch run --workspace ./project --prompt "Fix the failing test" --output json`; `latch sessions list` shows saved sessions. Run `latch --help` for all options.
-Latch asks the model to include its final summary when it marks a task complete;
-the recorded validation determines whether that task is verified.
-After recorded edits, a missing implementation claim also receives one bounded
-correction opportunity; a normal CLI exit alone is not verified completion.
-An empty final completion summary receives a kernel report of recorded changes
-and current validation status without an extra model request; it stays visible on resume.
+The agent submits its final reply in a completion slot after validation; Latch
+publishes it once. In Work mode, missing, failed or stale required checks return
+to the agent until completed, even if it already claims to be done. An interrupted
+run keeps its validation obligations on resume. Ask/Plan can answer while future
+checks remain pending. Legacy empty completion replies retain a durable kernel fallback.
 Managed processes record natural exits automatically. If saving their output
 fails, polling reports lost output and labels any partial log as incomplete.
 When validation cannot certify the workspace, it names the blocker. Once the
@@ -128,7 +127,7 @@ standalone example; the [integration plan](docs/WEB_UI_PLAN.md) records the scop
 
 ## Working safely
 
-`/mode` selects Ask, Plan, or Work. `/safety` controls which operations need approval; `/permissions` controls how approval requests are handled. Every command still runs inside the platform sandbox. Standard and Autonomous allow command networking by default; Strict requires network approval. On Linux, commands share a session-private `/tmp` until the running session closes. Commands classified as inspection run with read-only filesystem access even in Work mode. After a completion claim, the model receives the tool results and gives a final answer; validation status alone does not replace that answer. `/help` lists TUI controls and commands.
+`/mode` selects Ask, Plan, or Work. `/safety` controls which operations need approval; `/permissions` controls how approval requests are handled. Every command still runs inside the platform sandbox. Standard and Autonomous allow command networking by default; Strict requires network approval. On Linux, commands share a session-private `/tmp` until the running session closes. Commands classified as inspection run with read-only filesystem access even in Work mode. The final answer is published from the completion slot after required validation passes. `/help` lists TUI controls and commands.
 
 The transcript shows messages and tool activity, with a session sidebar shown automatically on wide terminals. Ctrl+B opens or closes the sidebar. Tables align styled text by display columns and separate records with a blank row. Lists and tool entries keep their body indentation when wrapping; long commands and output stay compact, with complete details available through Ctrl+T. Command-change audits stay in history and the changes sidebar without repetitive transcript notices. Both views cache their layout so scrolling and returning from large outputs reuse the rendered rows. Tool markers blink yellow every 400ms while waiting for completion, then stay green on success or red on failure. Activity indicators in the sidebar and above the input use blue dots aligned with tool rows. The input box keeps room for multiline editing, and the startup screen uses a small Latch title. Mouse capture is enabled by default so the wheel scrolls the composer and transcript instead of recalling input history, including under tmux and Zellij. In terminals that support it, hold Shift while dragging to select text. Set `LATCH_MOUSE_CAPTURE=0` before starting Latch to disable capture and restore native mouse selection; terminals or multiplexers may then translate the wheel into history-navigation keys. PageUp/PageDown and Shift+PageUp/Down remain available for scrolling.
 

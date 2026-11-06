@@ -734,10 +734,11 @@ async fn child_permission_asks_never_reach_a_human() {
     // Children share the parent's live policy ceiling but run without the
     // interactive broker: an Ask resolves as an explicit durable denial
     // instead of prompting anyone.
+    let outside = crate::workspace_path::external_test_dir();
     let provider = Arc::new(TestProvider::with_first_calls(vec![ToolCall {
         id: "outside".into(),
         name: "patch".into(),
-        arguments: serde_json::json!({"path":"../outside-workspace.rs","base_hash":"","patch":"x"}),
+        arguments: serde_json::json!({"path":outside.path().join("outside-workspace.rs"),"base_hash":"","patch":"x"}),
     }]));
     let (_workspace, store, agent) = test_agent(provider, Mode::Work);
     let supervisor = agent.agent_supervisor().unwrap();

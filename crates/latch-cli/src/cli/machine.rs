@@ -457,12 +457,32 @@ fn task_report(state: &TaskState, evidence: &EvidenceLedger) -> TaskReport {
 }
 
 fn machine_sink(reporter: Reporter, telemetry: Arc<Mutex<Telemetry>>) -> AgentEventSink {
+    let streamed_text = Mutex::new(false);
     Arc::new(move |event| match event {
-        AgentOutput::Transient(StreamEvent::TextDelta(text)) => reporter.text_delta(&text),
+        AgentOutput::Transient(StreamEvent::TextDelta(text)) => {
+            if !text.is_empty() {
+                *streamed_text.lock().expect("stream state mutex poisoned") = true;
+            }
+            reporter.text_delta(&text);
+        }
         AgentOutput::Transient(_) => {}
         AgentOutput::ToolResult(result) => reporter.tool_result(&result),
         AgentOutput::Durable(event) => {
             match &event.payload {
+                EventPayload::ModelRequestStarted { .. } => {
+                    *streamed_text.lock().expect("stream state mutex poisoned") = false;
+                }
+                EventPayload::AssistantMessageCompleted { text, .. } => {
+                    // Slot answers are committed without text deltas. Publish
+                    // their text once; ordinary streamed answers already printed.
+                    let already_streamed = std::mem::take(
+                        &mut *streamed_text.lock().expect("stream state mutex poisoned"),
+                    );
+                    if !already_streamed && !text.is_empty() {
+                        reporter.text_delta(text);
+                    }
+                }
+                EventPayload::CompletionReport { text } => reporter.text_delta(text),
                 EventPayload::ContextMaterialized { stats } => {
                     telemetry.lock().expect("telemetry mutex poisoned").context =
                         Some(ContextReport::from_stats(stats));

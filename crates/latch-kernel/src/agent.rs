@@ -104,17 +104,12 @@ pub struct Agent {
     /// image is never silently dropped for a text-only model.
     input_modalities: Vec<InputModality>,
     /// Set when the current turn executed `complete` and the kernel-derived
-    /// completion is terminal. The root still gets a reporting turn after the
-    /// tool results; child turns can return their existing semantic summary.
+    /// completion is eligible for the final validation/steering check. The
+    /// final_answer slot is published only after that check.
     terminal_complete: bool,
-    /// True when a kernel-owned workspace mutation was recorded during the
-    /// current run. Derived only from durable `FileChanged` events, never from
-    /// model-authored `touched_files`, so "implementation changed the
-    /// workspace" is never a model claim.
-    run_mutated_workspace: bool,
-    /// The one-shot verification correction has been issued for this run. Reset
-    /// at the start of every run so the mechanism can never loop.
-    verification_correction_issued: bool,
+    /// Session mutation provenance, reconstructed at each run start. An
+    /// interrupted run cannot lose its validation obligation on continuation.
+    workspace_mutation_seen: bool,
     /// Kernel-owned instruction asking for the validation an unverified
     /// implementation claim is missing. Injected through the same durable
     /// context channel as progress re-ground, so it is append-only, replayed on
@@ -268,8 +263,7 @@ impl Agent {
             profile,
             input_modalities: vec![InputModality::Text],
             terminal_complete: false,
-            run_mutated_workspace: false,
-            verification_correction_issued: false,
+            workspace_mutation_seen: false,
             verification_correction: None,
             permissions: PermissionBroker::new(),
             steering: SteeringQueue::new(),
@@ -1042,11 +1036,12 @@ impl Agent {
         let start = self.store.last_sequence(self.session_id)?;
         self.progress_watermark = start;
         self.forward_watermark.store(start, Ordering::Relaxed);
-        // Mutation and correction state are per-run. A mutation from an earlier
-        // run must not make a later read-only run look like it changed the
-        // workspace, and a correction already spent must not be spent again.
-        self.run_mutated_workspace = false;
-        self.verification_correction_issued = false;
+        // Recover mutation obligations even after an interrupted run/restart.
+        // This bounded event lookup avoids rescanning long histories.
+        self.workspace_mutation_seen = self
+            .store
+            .latest_event_of_kinds(self.session_id, &["file_changed"])?
+            .is_some();
         self.verification_correction = None;
         let initial_agent_messages = self.child_mailbox.drain();
         let effective_user_text = if initial_agent_messages.is_empty() {
@@ -1294,12 +1289,11 @@ impl Agent {
                     && group_messages == 0
                 {
                     // A final answer with no tool call normally ends the run. It
-                    // does not when implementation actually changed the
-                    // workspace and its implementation claim or verification
-                    // is missing: the kernel spends its single
-                    // correction turn rather than silently accepting an
-                    // unverified change. A run that mutated nothing (read-only
-                    // or explanatory work) exits here exactly as before.
+                    // does not when any required verification or a changed
+                    // workspace's implementation claim is missing. Repeat the
+                    // correction until the evidence is current; explanatory
+                    // work without obligations can still finish directly.
+                    self.sync_completion(&sink)?;
                     if self.take_verification_correction() {
                         self.steering.open();
                         continue;
@@ -1337,20 +1331,14 @@ impl Agent {
             }
             self.supervise_failures(&response.tool_calls, &tool_results, &sink)?;
             self.supervise_progress(&sink)?;
-            // `complete` records a claim, not a user-facing answer. Let the root
-            // see its actual tool results before reporting. Bound this extra
-            // opportunity so repeated completion calls cannot create a loop.
-            // Steering and child notifications still take priority.
+            // Publish the submitted answer only after the whole batch passes
+            // the completion gate. Legacy calls without a slot get a bounded
+            // reporting opportunity; steering and notifications take priority.
             if self.terminal_complete {
                 self.terminal_complete = false;
-                // `Verified` is the only completion that ends the run on the
-                // strength of its own claim. An implementation claim with no
-                // passing validation stays a real, honestly-labelled state, but
-                // it is not verified success, so the kernel asks once for the
-                // missing evidence before honoring it. The correction is
-                // resolved here, after supervision has observed this turn's
-                // mutation events, so a `patch` and `complete` in the same
-                // response are judged on kernel-observed reality.
+                // Recheck after the entire batch: a patch or writer after a
+                // validation must invalidate the proposed final answer too.
+                self.sync_completion(&sink)?;
                 let correction = self.take_verification_correction();
                 let late = self.steering.close_and_drain();
                 let agent_messages = self.child_mailbox.drain();
@@ -1377,6 +1365,38 @@ impl Agent {
                     if correction {
                         self.steering.open();
                         continue;
+                    }
+                    let submitted_answer = response
+                        .tool_calls
+                        .iter()
+                        .rev()
+                        .find(|call| {
+                            call.name == "complete"
+                                && tool_results
+                                    .iter()
+                                    .any(|result| result.call_id == call.id && !result.is_error)
+                        })
+                        .and_then(|call| call.arguments.get("final_answer"))
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|text| !text.trim().is_empty());
+                    if let Some(answer) = submitted_answer {
+                        // The text is authored by the model in the tool slot.
+                        // Publish only after all tool results, durable validation
+                        // and the steering handshake. Existing replay/UI paths
+                        // render this ordinary assistant message exactly once.
+                        if answer.trim() != response.text.trim() {
+                            self.emit(
+                                EventPayload::AssistantMessageCompleted {
+                                    text: answer.to_owned(),
+                                    tool_calls: Vec::new(),
+                                    reasoning_content: None,
+                                    reasoning: Vec::new(),
+                                },
+                                &sink,
+                            )?;
+                        }
+                        final_text = answer.to_owned();
+                        break;
                     }
                     if self.agent_depth == 0 && !completion_reply_requested {
                         self.verification_correction = None;

@@ -355,28 +355,30 @@ fn root_response(
         _ => {
             // Coordination loop: refresh status, wait for workers, delegate
             // ready tasks, and finish only once every required task resolved.
-            let last_continue = outputs
+            let last_wait_or_continue = outputs
                 .iter()
-                .rposition(|(name, _)| name == "continue_agent");
+                .rposition(|(name, _)| matches!(name.as_str(), "continue_agent" | "wait_agents"));
             let fresh = |name: &str| {
                 outputs
                     .iter()
                     .enumerate()
                     .rev()
                     .find(|(index, (tool, _))| {
-                        tool == name && last_continue.is_none_or(|continued| *index > continued)
+                        tool == name && last_wait_or_continue.is_none_or(|changed| *index > changed)
                     })
                     .map(|(_, (_, output))| output.as_str())
             };
             let agents_output = fresh("list_agents");
             let status_output = fresh("group_status");
             let parser = created.first().copied();
-            let a_idle = agents_output
+            let agents = agents_output
                 .and_then(|output| serde_json::from_str::<serde_json::Value>(output).ok())
-                .and_then(|value| value.as_array().cloned())
+                .and_then(|value| value.as_array().cloned());
+            let a_idle = agents
+                .as_ref()
                 .and_then(|agents| {
                     let target = spawned.first()?;
-                    agents.into_iter().find(|agent| {
+                    agents.iter().find(|agent| {
                         agent.get("agent_id").and_then(|id| id.as_str())
                             == Some(target.to_string().as_str())
                     })
@@ -388,13 +390,19 @@ fn root_response(
                         .map(|status| status == "completed")
                 });
             let all_done = status_output.is_some_and(|output| output.contains("done 4"));
-            if all_done {
+            let all_idle = agents
+                .as_ref()
+                .is_some_and(|agents| agents.iter().all(|agent| agent["status"] == "completed"));
+            if all_done && all_idle {
                 return response(
-                    "All required group tasks are complete.",
+                    "",
                     vec![call(
                         "done",
                         "complete",
-                        serde_json::json!({"implementation_done": true}),
+                        serde_json::json!({
+                            "implementation_done": true,
+                            "final_answer":"All required group tasks are complete."
+                        }),
                     )],
                 );
             }
@@ -430,12 +438,22 @@ fn root_response(
             if status_output.is_none() {
                 return response("", vec![call("s", "group_status", serde_json::json!({}))]);
             }
+            let waiting_for = agents
+                .as_ref()
+                .and_then(|agents| {
+                    agents.iter().find(|agent| {
+                        matches!(agent["status"].as_str(), Some("starting" | "running"))
+                    })
+                })
+                .and_then(|agent| agent["agent_id"].as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| spawned.first().unwrap().to_string());
             response(
                 "",
                 vec![call(
                     "w",
                     "wait_agents",
-                    serde_json::json!({"agent_ids": [spawned.first().unwrap().to_string()]}),
+                    serde_json::json!({"agent_ids": [waiting_for]}),
                 )],
             )
         }
@@ -528,7 +546,34 @@ fn child_response(
             ],
         );
     }
-    response("acknowledged", vec![])
+    // Group completion is coordination truth, not validation evidence. Each
+    // child must check its generated fixture before ending its own WORK run;
+    // shared-workspace writes can stale the pass and send it back here again.
+    if tool_outputs(request)
+        .last()
+        .is_some_and(|(name, _)| name == "validate")
+    {
+        response(
+            "",
+            vec![call(
+                "child-complete",
+                "complete",
+                serde_json::json!({"implementation_done":true,"final_answer":"acknowledged"}),
+            )],
+        )
+    } else {
+        response(
+            "",
+            vec![call(
+                "child-validate",
+                "validate",
+                serde_json::json!({
+                    "requirement":"generated implementation fixtures are present",
+                    "command":"rg -l \"^// (parser|evaluator) implemented$\" --glob \"*.rs\" ."
+                }),
+            )],
+        )
+    }
 }
 
 fn build_root(
@@ -547,7 +592,7 @@ fn build_root(
     )
     .unwrap();
     let continuity = ContinuityEngine::new(store.clone(), Default::default());
-    Agent::new(AgentRuntime {
+    let mut agent = Agent::new(AgentRuntime {
         session_id: session,
         workspace: workspace.to_path_buf(),
         mode: Mode::Work,
@@ -556,7 +601,9 @@ fn build_root(
         tools,
         continuity,
         retry_budget: 1,
-    })
+    });
+    agent.set_max_model_turns(Some(80));
+    agent
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -574,7 +621,38 @@ async fn two_child_sessions_coordinate_on_one_shared_dag() {
             sink,
         )
         .await
-        .unwrap();
+        .unwrap_or_else(|error| {
+            let log = provider.log.lock().unwrap();
+            let mut seen = std::collections::HashSet::new();
+            let recent = log
+                .requests
+                .iter()
+                .rev()
+                .filter(|(session, _)| seen.insert(*session))
+                .map(|(session, request)| {
+                    let outputs = tool_outputs(request)
+                        .into_iter()
+                        .rev()
+                        .take(3)
+                        .collect::<Vec<_>>();
+                    (*session, outputs)
+                })
+                .collect::<Vec<_>>();
+            let reports = log
+                .turns
+                .keys()
+                .filter_map(|session| {
+                    store
+                        .latest_event_of_kinds(*session, &["agent_report_created"])
+                        .unwrap()
+                        .map(|event| event.payload)
+                })
+                .collect::<Vec<_>>();
+            panic!(
+                "{error}; root state: {:?}; recent tools: {recent:?}; reports: {reports:?}",
+                root.state()
+            );
+        });
     assert!(text.contains("All required group tasks are complete"));
 
     // Root terminal completion is real: with no required validations the
