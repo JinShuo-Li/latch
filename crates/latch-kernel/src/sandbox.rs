@@ -8,7 +8,7 @@
 //!
 //! The sandbox exposes only what a [`SandboxProfile`] grants: the workspace
 //! (read-only or writable, with `.git` protected unless explicitly granted),
-//! private scratch space, and any explicitly approved external roots. Home
+//! shared system /tmp, private build scratch, and approved external roots. Home
 //! secrets and host sockets are masked; the network namespace is unshared
 //! unless the profile grants network access.
 
@@ -342,12 +342,17 @@ impl SandboxRunner {
             cmd.arg("--unshare-net");
         }
         // Baseline: host filesystem read-only, minimal /dev, fresh /proc and
-        // session-private writable /tmp. /run is masked so system and session sockets
+        // shared /tmp (writable for mutation profiles). /run is masked so session sockets
         // (D-Bus, Docker, SSH/GPG agents) are not reachable.
         cmd.args(["--ro-bind", "/", "/"]);
         cmd.args(["--dev", "/dev"]);
         cmd.args(["--proc", "/proc"]);
-        cmd.arg("--bind").arg(&scratch).arg("/tmp");
+        cmd.arg(if profile.workspace_writable() {
+            "--bind"
+        } else {
+            "--ro-bind"
+        })
+        .args(["/tmp", "/tmp"]);
         cmd.args(["--tmpfs", "/run"]);
         if is_real_directory(Path::new("/var/run")) {
             cmd.args(["--tmpfs", "/var/run"]);
@@ -377,8 +382,7 @@ impl SandboxRunner {
             cmd.args(["--tmpfs"]).arg(secret);
         }
         // These mounts come after workspace and external grants, so neither
-        // can remount Latch's state back into view. /tmp and /run are already
-        // private unless a later workspace/external bind exposes the path.
+        // can remount Latch's state back into view, including state under /tmp.
         if mount_exposes(&state_dir, profile) {
             cmd.arg("--tmpfs").arg(&state_dir);
         }
@@ -395,12 +399,23 @@ impl SandboxRunner {
         if mount_exposes(&scratch_root, profile) {
             cmd.arg("--tmpfs").arg(&scratch_root);
         }
+        // Build caches and runtime sockets remain session-private, while /tmp
+        // has the same meaning to native file tools and external programs.
+        cmd.arg("--bind").arg(&scratch).arg("/run/latch");
         // Minimal environment: no host secrets leak through variables.
         cmd.arg("--clearenv");
         cmd.args(["--setenv", "HOME"]).arg(&profile.home);
         cmd.arg("--setenv").arg("PATH").arg(default_path());
-        cmd.args(["--setenv", "TMPDIR", "/tmp"]);
-        cmd.args(["--setenv", "XDG_RUNTIME_DIR", "/tmp/latch-runtime"]);
+        cmd.args([
+            "--setenv",
+            "TMPDIR",
+            if profile.workspace_writable() {
+                "/tmp"
+            } else {
+                "/run/latch"
+            },
+        ]);
+        cmd.args(["--setenv", "XDG_RUNTIME_DIR", "/run/latch/runtime"]);
         cmd.args(["--setenv", "LATCH_SANDBOX", "1"]);
         for (key, value) in crate::execution::network_environment(profile) {
             cmd.args(["--setenv", key]).arg(value);
@@ -426,7 +441,7 @@ impl SandboxRunner {
         // A read-only workspace still gets controlled build output: cargo and
         // friends write into the session scratch directory instead of the sources.
         if !profile.workspace_writable() {
-            cmd.args(["--setenv", "CARGO_TARGET_DIR", "/tmp/latch-target"]);
+            cmd.args(["--setenv", "CARGO_TARGET_DIR", "/run/latch/target"]);
             cmd.args(["--setenv", "PYTHONDONTWRITEBYTECODE", "1"]);
         }
         cmd.arg("--chdir").arg(workspace);
@@ -437,7 +452,7 @@ impl SandboxRunner {
 }
 
 fn mount_exposes(path: &Path, profile: &SandboxProfile) -> bool {
-    if !path.starts_with("/tmp") && !path.starts_with("/run") {
+    if !path.starts_with("/run") {
         return true;
     }
     std::iter::once(&profile.workspace)
@@ -637,56 +652,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_tmp_survives_commands_without_exposing_host_or_other_sessions() {
+    async fn system_tmp_is_shared_but_build_scratch_and_state_remain_private() {
         let dir = tempdir().unwrap();
         let mut runner = SandboxRunner::detect(dir.path()).expect("required sandbox");
-        // Force the backing directory into a visible workspace to cover its
-        // original host path as well as the /tmp bind destination.
         runner.scratch = Arc::new(tempfile::tempdir_in(dir.path()).unwrap());
         let home = dir.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
         let first = base_profile(dir.path(), &home).with_session(uuid::Uuid::new_v4());
         let second = base_profile(dir.path(), &home).with_session(uuid::Uuid::new_v4());
-        let host_marker = tempfile::NamedTempFile::new_in("/tmp").unwrap();
+        let exchange = tempfile::tempdir_in("/tmp").unwrap();
+        let note = exchange.path().join("note");
+        std::fs::write(&note, "from-host").unwrap();
+        let mut writable = first.clone();
+        writable
+            .capabilities
+            .insert(Capability::WorkspaceSourceWrite);
         let output = run(
             &runner,
-            &first,
-            "printf retained > /tmp/latch-note && mkdir -p \"$CARGO_TARGET_DIR\" && printf cached > \"$CARGO_TARGET_DIR/cache\"",
-        )
-        .await;
-        assert!(output.status.success(), "{:?}", output);
-        let output = run(
-            &runner.clone(),
-            &first,
-            "cat /tmp/latch-note \"$CARGO_TARGET_DIR/cache\"",
-        )
-        .await;
-        assert!(output.status.success());
-        assert_eq!(output.stdout, b"retainedcached");
-        let output = run(
-            &runner,
-            &second,
+            &writable,
             &format!(
-                "test ! -e /tmp/latch-note && test ! -e '{}' && test -z \"$(ls '{}')\"",
-                host_marker.path().display(),
-                runner.scratch.path().display(),
+                "cat '{}' && printf from-latch > '{}'",
+                note.display(),
+                note.display()
             ),
         )
         .await;
-        assert!(output.status.success(), "{:?}", output);
-        // Private scratch must not turn a read-only workspace into a write mount.
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"from-host");
+        assert_eq!(std::fs::read(&note).unwrap(), b"from-latch");
+        let output = run(
+            &runner,
+            &first,
+            "test \"$TMPDIR\" = /run/latch && mktemp >/dev/null && mkdir -p \"$CARGO_TARGET_DIR\" && printf cached > \"$CARGO_TARGET_DIR/cache\"",
+        )
+        .await;
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            run(&runner, &first, "cat \"$CARGO_TARGET_DIR/cache\"")
+                .await
+                .stdout,
+            b"cached"
+        );
+        assert!(
+            run(&runner, &second, "test ! -e \"$CARGO_TARGET_DIR/cache\"")
+                .await
+                .status
+                .success()
+        );
+        assert!(
+            run(
+                &runner,
+                &first,
+                &format!(
+                    "test -z \"$(ls '{}')\" && test -z \"$(ls '{}')\"",
+                    runner.scratch.path().display(),
+                    first.state_dir.display()
+                )
+            )
+            .await
+            .status
+            .success()
+        );
         assert!(
             !run(&runner, &first, "echo no > forbidden.txt")
                 .await
                 .status
                 .success()
         );
+        assert!(
+            !run(&runner, &first, &format!("echo no > '{}'", note.display()))
+                .await
+                .status
+                .success()
+        );
         let backing = runner.scratch.path().to_path_buf();
         drop(runner);
-        assert!(
-            !backing.exists(),
-            "scratch is removed when its runner closes"
-        );
+        assert!(!backing.exists());
+        assert!(note.exists(), "shared temporary files belong to the host");
     }
 
     #[tokio::test]

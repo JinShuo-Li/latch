@@ -254,10 +254,13 @@ checks between tools and execution.
 Linux delegates to the mandatory Bubblewrap runner in
 `sandbox.rs`; Standard/Autonomous shell, validation and managed commands receive
 network by default, while Strict requires explicit network approval. Network
-profiles inherit a bounded proxy/CA environment allowlist. Linux `/tmp` is
-runner-owned, session-partitioned scratch shared across calls and removed at
-runner close; shell writes there do not authorize host `/tmp` writes. Native
-file tools remain workspace-scoped. Windows uses the embedded `native/windows/boundary/` runner,
+profiles inherit a bounded proxy/CA environment allowlist. Linux file tools and
+WORK mutation profiles share host `/tmp`; inspection mounts it read-only.
+Freshness, alias checks and credential/state protection still apply. Other host
+roots require approval. Private build scratch at `/run/latch` is partitioned by
+session and used as inspection `TMPDIR`; WORK uses `/tmp`. Private scratch is
+removed at runner close; host `/tmp` files are not cleaned by Latch.
+Windows uses the embedded `native/windows/boundary/` runner,
 `cmd.exe`, a per-call AppContainer, a write-restricted token, durable ACL
 recovery, and a Job Object. It has no unsandboxed or local-account fallback.
 The native runner is built by

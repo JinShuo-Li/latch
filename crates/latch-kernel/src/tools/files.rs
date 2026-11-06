@@ -185,7 +185,7 @@ impl ToolExecutor {
             .get("path")
             .and_then(Value::as_str)
             .unwrap_or(".");
-        let path = resolve_workspace_path(&self.workspace, target)?;
+        let path = resolve_file_path(&self.workspace, target)?;
         self.ensure_not_protected(&path)?;
         let max_results = call
             .arguments
@@ -407,7 +407,7 @@ impl ToolExecutor {
         Ok(canonical)
     }
     pub(super) fn path_arg(&self, call: &ToolCall) -> Result<PathBuf> {
-        let path = resolve_workspace_path(&self.workspace, str_arg(call, "path")?)?;
+        let path = resolve_file_path(&self.workspace, str_arg(call, "path")?)?;
         self.ensure_not_protected(&path)?;
         Ok(path)
     }

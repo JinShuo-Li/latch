@@ -48,6 +48,98 @@ fn call(name: &str, args: Value) -> ToolCall {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn system_tmp_files_work_across_host_shell_and_native_tools() {
+    let (_workspace, executor) = setup_with_workspace_state_dir(Mode::Work);
+    let exchange = tempfile::tempdir_in("/tmp").unwrap();
+    let path = exchange.path().join("exchange.txt");
+    let raw = path.to_str().unwrap();
+    std::fs::write(&path, "host").unwrap();
+    let base = read_hash(&executor, raw).await;
+    let result = executor
+        .execute(
+            &call(
+                "patch",
+                json!({"path":raw,"base_hash":base,"old":"host","new":"native"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!result.is_error, "{}", result.output);
+    let result = executor
+        .execute(
+            &call(
+                "shell",
+                json!({"command":format!("cat '{raw}' && printf shell > '{raw}'")}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        !result.is_error && result.output.contains("native"),
+        "{}",
+        result.output
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "shell");
+    let base = read_hash(&executor, raw).await;
+    let result = executor
+        .execute(
+            &call(
+                "write",
+                json!({"path":raw,"base_hash":base,"content":"shared-result"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!result.is_error, "{}", result.output);
+    let result = executor
+        .execute(
+            &call(
+                "search",
+                json!({"path":exchange.path(),"query":"shared-result"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        !result.is_error && result.output.contains("shared-result"),
+        "{}",
+        result.output
+    );
+    let stale = executor
+        .execute(
+            &call(
+                "write",
+                json!({"path":raw,"base_hash":base,"content":"stale"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(stale.is_error && stale.output.contains("stale"));
+    // A symlink out of /tmp cannot turn it into a general filesystem grant.
+    let alias = exchange.path().join("outside");
+    directory_alias(Path::new("/etc"), &alias);
+    let denied = executor
+        .execute(
+            &call("read_file", json!({"path":alias.join("passwd")})),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(denied.is_error);
+    // State protection also applies to a direct absolute /tmp path.
+    let denied = executor
+        .execute(
+            &call(
+                "write",
+                json!({"path":executor.state_dir.join("blocked"),"content":"no"}),
+            ),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(denied.is_error);
+}
+
 /// Reads `path` and returns the version hash the way a model obtains a
 /// `base_hash`, asserting the read itself succeeded.
 async fn read_hash(executor: &ToolExecutor, path: &str) -> String {
@@ -841,7 +933,7 @@ async fn read_only_modes_reject_shell_escape() {
 fn read_only_shell_classification_is_conservative() {
     let d = tempdir().unwrap();
     std::fs::create_dir(d.path().join("src")).unwrap();
-    let outside = tempdir().unwrap();
+    let outside = crate::workspace_path::external_test_dir();
     directory_alias(outside.path(), &d.path().join("link"));
     let ws = d.path().to_path_buf();
     let workspace_cd = format!(
@@ -1042,7 +1134,7 @@ async fn writes_nested_new_file_without_path_collapse() {
 #[tokio::test]
 async fn symlink_cannot_escape_workspace() {
     let (d, executor) = setup(Mode::Work);
-    let outside = tempdir().unwrap();
+    let outside = crate::workspace_path::external_test_dir();
     directory_alias(outside.path(), &d.path().join("link"));
     let result = executor
         .execute(
@@ -1633,7 +1725,7 @@ async fn approved_outside_write_succeeds_and_records_absolute_path() {
         ),
     )
     .unwrap();
-    let outside = tempdir().unwrap();
+    let outside = crate::workspace_path::external_test_dir();
     let target = outside.path().join("note.txt");
     let call = ToolCall {
         id: "write-outside".into(),
@@ -1676,7 +1768,7 @@ async fn approved_outside_write_succeeds_and_records_absolute_path() {
 #[tokio::test]
 async fn approved_shell_external_write_uses_only_its_call_scoped_mount() {
     let workspace = tempdir().unwrap();
-    let outside = tempdir().unwrap();
+    let outside = crate::workspace_path::external_test_dir();
     let target = outside.path().join("shell.txt");
     let store = EventStore::open_memory().unwrap();
     let session = store.create_session(workspace.path()).unwrap();
@@ -2276,7 +2368,7 @@ async fn ask_build_output_is_redirected_to_private_scratch() {
         result.output.contains(if cfg!(windows) {
             "latch-target"
         } else {
-            "/tmp/latch-target"
+            "/run/latch/target"
         }),
         "{}",
         result.output
@@ -2320,8 +2412,8 @@ async fn workspace_write_is_allowed_in_work_but_git_metadata_is_not() {
 #[tokio::test]
 async fn grant_is_scoped_to_the_approved_external_root() {
     let (d, e) = setup(Mode::Work);
-    let allowed_dir = tempdir().unwrap();
-    let denied_dir = tempdir().unwrap();
+    let allowed_dir = crate::workspace_path::external_test_dir();
+    let denied_dir = crate::workspace_path::external_test_dir();
     let allowed_path = allowed_dir.path().join("ok.txt");
     let denied_path = denied_dir.path().join("no.txt");
 
@@ -2363,7 +2455,7 @@ async fn grant_is_scoped_to_the_approved_external_root() {
 #[tokio::test]
 async fn model_arguments_cannot_fabricate_approval() {
     let (d, e) = setup(Mode::Work);
-    let outside = tempdir().unwrap();
+    let outside = crate::workspace_path::external_test_dir();
     let target = outside.path().join("note.txt");
     let result = e
         .execute(
@@ -2520,13 +2612,13 @@ async fn read_image_obeys_the_workspace_read_boundary() {
     std::fs::write(d.path().join("shot.png"), TINY_PNG).unwrap();
     let result = e
         .execute(
-            &call("read_image", json!({"path":"../outside.png"})),
+            &call("read_image", json!({"path":crate::workspace_path::external_test_dir().path().join("outside.png")})),
             CancellationToken::new(),
         )
         .await;
     assert!(result.is_error, "path escape must be rejected");
     assert!(
-        result.output.contains("escapes workspace"),
+        result.output.contains("escapes allowed filesystem roots"),
         "{}",
         result.output
     );

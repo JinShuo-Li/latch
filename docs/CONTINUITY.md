@@ -313,11 +313,11 @@ See [Skills and MCP](SKILLS_AND_MCP.md) for configuration and compatibility.
 
 ## Temporary command files
 
-Linux command scratch (`/tmp`, also `$TMPDIR`) is private to each session and
-shared across its commands while the execution runner is alive. It is cleaned
-when the runner closes, is not durable evidence, and is not restored on resume
-after a restart. Save files needed for future turns or resumed work in the
-workspace; preserve validation/evidence through the existing durable tools.
+Linux file tools and commands share the host `/tmp`. Temporary files are external
+storage, not durable evidence; Latch neither cleans them on shutdown nor promises
+OS retention. Private build scratch at `/run/latch` is partitioned by session,
+cleaned at runner close, and not restored after restart. Preserve required
+validation/evidence through the durable tools.
 
 ## Completion answers
 

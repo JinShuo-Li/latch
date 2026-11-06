@@ -208,7 +208,7 @@ fn classify_file_write(tool: &str, args: &Value, context: Context<'_>) -> Classi
     };
     let mut capabilities = CapabilitySet::new();
     capabilities.insert(Capability::WorkspaceRead);
-    if !absolute.starts_with(&workspace) {
+    if !absolute.starts_with(&workspace) && !crate::workspace_path::is_system_tmp(&absolute) {
         if system_destructive_target(&absolute) {
             capabilities.insert(Capability::DestructiveOperation);
             return Classification::deny(
@@ -830,12 +830,13 @@ fn inferred_external_write(
     if path.starts_with(workspace) {
         return None;
     }
-    // Linux /tmp is a private sandbox mount, not a host write grant. Normalize
-    // traversal lexically in the sandbox namespace, without resolving host
-    // symlinks that are not visible in that mount.
+    // Linux /tmp is an ordinary shared temporary root. Resolve host aliases so
+    // a symlink out of /tmp never silently widens the default write scope.
     if !host_write_requested
-        && cfg!(target_os = "linux")
-        && crate::workspace_path::lexical_normalize(&path).starts_with("/tmp")
+        && crate::workspace_path::resolve_real_path(&crate::workspace_path::lexical_normalize(
+            &path,
+        ))
+        .is_some_and(|real| crate::workspace_path::is_system_tmp(&real))
     {
         return None;
     }
@@ -1099,10 +1100,8 @@ mod tests {
 
     #[test]
     fn outside_write_is_ask_even_under_autonomous() {
-        let outside = test_workspace()
-            .parent()
-            .unwrap()
-            .join("elsewhere/file.txt");
+        let outside_dir = crate::workspace_path::external_test_dir();
+        let outside = outside_dir.path().join("elsewhere/file.txt");
         let classification = classify(
             "write",
             &json!({"path": outside}),

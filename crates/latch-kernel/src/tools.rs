@@ -7,7 +7,7 @@ mod process;
 mod write;
 
 use crate::execution::is_read_only_shell;
-use crate::workspace_path::{lexical_normalize, resolve_real_path, resolve_workspace_path};
+use crate::workspace_path::{lexical_normalize, resolve_file_path, resolve_real_path};
 use ownership::{ChangeLedger, git_dirty_hashes};
 pub use policy::{CapabilityGrant, PolicyDecision, PolicyEngine};
 use process::ManagedProcess;
@@ -584,7 +584,36 @@ impl ToolExecutor {
         if crate::workspace_path::file_alias_may_escape(path) {
             return true;
         }
-        resolve_real_path(path).is_some_and(|real| real.starts_with(self.protected_state_dir()))
+        resolve_real_path(path).is_some_and(|real| {
+            if real.starts_with(self.protected_state_dir()) {
+                return true;
+            }
+            // Sharing /tmp must not expose a configured credential symlink or
+            // a conventional credential tree relocated there.
+            if crate::workspace_path::is_system_tmp(&real) {
+                #[cfg(target_os = "linux")]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if std::fs::metadata(&real).is_ok_and(|meta| meta.is_file() && meta.nlink() > 1)
+                    {
+                        return true;
+                    }
+                }
+                let secret = crate::paths::ResolvedPaths::for_state(&self.protected_state_dir())
+                    .secrets_path;
+                if secret.canonicalize().is_ok_and(|target| target == real) {
+                    return true;
+                }
+                if let Some(home) = dirs::home_dir() {
+                    return crate::sandbox::secret_paths(&home).iter().any(|secret| {
+                        secret
+                            .canonicalize()
+                            .is_ok_and(|target| real.starts_with(target))
+                    });
+                }
+            }
+            false
+        })
     }
     /// Refuses agent-visible filesystem access to the configured state
     /// directory and everything beneath it. Credentials and session state must
@@ -679,8 +708,8 @@ fn str_arg<'a>(call: &'a ToolCall, name: &str) -> Result<&'a str> {
 }
 fn relative(root: &Path, path: &Path) -> Result<String> {
     let root = root.canonicalize()?;
-    // A path outside the workspace only reaches here after an explicit human
-    // approval; record it absolutely so provenance and undo stay honest.
+    // Shared /tmp and approved external paths are recorded absolutely so
+    // provenance and undo stay honest.
     match path.strip_prefix(&root) {
         Ok(relative) => Ok(relative.to_string_lossy().into_owned()),
         Err(_) => Ok(path.to_string_lossy().into_owned()),

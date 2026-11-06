@@ -34,6 +34,20 @@ pub(crate) fn resolve_real_path(path: &Path) -> Option<PathBuf> {
 }
 
 pub(crate) fn resolve_workspace_path(workspace: &Path, path: &str) -> Result<PathBuf> {
+    resolve_scoped_path(workspace, path, false)
+}
+
+/// Native file tools share Linux's host /tmp with command execution. Other
+/// consumers (notably LSP) retain the workspace-only resolver.
+pub(crate) fn resolve_file_path(workspace: &Path, path: &str) -> Result<PathBuf> {
+    resolve_scoped_path(workspace, path, true)
+}
+
+pub(crate) fn is_system_tmp(path: &Path) -> bool {
+    cfg!(target_os = "linux") && path.starts_with("/tmp")
+}
+
+fn resolve_scoped_path(workspace: &Path, path: &str, allow_tmp: bool) -> Result<PathBuf> {
     let root = workspace.canonicalize()?;
     let candidate = if Path::new(path).is_absolute() {
         lexical_normalize(Path::new(path))
@@ -41,8 +55,8 @@ pub(crate) fn resolve_workspace_path(workspace: &Path, path: &str) -> Result<Pat
         lexical_normalize(&root.join(path))
     };
     let resolved = resolve_real_path(&candidate).ok_or_else(|| anyhow!("invalid path"))?;
-    if !resolved.starts_with(&root) {
-        bail!("path escapes workspace through a symbolic link or parent traversal");
+    if !resolved.starts_with(&root) && !(allow_tmp && is_system_tmp(&resolved)) {
+        bail!("path escapes allowed filesystem roots through a symbolic link or parent traversal");
     }
     Ok(resolved)
 }

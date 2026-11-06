@@ -512,12 +512,15 @@ LSP profiles remain offline; MCP approvals and known remote-side-effect approval
 are unchanged. Network capability is broad IP access, not an endpoint filter or
 a guarantee that arbitrary scripts have no remote side effects.
 
-Linux `/tmp` is a writable private directory partitioned by session id within
-the execution runner, shared by that session’s command calls and extension host.
-It is removed when the runner closes and is not durable resume state. Explicit
-shell writes there need no external host write grant. Explicit `external_write`
-requests for identifiable `/tmp` targets retain normal host-mount approval.
-Host `/tmp` contents remain hidden unless exposed through the workspace or an
-approved external root. The original scratch backing path is masked even when
-its parent is exposed, preserving isolation between sessions. Kernel-native file
-tools remain workspace-scoped. Windows and macOS scratch mappings are unchanged.
+Linux file tools and commands share the host `/tmp` as an additional default
+filesystem root. WORK mutation profiles can write it; inspection profiles see
+it read-only. Normal native write freshness/ownership checks still apply.
+Resolved symlinks out of the allowed roots do not acquire permission; native
+temporary-file hardlink aliases are rejected. Credentials and configured Latch
+state remain protected even when stored under `/tmp`. Other host write roots
+retain scoped approval. Explicit `external_write` requests retain approval.
+Private build scratch is mounted at `/run/latch`, partitioned by session and
+removed at runner close; inspection profiles use it as `TMPDIR`. WORK profiles
+use `/tmp`, and host temporary files are not removed by Latch.
+Sharing `/tmp` deliberately exposes ordinary host temporary files and sockets;
+it is no longer a session isolation boundary. Windows/macOS mappings are unchanged.

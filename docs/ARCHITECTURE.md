@@ -1018,8 +1018,9 @@ set; failure is stored as an actionable refusal and shell/exec/validation/git
 inspection all fail rather than running unsandboxed. A `SandboxProfile` binds
 the host root read-only, mounts the workspace explicitly (read-only for
 inspection; writable with `.git` remounted read-only unless `GitMetadataWrite`
-was granted), adds call-scoped external writable roots, binds a session-private
-writable `/tmp` and mounts a private tmpfs `/run`, masks home credentials, clears
+was granted), adds call-scoped external writable roots, binds host `/tmp`
+(writable for mutation profiles, read-only for inspection), mounts a private
+tmpfs `/run`, masks home credentials, clears
 the environment, and isolates user/PID/IPC/UTS namespaces plus network (re-shared only when the profile
 grants it). Network-authorized processes inherit only an allowlist of proxy
 and CA environment settings alongside the existing runtime environment.
@@ -1029,23 +1030,23 @@ same backend. Extension hosts start through the same
 sandbox with a read-only workspace and network; their individual tool arguments
 remain a cooperative boundary, documented rather than overclaimed.
 
-Linux scratch is owned by the runner and partitioned by session id, including
-child sessions. Its original host backing path is also masked so a visible
-workspace cannot expose another session’s scratch or replace bind sources.
-Shell commands can reuse `/tmp` files and read-only build output
-across calls; scratch is cleaned when the runner closes and is not restored after
-a restart. Explicit `/tmp` shell writes do not ask for an external host mount;
-they write into this private namespace. An explicit `external_write` capability
-with an identifiable `/tmp` target instead requests a call-scoped host mount
-through normal approval. Host temporary files stay hidden unless
-a workspace or approved external mount explicitly exposes them. Native file tools
-remain workspace-scoped; use shell for temporary files.
+Linux native file tools and commands share the real host `/tmp`, allowing files
+to be exchanged with external programs. WORK writes use normal freshness and
+ownership checks; other external roots still require approval. Resolved symlinks
+cannot extend this default scope beyond the workspace and `/tmp`. Guarded native
+tools reject hardlink aliases in shared temporary storage. `/tmp` is ordinary
+host storage: Latch does not remove its contents on shutdown or promise retention.
+Session-private build output is mounted at `/run/latch`, with its backing root
+masked and removed at runner close; this isolates read-only build caches between
+sessions. Inspection profiles set `TMPDIR` to `/run/latch` so commands can still
+create private temporary files; WORK profiles use `/tmp`. Windows/macOS temporary
+directory policies are unchanged.
 
 Every command and extension profile carries the configured Latch state directory.
 The sandbox resolves its real path and masks the whole directory after workspace
 and external mounts. If `secrets.toml` is a symlink outside that directory, its
-resolved target is masked too. The private `/tmp` and `/run` mounts already hide
-paths there unless a workspace or granted external mount exposes them. Failure
+resolved target is masked too, including state or credential targets in shared
+`/tmp`. The private `/run` mount hides host runtime sockets. Failure
 to resolve the configured state directory refuses the command. Kernel-native
 filesystem tools enforce the same boundary on the host: `read_file`,
 `read_image`, and the `search` target refuse the resolved state directory and

@@ -122,7 +122,7 @@ impl PromptCompiler {
                 "latch.permissions",
                 130,
                 true,
-                "Sandboxed shell: Standard/Autonomous allow network; Strict needs `capabilities: [\"network\"]` approval. Request Git/external writes explicitly. Linux shell /tmp lasts until restart.",
+                "Sandboxed shell: Standard/Autonomous allow network; Strict needs `capabilities: [\"network\"]` approval. Request Git/external writes explicitly. Linux file tools and WORK commands share system /tmp.",
             ),
             fragment(
                 "latch.subagents",

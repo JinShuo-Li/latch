@@ -100,10 +100,8 @@ impl ToolExecutor {
             .insert(path.to_path_buf());
         Ok(())
     }
-    /// Write paths honor an explicit outside-workspace approval: the user saw
-    /// the exact call and approved it, so the write may target an absolute path
-    /// outside the workspace. Without approval the normal containment rules
-    /// apply and the call never reaches this point.
+    /// Writes stay within the workspace, Linux's shared /tmp, or the exact
+    /// external scope approved for this call.
     fn write_path_arg(&self, call: &ToolCall) -> Result<PathBuf> {
         let raw = str_arg(call, "path")?;
         let candidate = if Path::new(raw).is_absolute() {
@@ -115,10 +113,10 @@ impl ToolExecutor {
         // tools, whether the state directory lives inside the workspace or is
         // reached through a symlink alias.
         self.ensure_not_protected(&candidate)?;
-        if resolve_workspace_path(&self.workspace, raw).is_ok() {
-            return Ok(candidate);
+        if let Ok(resolved) = resolve_file_path(&self.workspace, raw) {
+            return Ok(resolved);
         }
-        // Outside the workspace: only a scoped, single-use grant allows it.
+        // Outside the default roots: only a scoped, single-use grant allows it.
         if self.grant_allows_path(&call.id, &candidate) {
             return Ok(candidate);
         }
