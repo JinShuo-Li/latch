@@ -22,6 +22,10 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+// Stay inside the conservative read-only shell grammar so parallel checks
+// cannot continually invalidate one another's durable validation evidence.
+const FIXTURE_VALIDATION_COMMAND: &str = "rg -l implemented parser.rs evaluator.rs";
+
 #[derive(Default)]
 struct ProviderLog {
     turns: HashMap<Uuid, usize>,
@@ -569,7 +573,7 @@ fn child_response(
                 "validate",
                 serde_json::json!({
                     "requirement":"generated implementation fixtures are present",
-                    "command":"rg -l \"^// (parser|evaluator) implemented$\" --glob \"*.rs\" ."
+                    "command":FIXTURE_VALIDATION_COMMAND
                 }),
             )],
         )
@@ -604,6 +608,48 @@ fn build_root(
     });
     agent.set_max_model_turns(Some(80));
     agent
+}
+
+#[tokio::test]
+async fn fixture_validation_never_invalidates_peer_evidence() {
+    let workspace = tempfile::tempdir().unwrap();
+    for (file, text) in [
+        ("parser.rs", "// parser implemented\n"),
+        ("evaluator.rs", "// evaluator implemented\n"),
+    ] {
+        std::fs::write(workspace.path().join(file), text).unwrap();
+    }
+    let store = EventStore::open_memory().unwrap();
+    let session = store.create_session(workspace.path()).unwrap();
+    let tools = ToolExecutor::new(
+        workspace.path().into(),
+        workspace.path().join("artifacts"),
+        store.clone(),
+        session,
+        PolicyEngine::new(Mode::Work, workspace.path().into(), Default::default()),
+    )
+    .unwrap();
+    let result = tools
+        .run_validated_command(
+            &call(
+                "fixture-validation",
+                "validate",
+                serde_json::json!({"command": FIXTURE_VALIDATION_COMMAND}),
+            ),
+            5,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(result.success, "{}", result.text);
+    assert!(result.text.contains("parser.rs") && result.text.contains("evaluator.rs"));
+    assert!(
+        !store.events(session).unwrap().iter().any(|event| matches!(
+            event.payload,
+            EventPayload::WorkspaceMutationPossible { .. }
+        )),
+        "a read-only fixture check must not invalidate peer validation"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -765,8 +811,14 @@ async fn two_child_sessions_coordinate_on_one_shared_dag() {
                 .any(|event| matches!(event.payload, EventPayload::AgentReportCreated { .. }))
         );
     }
-    assert!(workspace.path().join("parser.rs").exists());
-    assert!(workspace.path().join("evaluator.rs").exists());
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("parser.rs")).unwrap(),
+        "// parser implemented\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("evaluator.rs")).unwrap(),
+        "// evaluator implemented\n"
+    );
 
     // A fresh root agent (process restart) reconstructs the same coordination
     // state from durable events alone.
