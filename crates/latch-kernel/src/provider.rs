@@ -153,8 +153,8 @@ pub fn anthropic_thinking_for(
     }
 }
 
-/// User-Agent sent with every provider request. Keep in sync with the workspace version.
-pub const USER_AGENT: &str = "latch/0.2.3";
+/// User-Agent sent with every provider request, derived from the workspace version.
+pub const USER_AGENT: &str = concat!("latch/", env!("CARGO_PKG_VERSION"));
 const OPENCODE_GO_BASE: &str = "https://opencode.ai/zen/go";
 const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
@@ -3641,6 +3641,11 @@ mod tests {
     }
 
     #[test]
+    fn user_agent_tracks_the_package_version() {
+        assert_eq!(USER_AGENT, format!("latch/{}", env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
     fn generic_endpoints_send_only_the_user_agent() {
         let provider = OpenAiProvider::new(
             "https://api.openai.com/v1/".into(),
@@ -3677,10 +3682,7 @@ mod tests {
             resumed.request_headers().get(OPENCODE_SESSION_HEADER),
             first.get(OPENCODE_SESSION_HEADER)
         );
-        assert_eq!(
-            first.get(reqwest::header::USER_AGENT).unwrap(),
-            "latch/0.2.3"
-        );
+        assert_eq!(first.get(reqwest::header::USER_AGENT).unwrap(), USER_AGENT);
     }
     #[test]
     fn detects_opencode_go_endpoints_at_path_boundaries() {
