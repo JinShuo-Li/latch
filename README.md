@@ -71,7 +71,7 @@ On first launch, use `/setup` to choose a provider, enter or reference its API k
 
 Setup adds providers without removing existing ones: OpenCode Go, DeepSeek, and ChatGPT subscription can coexist in `/model`. One credential covers all supported models on that service; new setup enables the full catalog. `/model refresh` updates service catalogs (including automatic stable-version tracking for ChatGPT), and `/model all` clears older local model filters. Account permissions and quotas still apply. Use `/setup` to edit or remove an existing provider explicitly.
 
-Model requests have configurable connection/TLS, header, stream-idle and total deadlines. Automatic retries are limited to recognized temporary failures before a response starts; see [request timeouts and retries](docs/PROVIDER_REQUESTS.md).
+Model requests have configurable connection/TLS, header, stream-idle and total deadlines. Automatic retries are limited to recognized temporary failures before a response starts; see [request timeouts and retries](docs/PROVIDER_REQUESTS.md). Provider errors have bounded, credential-redacted diagnostics; malformed tool arguments fail before execution.
 
 Run `latch doctor` to check local prerequisites and configuration without contacting a model provider. `/model` changes the model for the current session. You can also run one prompt without the TUI:
 

@@ -86,6 +86,12 @@ connection to close. Chat Completions also accepts clean EOF after a nonempty
 never an empty success or permission to execute partially received tools.
 The same output-aware retry gate applies to both HTTP and stream errors.
 
+HTTP error bodies retain at most 16 KiB before redaction and the 4 KB display
+limit. A truncated body is marked explicitly; an echoed credential cut at the
+read limit is redacted too. Status and Retry-After remain available without
+waiting for a large error body to finish. Smaller stalled bodies still obey the
+configured header/total deadlines.
+
 Transport diagnostics retain the underlying I/O/TLS cause while removing the
 request URL; service error messages redact the credential. Failed requests
 persist the sanitized diagnostic in `ModelRequestFinished.error`, so session

@@ -2504,19 +2504,51 @@ async fn checked_response_redacted(
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| retry_after_delay(value, chrono::Utc::now()));
-    let body = response.text().await.unwrap_or_default();
-    let body = if secret.is_empty() {
-        body
-    } else {
-        crate::credentials::redact(&body, &[secret])
-    };
+    // Limit ingestion, not just the displayed diagnostic: a proxy may return
+    // an enormous body or keep writing after the error status is already known.
+    const ERROR_BODY_LIMIT: usize = 16_384;
+    let mut response = response;
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    loop {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(_) => {
+                truncated = true;
+                break;
+            }
+        };
+        let remaining = ERROR_BODY_LIMIT - bytes.len();
+        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        if bytes.len() == ERROR_BODY_LIMIT {
+            truncated = true;
+            break;
+        }
+    }
+    if truncated && !secret.is_empty() {
+        // Truncation can cut through an echoed credential. Remove a matching
+        // partial suffix before decoding/redacting the retained body.
+        if let Some(length) = (1..=secret.len().min(bytes.len()))
+            .rev()
+            .find(|&length| bytes.ends_with(&secret.as_bytes()[..length]))
+        {
+            bytes.truncate(bytes.len() - length);
+            bytes.extend_from_slice(b"[redacted]");
+        }
+    }
+    let body = crate::credentials::redact(&String::from_utf8_lossy(&bytes), &[secret]);
+    let mut body = bound_error_body(&body);
+    if truncated {
+        body.push_str(" [response body truncated]");
+    }
     Err(crate::provider_request::ProviderHttpError {
         status: status.as_u16(),
         retry_after,
         message: format!(
             "{provider} request failed with HTTP {}: {}",
             status.as_u16(),
-            bound_error_body(&body)
+            body
         ),
     }
     .into())
@@ -3410,6 +3442,111 @@ mod tests {
             );
         }
         assert!(retry_after_delay("invalid", now).is_none());
+    }
+
+    #[tokio::test]
+    async fn http_error_body_is_bounded_before_eof_and_keeps_retry_facts() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 100000000\r\nRetry-After: 12\r\n\r\n").await.unwrap();
+            socket
+                .write_all(format!("fixture-secret{}", "x".repeat(64 * 1024)).as_bytes())
+                .await
+                .ok();
+            std::future::pending::<()>().await;
+        });
+        let response = Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            checked_response_redacted("fixture", response, "fixture-secret"),
+        )
+        .await;
+        server.abort();
+        let error = result
+            .expect("a large error body must not wait for EOF")
+            .unwrap_err();
+        let http = error
+            .downcast_ref::<crate::provider_request::ProviderHttpError>()
+            .unwrap();
+        assert_eq!(http.status, 503);
+        assert_eq!(http.retry_after, Some(std::time::Duration::from_secs(12)));
+        assert!(http.message.len() < 4500);
+        assert!(http.message.contains("truncated"));
+        assert!(!http.message.contains("fixture-secret"));
+    }
+
+    #[tokio::test]
+    async fn http_error_body_redacts_credentials_split_at_ingestion_limit() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (secret, prefix) in [("fixture-secret", 16_380), ("🔒credential", 16_382)] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = format!("{}{secret}{}", " ".repeat(prefix), "x".repeat(100));
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                socket.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            let response = Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap();
+            let error = checked_response_redacted("fixture", response, secret)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "fixture request failed with HTTP 401: [redacted] [response body truncated]"
+            );
+            assert!(crate::provider_request::retry_delay(&error, 0, Uuid::nil()).is_none());
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn http_error_body_redacts_credentials_when_transport_cuts_the_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 9999\r\nConnection: close\r\n\r\nprefix: fixt").await.unwrap();
+        });
+        let response = Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        let error = checked_response_redacted("fixture", response, "fixture-secret")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "fixture request failed with HTTP 401: prefix: [redacted] [response body truncated]"
+        );
+        server.await.unwrap();
     }
 
     #[test]

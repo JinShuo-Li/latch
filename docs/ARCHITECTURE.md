@@ -1125,7 +1125,8 @@ deadline. Cancellation drops the request future; child rebinding retains the
 policy and adapter identity. The agent retries only recognized transient errors
 before semantic output, with bounded exponential backoff and Retry-After;
 permanent/unknown failures and absolute deadlines do not retry. HTTP status and
-redacted diagnostics are extracted in `provider.rs`; wire serialization and
+redacted diagnostics are extracted in `provider.rs`, with error-body ingestion
+bounded to 16 KiB before the 4 KB display limit; wire serialization and
 durable conversation schemas do not change. Shell/validation limits remain
 independent. See [model request deadlines and retries](PROVIDER_REQUESTS.md).
 
