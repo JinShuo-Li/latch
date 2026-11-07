@@ -2064,6 +2064,7 @@ impl GeminiStreamState {
                             name: name.clone(),
                             arguments: Value::Object(Default::default()),
                         }),
+                        args_complete: true,
                         ..Default::default()
                     });
                     self.parts.len() - 1
@@ -2077,20 +2078,23 @@ impl GeminiStreamState {
                 match function_call.get("args") {
                     Some(Value::Object(_)) => {
                         call.arguments = function_call["args"].clone();
+                        target.pending_args.clear();
                         target.args_complete = true;
                     }
                     Some(Value::String(fragment)) => {
                         target.pending_args.push_str(fragment);
-                        if let Ok(parsed) = serde_json::from_str::<Value>(&target.pending_args)
-                            && parsed.is_object()
-                        {
-                            call.arguments = parsed;
-                            target.args_complete = true;
-                        }
+                        target.args_complete = serde_json::from_str::<Value>(&target.pending_args)
+                            .is_ok_and(|parsed| parsed.is_object());
                     }
-                    _ => {
-                        call.arguments = Value::Object(Default::default());
-                        target.args_complete = true;
+                    None => {
+                        // A signature-only update must not erase previously
+                        // received arguments or mark partial JSON complete.
+                    }
+                    Some(_) => {
+                        return Err(format!(
+                            "invalid Gemini function-call arguments for {}: expected an object or JSON fragment",
+                            call.name
+                        ));
                     }
                 }
             }
@@ -2152,13 +2156,19 @@ impl GeminiStreamState {
         let mut reasoning = Vec::new();
         for mut part in self.parts {
             if let Some(mut call) = part.call.take() {
-                if !part.pending_args.is_empty() && call.arguments == json!({}) {
+                if !part.args_complete || !part.pending_args.is_empty() {
                     call.arguments = serde_json::from_str(&part.pending_args).map_err(|error| {
                         format!(
                             "invalid Gemini function-call arguments for {}: {error}",
                             call.name
                         )
                     })?;
+                    if !call.arguments.is_object() {
+                        return Err(format!(
+                            "invalid Gemini function-call arguments for {}: expected an object",
+                            call.name
+                        ));
+                    }
                 }
                 reasoning.push(latch_protocol::ReasoningArtifact::ToolCall {
                     call_id: call.id.clone(),
@@ -5377,6 +5387,56 @@ mod tests {
             vec!["gemini-call-1", "gemini-call-2"]
         );
         assert_eq!(response.tool_calls[0].arguments, json!({"path": "a.txt"}));
+    }
+
+    #[test]
+    fn gemini_signature_updates_preserve_arguments_and_omitted_args_stay_supported() {
+        let mut state = GeminiStreamState::default();
+        for part in [
+            json!({"functionCall": {"id": "call-1", "name": "read_file", "args": "{\"path\":"}}),
+            json!({"functionCall": {"id": "call-1"}, "thoughtSignature": "sig"}),
+            json!({"functionCall": {"id": "call-1", "args": "\"a\"}"}}),
+            json!({"functionCall": {"id": "call-2", "name": "list"}}),
+        ] {
+            state
+                .apply(&json!({"candidates": [{"content": {"parts": [part]}}]}))
+                .unwrap();
+        }
+        let response = state.finish().unwrap();
+        assert_eq!(response.tool_calls[0].arguments, json!({"path": "a"}));
+        assert_eq!(response.tool_calls[1].arguments, json!({}));
+        assert!(
+            matches!(&response.reasoning[0], latch_protocol::ReasoningArtifact::ToolCall { signature, .. } if signature == "sig")
+        );
+    }
+
+    #[test]
+    fn gemini_stream_rejects_malformed_final_argument_fragments() {
+        for fragments in [
+            vec![json!("{\"path\":\"a\"}"), json!("garbage")],
+            vec![json!("[]")],
+            vec![json!("")],
+            vec![json!(null)],
+            vec![json!(42)],
+        ] {
+            let mut state = GeminiStreamState::default();
+            let mut rejected = false;
+            for args in fragments {
+                if state
+                    .apply(&json!({"candidates": [{"content": {"parts": [
+                        {"functionCall": {"id": "call-1", "name": "read_file", "args": args}}
+                    ]}}]}))
+                    .is_err()
+                {
+                    rejected = true;
+                    break;
+                }
+            }
+            assert!(
+                rejected || state.finish().is_err(),
+                "malformed arguments must never be executable"
+            );
+        }
     }
 
     #[test]

@@ -259,7 +259,9 @@ serializes `contents` with text, `inlineData` images, `functionCall`, and
 preserves provider-native function-call ids with a deterministic fallback only
 when the API omits one, and correlates tool results by call id (the function
 name is recovered from history because the wire requires it, never used as the
-correlation key). Thinking controls nest under
+correlation key). Final fragmented arguments must parse as a JSON object;
+malformed tails cannot fall back to an earlier valid prefix. Signature-only
+updates retain the call's arguments. Thinking controls nest under
 `generationConfig.thinkingConfig`: `includeThoughts` requests summaries and
 the model's declared capability decides whether `thinkingLevel` or
 `thinkingBudget` is emitted. Gemini thought and function-call signatures are
