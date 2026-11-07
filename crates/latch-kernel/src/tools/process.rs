@@ -315,14 +315,15 @@ impl ToolExecutor {
             .stderr
             .take()
             .ok_or_else(|| anyhow!("missing stderr"))?;
-        let stdout_task = tokio::spawn(async move {
+        // An early return must not detach readers holding sandbox pipes.
+        let stdout_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             let mut bytes = Vec::new();
             stdout.read_to_end(&mut bytes).await.map(|_| bytes)
-        });
-        let stderr_task = tokio::spawn(async move {
+        }));
+        let stderr_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             let mut bytes = Vec::new();
             stderr.read_to_end(&mut bytes).await.map(|_| bytes)
-        });
+        }));
         let waited = tokio::select! {
             () = cancel.cancelled() => None,
             result = tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()) => Some(result),
@@ -330,12 +331,14 @@ impl ToolExecutor {
         let status = match waited {
             Some(Ok(result)) => result?,
             Some(Err(_)) => {
+                crate::execution::kill_sandbox_children(child.id());
                 child.kill().await.ok();
                 child.wait().await.ok();
                 self.store.finish_operation(op)?;
                 bail!("shell command timed out");
             }
             None => {
+                crate::execution::kill_sandbox_children(child.id());
                 child.kill().await.ok();
                 child.wait().await.ok();
                 self.store.finish_operation(op)?;

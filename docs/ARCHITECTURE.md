@@ -1372,3 +1372,8 @@ Latch state and conventional credentials are denied, Git metadata is protected
 without its capability, and network access requires its capability. Cancellation
 kills the sandbox process group. Web reuses the existing host and opens the
 browser with `/usr/bin/open`. Qualification and limits are in [MACOS.md](MACOS.md).
+
+Ordinary shell timeout/cancellation invokes the execution backend's descendant
+cleanup before killing/reaping its runner, as managed termination does. Output
+reader tasks abort when their owning command future exits early. This does not
+qualify deliberate process-group escape on macOS or every native startup race.

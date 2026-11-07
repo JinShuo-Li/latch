@@ -48,6 +48,55 @@ fn call(name: &str, args: Value) -> ToolCall {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn shell_cancellation_and_timeout_stop_descendant_writes() {
+    for timeout in [false, true] {
+        let (dir, executor) = setup(Mode::Work);
+        let ready = dir.path().join("ready");
+        let late = dir.path().join("late");
+        let call = call(
+            "shell",
+            json!({
+                "command": "printf ready > ready; (sleep 2; printf survived > late) & wait",
+                "timeout_seconds": if timeout { 1 } else { 10 },
+            }),
+        );
+        let cancel = CancellationToken::new();
+        let run = executor.execute(&call, cancel.clone());
+        tokio::pin!(run);
+        tokio::select! {
+            result = &mut run => panic!("shell ended before readiness: {}", result.output),
+            () = async {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !ready.exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await.expect("sandboxed command never started");
+            } => {}
+        }
+        if !timeout {
+            cancel.cancel();
+        }
+        let result = tokio::time::timeout(Duration::from_secs(5), &mut run)
+            .await
+            .expect("shell teardown must be bounded");
+        assert!(result.is_error, "{}", result.output);
+        assert!(
+            result
+                .output
+                .contains(if timeout { "timed out" } else { "cancelled" }),
+            "{}",
+            result.output
+        );
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+        assert!(
+            !late.exists(),
+            "a cancelled/timed-out descendant kept writing"
+        );
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn system_tmp_files_work_across_host_shell_and_native_tools() {

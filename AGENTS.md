@@ -509,3 +509,8 @@ See `benchmark/README.md` for budgets and single-case reruns.
 Browser header version comes only from bootstrap metadata; never hardcode a
 release fallback in HTML/JS. `node scripts/test_web_view.mjs` checks missing,
 initial and updated server versions without a browser (development only).
+
+Ordinary shell cancellation/timeout reuses `execution::kill_sandbox_children`
+before killing the runner; output reader tasks must abort on early return.
+`cargo test -p latch-kernel --lib shell_cancellation_and_timeout --locked`
+checks descendant writes on Linux/macOS and also runs in macOS smoke CI.
