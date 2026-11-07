@@ -335,3 +335,8 @@ Legacy completion without a final-answer slot retains one reporting opportunity.
 A still-empty response can receive a kernel-authored `CompletionReport`, subject
 to the same validation gate. Neither path invents evidence. Live and resumed
 interfaces render the same events.
+
+Provider message assembly preserves reasoning-bearing assistant turn boundaries,
+including adjacent completed responses. Text-only turn coalescing must not drop
+reasoning content, signed text, or positional replay artifacts from durable
+history. The regression is `adjacent_assistant_reasoning_survives_context_reconstruction`.

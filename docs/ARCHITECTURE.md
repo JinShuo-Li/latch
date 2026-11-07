@@ -1132,7 +1132,10 @@ API boundary. Durable state remains provider-neutral. Assistant reasoning
 (`reasoning_content`) is persisted and replayed verbatim by reasoning-capable
 endpoints (DeepSeek, OpenCode Go) through a small wire profile; replay is
 decoupled from tool-call structure so a defensive history transform can never
-drop required reasoning state. Reasoning is never displayed in the transcript.
+drop required reasoning state. Context assembly keeps adjacent assistant turns
+separate whenever either carries reasoning content or replay artifacts; signed
+parts retain their original turn and visible text. Reasoning is never displayed
+in the transcript.
 
 Tool outcome stays typed across the same boundary. The kernel records
 `ToolCompleted` and `ToolFailed` as distinct durable events and the request

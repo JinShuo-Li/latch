@@ -210,13 +210,19 @@ pub(crate) fn context_messages(ctx: &crate::continuity::MaterializedContext) -> 
     {
         normalized.push(ModelMessage::text("user", CONTINUATION_ANCHOR));
     }
+    // Reasoning artifacts belong to one assistant turn. Merging those turns
+    // loses replay metadata and can hide appended text behind signed parts.
     for message in sanitized {
         if let Some(previous) = normalized.last_mut()
             && previous.role == message.role
             && previous.tool_calls.is_empty()
             && previous.tool_call_id.is_none()
+            && previous.reasoning_content.is_none()
+            && previous.reasoning.is_empty()
             && message.tool_calls.is_empty()
             && message.tool_call_id.is_none()
+            && message.reasoning_content.is_none()
+            && message.reasoning.is_empty()
         {
             if !message.content.is_empty() {
                 if !previous.content.is_empty() {
@@ -310,6 +316,62 @@ mod tests {
     use crate::store::EventStore;
     use latch_protocol::{EventPayload, ReasoningArtifact, TaskState, ToolCall, ToolResult};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn adjacent_assistant_reasoning_survives_context_reconstruction() {
+        let store = EventStore::open_memory().unwrap();
+        let session = store.create_session(Path::new("/fixture")).unwrap();
+        let turns = [
+            (
+                "first",
+                None,
+                vec![ReasoningArtifact::SignedText {
+                    text: "first".into(),
+                    signature: "signature-one".into(),
+                }],
+            ),
+            (
+                "second",
+                Some("reasoning-two".to_owned()),
+                vec![ReasoningArtifact::Thinking {
+                    text: "thought".into(),
+                    signature: "signature-two".into(),
+                }],
+            ),
+            ("third", None, Vec::new()),
+        ];
+        for (text, reasoning_content, reasoning) in &turns {
+            store
+                .append(
+                    session,
+                    EventPayload::AssistantMessageCompleted {
+                        text: (*text).into(),
+                        tool_calls: Vec::new(),
+                        reasoning_content: reasoning_content.clone(),
+                        reasoning: reasoning.clone(),
+                    },
+                )
+                .unwrap();
+        }
+        let context = crate::context::ContextView {
+            system: String::new(),
+            session_context: String::new(),
+            canonical: String::new(),
+            recalled: String::new(),
+            recent: store.events(session).unwrap(),
+            bridge: Default::default(),
+            episodes: Vec::new(),
+            stats: Default::default(),
+        };
+        let messages = context_messages(&context);
+        let assistants: Vec<_> = messages.iter().filter(|m| m.role == "assistant").collect();
+        assert_eq!(assistants.len(), turns.len());
+        for (message, (text, reasoning_content, reasoning)) in assistants.iter().zip(&turns) {
+            assert_eq!(message.content, *text);
+            assert_eq!(&message.reasoning_content, reasoning_content);
+            assert_eq!(&message.reasoning, reasoning);
+        }
+    }
 
     #[test]
     fn tool_definitions_stay_within_budget() {
