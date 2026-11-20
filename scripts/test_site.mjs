@@ -35,21 +35,19 @@ try {
   const click=selector=>evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   await mkdir('target/site-review',{recursive:true});
   await viewport(1440);await navigate('');
-  await waitFor(`!document.querySelector('[data-search]').hidden && document.querySelector('#web-panel').hidden`);
-  // Below-fold screenshots are lazy-loaded in production; request them explicitly
-  // before asserting asset availability instead of depending on preload timing.
+  await waitFor(`!document.querySelector('[data-search]').hidden && document.querySelector('#diff-panel').hidden && document.querySelector('#approval-panel').hidden`);
   await evaluate(`[...document.images].forEach(image=>{image.loading='eager';})`);
   await waitFor(`[...document.images].every(image=>image.complete && image.naturalWidth>0)`);
   await screenshot('target/site-review/home-desktop.png');
-  await click('#tab-web');
-  assert.equal(await evaluate(`document.querySelector('#web-panel').hidden`),false);
+  await click('#tab-diff');
+  assert.equal(await evaluate(`document.querySelector('#diff-panel').hidden`),false);
   await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'Home',code:'Home'});
   // Explicitly focus the selected tab before checking roving keyboard behavior.
-  await evaluate(`document.querySelector('#tab-web').focus()`);
+  await evaluate(`document.querySelector('#tab-diff').focus()`);
   await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowLeft',code:'ArrowLeft'});
   assert.equal(await evaluate(`document.activeElement.id`),'tab-terminal');
   assert.equal(await evaluate(`document.querySelector('#terminal-panel').hidden`),false);
-  console.log('Home, screenshot assets, and keyboard tabs passed.');
+  console.log('Home, live TUI display, and keyboard tabs passed.');
   await navigate('docs/introduction/');
   await screenshot('target/site-review/docs-desktop.png');
   assert.equal(await evaluate(`document.querySelector('.sidebar [aria-current="page"]').textContent`),'Introduction');
@@ -93,7 +91,7 @@ try {
   assert.equal(await evaluate(`!!document.querySelector('.sidebar a[href="../skills-mcp/"]')`),true);
   assert.equal(await evaluate(`document.querySelectorAll('pre code').length>0`),true);
   await navigate('');
-  assert.equal(await evaluate(`document.querySelectorAll('figure:not([hidden])').length`),2);
+  assert.equal(await evaluate(`document.querySelectorAll('figure:not([hidden])').length`),3);
   console.log('Browser checks passed: project subpath, search/keyboard, clipboard, tabs, 5 viewport widths, mobile menu, and no-JS navigation.');
 } finally {
   await browser?.close();server.closeAllConnections();server.close();

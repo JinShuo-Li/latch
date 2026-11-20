@@ -8,7 +8,7 @@ function fitNavigation() { if (sidebar) sidebar.open = !mobile.matches; }
 fitNavigation();
 mobile.addEventListener('change', fitNavigation);
 
-for (const pre of document.querySelectorAll('pre')) {
+for (const pre of document.querySelectorAll('pre:not(.tui-screen)')) {
   const code = pre.querySelector('code');
   if (!code) continue;
   pre.tabIndex = 0;

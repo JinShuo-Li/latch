@@ -17,8 +17,8 @@
   --header-dark:#0b1f18;
   --code-bg:#141b18;
   --code-ink:#e9f0ec;
-  --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
-  --sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:"JetBrains Mono","SF Mono",SFMono-Regular,ui-monospace,Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:"Source Sans 3","Helvetica Neue",Helvetica,Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 }
 * {
   box-sizing:border-box;
@@ -63,21 +63,21 @@ button,a,summary,input,[tabindex] {
   color:var(--ink);
 }
 h1,h2,h3,h4 {
-  line-height:1.25;
-  font-weight:650;
-  letter-spacing:-.025em;
+  line-height:1.2;
+  font-weight:700;
+  letter-spacing:-.015em;
   color:var(--ink);
 }
 h1 {
-  font-size:34px;
+  font-size:36px;
   margin:0 0 22px;
 }
 h2 {
-  font-size:23px;
+  font-size:24px;
   margin:44px 0 16px;
 }
 h3 {
-  font-size:17px;
+  font-size:17.5px;
   margin:30px 0 10px;
 }
 h4 {
@@ -378,17 +378,17 @@ kbd {
   margin:0 0 10px;
 }
 .intro h1 {
-  font-size:48px;
-  line-height:1.08;
+  font-size:52px;
+  line-height:1.05;
   margin:0 0 16px;
-  letter-spacing:-.04em;
-  font-weight:750;
+  letter-spacing:-.025em;
+  font-weight:700;
 }
 .lead {
-  font-size:22px;
-  font-weight:500;
-  letter-spacing:-.02em;
-  line-height:1.4;
+  font-size:23px;
+  font-weight:400;
+  letter-spacing:-.01em;
+  line-height:1.42;
   color:var(--ink);
   margin-bottom:18px;
   max-width:640px;
@@ -571,7 +571,7 @@ kbd {
   max-width:none!important;
 }
 
-/* Interface screenshots & tabs */
+/* Live Ratatui terminal display & tabs */
 .interface-tabs {
   display:flex;
   gap:4px;
@@ -583,7 +583,7 @@ kbd {
   border-bottom:3px solid transparent;
   margin-bottom:-2px;
   background:none;
-  padding:10px 16px;
+  padding:10px 18px;
   color:var(--muted);
   font-size:13.5px;
   font-weight:600;
@@ -602,7 +602,121 @@ figure {
   background:var(--surface);
   border:1px solid var(--line);
   border-top:0;
-  padding:20px;
+  padding:22px;
+}
+.tui-window {
+  background:#131619;
+  border:1px solid #2b3239;
+  border-radius:6px;
+  overflow:hidden;
+  box-shadow:0 14px 36px rgba(11,24,18,.16);
+}
+.tui-titlebar {
+  background:#1b2024;
+  border-bottom:1px solid #293036;
+  padding:9px 14px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.tui-dots {
+  display:flex;
+  gap:6px;
+}
+.tui-dots span {
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:#374047;
+}
+.tui-dots span:first-child {
+  background:#5c4040;
+}
+.tui-dots span:nth-child(2) {
+  background:#5c533c;
+}
+.tui-dots span:nth-child(3) {
+  background:#3c5848;
+}
+.tui-title {
+  font:500 11.5px/1 var(--mono);
+  color:#97a3ab;
+}
+.tui-badge {
+  font:600 10px/1 var(--mono);
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:#8ab89f;
+  background:rgba(32,91,67,.28);
+  border:1px solid rgba(168,207,154,.24);
+  padding:3px 7px;
+  border-radius:3px;
+}
+pre.tui-screen {
+  margin:0;
+  padding:16px 14px;
+  background:#131619;
+  border:0;
+  border-radius:0;
+  overflow-x:auto;
+  line-height:1.38;
+  scrollbar-width:thin;
+  scrollbar-color:#323a42 #131619;
+}
+pre.tui-screen::before {
+  display:none;
+}
+pre.tui-screen code {
+  font:12px/1.38 var(--mono);
+  color:#e2e7ec;
+  display:block;
+  width:max-content;
+  min-width:100%;
+}
+.t-row {
+  display:block;
+  white-space:pre;
+  padding:0 4px;
+}
+.t-user {
+  background:#22272c;
+}
+.t-add {
+  background:#162e1e;
+}
+.t-del {
+  background:#361c1a;
+}
+.t-bold {
+  font-weight:700;
+  color:#f4f7fa;
+}
+.t-accent,.t-cyan {
+  color:#56d4dd;
+  font-weight:700;
+}
+.t-blue {
+  color:#6cb6ff;
+  font-weight:700;
+}
+.t-green {
+  color:#57ab5a;
+  font-weight:700;
+}
+.t-red {
+  color:#f47067;
+  font-weight:700;
+}
+.t-yellow {
+  color:#e3b341;
+  font-weight:700;
+}
+.t-muted {
+  color:#95a0a8;
+}
+.t-dim {
+  color:#636e78;
 }
 figure img {
   display:block;
@@ -613,7 +727,7 @@ figure img {
   box-shadow:0 8px 28px rgba(15,25,20,.12);
 }
 figcaption {
-  font-size:12px;
+  font-size:12.5px;
   color:var(--muted);
   margin-top:14px;
   padding-top:12px;

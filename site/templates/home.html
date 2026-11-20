@@ -4,7 +4,7 @@
       <div class="intro-copy">
         <p class="eyebrow">Open-source · Linux, Windows &amp; Apple Silicon macOS</p>
         <h1 id="intro-title">Latch</h1>
-        <p class="lead">A coding agent for your terminal and browser, built around verifiable execution boundaries.</p>
+        <p class="lead">A terminal coding agent built around verifiable execution boundaries.</p>
         <p class="intro-description">Written in Rust with mandatory OS-native command sandboxing, durable SQLite event history, and validation tied directly to the workspace generation it checked. Bring your own model provider or subscription.</p>
         <div class="intro-links">
           <a class="button" href="docs/introduction/">Read the documentation <span aria-hidden="true">→</span></a>
@@ -29,7 +29,7 @@
           </div>
           <div>
             <dt>Interfaces &amp; protocols</dt>
-            <dd>Ratatui terminal UI, local loopback Web UI (<code>--web</code>), headless CLI, Agent Skills, MCP, and optional read-only LSP.</dd>
+            <dd>Ratatui terminal UI, headless machine CLI, Agent Skills, Model Context Protocol (MCP), and optional read-only LSP.</dd>
           </div>
         </dl>
       </aside>
@@ -69,18 +69,118 @@
   <section class="home-section" aria-labelledby="interfaces-title">
     <div class="section-heading">
       <div>
-        <p class="section-kicker">Runtime surfaces</p>
-        <h2 id="interfaces-title">Two interfaces, the same kernel</h2>
+        <p class="section-kicker">Interactive runtime</p>
+        <h2 id="interfaces-title">Terminal interface</h2>
       </div>
-      <a href="docs/web/">Web interface guide →</a>
+      <a href="docs/terminal/">Terminal &amp; CLI guide →</a>
     </div>
-    <p>The TUI and local Web interface share sessions, tools, approvals, and validation without separate backend services.</p>
-    <div class="interface-tabs" role="tablist" aria-label="Interface screenshots" hidden>
-      <button id="tab-terminal" type="button" role="tab" aria-controls="terminal-panel" aria-selected="true" tabindex="0">Terminal (Ratatui)</button>
-      <button id="tab-web" type="button" role="tab" aria-controls="web-panel" aria-selected="false" tabindex="-1">Local Web UI</button>
+    <p>Ratatui terminal interface with real-time execution activity, durable task &amp; validation status, inline workspace diffs, and explicit capability approvals.</p>
+    <div class="interface-tabs" role="tablist" aria-label="Terminal views" hidden>
+      <button id="tab-terminal" type="button" role="tab" aria-controls="terminal-panel" aria-selected="true" tabindex="0">Workspace &amp; Sidebar</button>
+      <button id="tab-diff" type="button" role="tab" aria-controls="diff-panel" aria-selected="false" tabindex="-1">Inline Diff &amp; Edits</button>
+      <button id="tab-approval" type="button" role="tab" aria-controls="approval-panel" aria-selected="false" tabindex="-1">Capability Approval</button>
     </div>
-    <figure id="terminal-panel"><a href="assets/terminal.png"><img src="assets/terminal.png" width="1440" height="650" alt="Latch TUI showing a failing test, an assistant response, a multiline composer, and a session sidebar with validation pending." loading="lazy"></a><figcaption>Terminal · Actual Ratatui output from the repository’s deterministic wide-sidebar fixture, rendered as an image. <a href="captures/terminal.txt">Plain-text capture</a>.</figcaption></figure>
-    <figure id="web-panel"><a href="assets/web.png"><img src="assets/web.png" width="1440" height="900" alt="Latch’s local Web interface with conversation navigation and the first-run workspace view before a provider is configured." loading="lazy"></a><figcaption>Web · First-run workspace view captured from a local v$version binary with isolated state. No provider request or credential.</figcaption></figure>
+    <figure id="terminal-panel" class="tui-figure">
+      <div class="tui-window" role="region" aria-label="Latch TUI workspace and session sidebar">
+        <div class="tui-titlebar">
+          <div class="tui-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span class="tui-title">latch — /tmp/latch-ui (130×28)</span>
+          <span class="tui-badge">Ratatui Snapshot</span>
+        </div>
+        <pre class="tui-screen"><code class="language-tui"><span class="t-row">                                                                                     <span class="t-dim">│</span> <span class="t-bold">deepseek-flash</span>                            </span>
+<span class="t-row t-user">  <span class="t-accent">›</span> Fix the failing test.                                                            <span class="t-dim">│</span> <span class="t-muted">WORK · 0 turns · 0s</span>                       </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span> <span class="t-muted">on main</span>                                   </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span>                                           </span>
+<span class="t-row">  <span class="t-red">•</span> <span class="t-bold">Failed</span> cargo test                                                                <span class="t-dim">│</span> <span class="t-dim">ACTIVITY</span>                                  </span>
+<span class="t-row">    <span class="t-dim">└</span> <span class="t-red">exit code 1</span>                                                                    <span class="t-dim">│</span> <span class="t-blue">•</span> Preparing request                       </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span>   <span class="t-muted">0s in phase · 0s quiet</span>                  </span>
+<span class="t-row">      <span class="t-muted">exit code 1</span>                                                                    <span class="t-dim">│</span>                                           </span>
+<span class="t-row">      <span class="t-muted">assertion failed</span>                                                               <span class="t-dim">│</span> <span class="t-dim">CURRENT REQUEST</span>                           </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span> Fix the failing test.                     </span>
+<span class="t-row">  <span class="t-dim">•</span> The addend is wrong; fixing it now.                                              <span class="t-dim">│</span>                                           </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span> <span class="t-dim">TASK</span>                                      </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span> <span class="t-yellow">InProgress</span>                                </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span> <span class="t-muted">Implementation unchanged</span>                  </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span> <span class="t-yellow">Validation pending</span>                        </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span>                                           </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span> <span class="t-dim">CONTEXT</span>                                   </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span> <span class="t-muted">Working set  ≈48.1k / 256k tok</span>            </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span> <span class="t-accent">██████</span><span class="t-dim">░░░░░░░░░░░░░░░░░░░░░░░░░░</span>          </span>
+<span class="t-row">                                                                                     <span class="t-dim">│</span>                                           </span>
+<span class="t-row">  <span class="t-dim">╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span>  </span>
+<span class="t-row">  <span class="t-dim">│</span> <span class="t-accent">›</span> <span class="t-muted">Ask Latch…</span>                                                                                                               <span class="t-dim">│</span>  </span>
+<span class="t-row">  <span class="t-dim">│</span>                                                                                                                            <span class="t-dim">│</span>  </span>
+<span class="t-row">  <span class="t-dim">│</span>   <span class="t-bold">WORK</span> <span class="t-dim">·</span> deepseek-flash/low <span class="t-dim">·</span> main <span class="t-dim">·</span> std <span class="t-dim">·</span> ask                                                                       <span class="t-green">ready</span> <span class="t-dim">│</span>  </span>
+<span class="t-row">  <span class="t-dim">╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span>  </span>
+<span class="t-row">  <span class="t-dim">enter</span> <span class="t-muted">send</span>  <span class="t-dim">ctrl+j</span> <span class="t-muted">newline</span>  <span class="t-dim">ctrl+p</span> <span class="t-muted">commands</span>                                                                                     </span>
+<span class="t-row">  <span class="t-muted">/tmp/latch-ui</span>                                                                                                      <span class="t-dim">latch v$version</span>  </span></code></pre>
+      </div>
+      <figcaption>Terminal · Actual Ratatui buffer output from the repository’s deterministic wide-sidebar fixture (<code>v4_wide_sidebar.txt</code>), rendered directly as live text. <a href="captures/terminal.txt">Raw plain-text capture</a>.</figcaption>
+    </figure>
+    <figure id="diff-panel" class="tui-figure">
+      <div class="tui-window" role="region" aria-label="Latch TUI inline edit preview">
+        <div class="tui-titlebar">
+          <div class="tui-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span class="tui-title">latch — inline edit preview (100×24)</span>
+          <span class="tui-badge">Ratatui Snapshot</span>
+        </div>
+        <pre class="tui-screen"><code class="language-tui"><span class="t-row">  <span class="t-green">•</span> <span class="t-bold">Edited</span> 2 files                                                                                  </span>
+<span class="t-row">    <span class="t-dim">└</span> <span class="t-bold">M src/calc.rs</span>  <span class="t-green">+1</span> <span class="t-red">−1</span>                                                                          </span>
+<span class="t-row">      <span class="t-cyan">@@ -1,4 +1,4 @@</span>                                                                               </span>
+<span class="t-row">       pub fn add(a: i32, b: i32) -&gt; i32 {                                                          </span>
+<span class="t-row">           let base = 10;                                                                           </span>
+<span class="t-row t-del">      <span class="t-red">-    base + a + b</span>                                                                             </span>
+<span class="t-row t-add">      <span class="t-green">+    base + a - b</span>                                                                             </span>
+<span class="t-row">       }                                                                                            </span>
+<span class="t-row">      <span class="t-bold">A tests/calc.rs</span>  <span class="t-green">+2</span> <span class="t-dim">−0</span>                                                                        </span>
+<span class="t-row">      <span class="t-cyan">@@ -0,0 +1,2 @@</span>                                                                               </span>
+<span class="t-row t-add">      <span class="t-green">+#[test]</span>                                                                                      </span>
+<span class="t-row t-add">      <span class="t-green">+fn subtracts() {}</span>                                                                            </span>
+<span class="t-row">                                                                                                    </span>
+<span class="t-row">  <span class="t-dim">╭──────────────────────────────────────────────────────────────────────────────────────────────╮</span>  </span>
+<span class="t-row">  <span class="t-dim">│</span> <span class="t-accent">›</span> <span class="t-muted">Ask Latch…</span>                                                                                 <span class="t-dim">│</span>  </span>
+<span class="t-row">  <span class="t-dim">│</span>                                                                                              <span class="t-dim">│</span>  </span>
+<span class="t-row">  <span class="t-dim">│</span>   <span class="t-bold">WORK</span> <span class="t-dim">·</span> deepseek-flash/low <span class="t-dim">·</span> main <span class="t-dim">·</span> std <span class="t-dim">·</span> ask                                         <span class="t-green">ready</span> <span class="t-dim">│</span>  </span>
+<span class="t-row">  <span class="t-dim">╰──────────────────────────────────────────────────────────────────────────────────────────────╯</span>  </span>
+<span class="t-row">  <span class="t-dim">enter</span> <span class="t-muted">send</span>  <span class="t-dim">ctrl+j</span> <span class="t-muted">newline</span>  <span class="t-dim">ctrl+p</span> <span class="t-muted">commands</span>                                                       </span>
+<span class="t-row">  <span class="t-muted">/tmp/latch-ui</span>                                                                       <span class="t-dim">latch v$version</span>  </span></code></pre>
+      </div>
+      <figcaption>Inline diff · Actual Ratatui buffer output from <code>v4_inline_edit_preview.txt</code> showing syntax-highlighted unified hunks inside the transcript.</figcaption>
+    </figure>
+    <figure id="approval-panel" class="tui-figure">
+      <div class="tui-window" role="region" aria-label="Latch TUI capability approval surface">
+        <div class="tui-titlebar">
+          <div class="tui-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span class="tui-title">latch — capability approval gate (100×30)</span>
+          <span class="tui-badge">Ratatui Snapshot</span>
+        </div>
+        <pre class="tui-screen"><code class="language-tui"><span class="t-row">  <span class="t-bold">Latch</span>                                                                                             </span>
+<span class="t-row">  <span class="t-muted">a quiet terminal coding agent</span>                                                                     </span>
+<span class="t-row">                                                                                                    </span>
+<span class="t-row">    <span class="t-yellow">Approval needed</span>                                                                                 </span>
+<span class="t-row">                                                                                                    </span>
+<span class="t-row">    <span class="t-bold">shell</span>                                                                                           </span>
+<span class="t-row">    <span class="t-muted">$$</span> sudo make install                                                                             </span>
+<span class="t-row">                                                                                                    </span>
+<span class="t-row">    <span class="t-muted">outside-workspace write requires explicit approval</span>                                              </span>
+<span class="t-row">    <span class="t-dim">capability:</span> external_filesystem_write                                                           </span>
+<span class="t-row">                                                                                                    </span>
+<span class="t-row">    <span class="t-accent">› Approve</span>  <span class="t-muted">Run this operation once.</span>                                                             </span>
+<span class="t-row">      Deny     <span class="t-muted">Skip it and tell the model what to do differently.</span>                                   </span>
+<span class="t-row">                                                                                                    </span>
+<span class="t-row">    <span class="t-dim">enter confirm · y approve · n deny · ctrl+o full request · esc deny</span>                             </span>
+<span class="t-row">                                                                                                    </span>
+<span class="t-row">  <span class="t-yellow">•</span> Waiting for approval                                                                            </span>
+<span class="t-row">                                                                                                    </span>
+<span class="t-row">  <span class="t-dim">╭──────────────────────────────────────────────────────────────────────────────────────────────╮</span>  </span>
+<span class="t-row">  <span class="t-dim">│</span> <span class="t-accent">›</span> <span class="t-muted">Ask Latch…</span>                                                                                 <span class="t-dim">│</span>  </span>
+<span class="t-row">  <span class="t-dim">│</span>                                                                                              <span class="t-dim">│</span>  </span>
+<span class="t-row">  <span class="t-dim">│</span>   <span class="t-bold">WORK</span> <span class="t-dim">·</span> deepseek-flash/low <span class="t-dim">·</span> main <span class="t-dim">·</span> std <span class="t-dim">·</span> ask                                               <span class="t-dim">│</span>  </span>
+<span class="t-row">  <span class="t-dim">╰──────────────────────────────────────────────────────────────────────────────────────────────╯</span>  </span>
+<span class="t-row">  <span class="t-muted">/tmp/latch-ui</span>                                                                       <span class="t-dim">latch v$version</span>  </span></code></pre>
+      </div>
+      <figcaption>Capability gate · Actual Ratatui buffer output from <code>v5_approval_surface.txt</code> requiring explicit confirmation before an outside-workspace write.</figcaption>
+    </figure>
   </section>
 
   <section class="home-section" aria-labelledby="behavior-title">
