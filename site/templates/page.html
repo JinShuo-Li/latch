@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#ffffff">
+  <meta name="theme-color" content="#0b1f18">
   <meta name="description" content="$description">
   <meta property="og:title" content="$title · Latch">
   <meta property="og:description" content="$description">
@@ -15,6 +15,17 @@
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
+<div class="utility-bar" aria-label="Release summary">
+  <div class="utility-inner">
+    <span>Latch Project · Open-source systems documentation</span>
+    <div class="utility-links">
+      <span>Release v$version</span>
+      <span>Linux · Windows · macOS</span>
+      <a href="$root/docs/installation/">Install</a>
+      <a href="https://github.com/JinShuo-Li/latch">Repository ↗</a>
+    </div>
+  </div>
+</div>
 <header class="site-header">
   <div class="header-inner">
     <a class="wordmark" href="$root/" aria-label="Latch home"><svg aria-hidden="true" viewBox="0 0 24 24" shape-rendering="crispEdges">
@@ -22,15 +33,54 @@
   <rect x="12" width="12" height="12" fill="#a8cf9a"/>
   <rect y="12" width="12" height="12" fill="#205b43"/>
   <rect x="12" y="12" width="12" height="12" fill="#205b43"/>
-</svg>Latch</a>
+</svg><span class="wordmark-text"><strong>Latch</strong><small>Coding Agent Runtime</small></span></a>
     <span class="version">v$version</span>
-    <nav aria-label="Main navigation"><a $home_current href="$root/">Overview</a><a $docs_current href="$root/docs/introduction/">Documentation</a></nav>
-    <button class="search-trigger" type="button" data-search hidden>Search docs <kbd>Ctrl K</kbd></button>
+    <nav aria-label="Main navigation"><a $home_current href="$root/">Overview</a><a $docs_current href="$root/docs/introduction/">Documentation</a><a class="nav-extra" href="$root/docs/architecture/">Architecture</a><a class="nav-extra" href="$root/docs/benchmark-results/">Benchmarks</a></nav>
+    <button class="search-trigger" type="button" data-search hidden><span>Search documentation</span><kbd>Ctrl K</kbd></button>
     <a class="github-link" href="https://github.com/JinShuo-Li/latch">GitHub <span aria-hidden="true">↗</span></a>
   </div>
 </header>
 $body
-<footer class="site-footer"><span>Latch v$version · Rust · MIT license</span><nav aria-label="Footer navigation"><a href="$root/docs/contributing/">Contributing</a><a href="https://github.com/JinShuo-Li/latch/issues">Issues</a><a href="https://github.com/JinShuo-Li/latch">Source ↗</a></nav></footer>
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <div class="footer-title"><svg aria-hidden="true" viewBox="0 0 24 24" shape-rendering="crispEdges">
+        <rect width="12" height="12" fill="#205b43"/>
+        <rect x="12" width="12" height="12" fill="#a8cf9a"/>
+        <rect y="12" width="12" height="12" fill="#205b43"/>
+        <rect x="12" y="12" width="12" height="12" fill="#205b43"/>
+      </svg><strong>Latch v$version</strong></div>
+      <p>Rust coding agent for Linux, Windows, and Apple Silicon macOS with mandatory command sandboxing, durable SQLite sessions, and workspace-bound validation.</p>
+    </div>
+    <nav class="footer-grid" aria-label="Footer navigation">
+      <div>
+        <p>Start</p>
+        <a href="$root/docs/introduction/">Introduction</a>
+        <a href="$root/docs/installation/">Installation</a>
+        <a href="$root/docs/terminal/">Terminal &amp; CLI</a>
+        <a href="$root/docs/web/">Web interface</a>
+      </div>
+      <div>
+        <p>Technical</p>
+        <a href="$root/docs/architecture/">System architecture</a>
+        <a href="$root/docs/safety/">Sandbox &amp; approvals</a>
+        <a href="$root/docs/sessions/">Sessions &amp; continuity</a>
+        <a href="$root/docs/skills-mcp/">Skills &amp; MCP</a>
+      </div>
+      <div>
+        <p>Project</p>
+        <a href="$root/docs/benchmark-results/">Benchmark report</a>
+        <a href="$root/docs/contributing/">Contributing</a>
+        <a href="https://github.com/JinShuo-Li/latch/issues">Issues ↗</a>
+        <a href="https://github.com/JinShuo-Li/latch">Source ↗</a>
+      </div>
+    </nav>
+  </div>
+  <div class="footer-meta">
+    <span>Latch v$version · Rust · MIT license</span>
+    <span>Static documentation · Local browser search · No telemetry</span>
+  </div>
+</footer>
 <dialog id="search-dialog" aria-labelledby="search-title">
   <div class="search-head"><label id="search-title" for="search-input">Search documentation</label><button type="button" id="search-close" aria-label="Close search">Esc</button></div>
   <input id="search-input" type="search" placeholder="Search topics, commands, and configuration…" autocomplete="off" spellcheck="false">

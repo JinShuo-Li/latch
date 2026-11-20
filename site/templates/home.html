@@ -1,35 +1,137 @@
 <main id="main" class="home">
   <section class="intro" aria-labelledby="intro-title">
-    <p class="eyebrow">Open-source · Linux, Windows &amp; macOS</p>
-    <h1 id="intro-title">Latch</h1>
-    <p class="lead">A coding agent for your terminal and browser.</p>
-    <p class="intro-description">Written in Rust, with mandatory command sandboxing, durable sessions, and validation tied to the workspace it checked. Use your own model provider.</p>
-    <div class="intro-links"><a class="button" href="docs/introduction/">Read the documentation <span aria-hidden="true">→</span></a><a href="#install">Install Latch ↓</a><a href="https://github.com/JinShuo-Li/latch">View source ↗</a></div>
+    <div class="intro-grid">
+      <div class="intro-copy">
+        <p class="eyebrow">Open-source · Linux, Windows &amp; Apple Silicon macOS</p>
+        <h1 id="intro-title">Latch</h1>
+        <p class="lead">A coding agent for your terminal and browser, built around verifiable execution boundaries.</p>
+        <p class="intro-description">Written in Rust with mandatory OS-native command sandboxing, durable SQLite event history, and validation tied directly to the workspace generation it checked. Bring your own model provider or subscription.</p>
+        <div class="intro-links">
+          <a class="button" href="docs/introduction/">Read the documentation <span aria-hidden="true">→</span></a>
+          <a class="button-secondary" href="#install">Install Latch ↓</a>
+          <a class="text-link" href="https://github.com/JinShuo-Li/latch">View source ↗</a>
+        </div>
+      </div>
+      <aside class="key-facts" aria-label="Technical overview">
+        <p class="panel-kicker">System profile · v$version</p>
+        <dl class="fact-list">
+          <div>
+            <dt>Execution boundary</dt>
+            <dd>Linux Bubblewrap, Windows native AppContainer &amp; file/socket brokers, macOS Seatbelt. No unsandboxed fallback.</dd>
+          </div>
+          <div>
+            <dt>Durable continuity</dt>
+            <dd>Append-only SQLite event store with hysteretic epoch rotation, FTS recall, and full resume equivalence.</dd>
+          </div>
+          <div>
+            <dt>Validation contract</dt>
+            <dd>Passed checks certify only the observed workspace generation; later edits or active background writers invalidate stale passes.</dd>
+          </div>
+          <div>
+            <dt>Interfaces &amp; protocols</dt>
+            <dd>Ratatui terminal UI, local loopback Web UI (<code>--web</code>), headless CLI, Agent Skills, MCP, and optional read-only LSP.</dd>
+          </div>
+        </dl>
+      </aside>
+    </div>
   </section>
+
   <section id="install" aria-labelledby="install-title" class="home-section">
-    <div class="section-heading"><h2 id="install-title">Installation</h2><a href="docs/installation/">Full install guide →</a></div>
-    <p>Precompiled binaries for Linux x86_64/ARM64, Windows x86_64, and Apple Silicon macOS. The installers verify SHA256 checksums.</p>
+    <div class="section-heading">
+      <div>
+        <p class="section-kicker">Deployment</p>
+        <h2 id="install-title">Installation</h2>
+      </div>
+      <a href="docs/installation/">Full install guide →</a>
+    </div>
+    <p>Precompiled binaries for Linux x86_64/ARM64, Windows x86_64, and Apple Silicon macOS. The installers verify SHA256 checksums before placing the binary.</p>
     <div class="install-columns">
-      <div><h3>Linux / macOS <span>Bash · automatic architecture selection</span></h3><pre><code class="language-sh">curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash</code></pre><p>Linux requires Bubblewrap, ripgrep, and Git; Apple Silicon macOS uses Seatbelt, ripgrep, and Git. Both install to <code>~/.local/bin</code>; follow the installer’s PATH instructions.</p></div>
-      <div><h3>Windows <span>PowerShell</span></h3><pre><code class="language-powershell">&amp; { $$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm -DisableKeepAlive https://jinshuo-li.github.io/latch/install.ps1 | iex; $$env:Path="$$env:LOCALAPPDATA\Programs\Latch\bin;$$env:Path"; latch --version }</code></pre><p>Requires Git, ripgrep, and a user-owned NTFS workspace. The native sandbox is included. <a href="docs/installation/#install-a-binary">Add the install directory to your user PATH.</a></p></div>
+      <div class="install-card">
+        <div class="install-card-head">
+          <h3>Linux / macOS</h3>
+          <span>Bash · automatic architecture selection</span>
+        </div>
+        <pre><code class="language-sh">curl -fsSL https://jinshuo-li.github.io/latch/install.sh | bash</code></pre>
+        <p>Linux requires Bubblewrap, ripgrep, and Git; Apple Silicon macOS uses Seatbelt, ripgrep, and Git. Both install to <code>~/.local/bin</code>; follow the installer’s PATH instructions.</p>
+      </div>
+      <div class="install-card">
+        <div class="install-card-head">
+          <h3>Windows</h3>
+          <span>PowerShell 5.1 or 7 · TLS 1.2</span>
+        </div>
+        <pre><code class="language-powershell">&amp; { $$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm -DisableKeepAlive https://jinshuo-li.github.io/latch/install.ps1 | iex; $$env:Path="$$env:LOCALAPPDATA\Programs\Latch\bin;$$env:Path"; latch --version }</code></pre>
+        <p>Requires Git, ripgrep, and a user-owned NTFS workspace. The native sandbox is included. <a href="docs/installation/#install-a-binary">Add the install directory to your user PATH.</a></p>
+      </div>
     </div>
     <p class="next-step">Run <code>latch</code> in your project, use <code>/setup</code> to choose a provider and model, then check prerequisites with <code>latch doctor</code>. <a href="docs/installation/#build-from-source">Build from source →</a></p>
   </section>
+
   <section class="home-section" aria-labelledby="interfaces-title">
-    <div class="section-heading"><h2 id="interfaces-title">Two interfaces, the same kernel</h2><a href="docs/web/">Web interface guide →</a></div>
-    <p>The TUI and local Web interface share sessions, tools, approvals, and validation.</p>
-    <div class="interface-tabs" role="tablist" aria-label="Interface screenshots" hidden><button id="tab-terminal" type="button" role="tab" aria-controls="terminal-panel" aria-selected="true" tabindex="0">Terminal</button><button id="tab-web" type="button" role="tab" aria-controls="web-panel" aria-selected="false" tabindex="-1">Web</button></div>
+    <div class="section-heading">
+      <div>
+        <p class="section-kicker">Runtime surfaces</p>
+        <h2 id="interfaces-title">Two interfaces, the same kernel</h2>
+      </div>
+      <a href="docs/web/">Web interface guide →</a>
+    </div>
+    <p>The TUI and local Web interface share sessions, tools, approvals, and validation without separate backend services.</p>
+    <div class="interface-tabs" role="tablist" aria-label="Interface screenshots" hidden>
+      <button id="tab-terminal" type="button" role="tab" aria-controls="terminal-panel" aria-selected="true" tabindex="0">Terminal (Ratatui)</button>
+      <button id="tab-web" type="button" role="tab" aria-controls="web-panel" aria-selected="false" tabindex="-1">Local Web UI</button>
+    </div>
     <figure id="terminal-panel"><a href="assets/terminal.png"><img src="assets/terminal.png" width="1440" height="650" alt="Latch TUI showing a failing test, an assistant response, a multiline composer, and a session sidebar with validation pending." loading="lazy"></a><figcaption>Terminal · Actual Ratatui output from the repository’s deterministic wide-sidebar fixture, rendered as an image. <a href="captures/terminal.txt">Plain-text capture</a>.</figcaption></figure>
     <figure id="web-panel"><a href="assets/web.png"><img src="assets/web.png" width="1440" height="900" alt="Latch’s local Web interface with conversation navigation and the first-run workspace view before a provider is configured." loading="lazy"></a><figcaption>Web · First-run workspace view captured from a local v$version binary with isolated state. No provider request or credential.</figcaption></figure>
   </section>
+
   <section class="home-section" aria-labelledby="behavior-title">
-    <h2 id="behavior-title">How Latch works</h2>
+    <div class="section-heading">
+      <div>
+        <p class="section-kicker">Architecture &amp; invariants</p>
+        <h2 id="behavior-title">How Latch works</h2>
+      </div>
+      <a href="docs/architecture/">System architecture →</a>
+    </div>
     <dl class="principles">
-      <div><dt>Sandboxed commands</dt><dd>Bubblewrap on Linux; native AppContainer on Windows. Command execution stops if the sandbox is unavailable. <a href="docs/safety/">Boundaries and limits →</a></dd></div>
-      <div><dt>Durable sessions</dt><dd>Session events persist in SQLite. Working-history rotation keeps the original record available; resume restores task state and evidence. <a href="docs/sessions/">Sessions and continuity →</a></dd></div>
-      <div><dt>Recorded validation</dt><dd>A pass applies to the workspace state it checked. Later writes make it stale, and active managed processes block certification. <a href="docs/workflow/">Validation semantics →</a></dd></div>
-      <div><dt>Multi-agent support</dt><dd>A root agent can delegate to independent child sessions. Child reports and group coordination do not certify the root task. <a href="docs/agents/">Agent coordination →</a></dd></div>
+      <div>
+        <dt>Sandboxed commands</dt>
+        <dd>Bubblewrap on Linux, Seatbelt on macOS, and native AppContainer on Windows. Command execution stops if the sandbox is unavailable. <a href="docs/safety/">Boundaries and limits →</a></dd>
+      </div>
+      <div>
+        <dt>Durable sessions</dt>
+        <dd>Session events persist in SQLite. Working-history rotation keeps the original record available; resume restores task state and evidence. <a href="docs/sessions/">Sessions and continuity →</a></dd>
+      </div>
+      <div>
+        <dt>Recorded validation</dt>
+        <dd>A pass applies to the workspace state it checked. Later writes make it stale, and active managed processes block certification. <a href="docs/workflow/">Validation semantics →</a></dd>
+      </div>
+      <div>
+        <dt>Multi-agent support</dt>
+        <dd>A root agent can delegate to independent child sessions. Child reports and group coordination do not certify the root task. <a href="docs/agents/">Agent coordination →</a></dd>
+      </div>
     </dl>
   </section>
-  <section class="home-section reading" aria-labelledby="reading-title"><h2 id="reading-title">Further reading</h2><p><a href="docs/skills-mcp/">Agent Skills and MCP</a> are available with explicit permission and lifecycle limits. <a href="docs/runtime/#8-implemented-now-vs-deferred">Runtime capabilities</a> distinguish implemented and deferred work.</p><p>The <a href="docs/benchmark-results/">25-task benchmark report</a> records results, failures, and methodology from one exploratory comparison. It does not establish general performance guarantees.</p></section>
+
+  <section class="home-section reading" aria-labelledby="reading-title">
+    <div class="section-heading">
+      <div>
+        <p class="section-kicker">Documentation &amp; evidence</p>
+        <h2 id="reading-title">Further reading</h2>
+      </div>
+      <a href="docs/introduction/">Browse all topics →</a>
+    </div>
+    <div class="reading-grid">
+      <div class="reading-card">
+        <h3>Extensibility &amp; Language Tools</h3>
+        <p><a href="docs/skills-mcp/">Agent Skills and MCP</a> are available with explicit permission and lifecycle limits. Optional <a href="docs/lsp/">Language Server Protocol (LSP)</a> integration provides read-only symbol and diagnostic queries.</p>
+      </div>
+      <div class="reading-card">
+        <h3>Runtime Capability Model</h3>
+        <p><a href="docs/runtime/#8-implemented-now-vs-deferred">Runtime capabilities</a> define kernel invariants, narrow port rules, and distinguish implemented subsystems from deferred work.</p>
+      </div>
+      <div class="reading-card">
+        <h3>Empirical Evaluation</h3>
+        <p>The <a href="docs/benchmark-results/">25-task benchmark report</a> and <a href="docs/history-benchmark/">working-history calibration</a> record results, failures, and methodology from controlled evaluations without claiming general performance guarantees.</p>
+      </div>
+    </div>
+  </section>
 </main>
