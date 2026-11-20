@@ -660,7 +660,7 @@ pre.tui-screen {
   border:0;
   border-radius:0;
   overflow-x:auto;
-  line-height:1.38;
+  line-height:1.15;
   scrollbar-width:thin;
   scrollbar-color:#323a42 #131619;
 }
@@ -668,7 +668,8 @@ pre.tui-screen::before {
   display:none;
 }
 pre.tui-screen code {
-  font:12px/1.38 var(--mono);
+  font:12.5px/1.15 "Cascadia Mono","JetBrains Mono","SF Mono",SFMono-Regular,Consolas,"Liberation Mono","DejaVu Sans Mono",monospace;
+  font-variant-ligatures:none;
   color:#e2e7ec;
   display:block;
   width:max-content;
@@ -678,6 +679,7 @@ pre.tui-screen code {
   display:block;
   white-space:pre;
   padding:0 4px;
+  line-height:1.15;
 }
 .t-user {
   background:#22272c;
